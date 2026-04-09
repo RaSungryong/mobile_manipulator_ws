@@ -1,0 +1,34 @@
+<launch>
+
+    <!-- Keyence DL-EN1 distance sensor node
+    <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
+        <param name="host"           value="192.168.1.5"/>
+        <param name="port"           value="64000"/>
+        <param name="rate_hz"        value="60.0"/>
+        <param name="timeout_s"      value="0.5"/>
+        <param name="scale"          value="0.001"/>
+        <param name="offset"         value="0.0"/>
+        <param name="use_crlf"       value="true"/>
+    </node> -->
+
+    <!-- Task executor — main orchestrator (includes arm control + navigation) -->
+    <!-- ArmController is instantiated inside task_executor; params use ~ (private) namespace -->
+    <node name="mobile_manipulator_system" pkg="apriltag_nav" type="task_executor.py" output="screen">
+        <param name="num_samples"           value="1"/>
+        <param name="delay_between_samples" value="0.2"/>
+        <param name="stabilization_time"    value="0.5"/>
+        <param name="save_images"           value="false"/>
+        <param name="output_dir"            value="/tmp/scan_results"/>
+
+        <param name="keyence_tol"           value="0.2"/>
+        <param name="keyence_dir"           value="1.0"/>
+        <param name="keyence_kp"            value="0.8"/>
+        <param name="keyence_max_steps"     value="10"/>
+        <param name="keyence_max_step_mm"   value="5.0"/>
+
+        <param name="pose_base_z"           value="-0.835"/>
+        <param name="pose_mb_z"             value="0.18"/>
+        <param name="pose_arm_z"            value="-1.02"/>
+    </node>
+
+</launch>

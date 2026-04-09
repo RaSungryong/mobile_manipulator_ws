@@ -1,0 +1,72 @@
+robot:
+  # Dimensions (meters)
+  length: 0.80
+  width: 0.50
+  camera_offset: 0.45  # Distance from robot center to camera lens
+
+  # Movement limits
+  max_linear_speed: 0.05    # Maximum linear velocity (m/s)
+  max_angular_speed: 0.25   # Maximum angular velocity (rad/s)
+  slow_factor: 0.3          # Speed multiplier for docking/precision
+
+  # Minimum velocity settings (as ratio of max speed)
+  # These prevent motor stiction while allowing low-speed operation
+  min_linear_factor: 0.3    # min_linear = 0.3 * max_linear = 0.015 m/s
+  min_angular_factor: 0.25  # min_angular = 0.25 * max_angular = 0.0625 rad/s
+
+  # Velocity ramping (for smooth start/stop)
+  # Set to 0 to disable ramping
+  linear_accel: 0.05        # Linear acceleration limit (m/s²)
+  angular_accel: 0.3        # Angular acceleration limit (rad/s²)
+  ramp_enabled: true        # Enable/disable velocity ramping
+
+  # AprilTag settings
+  tag_size: 0.06
+  tag_family: "tag36h11"
+
+  # Wall Distance Safety (meters)
+  # Robot's right side is always facing the wall
+  wall_dist_work_zone: 0.35  # Zones B, C, D, E
+  wall_dist_zone_a: 0.6275   # Zone A
+  min_wall_clearance: 0.10
+
+  # Pure Pursuit Tuning
+  look_ahead_base: 0.4
+  pp_gain_forward: 1.0
+  pp_gain_backward: 0.8
+
+  # Alignment Tuning
+  align_gain: 0.8           # Proportional gain for alignment rotation
+  align_threshold_deg: 0.5  # Alignment complete when angle < this (degrees)
+
+  # Pivot Tuning
+  pivot_gain: 1.5           # Proportional gain for pivot rotation
+  pivot_slowdown_deg: 10.0  # Start slowing down when error < this (degrees)
+  pivot_threshold_deg: 1.0  # Pivot complete when error < this (degrees)
+
+  # S-Curve Settings (for smooth velocity profile)
+  s_curve_accel_ratio: 0.3  # First 30% of distance: accelerate
+  s_curve_decel_ratio: 0.4  # Last 40% of distance: decelerate
+  s_curve_min_speed_factor: 0.2  # Minimum speed = 0.2 * max_speed
+
+  # Stopping Condition (Pixels relative to Center Y)
+  # 0 = Center of image.
+  # Negative = Stops 'earlier' (Top of frame).
+  # Positive = Stops 'later' (Bottom of frame).
+  center_y_stop_offset: -50.0
+  center_y_stop_tolerance: 10.0
+
+  # Delays (seconds)
+  stop_sleep_duration: 1.0
+
+  # Safety timeout (seconds)
+  # If tag not reached within this time, emergency stop
+  navigation_timeout: 8.0
+
+topics:
+  camera_rgb: "/rgb"
+  camera_info: "/camera_info"
+  scan_signal: "/scan_finished"
+  cmd_vel: "/cmd_vel"
+  odom: "/odom"
+  robot_pose: "/robot_pose"

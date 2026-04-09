@@ -1,0 +1,17 @@
+std_msgs/Header header
+string state
+int32 mode
+string zone
+int32 current_tag
+int32 target_tag
+int32 next_tag
+string waypoint_progress
+float64 lateral_offset_m
+string drift_direction
+float64 wall_distance_m
+string wall_status
+float64 align_angle_deg
+int32[] scan_tags
+int32 current_scan_idx
+int32 current_scan_target
+int32 scans_remaining

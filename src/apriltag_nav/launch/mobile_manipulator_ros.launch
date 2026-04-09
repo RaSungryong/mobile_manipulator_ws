@@ -1,0 +1,88 @@
+<launch>
+
+    <!-- =========================================================
+         Plan B — Distributed ROS Node Architecture
+         =========================================================
+         Each hardware device runs as an independent node.
+         Layers communicate only via ROS topics.
+
+         Layer 1 (Hardware) :  keyence_dlen1_node, basler_camera_node
+         Layer 2 (Control)  :  arm_controller_ros
+         Layer 3 (Orchestration): mobile_manipulator_system
+
+         Topic flow:
+           keyence/value          (Float32)        ──→ arm_controller_ros
+           /basler/image_raw      (Image bgr8)     ──→ arm_controller_ros
+           /robot_pose            (Pose2DWithFlag)  ──→ arm_controller_ros
+           /arm/scan_command      (String JSON)    ──→ arm_controller_ros
+           /arm/cancel            (Bool)           ──→ arm_controller_ros
+           /scan_finished         (Bool)           ──→ mobile_manipulator_system
+           /scan/ra_value         (Float32)        ──→ external
+           /scan/point_result     (String JSON)    ──→ external
+           /scan/image            (Image)          ──→ external
+    ========================================================= -->
+
+    <!-- =====================================================
+         Layer 1 — Hardware nodes
+         Can be restarted independently without stopping arm or task nodes.
+    ===================================================== -->
+
+    <!-- Keyence DL-EN1 distance sensor (TCP polling at 60 Hz) -->
+    <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
+        <param name="host"      value="192.168.1.5"/>
+        <param name="port"      value="64000"/>
+        <param name="rate_hz"   value="60.0"/>
+        <param name="timeout_s" value="0.5"/>
+        <param name="scale"     value="0.001"/>
+        <param name="offset"    value="0.0"/>
+        <param name="use_crlf"  value="true"/>
+    </node>
+
+    <!-- Basler camera publisher — publishes /basler/image_raw (bgr8) -->
+    <node name="basler_camera_node" pkg="apriltag_nav" type="basler_camera_node.py" output="screen">
+        <param name="fps"   value="5.0"/>
+        <param name="topic" value="/basler/image_raw"/>
+    </node>
+
+    <!-- =====================================================
+         Layer 2 — Control node
+         Depends on Layer 1 topics. Subscribes to sensor data,
+         receives scan commands, controls the Fairino arm.
+    ===================================================== -->
+
+    <node name="arm_controller_ros" pkg="apriltag_nav" type="arm_controller_ros.py" output="screen">
+
+        <!-- Robot connection -->
+        <param name="robot_ip"   value="192.168.58.2"/>
+        <param name="model_path" value="$(find apriltag_nav)/model/exported/resnet3D.onnx"/>
+
+        <!-- Scan settings -->
+        <param name="num_samples"           value="1"/>
+        <param name="delay_between_samples" value="0.2"/>
+        <param name="stabilization_time"    value="0.5"/>
+        <param name="save_images"           value="false"/>
+        <param name="output_dir"            value="/tmp/scan_results"/>
+
+        <!-- Keyence closed-loop control -->
+        <param name="keyence_tol"           value="0.2"/>
+        <param name="keyence_dir"           value="1.0"/>
+        <param name="keyence_kp"            value="0.8"/>
+        <param name="keyence_max_steps"     value="10"/>
+        <param name="keyence_max_step_mm"   value="5.0"/>
+
+        <!-- Coordinate transform constants -->
+        <param name="pose_base_z"           value="-0.835"/>
+        <param name="pose_mb_z"             value="0.18"/>
+        <param name="pose_arm_z"            value="-1.02"/>
+
+    </node>
+
+    <!-- =====================================================
+         Layer 3 — Orchestration node
+         No direct hardware dependency.
+         Triggers arm via /arm/scan_command topic.
+    ===================================================== -->
+
+    <node name="mobile_manipulator_system" pkg="apriltag_nav" type="task_executor_ros.py" output="screen"/>
+
+</launch>
