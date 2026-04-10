@@ -1,6 +1,6 @@
 # 모바일 매니퓰레이터 코드 수정 보고서
 
-**작성일:** 2026-04-09
+**작성일:** 2026-04-10 (0330 버전 병합 포함)
 
 ---
 
@@ -208,7 +208,44 @@ rostopic pub -1 /task_command std_msgs/String "TEST_POSE 0.737 2.14 0.704 1.5708
 
 ---
 
-## 4. 의존성 변경
+## 4. 0330 버전 병합 (안전성/검증 기능)
+
+0330 버전에서 추가된 안전성 및 검증 기능을 현재 rtb 기반 코드에 병합했습니다.
+
+### 4.1 병합된 기능
+
+| 기능 | 설명 |
+|------|------|
+| `JOINT_LIMITS` | FR10v6 관절 각도 제한 (6축) |
+| `VELOCITY_LIMITS` | 관절 최대 속도 [3.15, 3.15, 3.15, 3.2, 3.2, 3.2] rad/s |
+| `validate_joint_values()` | IK/운동 전 관절 한계 검증 |
+| `validate_velocities()` | 관절 속도 한계 검증 |
+| `is_discontinuous` 지원 | =1이면 해당 포인트 이동 전 Home 복귀 |
+| 반환값 `(bool, str)` | 모든 운동 함수가 성공/실패 상태 반환 |
+| `isaac_collision_detected` | Isaac Sim 충돌 검출 플래그 |
+| `_save_results_to_new_csv()` | 실행 결과를 `_result.csv`로 실시간 저장 (withscan만) |
+| `scan_joints_line1_new` 작업 | 새 작업 정의 (groups 103-109) |
+
+### 4.2 복사된 파일
+
+| 파일 | 설명 |
+|------|------|
+| `optimized_joints_line1_new.csv` | 새 joint CSV (is_discontinuous 열 포함) |
+| `polishing_env_10255.usd` | 충돌 mesh trigger 객체 제거됨 |
+
+### 4.3 task_manager.py 확장
+
+모든 scan point에 메타데이터 필드 추가:
+- `point_id` — CSV의 포인트 인덱스
+- `group_id` — 태그 그룹 ID
+- `csv_path` — 원본 CSV 파일 경로
+- `is_discontinuous` — 비연속성 플래그 (0 또는 1)
+
+**기존 q0/joint_file 로직 유지** (0330 버전에서 삭제되었으나 본 코드에서는 보존)
+
+---
+
+## 5. 의존성 변경
 
 | 패키지 | 버전 | 용도 |
 |-------|------|------|

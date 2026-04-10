@@ -75,6 +75,13 @@ class TaskManager:
 
 
 
+        # ---------------- scan (joint, new) ----------------
+        "scan_joints_line1_new": {
+            "file": "optimized_joints_line1_new.csv",
+            "type": "scan",
+            "scan_mode": "joint",
+        },
+
         # ---------------- move-only CSV  --------
         # "move_route_A": {
         #     "file": "move_route_A.csv",
@@ -141,6 +148,7 @@ class TaskManager:
                     rows,
                     scan_mode=cfg["scan_mode"],
                     joint_rows=joint_rows,
+                    csv_path=csv_path,
                 )
 
             elif task_type == "move":
@@ -191,7 +199,7 @@ class TaskManager:
     # ==================================================
     # BUILD TASKS
     # ==================================================
-    def _build_scan_task(self, task_name, rows, scan_mode, joint_rows=None):
+    def _build_scan_task(self, task_name, rows, scan_mode, joint_rows=None, csv_path=""):
 
         task_steps = []
         scan_points_by_tag = defaultdict(list)
@@ -230,6 +238,11 @@ class TaskManager:
 
             speed = float(r.get("speed", 80))
 
+            # ---- metadata from CSV ----
+            pid = int(r.get("point_id", 0))
+            is_disc_val = str(r.get("is_discontinuous", "0")).strip()
+            is_disc = int(is_disc_val) if is_disc_val else 0
+
             # ---- scan point ----
             if scan_mode == "joint":
                 scan_points_by_tag[gid].append({
@@ -238,7 +251,11 @@ class TaskManager:
                         float(r["q1"]), float(r["q2"]), float(r["q3"]),
                         float(r["q4"]), float(r["q5"]), float(r["q6"]),
                     ],
-                    "speed": speed
+                    "speed": speed,
+                    "point_id": pid,
+                    "group_id": gid,
+                    "csv_path": csv_path,
+                    "is_discontinuous": is_disc,
                 })
 
             elif scan_mode == "pose":
@@ -250,10 +267,13 @@ class TaskManager:
                     "rx": float(r["rx"]),   # rad
                     "ry": float(r["ry"]),
                     "rz": float(r["rz"]),
-                    "speed": speed
+                    "speed": speed,
+                    "point_id": pid,
+                    "group_id": gid,
+                    "csv_path": csv_path,
+                    "is_discontinuous": is_disc,
                 }
                 # Attach IK seed from paired joint CSV
-                pid = int(r.get("point_id", 0))
                 q0 = joint_lookup.get((gid, pid))
                 if q0 is not None:
                     point["q0"] = q0

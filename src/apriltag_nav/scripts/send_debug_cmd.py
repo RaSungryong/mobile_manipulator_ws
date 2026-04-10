@@ -84,6 +84,7 @@ def main():
     # ------------------------------------------
     # cmd_str = 'TASK scan_joints_line1'
     cmd_str = 'TASK scan_grid_line1'
+    # cmd_str =  'TASK scan_joints_line1_new'
     # cmd_str = 'GOTO 108'
     # cmd_str = 'STOP'
 

@@ -43,11 +43,25 @@ class ArmController:
         - joint control (direct joint interpolation)
     """
 
+    # FR10v6 joint limits (radians)
+    JOINT_LIMITS = [
+        (-3.0543, 3.0543),   # j1
+        (-4.6251, 1.4835),   # j2
+        (-2.8274, 2.8274),   # j3
+        (-4.6251, 1.4835),   # j4
+        (-3.0543, 3.0543),   # j5
+        (-3.0543, 3.0543)    # j6
+    ]
+
+    # FR10v6 max joint velocity (rad/s)
+    VELOCITY_LIMITS = [3.15, 3.15, 3.15, 3.2, 3.2, 3.2]
+
     def __init__(self, model_path=None):
         self.busy = False
         self.cancel_requested = False
         self.current_pose_msg = None
         self.goals_queue = []
+        self.isaac_collision_detected = False
 
         # ---------- ROS node ----------
         if not rospy.core.is_initialized():
@@ -161,13 +175,18 @@ class ArmController:
             if p["mode"] == "pose":
                 pose_points.append(p)
             elif p["mode"] == "joint":
-                goals.append(("joint", p["joints"], p.get("speed", 80)))
+                goals.append(("joint", p["joints"], p.get("speed", 80),
+                              p.get("point_id", 0), p.get("group_id", -1),
+                              p.get("csv_path", ""), p.get("is_discontinuous", 0)))
 
         if pose_points:
             raw = []
             for i, p in enumerate(pose_points):
                 raw.append({
-                    "point_id": i,
+                    "point_id": p.get("point_id", i),
+                    "group_id": p.get("group_id", -1),
+                    "csv_path": p.get("csv_path", ""),
+                    "is_discontinuous": p.get("is_discontinuous", 0),
                     "x": p["x"],
                     "y": p["y"],
                     "z": p["z"],
@@ -178,9 +197,9 @@ class ArmController:
                 })
 
             transformed = self.process_transforms(raw, self.current_pose_msg)
-            for idx, (pos, quat, speed) in enumerate(transformed):
+            for idx, (pos, quat, speed, pid, gid, cpath, is_disc) in enumerate(transformed):
                 q0 = pose_points[idx].get("q0")  # IK seed from joint CSV
-                goals.append(("pose", pos, quat, speed, q0))
+                goals.append(("pose", pos, quat, speed, q0, pid, gid, cpath, is_disc))
 
         return goals
 
@@ -190,19 +209,35 @@ class ArmController:
     def _execute_goals(self):
         rospy.loginfo(f"[Arm] Execute {len(self.goals_queue)} goals")
 
+        self.isaac_collision_detected = False
+
         for i, goal in enumerate(self.goals_queue):
 
             if self.cancel_requested:
                 rospy.logwarn("[Arm] Scan cancelled")
                 break
 
+            rospy.loginfo(f"[Arm] === Point {i+1}/{len(self.goals_queue)} ===")
+
+            success = False
+            msg_txt = "Unknown"
+
             if goal[0] == "pose":
-                _, pos, quat, speed, q0 = goal
-                self._execute_pose_goal(pos, quat, speed, q0)
+                _, pos, quat, speed, q0, pid, gid, cpath, is_disc = goal
+                if is_disc == 1:
+                    rospy.loginfo(f"[Arm] is_discontinuous=1 for Point {pid}. Moving to Home first.")
+                    self.move_to_home()
+                success, msg_txt = self._execute_pose_goal(pos, quat, speed, q0)
 
             elif goal[0] == "joint":
-                _, joints, speed = goal
-                self._execute_joint_goal(joints, speed)
+                _, joints, speed, pid, gid, cpath, is_disc = goal
+                if is_disc == 1:
+                    rospy.loginfo(f"[Arm] is_discontinuous=1 for Point {pid}. Moving to Home first.")
+                    self.move_to_home()
+                success, msg_txt = self._execute_joint_goal(joints, speed)
+
+            if not success:
+                rospy.logwarn(f"[Arm] Point {i+1} failed: {msg_txt}")
 
             rospy.sleep(0.3)
 
@@ -228,14 +263,27 @@ class ArmController:
         sol = self.robot.ikine_LM(T_target, q0=ik_seed)
         if not sol.success:
             rospy.logerr(f"[Arm] IK failed for pos={np.round(pos, 4)}, dist={dist:.3f}m, skipping")
-            return
+            return (False, "IK failed")
 
         q_target = sol.q
+
+        # Validate joint limits
+        valid, vmsg = self.validate_joint_values(q_target)
+        if not valid:
+            rospy.logerr(f"[Arm] Joint validation failed: {vmsg}")
+            return (False, f"Joint limit violation: {vmsg}")
+
         steps = max(20, int(DEFAULT_STEPS * (100 - speed) / 100) + 20)
         traj = jtraj(self.current_q, q_target, steps)
 
         rospy.loginfo(f"[Arm] Pose goal: {np.round(pos, 3)}, steps={steps}")
         self._execute_trajectory(traj.q)
+
+        if self.isaac_collision_detected:
+            self.isaac_collision_detected = False
+            return (False, "Isaac Sim Collision Detected")
+
+        return (True, "Success")
 
     # --------------------------------------------------
     # JOINT GOAL (direct interpolation)
@@ -243,14 +291,27 @@ class ArmController:
     def _execute_joint_goal(self, joints, speed):
         if len(joints) != 6:
             rospy.logerr("[Arm] joint goal must have 6 values")
-            return
+            return (False, "Invalid joints count")
 
         q_target = np.array(joints, dtype=float)
+
+        # Validate joint limits
+        valid, vmsg = self.validate_joint_values(q_target)
+        if not valid:
+            rospy.logerr(f"[Arm] Joint validation failed: {vmsg}")
+            return (False, f"Joint limit violation: {vmsg}")
+
         steps = max(20, int(DEFAULT_STEPS * (100 - speed) / 100) + 20)
         traj = jtraj(self.current_q, q_target, steps)
 
         rospy.loginfo(f"[Arm] Joint goal: {np.round(q_target, 3)}, steps={steps}")
         self._execute_trajectory(traj.q)
+
+        if self.isaac_collision_detected:
+            self.isaac_collision_detected = False
+            return (False, "Isaac Sim Collision Detected")
+
+        return (True, "Success")
 
     # --------------------------------------------------
     # HOME
@@ -350,10 +411,32 @@ class ArmController:
             )
 
             transformed.append(
-                (p_arm, r_arm.as_quat(), g['speed'])
+                (p_arm, r_arm.as_quat(), g['speed'],
+                 g.get('point_id'), g.get('group_id', -1),
+                 g.get('csv_path', ''), g.get('is_discontinuous', 0))
             )
 
         return transformed
+
+    # --------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------
+    def validate_joint_values(self, joints):
+        """Check if joint values are within FR10v6 limits."""
+        for i, (val, (lo, hi)) in enumerate(zip(joints, self.JOINT_LIMITS)):
+            if not (lo <= val <= hi):
+                return False, f"J{i+1}={val:.4f} not in [{lo:.4f}, {hi:.4f}]"
+        return True, "OK"
+
+    def validate_velocities(self, current, target, time_delta):
+        """Check if joint velocities exceed FR10v6 limits."""
+        if time_delta <= 0:
+            return False, "Time delta must be > 0"
+        for i in range(6):
+            vel = abs(target[i] - current[i]) / time_delta
+            if vel > self.VELOCITY_LIMITS[i]:
+                return False, f"J{i+1} vel={vel:.2f} > {self.VELOCITY_LIMITS[i]} rad/s"
+        return True, "OK"
 
     # --------------------------------------------------
     # DONE
