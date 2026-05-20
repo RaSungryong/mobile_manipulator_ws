@@ -1,0 +1,22 @@
+# Platform-fixed extrinsics. Row-major 4x4 (length 16). Edit if the platform
+# geometry changes.
+#
+# Initial values are copied verbatim from the geometry constants used in the
+# reference implementation under tranformation_ws/transform_chain/constants.py.
+#
+#   T_AB2MB: ab(arm_base) origin = (0,0,0.040) m in mb(mobile_base) frame;
+#            ab.x = -mb.x, ab.y = -mb.y, ab.z = +mb.z
+#   T_MB2FC: fc(front_cam) origin = (0.6625, 0.0, 0.400) m in mb frame;
+#            fc.x = -mb.y, fc.y = -mb.x, fc.z = -mb.z (downward-facing camera)
+
+T_ab2mb_row_major:
+  [-1.0,  0.0,  0.0,  0.0,
+    0.0, -1.0,  0.0,  0.0,
+    0.0,  0.0,  1.0, -0.04,
+    0.0,  0.0,  0.0,  1.0]
+
+T_mb2fc_row_major:
+  [ 0.0, -1.0,  0.0,  0.6625,
+   -1.0,  0.0,  0.0,  0.0,
+    0.0,  0.0, -1.0,  0.4,
+    0.0,  0.0,  0.0,  1.0]

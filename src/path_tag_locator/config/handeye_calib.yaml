@@ -1,0 +1,21 @@
+handeye_calib:
+  topics:
+    hand_cam_image:   "/hand_cam/image_raw"
+    hand_cam_info:    "/hand_cam/camera_info"
+
+  tag:
+    id:               58            # calibration tag (the same one used as reference tag A)
+    size_m:           0.060
+    family:           "tag36h11"
+
+  robot:
+    use_sdk:          true
+    robot_ip:         "192.168.58.2"
+    fairino_sdk_path: "/home/lcl/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
+    tcp_index:        1
+
+  io:
+    image_wait_timeout: 3.0
+    # Locator reads from here; produce the file with this node.
+    output_path:        "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    min_samples:        8

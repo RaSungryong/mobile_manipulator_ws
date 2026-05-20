@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>path_tag_locator</name>
+  <version>0.1.0</version>
+  <description>
+    Online localization of ground-path AprilTags in world frame, using a
+    user-provided reference tag observed by an arm end-effector camera and a
+    path tag observed by a front/floor camera. Independent ROS package; no
+    dependency on apriltag_nav.
+  </description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>message_generation</build_depend>
+  <build_depend>std_srvs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+</package>

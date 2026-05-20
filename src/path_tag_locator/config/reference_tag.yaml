@@ -1,0 +1,13 @@
+# Reference tag (tag A) world pose. Provided by the user via accurate
+# external calibration. Two equivalent formats are accepted:
+#
+#   format: pose      -> use position_m + rpy_deg (ZYX intrinsic, degrees)
+#   format: matrix    -> use matrix_4x4 (row-major 16 floats)
+#
+# Edit these defaults to match your real installation. The service may also
+# override the value at call time (override_ref=true + ref_pose).
+reference_tag:
+  format: "pose"
+  position_m: [0.0, 0.0, 0.0]
+  rpy_deg:    [0.0, 0.0, 0.0]
+  # matrix_4x4: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]

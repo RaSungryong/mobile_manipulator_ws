@@ -1,0 +1,10 @@
+<launch>
+  <arg name="config" default="$(find path_tag_locator)/config/locator.yaml"/>
+
+  <node pkg="path_tag_locator"
+        type="path_tag_locator_node.py"
+        name="path_tag_locator"
+        output="screen">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+</launch>

@@ -1,0 +1,29 @@
+# Request: locate a single ground-path AprilTag in world frame.
+#
+# - tag_b_id < 0  : use yaml-default tag_b_id
+# - override_ref  : if true, use ref_pose as T_A_world; else use yaml default
+# - save_result   : if true, also persist npz+yaml under save_dir (or default)
+# - auto_align    : if true, before localization the arm is moved so that
+#                   the hand camera squarely faces tag A. The user-supplied
+#                   ``align_initial_tcp_mm_deg`` is the approximate starting
+#                   pose (FR5 [x_mm,y_mm,z_mm,rx_deg,ry_deg,rz_deg], ZYX).
+int32 tag_b_id
+geometry_msgs/Pose ref_pose
+bool override_ref
+bool save_result
+string save_dir
+bool auto_align
+float64[6] align_initial_tcp_mm_deg
+---
+# Response
+bool success
+string message
+geometry_msgs/Pose tag_b_world_pose
+float64[3] position_m
+float64[3] rpy_deg
+float64[16] t_a2b_row_major
+# Auto-align report (0 / 0.0 when auto_align=false)
+int32 align_iterations_used
+float64 align_final_xy_offset_m
+float64 align_final_tilt_deg
+float64[6] align_final_tcp_mm_deg

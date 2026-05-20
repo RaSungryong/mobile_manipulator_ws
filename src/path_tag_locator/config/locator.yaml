@@ -1,0 +1,47 @@
+path_tag_locator:
+  topics:
+    hand_cam_image:   "/hand_cam/image_raw"
+    hand_cam_info:    "/hand_cam/camera_info"
+    front_cam_image:  "/front_cam/image_raw"
+    front_cam_info:   "/front_cam/camera_info"
+
+  tag:
+    family:           "tag36h11"
+    tag_a_id:         58       # reference tag (observed by hand-cam)
+    tag_b_id:         10       # default path tag (observed by front-cam)
+    tag_a_size_m:     0.060
+    tag_b_size_m:     0.060
+
+  robot:
+    use_sdk:          true
+    robot_ip:         "192.168.58.2"
+    fairino_sdk_path: "/home/lcl/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
+    tcp_index:        1
+
+  hand_eye:
+    npz_path:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+
+  extrinsics_yaml:    "$(find path_tag_locator)/config/extrinsics.yaml"
+  reference_tag_yaml: "$(find path_tag_locator)/config/reference_tag.yaml"
+
+  io:
+    image_wait_timeout: 3.0
+    default_save_dir:   "~/.ros/path_tag_locator"
+
+  # Auto-align parameters used when the LocatePathTag service request has
+  # auto_align=true. Before computing T_B_world, the arm moves to the
+  # user-supplied approximate pose, then iteratively centers tag A in the
+  # hand-cam image with the camera optical axis perpendicular to the tag.
+  align:
+    target_distance_m:     0.0     # 0 => keep current depth (z) from tag
+    max_iterations:        5       # set to 1 for one-shot
+    position_tol_m:        0.005   # convergence: tag x-y offset in cam frame
+    angle_tol_deg:         1.0     # convergence: tilt between cam +z and tag +z
+    max_step_m:            0.10    # per-iteration MoveL translation clamp
+    max_step_deg:          15.0    # per-iteration MoveL rotation clamp
+    max_initial_step_m:    0.80    # clamp on the user-supplied initial move
+    max_initial_step_deg:  180.0   # clamp on the user-supplied initial move
+    move_vel:              20.0    # Fairino MoveJ vel %
+    move_acc:              20.0
+    move_ovl:              100.0
+    move_settle_s:         0.3     # pause after MoveJ before re-detecting
