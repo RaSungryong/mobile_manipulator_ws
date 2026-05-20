@@ -127,8 +127,43 @@ quaternion).
   latched).
 - **Service response** includes `tag_b_world_pose`, `position_m`,
   `rpy_deg` (ZYX intrinsic, degrees), and `t_a2b_row_major` for debug.
-- **Files** (when `save_result: true`): under
-  `~/.ros/path_tag_locator/path_tag_<id>_<timestamp>.{npz,yaml}`.
+- **Files** — every call (success and failure) is persisted; the
+  `save_result` request flag is now informational only. See next section.
+
+## Persistence layout
+
+Every `locate_path_tag` call writes a self-contained run directory so
+that the result can be reproduced offline:
+
+```
+~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
+    hand_cam.png            BGR image fed to detector
+    front_cam.png           BGR image fed to detector
+    K_hc.npz / K_fc.npz     intrinsics actually used
+    result.npz              T_B_world, T_A2B, T_A_world, T_hc2ee,
+                            T_ab2mb, T_mb2fc, tcp_pose_mm_deg, K_*,
+                            position_m, rpy_deg
+    result.yaml             human-readable summary (incl. auto_align report)
+    request.yaml            full service request echo
+~/.ros/path_tag_locator/locate/locate_log.csv   append-only index
+```
+
+Failed calls land in `..._FAILED/` directories with `result.yaml`
+holding the error message and `request.yaml` echoing the input, and the
+log row carries `success=0`.
+
+Hand-eye calibration archives each capture as it happens:
+
+```
+~/.ros/path_tag_locator/handeye_calib/run_<ts>/
+    samples/0000_image.png    samples/0000_pose.npz  (tcp_pose, K)
+    samples/0001_image.png    ...
+    samples_index.csv         row per capture (tcp, file paths)
+    result.npz / result.yaml  written on /compute
+```
+
+`/handeye_calib/reset` starts a fresh `run_<ts>/` directory, so
+historical attempts are never lost.
 
 ## Notes
 

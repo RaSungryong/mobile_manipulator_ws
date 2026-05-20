@@ -36,6 +36,7 @@ from path_tag_locator.handeye_calib import (
     save_result,
     summarize,
 )
+from path_tag_locator.persistence import HandeyeRunRecorder
 from path_tag_locator.ros_image import grab_image_and_K
 from path_tag_locator.tcp_pose import FairinoTCPClient
 
@@ -69,6 +70,8 @@ class HandeyeCalibNode:
         self.image_wait_timeout = float(root["io"]["image_wait_timeout"])
         self.output_path = _resolve_ros_path(root["io"]["output_path"])
         self.min_samples = int(root["io"].get("min_samples", 8))
+        self.run_root = _resolve_ros_path(
+            root["io"].get("run_root", "~/.ros/path_tag_locator"))
 
         robot = root["robot"]
         self.tcp_client = None
@@ -81,6 +84,9 @@ class HandeyeCalibNode:
 
         self.samples = []           # list[CalibSample]
         self.last_result = None     # CalibResult | None
+        self.recorder = HandeyeRunRecorder(self.run_root)
+        rospy.loginfo("handeye_calib: persistence run_dir=%s",
+                      self.recorder.run_dir)
 
         rospy.Service("~capture", Trigger, self._on_capture)
         rospy.Service("~compute", Trigger, self._on_compute)
@@ -107,6 +113,11 @@ class HandeyeCalibNode:
             tcp = self.tcp_client.get_tcp_pose()
             self.samples.append(CalibSample(image_bgr=img, K=K,
                                             tcp_pose_mm_deg=tcp))
+            try:
+                self.recorder.add_sample(img, K, tcp)
+            except Exception as save_err:
+                rospy.logwarn("handeye_calib: failed to persist sample: %s",
+                              save_err)
             msg = (f"sample {len(self.samples)} captured "
                    f"(tcp_mm_deg={['%.2f' % v for v in tcp]})")
             rospy.loginfo("handeye_calib: %s", msg)
@@ -126,6 +137,13 @@ class HandeyeCalibNode:
             )
             path = save_result(result, self.output_path)
             self.last_result = result
+            try:
+                run_dir = self.recorder.save_result(
+                    result, self.tag_id, self.tag_size_m, self.tag_family)
+                rospy.loginfo("handeye_calib: archived run to %s", run_dir)
+            except Exception as save_err:
+                rospy.logwarn("handeye_calib: failed to archive run: %s",
+                              save_err)
             text = summarize(result)
             rospy.loginfo("handeye_calib.compute:\n%s\nsaved: %s", text, path)
             return TriggerResponse(success=True, message=f"saved {path}\n{text}")
@@ -137,6 +155,13 @@ class HandeyeCalibNode:
         n = len(self.samples)
         self.samples = []
         self.last_result = None
+        try:
+            self.recorder = HandeyeRunRecorder(self.run_root)
+            rospy.loginfo("handeye_calib.reset: new run_dir=%s",
+                          self.recorder.run_dir)
+        except Exception as save_err:
+            rospy.logwarn("handeye_calib.reset: failed to start new run: %s",
+                          save_err)
         rospy.loginfo("handeye_calib.reset: cleared %d samples", n)
         return TriggerResponse(success=True, message=f"cleared {n} samples")
 

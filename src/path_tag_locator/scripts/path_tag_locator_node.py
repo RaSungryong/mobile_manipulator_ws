@@ -11,17 +11,13 @@ Single ROS node that:
 The node owns no internal state besides cached calibration matrices; each
 service call grabs fresh images, fresh camera_info, and the live TCP pose.
 """
-import datetime as _dt
 import os
 import re
 import sys
-import time
-from pathlib import Path
 
 import numpy as np
 import rospy
 import rospkg
-import yaml
 from geometry_msgs.msg import Pose, PoseStamped
 
 from path_tag_locator.align import (
@@ -38,7 +34,6 @@ from path_tag_locator.constants import (
 )
 from path_tag_locator.detect import detect_apriltag
 from path_tag_locator.geometry import (
-    R_to_quat_xyzw,
     assert_rigid,
     matrix_m_to_pose_fr5,
     matrix_to_pose,
@@ -46,6 +41,7 @@ from path_tag_locator.geometry import (
     pose_to_matrix,
 )
 from path_tag_locator.hand_eye import load_T_hc2ee
+from path_tag_locator.persistence import save_locate_failure, save_locate_run
 from path_tag_locator.ros_image import grab_image_and_K
 from path_tag_locator.tcp_pose import FairinoTCPClient
 from path_tag_locator.srv import (
@@ -129,11 +125,14 @@ class PathTagLocatorNode:
     # ------------------------------------------------------------------
     def _handle_locate(self, req):
         resp = LocatePathTagResponse()
+        # Build a request echo eagerly (always written, even on failure).
+        request_echo = self._echo_request(req)
+        tag_b_id = (int(req.tag_b_id)
+                    if int(req.tag_b_id) >= 0
+                    else int(self.cfg.tag.tag_b_id))
+        save_dir_req = (str(req.save_dir) if req.save_dir else
+                        self.cfg.io.default_save_dir)
         try:
-            tag_b_id = (int(req.tag_b_id)
-                        if int(req.tag_b_id) >= 0
-                        else int(self.cfg.tag.tag_b_id))
-
             if req.override_ref:
                 T_A_world = pose_to_matrix(
                     (req.ref_pose.position.x,
@@ -226,10 +225,42 @@ class PathTagLocatorNode:
             stamped.pose = resp.tag_b_world_pose
             self.pub.publish(stamped)
 
-            if bool(req.save_result):
-                save_dir = (req.save_dir or self.cfg.io.default_save_dir)
-                self._save(save_dir, tag_b_id, T_A_world, T_A2B, T_B_world,
-                           tcp_pose, resp.position_m, resp.rpy_deg)
+            # Always persist (raw images, K, all transforms, CSV append).
+            try:
+                run_dir = save_locate_run(
+                    root_dir=save_dir_req,
+                    tag_b_id=tag_b_id,
+                    image_hc=hc_img,
+                    image_fc=fc_img,
+                    K_hc=K_hc,
+                    K_fc=K_fc,
+                    T_A_world=T_A_world,
+                    T_hc2ee=self.T_hc2ee,
+                    T_ab2mb=self.T_ab2mb,
+                    T_mb2fc=self.T_mb2fc,
+                    tcp_pose_mm_deg=tcp_pose,
+                    T_A2B=T_A2B,
+                    T_B_world=T_B_world,
+                    position_m=resp.position_m,
+                    rpy_deg=resp.rpy_deg,
+                    tag_a_id=int(self.cfg.tag.tag_a_id),
+                    tag_a_size_m=float(self.cfg.tag.tag_a_size_m),
+                    tag_b_size_m=float(self.cfg.tag.tag_b_size_m),
+                    family=self.cfg.tag.family,
+                    request_echo=request_echo,
+                    success=True,
+                    message="ok",
+                    auto_align_report={
+                        "iterations": int(align_iters),
+                        "xy_offset_m": float(align_xy),
+                        "tilt_deg": float(align_tilt),
+                        "final_tcp_mm_deg": [float(v) for v in align_final_tcp],
+                    } if bool(req.auto_align) else None,
+                )
+                rospy.loginfo("path_tag_locator: saved run to %s", run_dir)
+            except Exception as save_err:
+                rospy.logwarn("path_tag_locator: failed to persist run: %s",
+                              save_err)
 
             rospy.loginfo("path_tag_locator: tag_b_id=%d pos=%s rpy=%s",
                           tag_b_id, resp.position_m, resp.rpy_deg)
@@ -245,7 +276,43 @@ class PathTagLocatorNode:
             resp.align_final_xy_offset_m = 0.0
             resp.align_final_tilt_deg = 0.0
             resp.align_final_tcp_mm_deg = [0.0] * 6
+            try:
+                save_locate_failure(
+                    root_dir=save_dir_req,
+                    tag_b_id=tag_b_id,
+                    message=str(e),
+                    request_echo=request_echo,
+                )
+            except Exception as save_err:
+                rospy.logwarn("path_tag_locator: failed to persist failure: %s",
+                              save_err)
         return resp
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _echo_request(req):
+        return {
+            "tag_b_id": int(req.tag_b_id),
+            "override_ref": bool(req.override_ref),
+            "ref_pose": {
+                "position": {
+                    "x": float(req.ref_pose.position.x),
+                    "y": float(req.ref_pose.position.y),
+                    "z": float(req.ref_pose.position.z),
+                },
+                "orientation": {
+                    "x": float(req.ref_pose.orientation.x),
+                    "y": float(req.ref_pose.orientation.y),
+                    "z": float(req.ref_pose.orientation.z),
+                    "w": float(req.ref_pose.orientation.w),
+                },
+            },
+            "save_result": bool(req.save_result),
+            "save_dir": str(req.save_dir),
+            "auto_align": bool(req.auto_align),
+            "align_initial_tcp_mm_deg": [float(v)
+                                         for v in req.align_initial_tcp_mm_deg],
+        }
 
     # ------------------------------------------------------------------
     def _auto_align(self, initial_tcp_mm_deg):
@@ -327,27 +394,6 @@ class PathTagLocatorNode:
             "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
             "final_tcp": final_tcp,
         }
-
-    # ------------------------------------------------------------------
-    def _save(self, save_dir, tag_b_id, T_A_world, T_A2B, T_B_world,
-              tcp_pose, position_m, rpy_deg):
-        d = Path(os.path.expanduser(save_dir))
-        d.mkdir(parents=True, exist_ok=True)
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = d / f"path_tag_{tag_b_id}_{ts}"
-        np.savez(str(base) + ".npz",
-                 T_B_world=T_B_world,
-                 T_A2B=T_A2B,
-                 T_A_world=T_A_world,
-                 tcp_pose_mm_deg=np.asarray(tcp_pose, dtype=np.float64))
-        with open(str(base) + ".yaml", "w") as fh:
-            yaml.safe_dump({
-                "tag_b_id": int(tag_b_id),
-                "position_m": [float(v) for v in position_m],
-                "rpy_deg": [float(v) for v in rpy_deg],
-                "tcp_pose_mm_deg": [float(v) for v in tcp_pose],
-            }, fh, default_flow_style=False)
-        rospy.loginfo("path_tag_locator: saved %s.{npz,yaml}", base)
 
     def spin(self):
         rospy.spin()

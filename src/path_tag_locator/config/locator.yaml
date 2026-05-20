@@ -26,6 +26,10 @@ path_tag_locator:
 
   io:
     image_wait_timeout: 3.0
+    # Every call (success or failure) is persisted under this root.
+    # The service request can override the path per-call; the
+    # ``save_result`` flag in the request is now informational only —
+    # results are always written (raw images + K + transforms + CSV).
     default_save_dir:   "~/.ros/path_tag_locator"
 
   # Auto-align parameters used when the LocatePathTag service request has

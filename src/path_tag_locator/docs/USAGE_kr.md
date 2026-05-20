@@ -193,20 +193,59 @@ rosservice call /path_tag_locator/locate_path_tag "{
 rostopic echo -n 1 /path_tag_locator/tag_world_pose
 ```
 
-### 디스크 저장 (save_result=true 시, 기본 경로 `~/.ros/path_tag_locator/`)
+### 디스크 저장 (자동, 항상 보존됨)
 
-```bash
-ls -t ~/.ros/path_tag_locator/ | head
-# path_tag_<id>_<timestamp>.npz   — T_B_world, T_A2B, T_A_world, tcp_pose
-# path_tag_<id>_<timestamp>.yaml  — position_m, rpy_deg (사람이 보기 쉬움)
+모든 호출 (성공 / 실패) 이 디스크에 기록됨. `save_result` 플래그는 안내용일 뿐 동작에 영향을 주지 않음.
+
+기본 저장 경로: `~/.ros/path_tag_locator/`
+
+#### Localization 호출별 디렉터리 구조
+
+```
+~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
+    hand_cam.png            검출기에 입력된 BGR 이미지
+    front_cam.png           검출기에 입력된 BGR 이미지
+    K_hc.npz / K_fc.npz     호출 시점에 실제 사용된 K
+    result.npz              T_B_world, T_A2B, T_A_world, T_hc2ee,
+                            T_ab2mb, T_mb2fc, tcp_pose_mm_deg, K_*,
+                            position_m, rpy_deg
+    result.yaml             사람이 읽기 좋은 요약 (auto_align 보고 포함)
+    request.yaml            서비스 요청 원본 echo
+~/.ros/path_tag_locator/locate/locate_log.csv   append-only 인덱스
 ```
 
-npz 읽기:
+실패한 호출은 `..._FAILED/` 디렉터리에 저장되며 `result.yaml` 에 에러 메시지, CSV 의 `success` 열이 0 으로 기록됨.
+
+#### Hand-eye 캘리브레이션 아카이브
+
+```
+~/.ros/path_tag_locator/handeye_calib/run_<ts>/
+    samples/0000_image.png    samples/0000_pose.npz  (tcp_pose, K)
+    samples/0001_image.png    ...
+    samples_index.csv         캡처 1건당 1 row (tcp, 파일 경로)
+    result.npz / result.yaml  /compute 호출 시 작성됨
+```
+
+`/handeye_calib/reset` 호출 시 새 `run_<ts>/` 디렉터리가 생성되므로 이전 시도 데이터는 보존됨.
+
+#### npz 읽기 예시
+
 ```python
 import numpy as np
-d = np.load('/home/lcl/.ros/path_tag_locator/path_tag_10_20260520_173025.npz')
+d = np.load('/home/lcl/.ros/path_tag_locator/locate/20260520/run_20260520_173025_tag10/result.npz')
 print(d['T_B_world'])   # 4x4
 print(d['T_A2B'])
+print(list(d.files))    # 모든 키 확인
+```
+
+#### CSV 인덱스 빠른 조회
+
+```bash
+# 가장 최근 호출 10건
+tail -n 10 ~/.ros/path_tag_locator/locate/locate_log.csv
+
+# tag_id=12 의 성공한 호출만
+awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
 ```
 
 ---

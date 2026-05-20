@@ -19,3 +19,7 @@ handeye_calib:
     # Locator reads from here; produce the file with this node.
     output_path:        "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
     min_samples:        8
+    # Archive every capture (image + TCP + K) and the final result here.
+    # Each invocation of the node (and each /reset) starts a fresh
+    # run_<timestamp>/ subdirectory.
+    run_root:           "~/.ros/path_tag_locator"
