@@ -99,31 +99,69 @@ class FairinoTCPClient:
     def move_j_to_pose(self, target_pose_mm_deg,
                        vel=None, acc=None, ovl=None,
                        settle_s: float = 0.2):
-        """Resolve ``target_pose_mm_deg`` to joints via IK (using the
-        current joint state as a reference) and execute a blocking MoveJ.
+        """Resolve ``target_pose_mm_deg`` to joints via IK and execute a
+        blocking ``MoveJ``. Mirrors the call pattern used by the working
+        ``apriltag_nav`` arm controller (proven on this Fairino build):
 
-        Raises ``RuntimeError`` on any non-zero SDK return.
+            ret, joints = robot.GetInverseKin(0, target, config=-1)
+            ret         = robot.MoveJ(joints, tool, user)
+
+        The ``vel``/``acc``/``ovl`` kwargs are intentionally NOT passed to
+        ``MoveJ`` — the compiled SDK on this controller exposes only the
+        first three positional arguments and rejects the speed kwargs.
+        Speed is therefore governed by the controller-side defaults (set
+        on the teach pendant or via ``robot_common_set.py``). The args
+        are accepted here for forward compatibility but currently
+        ignored; they are logged for traceability.
+
+        Tool-frame consistency: ``GetActualTCPPose()`` and IK results
+        reference the controller's currently active tool. ``MoveJ`` is
+        called with ``tool=tcp_index``. For the chain math to hold, the
+        active tool on the box MUST equal ``tcp_index`` — set it once
+        with ``SetToolCoord`` + the teach pendant. If ``tcp_index`` is 0
+        you are using the bare flange and no setup is needed.
+
+        Raises ``RuntimeError`` on any non-zero SDK return. Includes the
+        error code in the message so the Fairino error table can be
+        consulted (e.g. ``ret=14`` means "axis travel limit reached" —
+        the caller may want to call ``ResetAllError`` and retry).
         """
         self.enable()
         robot = self._connect()
-        cur_joints = self.get_joints()
         target_pose = [float(v) for v in target_pose_mm_deg]
 
-        # IK with current joints as reference (preferred), fall back to
-        # configuration-based IK if the SDK can't solve with the seed.
-        err_ik, joints = robot.GetInverseKinRef(0, target_pose, cur_joints)
+        # Log the IK input so a failure on the box is easy to reproduce
+        # off-line (paste these numbers into a stand-alone script).
+        try:
+            cur_tcp = self.get_tcp_pose()
+        except Exception:
+            cur_tcp = None
+        _vel = float(self.default_vel if vel is None else vel)
+        _acc = float(self.default_acc if acc is None else acc)
+        _ovl = float(self.default_ovl if ovl is None else ovl)
+        print(f"[FairinoTCPClient] move_j_to_pose: "
+              f"target={target_pose} cur_tcp={cur_tcp} "
+              f"tool={int(self.tcp_index)} "
+              f"(vel={_vel} acc={_acc} ovl={_ovl} not forwarded to MoveJ)")
+
+        ret_ik = robot.GetInverseKin(0, target_pose, config=-1)
+        # The SDK returns (err, joints). Unpack defensively to surface
+        # any signature drift as a clear error.
+        try:
+            err_ik, joints = ret_ik
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"GetInverseKin returned unexpected shape: {ret_ik!r}")
         if int(err_ik) != 0:
-            err_ik, joints = robot.GetInverseKin(0, target_pose, config=-1)
-            if int(err_ik) != 0:
-                raise RuntimeError(f"GetInverseKin* failed (err={err_ik})")
+            raise RuntimeError(
+                f"GetInverseKin failed (err={err_ik}); target={target_pose}")
 
-        v = float(self.default_vel if vel is None else vel)
-        a = float(self.default_acc if acc is None else acc)
-        o = float(self.default_ovl if ovl is None else ovl)
-
-        err = robot.MoveJ(joints, tool=int(self.tcp_index), user=0,
-                          vel=v, acc=a, ovl=o)
+        err = robot.MoveJ(joints, int(self.tcp_index), 0)
         if err and int(err) != 0:
-            raise RuntimeError(f"MoveJ failed (err={err})")
+            raise RuntimeError(
+                f"MoveJ failed (err={err}); joints={joints} "
+                f"tool={int(self.tcp_index)} "
+                f"(hint: err=14 -> ResetAllError; check active tool "
+                f"matches tcp_index, and joints are inside soft limits)")
         if settle_s > 0:
             time.sleep(settle_s)
