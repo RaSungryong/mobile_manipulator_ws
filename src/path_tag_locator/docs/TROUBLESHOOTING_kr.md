@@ -388,6 +388,9 @@ python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
 - [ ] 노드 측 iter 로그에 `clamped` 가 매번 뜨는가? (§ 1.2)
 - [ ] tool=1 활성화 됐는가? (§ 3.7)
 - [ ] Fairino SDK 호출 시그니처가 SDK 예제와 일치? (§ 1.3)
+- [ ] (map_calibrator 사용 시) base 가 시작 위치에서 어떤 map tag 를 보고 있는가? (§ 6.1)
+- [ ] (map_calibrator 사용 시) apriltag_nav 메인 노드가 죽어 있는가? (§ 6.2)
+- [ ] (map_calibrator 사용 시) `reference_tags.yaml` 의 `id:` 가 정수인가? (§ 6.7)
 
 ---
 
@@ -404,3 +407,107 @@ python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
 | `MoveJ(j, p, 0, 0, v, a, o, [0]*6, 0, 0)` | 시그니처 오류 | `(j, tool=1, user=0, vel=v, acc=a, ovl=o)` |
 
 증상이 위 패턴이면 SDK 시그니처 재확인 (`fairino_sdk/.../examples/movej&movel&movecart.py` 참조).
+
+---
+
+## 6. 지도 일괄 보정 (`map_calibrator_node`) 진단
+
+### 6.1 첫 번째 entry 에서 `base nav to ... failed`
+
+#### 원인
+- 노드 기동 시점에 base 가 어떤 map tag 도 front-cam 으로 보지 못함
+- `RobotController.get_current_tag_id()` → None, `last_known_tag` → None,
+  결과적으로 `move_to_tag` 가 시작 tag 를 못 정함
+
+#### 처방
+실행 전에 base 를 **`map.yaml` 에 등록된 어떤 tag 앞 (예: DOCK 508)** 에
+정차시켜 front-cam 시야에 그 tag 가 들어오게 한 뒤 launch. 첫 entry 의
+`nav_start_id` 를 그 tag 로 두면 BFS 가 안전하게 출발한다.
+
+### 6.2 `/cmd_vel` 이 튕긴다 / base 가 비정상적으로 흔들림
+
+#### 원인
+다른 노드 (예: `apriltag_nav` 메인 컨트롤러) 가 동시에 `/cmd_vel` 을 publish.
+
+#### 처방
+```bash
+rosnode list | grep -E "navigate|robot_controller|task_executor"
+rosnode kill <conflict-node>
+```
+`map_calibrator.launch` 사용 시에는 apriltag_nav 메인 컨트롤러를 **반드시
+종료**. 동시 발행자 둘이 서로 덮어쓰면 동작이 비결정적.
+
+### 6.3 `auto_align: tag A (id=X) not detected` 가 빈번
+
+#### 원인 (entry 1회 실패는 정상, 매번이면 ↓)
+- 그 entry 의 `arm_view_tcp_mm_deg` 가 ref tag 시야 밖
+- base 의 실제 정차 위치가 `map.yaml` 의 path tag 값과 너무 다름
+  (= cm 보다 큰 어긋남 → arm 시드 자세가 빗나감)
+
+#### 처방
+1. 그 entry 의 `nav_start_id` 를 더 가까운 tag 로 변경
+2. `arm_view_tcp_mm_deg` 를 entry 별로 override (현장 jog 로 ref tag 가
+   잘 보이는 자세를 찾은 뒤 그 TCP 를 yaml 에 기록)
+3. `locator.yaml` 의 `align.max_initial_step_m / max_initial_step_deg` 를
+   키워서 첫 점프가 더 멀리 가게 함 (안전 vs 속도 트레이드오프)
+
+### 6.4 `map_world.yaml` 이 일부만 채워짐 (재개 방법)
+
+#### 원인
+중간에 노드를 죽였음. 원자 쓰기는 entry 별로 일어나므로 성공한 entry 까지는
+`map_world_<ts1>.yaml` 에 기록되어 있음.
+
+#### 처방
+`map_in_path` 는 read-only metadata 소스 (apriltag_nav 의 `map.yaml`)
+이므로 그것을 바꾸는 방식으로는 재개되지 않는다. 대신:
+
+1. `map_world_<ts1>.yaml` 의 `tags:` 키들을 열어 이미 성공한 path_tag_id
+   목록을 확인.
+2. `calibration_plan.yaml` 에서 이미 성공한 entry 들을 제거 (또는
+   주석 처리) 한 새 plan 으로 두 번째 실행.
+3. 결과는 새 `map_world_<ts2>.yaml` 에 들어가므로, 사용자가 수동으로
+   두 yaml 의 `tags:` 섹션을 병합:
+
+```bash
+# 수동 병합 예시 (jq 사용시)
+yq eval-all '. as $item ireduce ({}; . * $item)' \
+    map_world_<ts1>.yaml map_world_<ts2>.yaml > map_world_merged.yaml
+```
+
+> 자동 재개 (이전 출력을 읽고 plan 의 이미-완료 entry 를 skip) 는 추후
+> 추가 가능. 현재는 수동.
+
+### 6.5 결과가 의도와 다름 (특정 tag 가 1 m 이상 어긋남)
+
+#### 진단 체크리스트
+1. **ref tag 측정값이 정확한가** — `reference_tags.yaml` 의 (x, y, z, rpy)
+   를 줄자로 재확인. 보통 이게 원인.
+2. **그 entry 의 hand-cam 이 다른 tag 를 본 게 아닌가** —
+   `~/.ros/path_tag_locator/locate/<date>/run_*_tag<id>/hand_cam.png` 를 열어
+   진짜로 ref_tag_id 만 보이는지 확인.
+3. **T_A_world rpy_deg 의 회전 부호** — 같은 (x, y, z) 라도 yaw 가 90° 잘못
+   되면 path tag 결과가 회전 방향으로 멀리 튐.
+4. **Hand-eye 잔차** — § 1.6 참조.
+
+### 6.6 `Navigator: camera_info NOT received within 5.0s`
+
+#### 원인
+`robot_nav.yaml` 의 `topics.camera_info` 가 실제 publish 토픽과 불일치.
+
+#### 처방
+```bash
+rostopic list | grep -i camera_info
+# 실제 토픽 이름에 맞춰 robot_nav.yaml 수정.
+# base nav 는 floor/front 카메라 전용 — hand-cam(vision_cam) 토픽을
+# 가리키면 안 됨.
+```
+
+### 6.7 모든 entry 가 `ref_tag_id X not in reference_tags.yaml`
+
+#### 원인
+plan 의 `ref_tag_id` 가 `reference_tags.yaml` 의 어떤 항목과도 매칭되지 않음.
+yaml 의 id 는 int (예: `100`), plan 도 int 여야 함. 따옴표 (`"100"`) 로 쓰면
+string 으로 파싱되어 매칭 실패.
+
+#### 처방
+모든 `id:` 값이 따옴표 없이 정수로 적혀 있는지 확인.

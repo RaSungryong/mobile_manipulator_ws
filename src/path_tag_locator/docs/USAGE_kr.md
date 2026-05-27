@@ -21,6 +21,22 @@ pip install dt_apriltags        # 누락 시
 
 ## 1. Hand-eye 캘리브레이션 (`T_hc2ee.npz`, 로봇 1대당 1회)
 
+`config/hand_eye/T_hc2ee.npz` 를 만드는 두 가지 경로:
+
+- **A. 정상 보정 세션**: `handeye_calib_node` 로 실제 캡처를 모아 `cv2.calibrateHandEye` 를 돌린다 (다음 절). 권장.
+- **B. 직접 입력**: 외부 (CAD, 데이터시트, 이전 보정값) 에서 측정한 값을 `config/hand_eye/T_hc2ee.yaml` 에 채워서 변환. 빠른 부트스트랩 / nominal mounting offset 으로 시작할 때 유용.
+
+```bash
+# 1. config/hand_eye/T_hc2ee.yaml 의 position_m + rpy_deg (또는 matrix_4x4) 수정
+# 2. yaml -> npz 변환:
+rosrun path_tag_locator save_npz.py             # 기존 npz 가 있으면 거부 (덮어쓰지 않음)
+rosrun path_tag_locator save_npz.py --force     # 덮어쓰기 허용
+```
+
+> **주의**: `T_hc2ee.npz` 를 새로 쓴 뒤에는 `path_tag_locator_node` 를 **재시작**해야 반영됨 (노드가 기동 시 1회 로드).
+
+### 1.A 정상 보정 세션 (권장)
+
 ### 1a. `config/handeye_calib.yaml` 설정
 
 ```yaml
@@ -242,7 +258,334 @@ rosservice call /path_tag_locator/locate_path_tag "{
 
 ---
 
-## 5. 결과 읽기
+## 5. 지도 일괄 보정 (`map_calibrator_node`)
+
+`map.yaml`에 있는 **모든 path tag 의 (x, y)를 한 세션으로 재보정**해서
+`map_updated.yaml`을 산출하는 자율 워크플로. 단일 `locate_path_tag` 호출을
+플랜에 따라 순차로 호출하면서, base 이동까지 패키지 내부 nav 로직(`apriltag_nav`
+런타임 의존 없음)으로 처리한다.
+
+### 5a. 설정 파일
+
+| 파일 | 용도 |
+|------|------|
+| `config/reference_tags.yaml` | **사용자가 측정한 정확한** 기준 tag 들의 월드 6-DOF. (id → position_m + rpy_deg, 또는 4×4 matrix). 모든 path tag 가 이 기준에 대해 보정됨. |
+| `config/calibration_plan.yaml` | `path_tag_id` → `ref_tag_id` 순차 매핑. 항목별 `arm_view_tcp_mm_deg` (hand-cam이 ref tag를 볼 초기 자세) / `nav_start_id` (base nav BFS 시작 tag) override 가능. |
+| `config/map.yaml` | `apriltag_nav/config/map.yaml`의 로컬 복사본. 패키지가 런타임에 apriltag_nav를 import하지 않도록 자체 보유. |
+| `config/robot_nav.yaml` | `apriltag_nav/config/robot.yaml`의 base-nav 서브셋만 추출 (max_linear_speed, look_ahead_base, S-curve 등 + topics). arm/keyence 섹션 없음. |
+| `config/map_calibrator.yaml` | 오케스트레이터의 기본 파일 경로들 (service call 시 override 가능). |
+
+### 5b. 실행
+
+```bash
+# 사전 조건:
+# - apriltag_nav 의 메인 노드는 /cmd_vel 충돌을 피하기 위해 종료된 상태여야 함
+# - base 는 시작 시점에 map.yaml 의 어떤 tag 를 front-cam 으로 보고 있어야 함
+#   (예: DOCK 508 앞). 첫 번째 nav 의 출발점이 필요.
+
+roslaunch path_tag_locator map_calibrator.launch
+
+# Dry-run: 실제 이동 없이 plan 파싱과 ref/map 로딩만 검증
+rosservice call /map_calibrator/run_calibration "{
+  plan_path: '', ref_tags_path: '', map_in_path: '', map_out_path: '',
+  dry_run: true
+}"
+
+# 실제 보정 실행
+rosservice call /map_calibrator/run_calibration "{
+  plan_path: '', ref_tags_path: '', map_in_path: '', map_out_path: '',
+  dry_run: false
+}"
+
+# 진행 상황 모니터링 (항목별 JSON)
+rostopic echo /map_calibrator/progress
+rostopic echo /map_calibrator/current_target_tag
+```
+
+서비스 응답: `success` (= num_failed==0), `message`, `num_succeeded`,
+`num_failed`, `output_yaml_path`. 실패한 entry 가 있어도 세션이
+중단되지 않고 다음 entry 로 진행한다 — 실패 tag 는 `map_updated.yaml`
+에서 원래 (x, y) 를 유지하며, `~/.ros/path_tag_locator/locate/.../`
+아래 `run_*_FAILED/` 디렉터리에 에러와 request echo 가 보존된다.
+
+### 5c. 항목 1개당 실행 흐름
+
+```
+1. base nav -> entry.nav_start_id (있으면)
+2. base nav -> entry.path_tag_id   (map.yaml 의 edges 를 BFS 로 탐색)
+3. arm MoveJ -> entry.arm_view_tcp_mm_deg
+                (defaults.arm_view_tcp_mm_deg 가 fallback)
+4. run_auto_align : hand-cam 을 ref tag 위로 정렬 (locate 시와 동일 알고리즘)
+5. hand-cam + front-cam 영상 + live TCP 캡처
+6. compute_T_A2B -> compute_T_B_world (= T_A_world · T_A2B)
+7. map_data['tags'][path_tag_id]['x','y'] 갱신
+8. atomic write -> map_updated.yaml (tmp + os.replace)
+9. persistence.save_locate_run(...) 으로 6-DOF + 원본 영상 아카이브
+```
+
+### 5d. map.yaml 이 부정확해도 결과가 정확한 이유
+
+체인은 **AprilTag 의 직접 관측**(`T_A2hc`, `T_fc2B`) + **하드웨어 보정값**
+(`T_hc2ee`, `T_ab2mb`, `T_mb2fc`) + **실측 TCP** 로 구성된다. `map.yaml`
+은 그 어느 항에도 들어가지 않는다. `T_B_world = T_A_world · T_A2B` 에서
+`T_A_world` 는 사용자가 준 정확한 값이므로 최종 결과는 `map.yaml`
+정확도와 무관하다.
+
+`map.yaml` 의 (부정확한) 값은 단지 2단계의 arm 초기 자세를 계산하는
+**대략적 시드** 로만 사용되며, 4단계의 `run_auto_align` 이 그 오차를
+실측 기반으로 완전히 흡수한다.
+
+### 5e. 첫 번째 보정 — 단계별 가이드
+
+**path tag 1 개를 처음부터 끝까지** 보정해 보는 가이드. 한번 성공한 뒤에는
+plan 에 entry 만 더 넣으면 됨.
+
+#### Phase 0 — 물리 셋업 (1회)
+
+1. **id=0 인 AprilTag** 을 "world 원점" 으로 정한 위치에 부착 (벽 모서리,
+   바닥 마킹, 고정 구조물 등).
+2. 나머지 ref tag (예: id 100, 502) 도 부착 후, tag 0 기준 상대
+   `(Δx, Δy, Δz, yaw)` 을 줄자로 측정.
+3. 보정할 path tag 1 개 (예: id 101) 를 base 가 접근 가능하고 front-cam
+   으로 보이는 위치에 배치.
+
+#### Phase 1 — Hand-eye `T_hc2ee.npz` (1회)
+
+둘 중 하나:
+
+```bash
+# A. 빠른 부트스트랩: yaml 에 측정/설계값 직접 입력
+nano src/path_tag_locator/config/hand_eye/T_hc2ee.yaml
+rosrun path_tag_locator save_npz.py             # 기존 파일 거부
+rosrun path_tag_locator save_npz.py --force     # 덮어쓰기
+
+# B. 실제 보정: 15-30 개 자세 + cv2.calibrateHandEye
+roslaunch path_tag_locator handeye_calib.launch
+rosservice call /handeye_calib/capture "{}"     # 자세마다 반복
+rosservice call /handeye_calib/compute "{}"
+```
+
+#### Phase 2 — 설정 파일 작성
+
+`config/reference_tags.yaml` — 측정값 ground truth:
+
+```yaml
+format: "pose"
+reference_tags:
+  - id: 0
+    position_m: [0.0, 0.0, 0.0]
+    rpy_deg:    [0.0, 0.0, 0.0]
+  - id: 100
+    position_m: [1.500, 0.200, 0.0]
+    rpy_deg:    [0.0, 0.0, 0.0]
+```
+
+`config/calibration_plan.yaml` — **첫 entry 1 개만**:
+
+```yaml
+defaults:
+  align_required: true
+  arm_view_tcp_mm_deg: [350.0, 0.0, 250.0, 180.0, 0.0, 0.0]   # placeholder, Phase 3 에서 교체
+plan:
+  - path_tag_id: 101
+    ref_tag_id:  0
+    nav_start_id: 508       # base nav 시작 tag (예: DOCK)
+```
+
+`config/locator.yaml` / `config/handeye_calib.yaml` — 실제 카메라
+토픽명 (`/vision_cam/color/image_raw`, `/front_cam/color/image_raw`)
+과 `robot_ip` / `fairino_sdk_path` 가 맞는지 확인.
+
+#### Phase 3 — `arm_view_tcp_mm_deg` 측정 (수동, 1회당 1번)
+
+이 한 단계만 수동임. hand-cam 이 ref tag 0 을 대략적으로 보는 arm 자세를
+찾아 TCP 값을 기록:
+
+```bash
+# 1. path_tag 101 앞에 base 를 수동으로 정차 (front-cam 으로 tag 가 보이게).
+#    teach pendant / joystick / 임시 apriltag_nav 등 어느 것이든.
+
+# 2. base 정차 후, teach pendant 로 arm 을 jog 해서 hand-cam 이 ref tag 0
+#    을 보도록 함 (rqt_image_view /vision_cam/color/image_raw 로 확인).
+#    중심에 두려고 애쓸 필요 없음 — auto_align 이 정조정.
+
+# 3. 현재 TCP pose 읽기:
+python3 -c "
+from fairino import Robot
+r = Robot.RPC('192.168.58.2')
+err, pose = r.GetActualTCPPose()
+print(pose)   # [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg]
+"
+
+# 4. 6 개 숫자를 calibration_plan.yaml 의 defaults.arm_view_tcp_mm_deg
+#    (혹은 그 entry 의 override) 에 붙여넣기.
+```
+
+#### Phase 4 — 충돌 노드 종료 + calibrator 실행
+
+```bash
+# 1. /cmd_vel 발행하는 노드 종료 (apriltag_nav 메인 컨트롤러 등)
+rosnode kill /navigate /robot_controller /task_executor 2>/dev/null || true
+
+# 2. base 를 nav_start_id (DOCK 508) 앞에 정차 — front-cam 이 그 tag 를
+#    보고 있어야 BFS 의 출발점이 잡힘.
+
+# 3. calibrator 실행
+roslaunch path_tag_locator map_calibrator.launch
+```
+
+#### Phase 5 — Dry-run → 실제 보정
+
+```bash
+# 5a. Dry-run: 이동 없이 plan / ref_tags / map.yaml 파싱만 검증
+rosservice call /map_calibrator/run_calibration "{
+  plan_path: '', ref_tags_path: '', map_in_path: '', map_out_path: '',
+  dry_run: true
+}"
+# 예상: success=true, num_succeeded=0, num_failed=0 (dry_run 은 성공 카운트 X)
+
+# 5b. 진행 모니터링 (다른 터미널)
+rostopic echo /map_calibrator/progress
+
+# 5c. 실제 보정
+rosservice call /map_calibrator/run_calibration "{
+  plan_path: '', ref_tags_path: '', map_in_path: '', map_out_path: '',
+  dry_run: false
+}"
+```
+
+그 entry 한 개에 대해 내부에서 일어나는 일:
+1. base nav: `508 → … → 101` (front-cam tag 보면서 감속해서 정렬)
+2. arm `MoveJ` → 너의 `arm_view_tcp_mm_deg`
+3. `auto_align` (보통 3-5 iter) — hand-cam 이 tag 0 을 중앙에 맞춤:
+   ```
+   auto_align iter 1/5: xy=0.040 m, tilt=3.2 deg, z=0.250 m
+   auto_align iter 3/5: xy=0.003 m, tilt=0.4 deg
+   auto_align: converged at iteration 3
+   ```
+4. hand-cam + front-cam 신선한 이미지 + TCP 실독
+5. 체인 계산 → `map_world_<ts>.yaml` 갱신
+
+#### Phase 6 — 결과 검증
+
+```bash
+# yaml 출력
+ls -lt ~/.ros/path_tag_locator/map_world_*.yaml | head -1
+cat <그 파일>
+# 기대: tag 101 의 position_m / rpy_deg, ref_tag_id=0, map_xy
+
+# Per-tag 아카이브 (원본 이미지 확인)
+ls ~/.ros/path_tag_locator/locate/$(date +%Y%m%d)/run_*_tag101/
+# hand_cam.png: ref tag 0 이 중앙 근처, 기울기 < ~5°
+# front_cam.png: path tag 101 이 선명히 보임
+```
+
+#### Phase 7 — Plan 확장 (auto view-pose bootstrap)
+
+**첫 entry 가 성공한 뒤로** 오케스트레이터가 base anchor (mb 의 world
+pose + /odom yaw + path tag map.yaml xy) 를 저장하고, 이후 entry 에서
+`arm_view_tcp_mm_deg` 가 명시되지 않으면 **자동 계산**한다.
+
+추정에 사용되는 정보:
+- 앞 anchor + Δ(path tag map.yaml xy) + Δ(/odom yaw) → 새 `T_world2mb`
+- 정확한 `T_A_world` + 보정 상수 (`T_hc2ee`, `T_ab2mb`)
+- → `arm_view_tcp_mm_deg`
+
+`T_map2world` 가 **필요 없음** — map.yaml 의 *상대* 기하 (절대 frame
+정렬은 몰라도 상관없음) 만으로 충분히 정확한 시드를 만들고,
+`run_auto_align` 이 cm/deg 단위 잔차를 흡수한다.
+
+entry 별 우선순위:
+
+1. `entry.arm_view_tcp_mm_deg` (yaml override) — 최우선
+2. Auto-bootstrap (= `align.auto_view_pose: true` + 직전 entry 성공)
+3. `defaults.arm_view_tcp_mm_deg`
+
+`align.auto_view_pose: false` 로 끄면 항상 defaults 사용.
+
+확장 plan 예:
+
+```yaml
+plan:
+  - path_tag_id: 101
+    ref_tag_id: 0
+    nav_start_id: 508
+  - path_tag_id: 102            # arm_view_tcp_mm_deg 자동 추정
+    ref_tag_id: 0
+  - path_tag_id: 103            # 또 자동 추정
+    ref_tag_id: 0
+  - path_tag_id: 405
+    ref_tag_id: 502             # ref 가 바뀌어도 bootstrap 동작
+```
+
+특정 entry 의 자동 추정이 안 좋으면 (= ref tag 가 화면 가장자리) 그 entry
+만 override 추가:
+
+```yaml
+  - path_tag_id: 405
+    ref_tag_id: 502
+    arm_view_tcp_mm_deg: [420.0, -10.0, 320.0, 175.0, 0.0, 5.0]
+```
+
+#### `reference_tags.yaml` 의 회전 관습 주의
+
+체인은 AprilTag 라이브러리 관습을 따른다: tag 의 local **z 축은 tag
+안쪽** (카메라 반대 방향) 을 향한다. **바닥에 face-up 으로 놓인 tag**
+(face = world +z) 의 경우 tag 의 z 는 바닥 안쪽 = world -z 방향이므로,
+다음과 같이 선언해야 한다:
+
+```yaml
+- id: 0
+  position_m: [0.0, 0.0, 0.0]
+  rpy_deg:    [180.0, 0.0, 0.0]   # x 축 180° → tag z = -world z (down)
+```
+
+`rpy_deg: [0, 0, 0]` 으로 두면 **face down** (바닥을 향함) 으로 해석되어
+체인 결과가 z 축 기준 180° 어긋난다. 바닥-위 tag 는 거의 항상 rpy
+[180, 0, 0] (또는 y 180°) 가 정답.
+
+(이전 안내 계속:)
+
+#### 첫 보정 시 흔한 함정
+
+| 증상 | 처방 |
+|------|------|
+| 첫 entry 에서 `base nav … failed` | base 가 `nav_start_id` 앞에 없거나 front-cam 이 tag 를 못 봄 |
+| `tag A (id=0) not detected` | `arm_view_tcp_mm_deg` 가 jog 시점과 다름; Phase 3 재측정 |
+| `auto_align: clamped` 반복 | step throttling, 정상 동작 (다음 iter 가 계속 진행) |
+| `auto_align` xy 가 >5 cm 에서 멈춤 | `T_hc2ee` 부정확 → Phase 1 재진행; 또는 `align.position_tol_m` 완화 |
+| 결과 `position_m` 이 1 m+ 어긋남 | ref_tags 측정 오류; yaw 반대로 설치; hand_cam.png 가 다른 tag 를 봄 |
+| Fairino `MoveJ` 실패 | 컨트롤러에서 `tcp_index=1` 도구 비활성; 또는 `arm_view_tcp_mm_deg` 가 reach 밖 |
+
+### 5f. 좌표계: `map.yaml` ≠ 사용자의 world frame
+
+`map.yaml` 의 (x, y) 는 apriltag_nav 가 쓰는 **Manipulator/Map frame**.
+`reference_tags.yaml` 의 좌표는 사용자가 정의하는 **world frame**
+(보통 어떤 ref tag 를 원점으로 잡음 — 예시는 `id: 0` 을 단위행렬로
+선언). 두 frame 사이의 변환은 본 패키지가 정확히 측정할 수 없으므로
+**합치려 시도하지 않는다**.
+
+따라서:
+- `map.yaml` 은 read-only. 보정 결과를 그 위에 덮어쓰지 않음.
+- base 이동은 여전히 `map.yaml` 을 사용 (Pure-Pursuit + BFS 의 시드로
+  충분하며, cm 단위 오차는 visual servoing 이 흡수).
+- 체인 결과 `T_B_world = T_A_world · T_A2B` 는 **world frame**.
+
+### 5g. 출력
+
+- `~/.ros/path_tag_locator/map_world_<ts>.yaml` — **world frame** 의
+  보정 결과. 스키마는 `map.yaml` 과 의도적으로 다르며, `frame: world`
+  배너와 "map.yaml 대체용 아님" 경고가 포함된다. 각 항목:
+  - `position_m: [x, y, z]` + `rpy_deg: [rx, ry, rz]` (전체 6-DOF)
+  - `ref_tag_id` (해당 항목에 쓰인 기준 tag)
+  - `map_xy` (원본 map.yaml 에서의 (x, y), 참조용)
+  - `type` / `zone` / `name` (map.yaml 에서 복사)
+- 항목별 6-DOF + 원본 영상은 `~/.ros/path_tag_locator/locate/<날짜>/run_*/`
+  아래 단일 `locate_path_tag` 호출과 동일한 형식으로 저장.
+
+---
+
+## 6. 결과 읽기
 
 ### Topic (가장 최근 성공 호출이 latched 로 유지됨)
 
@@ -307,7 +650,7 @@ awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
 
 ---
 
-## 6. 자주 발생하는 문제
+## 7. 자주 발생하는 문제
 
 > 깊은 진단은 [TROUBLESHOOTING_kr.md](TROUBLESHOOTING_kr.md) 참고. 노드 캐시 / 단위 / SDK 시그니처 / reach 경계 / 보정 잔차 등 케이스별 진단 명령어 포함.
 
@@ -324,18 +667,29 @@ awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
 | `GetInverseKinRef() takes exactly 4 positional arguments` | Fairino SDK 버전 차이. tcp_pose.py 의 IK/MoveJ 호출 시그니처를 SDK 예제(`fairino_sdk/.../examples/`)와 다시 맞춰야 함 |
 | `T_A_world is identity` warning | `reference_tag.yaml` 미설정 상태로 노드 기동. yaml 채우거나 호출 시 `override_ref: true` 사용 |
 | `/compute` 가 `need at least N samples, got M` | `/handeye_calib/load_latest` 또는 `io.load_samples_dirs` 로 이전 세션 샘플을 합치거나 추가 `/capture` |
+| `map_calibrator`: 첫 entry `base nav ... failed` | 출발 전에 base 를 map.yaml 의 tag (예: DOCK 508) 앞에 정차 → § 6.1 |
+| `map_calibrator`: 모든 entry `ref_tag_id X not in reference_tags.yaml` | yaml 에서 `id:` 값을 정수로 (따옴표 없이) → § 6.7 |
+| `map_calibrator`: 중간 중단 후 일부만 보정됨 | 정상. 다음 실행에서 이미 보정된 tag 의 entry 를 plan 에서 제거하면 됨. `map_world.yaml` 끼리 병합은 사용자가 수동으로. → § 6.4 |
+| `map_calibrator`: `Navigator: camera_info NOT received` | `robot_nav.yaml` 의 `topics.camera_info` 가 front-cam 토픽과 일치하는지 확인 → § 6.6 |
 
 ---
 
-## 7. 주요 파일 위치
+## 8. 주요 파일 위치
 
 | 파일 | 용도 |
 |------|------|
 | `launch/path_tag_locator.launch` | Localization 노드 |
 | `launch/handeye_calib.launch` | 캘리브레이션 노드 |
-| `config/locator.yaml` | 메인 설정 |
-| `config/handeye_calib.yaml` | 캘리브레이션 설정 |
-| `config/reference_tag.yaml` | T_A_world 기본값 |
+| `launch/map_calibrator.launch` | 지도 일괄 보정 오케스트레이터 |
+| `config/locator.yaml` | 메인 설정 (단일 locate + auto_align 파라미터) |
+| `config/handeye_calib.yaml` | Hand-eye 캘리브레이션 설정 |
+| `config/reference_tag.yaml` | 단일 locate 용 T_A_world 기본값 |
+| `config/reference_tags.yaml` | 지도 일괄 보정용 다중 기준 tag (정확한 6-DOF) |
+| `config/calibration_plan.yaml` | 지도 일괄 보정 plan (path → ref 매핑) |
+| `config/map.yaml` | apriltag_nav 의 로컬 복사본 (self-contained nav) |
+| `config/robot_nav.yaml` | base nav 파라미터 서브셋 |
+| `config/map_calibrator.yaml` | 오케스트레이터 기본 파일 경로 |
 | `config/extrinsics.yaml` | T_AB2MB / T_MB2FC |
-| `srv/LocatePathTag.srv` | 서비스 정의 |
-| `README.md` | 패키지 내부 README |
+| `srv/LocatePathTag.srv` | 단일 locate 서비스 정의 |
+| `srv/RunMapCalibration.srv` | 지도 일괄 보정 서비스 정의 |
+| `README.md` | 패키지 내부 README (영문) |
