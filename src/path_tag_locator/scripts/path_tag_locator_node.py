@@ -39,6 +39,7 @@ from path_tag_locator.geometry import (
     matrix_to_pose,
     pose_fr5_to_matrix_m,
     pose_to_matrix,
+    rot2rpy_deg,
 )
 from path_tag_locator.hand_eye import load_T_hc2ee
 from path_tag_locator.persistence import save_locate_failure, save_locate_run
@@ -100,6 +101,12 @@ class PathTagLocatorNode:
 
         self.T_ab2mb, self.T_mb2fc = load_extrinsics(extrinsics_path)
         self.T_A_world_default = load_reference_tag(ref_tag_path)
+        if np.allclose(self.T_A_world_default, np.eye(4), atol=1e-9):
+            rospy.logwarn(
+                "path_tag_locator: reference_tag.yaml is identity (no real "
+                "world calibration). Results equal T_A2B until you edit "
+                "%s or pass override_ref=true in the service request.",
+                ref_tag_path)
 
         self.tcp_client = None
         if cfg.robot.use_sdk:
@@ -208,7 +215,6 @@ class PathTagLocatorNode:
             resp.tag_b_world_pose.orientation.z = quat[2]
             resp.tag_b_world_pose.orientation.w = quat[3]
 
-            from path_tag_locator.geometry import rot2rpy_deg
             rpy = rot2rpy_deg(T_B_world[:3, :3])
             resp.position_m = [float(pos[0]), float(pos[1]), float(pos[2])]
             resp.rpy_deg = [float(rpy[0]), float(rpy[1]), float(rpy[2])]

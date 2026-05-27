@@ -188,6 +188,45 @@ def _append_locate_log(root, ts, run_dir, success, tag_b_id,
 
 
 # ----------------------------------------------------------------------
+def load_handeye_samples(run_dir):
+    """Read all (image, K, tcp_pose_mm_deg) samples persisted under
+    ``<run_dir>/samples/`` by :class:`HandeyeRunRecorder`.
+
+    Accepts either the run directory (containing a ``samples/`` subdir)
+    or the ``samples/`` directory itself. Returns a list of dicts
+    ``{image_bgr, K, tcp_pose_mm_deg}``; the caller wraps these into
+    ``CalibSample`` instances. Missing/corrupt pairs are skipped with a
+    warning printed to stdout.
+    """
+    p = _expand(run_dir)
+    samples_dir = p / "samples" if (p / "samples").is_dir() else p
+    if not samples_dir.is_dir():
+        raise FileNotFoundError(f"no samples directory under {run_dir}")
+
+    pose_files = sorted(samples_dir.glob("*_pose.npz"))
+    out = []
+    for pose_path in pose_files:
+        stem = pose_path.stem[:-len("_pose")]  # NNNN
+        img_path = samples_dir / f"{stem}_image.png"
+        if not img_path.exists():
+            print(f"load_handeye_samples: missing image for {pose_path.name}")
+            continue
+        try:
+            data = np.load(pose_path)
+            tcp = np.asarray(data["tcp_pose_mm_deg"], dtype=np.float64).tolist()
+            K = np.asarray(data["K"], dtype=np.float64)
+            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+            if img is None:
+                print(f"load_handeye_samples: cv2.imread failed: {img_path}")
+                continue
+        except Exception as e:
+            print(f"load_handeye_samples: skip {pose_path.name}: {e}")
+            continue
+        out.append({"image_bgr": img, "K": K, "tcp_pose_mm_deg": tcp})
+    return out
+
+
+# ----------------------------------------------------------------------
 class HandeyeRunRecorder:
     """Incrementally writes calibration samples; finalize with save_result()."""
 
@@ -227,19 +266,6 @@ class HandeyeRunRecorder:
                 f"samples/{pose_name}",
             ])
         return idx
-
-    def reset(self):
-        # Drop the existing samples and reopen the directory fresh.
-        import shutil
-        if self.run_dir.exists():
-            shutil.rmtree(self.run_dir)
-        self.samples_dir.mkdir(parents=True, exist_ok=True)
-        self._n = 0
-        with open(self.index_path, "w", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["index", "timestamp", "tcp_x_mm", "tcp_y_mm",
-                        "tcp_z_mm", "tcp_rx_deg", "tcp_ry_deg",
-                        "tcp_rz_deg", "image", "pose"])
 
     def save_result(self, result, tag_id, tag_size_m, family) -> Path:
         np.savez(
