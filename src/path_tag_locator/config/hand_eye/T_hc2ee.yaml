@@ -1,0 +1,33 @@
+# T_hc2ee 직접 입력 인터페이스
+# =============================
+# 손-눈 캘리브레이션을 직접 측정한 값으로 채워서 npz 를 생성할 때 사용.
+# `handeye_calib_node` 의 정상 보정 결과를 쓸 수 있다면 이 파일은 필요 없음.
+#
+# T_hc2ee = "hand-cam 좌표계에서 본 end-effector 의 pose"
+#         = OpenCV calibrateHandEye 의 T_gripper2cam
+#
+# 두 가지 입력 형식 중 하나를 사용:
+#   format: "pose"    -> position_m + rpy_deg (ZYX intrinsic, degrees)
+#   format: "matrix"  -> matrix_4x4 (row-major 16 floats)
+#
+# 사용:
+#   rosrun path_tag_locator save_npz.py
+#   (또는: python3 scripts/save_npz.py)
+# 기본적으로 이 파일을 읽어 config/hand_eye/T_hc2ee.npz 를 생성한다.
+# 이미 존재하는 npz 가 있으면 --force 가 없으면 덮어쓰지 않는다.
+
+format: "pose"
+
+# === 측정값을 여기에 입력 ===
+# 단위: 위치는 미터(m), 회전은 도(deg, ZYX intrinsic)
+# 예시는 nominal 하드웨어 설계값 (vision_tip 의 EE 가 hand-cam 좌표계에서):
+position_m: [0.03250, -0.16246, -0.16775]
+rpy_deg:    [0.0, 0.0, 180.0]
+
+# matrix 형식을 쓰려면 위 둘을 주석 처리하고 아래를 사용:
+# format: "matrix"
+# matrix_4x4:
+#   [-1.0,  0.0,  0.0,  0.03250,
+#     0.0, -1.0,  0.0, -0.16246,
+#     0.0,  0.0,  1.0, -0.16775,
+#     0.0,  0.0,  0.0,  1.0]

@@ -20,24 +20,16 @@ import rospy
 import rospkg
 from geometry_msgs.msg import Pose, PoseStamped
 
-from path_tag_locator.align import (
-    alignment_metrics,
-    clamp_step,
-    compute_target_ee_pose,
-    is_converged,
-)
+from path_tag_locator.align_runner import run_auto_align
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
 from path_tag_locator.constants import (
     load_extrinsics,
     load_locator_cfg_from_dict,
     load_reference_tag,
 )
-from path_tag_locator.detect import detect_apriltag
 from path_tag_locator.geometry import (
     assert_rigid,
-    matrix_m_to_pose_fr5,
     matrix_to_pose,
-    pose_fr5_to_matrix_m,
     pose_to_matrix,
     rot2rpy_deg,
 )
@@ -52,11 +44,6 @@ from path_tag_locator.srv import (
 
 
 _FIND_RE = re.compile(r"\$\(find\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)")
-
-
-def _fmt_pose(p):
-    return ("[x={:.2f}mm y={:.2f}mm z={:.2f}mm "
-            "rx={:.2f}deg ry={:.2f}deg rz={:.2f}deg]").format(*p)
 
 
 def _resolve_ros_path(p: str) -> str:
@@ -322,84 +309,19 @@ class PathTagLocatorNode:
 
     # ------------------------------------------------------------------
     def _auto_align(self, initial_tcp_mm_deg):
-        """Run the iterative align procedure. Returns dict with keys
-        iterations, xy_offset_m, tilt_deg, final_tcp.
-        Raises ``RuntimeError`` on detection / motion failure.
-        """
-        cfg = self.cfg.align
-        if self.tcp_client is None:
-            raise RuntimeError("auto_align requires robot.use_sdk=true")
-
-        initial = [float(v) for v in initial_tcp_mm_deg]
-        if len(initial) != 6 or all(v == 0.0 for v in initial):
-            raise RuntimeError(
-                "auto_align: align_initial_tcp_mm_deg must be 6 floats; "
-                "got all zeros (set explicit pose in the service request)")
-
-        # 1. Initial move (clamped with initial-step limits)
-        cur_tcp = self.tcp_client.get_tcp_pose()
-        T_cur = pose_fr5_to_matrix_m(cur_tcp)
-        T_init = pose_fr5_to_matrix_m(initial)
-        step = clamp_step(T_cur, T_init,
-                          max_step_m=cfg.max_initial_step_m,
-                          max_step_deg=cfg.max_initial_step_deg)
-        if step.clamped:
-            rospy.logwarn(
-                "auto_align: initial move clamped (Δt=%.3f m, Δrot=%.2f deg)",
-                step.delta_t_norm_m, step.delta_rot_deg)
-        step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
-        rospy.loginfo("auto_align: initial MoveJ -> %s", _fmt_pose(step_pose))
-        self.tcp_client.move_j_to_pose(step_pose, settle_s=cfg.move_settle_s)
-
-        # 2. Iterative refinement
-        last_metrics = None
-        iters = 0
-        timeout = float(self.cfg.io.image_wait_timeout)
-        for i in range(int(cfg.max_iterations)):
-            iters = i + 1
-            img, K = grab_image_and_K(
-                self.cfg.topics.hand_cam_image,
-                self.cfg.topics.hand_cam_info,
-                timeout=timeout)
-            T_cam2tag = detect_apriltag(
-                img, K, float(self.cfg.tag.tag_a_size_m),
-                int(self.cfg.tag.tag_a_id), family=self.cfg.tag.family)
-            if T_cam2tag is None:
-                raise RuntimeError(
-                    f"auto_align: tag A (id={self.cfg.tag.tag_a_id}) not "
-                    f"detected at iteration {iters} — adjust initial pose")
-            metrics = alignment_metrics(T_cam2tag)
-            last_metrics = metrics
-            rospy.loginfo(
-                "auto_align iter %d/%d: xy=%.4f m, tilt=%.3f deg, z=%.3f m",
-                iters, cfg.max_iterations,
-                metrics.xy_offset_m, metrics.tilt_deg, metrics.z_distance_m)
-            if is_converged(metrics, cfg.position_tol_m, cfg.angle_tol_deg):
-                rospy.loginfo("auto_align: converged at iteration %d", iters)
-                break
-
-            cur_tcp = self.tcp_client.get_tcp_pose()
-            T_cur = pose_fr5_to_matrix_m(cur_tcp)
-            T_target = compute_target_ee_pose(
-                T_cur, self.T_hc2ee, T_cam2tag,
-                target_distance_m=cfg.target_distance_m)
-            step = clamp_step(T_cur, T_target,
-                              max_step_m=cfg.max_step_m,
-                              max_step_deg=cfg.max_step_deg)
-            if step.clamped:
-                rospy.logwarn(
-                    "auto_align: step %d clamped (Δt=%.3f m, Δrot=%.2f deg)",
-                    iters, step.delta_t_norm_m, step.delta_rot_deg)
-            step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
-            self.tcp_client.move_j_to_pose(step_pose, settle_s=cfg.move_settle_s)
-
-        final_tcp = self.tcp_client.get_tcp_pose()
-        return {
-            "iterations": iters,
-            "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
-            "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
-            "final_tcp": final_tcp,
-        }
+        """Delegate to the shared align_runner module."""
+        return run_auto_align(
+            align_cfg=self.cfg.align,
+            tcp_client=self.tcp_client,
+            T_hc2ee=self.T_hc2ee,
+            tag_a_id=int(self.cfg.tag.tag_a_id),
+            tag_a_size_m=float(self.cfg.tag.tag_a_size_m),
+            tag_family=self.cfg.tag.family,
+            hand_cam_image_topic=self.cfg.topics.hand_cam_image,
+            hand_cam_info_topic=self.cfg.topics.hand_cam_info,
+            image_wait_timeout_s=float(self.cfg.io.image_wait_timeout),
+            initial_tcp_mm_deg=initial_tcp_mm_deg,
+        )
 
     def spin(self):
         rospy.spin()
