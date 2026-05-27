@@ -1,22 +1,31 @@
 # Platform-fixed extrinsics. Row-major 4x4 (length 16). Edit if the platform
 # geometry changes.
 #
-# Initial values are copied verbatim from the geometry constants used in the
-# reference implementation under tranformation_ws/transform_chain/constants.py.
+# Convention (matches geometry.py): T_X2Y = pose of frame Y expressed in
+# frame X (i.e. applied to a Y-frame point it returns the X-frame point).
 #
-#   T_AB2MB: ab(arm_base) origin = (0,0,0.040) m in mb(mobile_base) frame;
-#            ab.x = -mb.x, ab.y = -mb.y, ab.z = +mb.z
-#   T_MB2FC: fc(front_cam) origin = (0.6625, 0.0, 0.400) m in mb frame;
-#            fc.x = -mb.y, fc.y = -mb.x, fc.z = -mb.z (downward-facing camera)
+#   T_ab2mb: pose of mb(mobile_base) in ab(arm_base) frame.
+#            R = diag(-1, -1, +1)  -> mb axes vs ab: x=-x, y=-y, z=+z
+#                                     (= Rz(180°), matches arm mounted backwards)
+#            t = (0, 0, -1.025) m  -> mb origin is 1.025 m below the arm base
+#                                     along ab.z (arm sits on top of the cart).
+#   T_mb2fc: pose of fc(front_cam) in mb(mobile_base) frame.
+#            R columns are fc axes in mb:
+#                fc.x = -mb.y, fc.y = -mb.x, fc.z = -mb.z  (downward camera)
+#            t = (0.45, 0, 0.3) m  -> fc origin in mb frame.
+#
+# Re-measure on the real platform if geometry changes (the previous tuning
+# from tranformation_ws/transform_chain/constants.py used different numbers
+# and is no longer authoritative).
 
 T_ab2mb_row_major:
   [-1.0,  0.0,  0.0,  0.0,
     0.0, -1.0,  0.0,  0.0,
-    0.0,  0.0,  1.0, -0.04,
+    0.0,  0.0,  1.0, -1.025,
     0.0,  0.0,  0.0,  1.0]
 
 T_mb2fc_row_major:
-  [ 0.0, -1.0,  0.0,  0.6625,
+  [ 0.0, -1.0,  0.0,  0.45,
    -1.0,  0.0,  0.0,  0.0,
-    0.0,  0.0, -1.0,  0.4,
+    0.0,  0.0, -1.0,  0.293,
     0.0,  0.0,  0.0,  1.0]

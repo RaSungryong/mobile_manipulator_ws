@@ -2,7 +2,9 @@
 #
 # - tag_b_id < 0  : use yaml-default tag_b_id
 # - override_ref  : if true, use ref_pose as T_A_world; else use yaml default
-# - save_result   : if true, also persist npz+yaml under save_dir (or default)
+# - save_result   : DEPRECATED / informational. Every call (success or
+#                   failure) is always persisted under save_dir (or the
+#                   yaml default). The flag is kept for ABI compatibility.
 # - auto_align    : if true, before localization the arm is moved so that
 #                   the hand camera squarely faces tag A. The user-supplied
 #                   ``align_initial_tcp_mm_deg`` is the approximate starting

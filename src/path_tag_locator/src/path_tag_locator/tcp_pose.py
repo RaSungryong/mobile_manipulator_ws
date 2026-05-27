@@ -30,7 +30,11 @@ class FairinoTCPClient:
     sdk_path : str | None
         Inserted at the front of ``sys.path`` before importing ``fairino``.
     tcp_index : int
-        Flag passed to ``GetActualTCPPose`` (typically 1).
+        Tool index registered on the controller (e.g. 1 for vision_tip).
+        Set up on the controller via ``set_tool_tcp.py`` / ``SetToolCoord``.
+        Used as the ``tool=`` argument for ``MoveJ``. SDK pose-read calls
+        (``GetActualTCPPose`` / ``GetActualJointPosDegree``) take no tool
+        argument — they return the currently active TCP set on the box.
     default_vel : float
         Default MoveJ velocity percentage (0-100).
     default_acc : float
@@ -78,7 +82,7 @@ class FairinoTCPClient:
     def get_tcp_pose(self):
         """Return [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg]."""
         robot = self._connect()
-        err, tcp = robot.GetActualTCPPose(self.tcp_index)
+        err, tcp = robot.GetActualTCPPose()
         if err != 0:
             raise RuntimeError(f"GetActualTCPPose failed (err={err})")
         return [float(v) for v in tcp]
@@ -86,7 +90,7 @@ class FairinoTCPClient:
     def get_joints(self):
         """Return current joint angles (deg) as a list."""
         robot = self._connect()
-        err, joints = robot.GetActualJointPosDegree(self.tcp_index)
+        err, joints = robot.GetActualJointPosDegree()
         if err != 0:
             raise RuntimeError(f"GetActualJointPosDegree failed (err={err})")
         return [float(v) for v in joints]
@@ -105,30 +109,20 @@ class FairinoTCPClient:
         cur_joints = self.get_joints()
         target_pose = [float(v) for v in target_pose_mm_deg]
 
-        ret = robot.GetInverseKinRef(0, target_pose, cur_joints, -1)
-        # SDK varies: some return (err, joints); some (err) writing into a
-        # mutable arg; some return joints only. Normalize:
-        if isinstance(ret, tuple) and len(ret) == 2:
-            err_ik, joints = ret
-        else:
-            # Try the older single-return-list shape.
-            err_ik, joints = 0, ret
-        if err_ik and int(err_ik) != 0:
-            # Fallback: untreaded IK without seed.
-            ret = robot.GetInverseKin(0, target_pose, -1)
-            if isinstance(ret, tuple) and len(ret) == 2:
-                err_ik, joints = ret
-            else:
-                err_ik, joints = 0, ret
-            if err_ik and int(err_ik) != 0:
+        # IK with current joints as reference (preferred), fall back to
+        # configuration-based IK if the SDK can't solve with the seed.
+        err_ik, joints = robot.GetInverseKinRef(0, target_pose, cur_joints)
+        if int(err_ik) != 0:
+            err_ik, joints = robot.GetInverseKin(0, target_pose, config=-1)
+            if int(err_ik) != 0:
                 raise RuntimeError(f"GetInverseKin* failed (err={err_ik})")
 
         v = float(self.default_vel if vel is None else vel)
         a = float(self.default_acc if acc is None else acc)
         o = float(self.default_ovl if ovl is None else ovl)
 
-        err = robot.MoveJ(joints, target_pose, 0, 0,
-                          v, a, o, [0.0] * 6, 0, 0)
+        err = robot.MoveJ(joints, tool=int(self.tcp_index), user=0,
+                          vel=v, acc=a, ovl=o)
         if err and int(err) != 0:
             raise RuntimeError(f"MoveJ failed (err={err})")
         if settle_s > 0:

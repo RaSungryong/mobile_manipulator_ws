@@ -1,21 +1,21 @@
 path_tag_locator:
   topics:
-    hand_cam_image:   "/hand_cam/image_raw"
-    hand_cam_info:    "/hand_cam/camera_info"
-    front_cam_image:  "/front_cam/image_raw"
-    front_cam_info:   "/front_cam/camera_info"
+    hand_cam_image:   "/vision_cam/color/image_raw"
+    hand_cam_info:    "/vision_cam/color/camera_info"
+    front_cam_image:  "/front_cam/color/image_raw"
+    front_cam_info:   "/front_cam/color/camera_info"
 
   tag:
     family:           "tag36h11"
-    tag_a_id:         58       # reference tag (observed by hand-cam)
-    tag_b_id:         10       # default path tag (observed by front-cam)
+    tag_a_id:         0       # reference tag (observed by hand-cam)
+    tag_b_id:         105       # default path tag (observed by front-cam)
     tag_a_size_m:     0.060
     tag_b_size_m:     0.060
 
   robot:
     use_sdk:          true
     robot_ip:         "192.168.58.2"
-    fairino_sdk_path: "/home/lcl/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
+    fairino_sdk_path: "/home/ku/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
     tcp_index:        1
 
   hand_eye:

@@ -1,17 +1,17 @@
 handeye_calib:
   topics:
-    hand_cam_image:   "/hand_cam/image_raw"
-    hand_cam_info:    "/hand_cam/camera_info"
+    hand_cam_image:   "/vision_cam/color/image_raw"
+    hand_cam_info:    "/vision_cam/color/camera_info"
 
   tag:
-    id:               58            # calibration tag (the same one used as reference tag A)
+    id:               0            # calibration tag (the same one used as reference tag A)
     size_m:           0.060
     family:           "tag36h11"
 
   robot:
     use_sdk:          true
     robot_ip:         "192.168.58.2"
-    fairino_sdk_path: "/home/lcl/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
+    fairino_sdk_path: "/home/ku/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
     tcp_index:        1
 
   io:
@@ -23,3 +23,13 @@ handeye_calib:
     # Each invocation of the node (and each /reset) starts a fresh
     # run_<timestamp>/ subdirectory.
     run_root:           "~/.ros/path_tag_locator"
+
+    # Optional: list of previously-saved run directories to preload as
+    # samples at node startup (so /compute can be called without first
+    # capturing again). Each entry can be the run directory (it will
+    # auto-detect samples/) or the samples/ directory itself.
+    # ``$(find pkg)`` and ``~`` are expanded.
+    # Example:
+    #   load_samples_dirs:
+    #     - "~/.ros/path_tag_locator/handeye_calib/run_20260521_133900"
+    load_samples_dirs:  []
