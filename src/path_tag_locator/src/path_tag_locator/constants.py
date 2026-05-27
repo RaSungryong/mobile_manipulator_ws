@@ -62,6 +62,14 @@ class AlignCfg:
     move_acc: float
     move_ovl: float
     move_settle_s: float
+    # Auto-view-pose bootstrap (used by map_calibrator only, ignored by
+    # the single-tag locator). When ``auto_view_pose`` is true and the
+    # orchestrator has at least one previous successful entry, the next
+    # entry's ``arm_view_tcp_mm_deg`` is auto-computed from the previous
+    # anchor + map.yaml relative offsets. Explicit per-entry override in
+    # calibration_plan.yaml always wins.
+    auto_view_pose: bool = True
+    auto_view_distance_m: float = 0.20
 
 
 @dataclass
@@ -105,6 +113,8 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
         move_acc=20.0,
         move_ovl=100.0,
         move_settle_s=0.3,
+        auto_view_pose=True,
+        auto_view_distance_m=0.20,
     )
     align_defaults.update(root.get("align", {}))
     align = AlignCfg(**align_defaults)

@@ -1,0 +1,25 @@
+<launch>
+  <!--
+    Map calibration launch. Loads both the existing path_tag_locator
+    yaml (so the orchestrator can reuse topics / SDK / extrinsics / etc.)
+    and the map_calibrator-specific yaml.
+
+    NOTE: do NOT run apriltag_nav's main controller simultaneously —
+    both nodes publish /cmd_vel and would fight each other.
+  -->
+  <arg name="locator_config"
+       default="$(find path_tag_locator)/config/locator.yaml"/>
+  <arg name="calibrator_config"
+       default="$(find path_tag_locator)/config/map_calibrator.yaml"/>
+
+  <!-- Load the locator yaml under a global namespace so the orchestrator
+       can rospy.get_param('/path_tag_locator') -->
+  <rosparam command="load" file="$(arg locator_config)"/>
+
+  <node pkg="path_tag_locator"
+        type="map_calibrator_node.py"
+        name="map_calibrator"
+        output="screen">
+    <rosparam command="load" file="$(arg calibrator_config)"/>
+  </node>
+</launch>

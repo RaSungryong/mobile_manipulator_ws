@@ -1,0 +1,54 @@
+# Base-navigation parameters (subset of apriltag_nav/config/robot.yaml).
+# Only the keys consumed by path_tag_locator.nav.robot_controller +
+# path_tag_locator.nav.navigator. Arm/keyence/inference sections from
+# the source yaml are intentionally omitted; the orchestrator uses the
+# locator's existing path_tag_locator.* params for arm-side settings.
+robot:
+  length: 0.80
+  width: 0.50
+  camera_offset: 0.45
+
+  max_linear_speed: 0.05
+  max_angular_speed: 0.25
+  slow_factor: 0.3
+  min_linear_factor: 0.3
+  min_angular_factor: 0.25
+
+  linear_accel: 0.05
+  angular_accel: 0.3
+  ramp_enabled: true
+
+  tag_size: 0.06
+  tag_family: "tag36h11"
+
+  look_ahead_base: 0.4
+  pp_gain_forward: 1.0
+  pp_gain_backward: 0.8
+
+  align_gain: 0.8
+  align_threshold_deg: 0.5
+
+  pivot_gain: 1.5
+  pivot_slowdown_deg: 10.0
+  pivot_threshold_deg: 1.0
+
+  s_curve_accel_ratio: 0.3
+  s_curve_decel_ratio: 0.4
+  s_curve_min_speed_factor: 0.2
+
+  center_y_stop_offset: -50.0
+  center_y_stop_tolerance: 10.0
+
+  stop_sleep_duration: 1.0
+  navigation_timeout: 8.0
+
+topics:
+  # Front/floor camera used by base nav for tag detection. Defaults to
+  # the same topic the locator's front camera uses, so a single camera
+  # serves both purposes. Override if your hardware differs.
+  camera_rgb:   "/front_cam/color/image_raw"
+  camera_info:  "/front_cam/color/camera_info"
+  scan_signal:  "/scan_finished"      # unused (enable_scan_signal=False)
+  cmd_vel:      "/cmd_vel"
+  odom:         "/odom"
+  robot_pose:   "/robot_pose"

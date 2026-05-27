@@ -49,3 +49,11 @@ path_tag_locator:
     move_acc:              20.0
     move_ovl:              100.0
     move_settle_s:         0.3     # pause after MoveJ before re-detecting
+
+    # Bootstrap auto-arm-view-pose (map_calibrator only). When true,
+    # entries past the first one without an explicit arm_view_tcp_mm_deg
+    # get one auto-computed from the previous anchor + map.yaml relative
+    # offsets + odom Δθ. The first entry still needs a manually-supplied
+    # arm_view_tcp_mm_deg (in defaults or per entry).
+    auto_view_pose:        true
+    auto_view_distance_m:  0.20    # hand-cam height above the ref tag (m)

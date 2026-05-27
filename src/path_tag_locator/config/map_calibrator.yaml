@@ -1,0 +1,14 @@
+map_calibrator:
+  # Default paths (overridable by the service request).
+  ref_tags_yaml:  "$(find path_tag_locator)/config/reference_tags.yaml"
+  plan_yaml:      "$(find path_tag_locator)/config/calibration_plan.yaml"
+  map_in_path:    "$(find path_tag_locator)/config/map.yaml"
+  # Empty -> ~/.ros/path_tag_locator/map_updated_<ts>.yaml
+  map_out_path:   ""
+
+  # Navigation
+  robot_nav_yaml:   "$(find path_tag_locator)/config/robot_nav.yaml"
+  # map.yaml that the Navigator (base nav) loads. Defaults to the same
+  # path as map_in_path so the orchestrator and the navigator agree on
+  # tag positions for the duration of the session.
+  map_yaml_for_nav: "$(find path_tag_locator)/config/map.yaml"

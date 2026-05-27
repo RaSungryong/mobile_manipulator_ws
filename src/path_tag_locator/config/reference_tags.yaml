@@ -1,0 +1,45 @@
+# Reference tags with accurate world coordinates provided by the user.
+# These are the "trusted truth" against which all path tags are calibrated.
+#
+# The "world frame" used here is defined by YOU — typically with one tag
+# chosen as the origin (its pose = identity). For example, the default
+# below treats tag id=0 as the origin: position_m=[0,0,0], rpy_deg=[0,0,0].
+# All other ref tags' position_m / rpy_deg are measured relative to that
+# origin.
+#
+# IMPORTANT: this world frame is NOT the same as apriltag_nav's map.yaml
+# Manipulator frame. The calibrator output (map_world.yaml) lives in
+# the WORLD frame defined here and is NOT a drop-in for map.yaml.
+#
+# Each entry's pose is "pose of the tag in the world frame". Use either:
+#   format: pose      ->  position_m + rpy_deg  (ZYX intrinsic, degrees)
+#   format: matrix    ->  matrix_4x4 (row-major 16 floats)
+#
+# Optional per-tag ``size_m`` overrides the default tag_a_size_m from
+# locator.yaml; useful if your ref tags differ in physical size.
+
+format: "pose"
+
+# Rotation convention reminder (AprilTag library):
+# A tag's local +z points INTO the tag (away from the face / camera).
+# Therefore a FLOOR TAG FACING UP (face = world +z, common scenario)
+# has tag's z = -world_z = downward, which is rpy_deg = [180, 0, 0].
+#
+# If you write rpy_deg: [0, 0, 0] for a floor tag, the chain will
+# interpret the tag as face-DOWN — almost certainly NOT what you
+# measured. Always use [180, 0, 0] (or [0, 180, 0]) for floor tags.
+
+reference_tags:
+  # Origin tag — chosen so its pose maps to the chosen world frame.
+  # Floor tag, face-up: rpy_deg = [180, 0, 0].
+  - id: 0
+    position_m: [0.0, 0.0, 0.0]
+    rpy_deg:    [180.0, 0.0, 0.0]
+  # Additional ref tags, measured relative to the origin above.
+  # Replace example values with your actual measurements.
+  - id: 100
+    position_m: [1.500, 0.200, 0.000]
+    rpy_deg:    [180.0, 0.0, 0.0]      # face-up floor tag
+  - id: 502
+    position_m: [3.000, -0.150, 0.000]
+    rpy_deg:    [180.0, 0.0, 90.0]     # face-up + 90° yaw

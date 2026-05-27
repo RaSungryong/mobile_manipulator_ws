@@ -1,0 +1,31 @@
+# Calibration plan — ordered list of (path_tag, ref_tag) pairs.
+#
+# The orchestrator iterates entries top-to-bottom. For each entry:
+#   1. Base navigates to ``nav_start_id`` (if given) then to
+#      ``path_tag_id`` using map.yaml's edge graph.
+#   2. Arm moves to ``arm_view_tcp_mm_deg`` (or ``defaults.``).
+#   3. Auto-align refines so hand-cam sees ref_tag squarely.
+#   4. Chain computes path_tag world pose; map_updated.yaml is updated.
+#
+# Failures (nav timeout / tag undetected / IK / MoveJ) skip the entry,
+# log to the persistence layer, and continue with the next one.
+
+defaults:
+  retry_count: 1
+  align_required: true
+  # Default arm viewing pose (FR5 mm, deg ZYX). Edit so hand-cam is
+  # roughly looking at the ref tags from your typical base parking spot.
+  arm_view_tcp_mm_deg: [350.0, 0.0, 250.0, 180.0, 0.0, 0.0]
+
+plan:
+  # Example seed — replace with your actual plan.
+  # ref_tag_id MUST exist in reference_tags.yaml.
+  - path_tag_id: 101
+    ref_tag_id: 0               # origin tag
+    nav_start_id: 508           # base parks at DOCK before BFS to path tag
+  - path_tag_id: 102
+    ref_tag_id: 0
+  - path_tag_id: 405
+    ref_tag_id: 502
+    # entry-level overrides take precedence over defaults:
+    arm_view_tcp_mm_deg: [400.0, 0.0, 300.0, 170.0, 0.0, 0.0]

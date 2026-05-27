@@ -7,8 +7,10 @@ find_package(catkin REQUIRED COMPONENTS
   std_srvs
   geometry_msgs
   sensor_msgs
+  nav_msgs
   cv_bridge
   message_generation
+  robot_msgs
 )
 
 catkin_python_setup()
@@ -16,6 +18,7 @@ catkin_python_setup()
 add_service_files(
   FILES
   LocatePathTag.srv
+  RunMapCalibration.srv
 )
 
 generate_messages(
@@ -31,13 +34,16 @@ catkin_package(
     std_srvs
     geometry_msgs
     sensor_msgs
+    nav_msgs
     cv_bridge
     message_runtime
+    robot_msgs
 )
 
 install(PROGRAMS
   scripts/path_tag_locator_node.py
   scripts/handeye_calib_node.py
+  scripts/map_calibrator_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
