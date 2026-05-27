@@ -46,6 +46,8 @@ source devel/setup.bash
 ### Step 0 — Hand-eye calibration (one-off)
 
 `T_hc2ee.npz` is hardware-specific and must be produced on this robot.
+Each capture is immediately archived to disk, so you can interrupt the
+session and resume later (see "Reusing previous samples" below).
 
 ```bash
 # Edit config/handeye_calib.yaml (topic names, tag_id/size, robot_ip,
@@ -54,11 +56,28 @@ roslaunch path_tag_locator handeye_calib.launch
 
 # Move the arm so the hand-cam sees the calibration tag from a new pose,
 # then capture; repeat ~15-30 times with diverse orientations:
-rosservice call /handeye_calib/capture "{}"
-rosservice call /handeye_calib/status  "{}"   # check progress
-rosservice call /handeye_calib/compute "{}"   # writes T_hc2ee.npz
-# rosservice call /handeye_calib/reset "{}"   # discard and start over
+rosservice call /handeye_calib/capture     "{}"
+rosservice call /handeye_calib/status      "{}"   # check progress
+rosservice call /handeye_calib/compute     "{}"   # writes T_hc2ee.npz
+# rosservice call /handeye_calib/reset     "{}"   # discard and start over
+# rosservice call /handeye_calib/load_latest "{}" # reuse most recent run
 ```
+
+**Reusing previous samples.** Restarting the node clears in-memory
+samples but disk archives under
+`~/.ros/path_tag_locator/handeye_calib/run_*/` are preserved. Two ways
+to re-feed them into `/compute`:
+
+```bash
+# (a) after node start, append the latest prior run into memory
+rosservice call /handeye_calib/load_latest "{}"
+rosservice call /handeye_calib/compute     "{}"
+
+# (b) configure specific dirs to preload at launch via
+#     config/handeye_calib.yaml → io.load_samples_dirs (list of paths)
+```
+
+You may freely mix loaded + new `/capture` samples before `/compute`.
 
 ### Step 1 — Locate path tags
 
@@ -163,13 +182,33 @@ Hand-eye calibration archives each capture as it happens:
 ```
 
 `/handeye_calib/reset` starts a fresh `run_<ts>/` directory, so
-historical attempts are never lost.
+historical attempts are never lost. Any prior `run_*/` directory can be
+re-fed into a new session with `/handeye_calib/load_latest` or via the
+`io.load_samples_dirs` yaml field.
+
+## Troubleshooting
+
+For symptom-based diagnostics (100m-scale results, auto_align non-convergence,
+SDK signature errors, reach-limit issues, calibration residual, etc.) and
+copy-paste verification commands, see
+[docs/TROUBLESHOOTING_kr.md](docs/TROUBLESHOOTING_kr.md).
 
 ## Notes
 
 - Coordinate conventions: lengths in meters, RPY in degrees (ZYX intrinsic).
   This matches the FR5 TCP-pose convention used by the Fairino SDK.
-- The hand-eye `T_hc2ee` is the OpenCV `calibrateHandEye` "gripper-to-cam"
-  result — i.e. the pose of EE expressed in the hand-cam frame.
+- Transform notation: `T_X2Y` = pose of frame Y expressed in frame X
+  (i.e. it transforms Y-frame coordinates to X-frame coordinates). All
+  matrices in `config/extrinsics.yaml` and `T_hc2ee.npz` follow this
+  convention.
+- `T_hc2ee` is the pose of EE in the hand-cam frame. OpenCV's
+  `calibrateHandEye` returns `R_cam2gripper, t_cam2gripper` (the inverse
+  direction); `handeye_calib.py` already inverts it before saving.
+- Restart the node after editing `T_hc2ee.npz` or any yaml file —
+  the locator caches them at startup.
 - The detector uses `dt_apriltags` (Duckietown). Install with
   `pip install dt_apriltags` if missing.
+- `scripts/save_npz.py` writes a hand-coded identity-ish T_hc2ee for
+  smoke-testing only; for real use it refuses to overwrite an existing
+  file unless given `--force`. Always run `handeye_calib_node` for a
+  real calibration.

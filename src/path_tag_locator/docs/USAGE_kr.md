@@ -50,13 +50,13 @@ roslaunch path_tag_locator handeye_calib.launch
 암을 태그가 보이는 다양한 자세로 옮기면서 (각도/거리를 분산시킬수록 좋음), 매번:
 
 ```bash
-# 1회 캡처
+# 1회 캡처 — 즉시 디스크 아카이브 (~/.ros/path_tag_locator/handeye_calib/run_<ts>/) 됨
 rosservice call /handeye_calib/capture "{}"
 
 # 진행 상황 확인
 rosservice call /handeye_calib/status  "{}"
 
-# 처음부터 다시
+# 메모리 + 새 run_<ts>/ 시작 (이전 디스크 아카이브는 보존됨)
 rosservice call /handeye_calib/reset   "{}"
 ```
 
@@ -68,6 +68,51 @@ rosservice call /handeye_calib/compute "{}"
 
 응답에는 BEST method, residual, T_hc2ee 의 translation 과 RPY 가 포함됨.
 결과 파일은 `config/hand_eye/T_hc2ee.npz` 에 저장됨.
+
+> **참고**: `T_hc2ee.npz`는 노드가 시작 시 1회만 로드합니다. 새로 보정한 뒤에는 `path_tag_locator` 노드를 **재시작**해야 적용됩니다.
+
+### 1e. 기존 샘플 재사용 (resume)
+
+캡처 도중 노드를 종료해도 디스크 아카이브는 남아 있습니다. 재시작 후 두 가지 방법으로 이어서 진행할 수 있습니다.
+
+**방법 A — 가장 최근 run을 메모리에 적재 (가장 간단)**
+
+```bash
+roslaunch path_tag_locator handeye_calib.launch
+
+# 이전 세션의 가장 최신 run_<ts>/ 를 자동 검색해서 적재
+rosservice call /handeye_calib/load_latest "{}"
+# → loaded N sample(s) from .../run_20260521_133900 (total in memory: N)
+
+rosservice call /handeye_calib/status  "{}"   # samples: N (>= min_samples 인지 확인)
+rosservice call /handeye_calib/compute "{}"   # 바로 보정
+```
+
+**방법 B — 특정 디렉터리 지정 (`config/handeye_calib.yaml`)**
+
+```yaml
+handeye_calib:
+  io:
+    load_samples_dirs:
+      - "~/.ros/path_tag_locator/handeye_calib/run_20260521_133900"
+      - "~/.ros/path_tag_locator/handeye_calib/run_20260521_142500"   # 여러 세션 합치기 가능
+```
+
+노드 시작 시 자동으로 메모리에 적재됩니다. 각 항목은 `run_<ts>/` 디렉터리 또는 그 아래의 `samples/` 디렉터리 모두 지원합니다.
+
+**방법 C — 적재 후 추가 캡처**
+
+`/load_latest` 또는 `load_samples_dirs`로 적재한 다음에 `/capture`를 더 호출하면 두 소스가 합쳐져 `/compute`에 들어갑니다. 자세 다양성이 부족할 때 유용합니다.
+
+```bash
+rosservice call /handeye_calib/load_latest "{}"   # 과거 8개 적재
+rosservice call /handeye_calib/capture "{}"       # 새 자세 추가
+rosservice call /handeye_calib/capture "{}"
+rosservice call /handeye_calib/status  "{}"       # samples: 10
+rosservice call /handeye_calib/compute "{}"
+```
+
+> **주의**: 적재된 샘플은 새 `recorder` run에 **다시 저장되지 않습니다** (중복 방지). `/compute` 결과 `result.npz`는 새 `run_<ts>/`에 별도로 저장됩니다.
 
 ---
 
@@ -87,7 +132,9 @@ reference_tag:
 
 ### 2b. 플랫폼 기하 `config/extrinsics.yaml`
 
-T_AB2MB (arm_base → mobile_base), T_MB2FC (mobile_base → front_cam) 의 기본값이 채워져 있음. 플랫폼 개조 시에만 수정.
+`T_ab2mb` (mb의 ab 표현), `T_mb2fc` (fc의 mb 표현) 의 기본값이 채워져 있음. **좌표 규약**: `T_X2Y` = "Y 프레임의 X 프레임 내 표현" = Y → X 좌표 변환. 플랫폼 개조(arm 마운트/카메라 마운트 변경) 시에만 수정.
+
+기본값은 USD 모델 기준이므로 실제 하드웨어와 차이가 있으면 재측정하세요(`T_ab2mb`는 arm base 가 mobile base 위 어디에 있는지, `T_mb2fc`는 front-cam이 mobile base 어디에 어떤 방향으로 마운트됐는지).
 
 ### 2c. 메인 설정 `config/locator.yaml`
 
@@ -110,6 +157,16 @@ roslaunch path_tag_locator path_tag_locator.launch
 노드가 제공하는 인터페이스:
 - **Service**: `/path_tag_locator/locate_path_tag` (타입 `path_tag_locator/LocatePathTag`)
 - **Topic** (latched): `/path_tag_locator/tag_world_pose` (`geometry_msgs/PoseStamped`)
+
+`/handeye_calib` 노드 인터페이스(전부 `std_srvs/Trigger`):
+
+| 서비스 | 동작 |
+|--------|------|
+| `~capture` | 현재 이미지+K+TCP 한 세트 캡처. 디스크에도 즉시 저장. |
+| `~compute` | 메모리의 모든 샘플로 `calibrateHandEye` 실행. `T_hc2ee.npz` 갱신 + 새 `run_<ts>/result.{npz,yaml}` 저장. |
+| `~status`  | 현재 샘플 수, 마지막 결과 요약. |
+| `~reset`   | 메모리 비움 + 새 `run_<ts>/` 디렉터리 시작 (디스크 기록은 보존). |
+| `~load_latest` | `run_root` 아래 **현 세션을 제외한 가장 최신** `run_*/` 디렉터리에서 샘플을 메모리에 적재. |
 
 ---
 
@@ -226,7 +283,7 @@ rostopic echo -n 1 /path_tag_locator/tag_world_pose
     result.npz / result.yaml  /compute 호출 시 작성됨
 ```
 
-`/handeye_calib/reset` 호출 시 새 `run_<ts>/` 디렉터리가 생성되므로 이전 시도 데이터는 보존됨.
+`/handeye_calib/reset` 호출 시 새 `run_<ts>/` 디렉터리가 생성되므로 이전 시도 데이터는 보존됨. 보존된 `run_*/`는 `/handeye_calib/load_latest` 또는 `io.load_samples_dirs` 로 언제든 다시 합칠 수 있음(§ 1e).
 
 #### npz 읽기 예시
 
@@ -252,6 +309,9 @@ awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
 
 ## 6. 자주 발생하는 문제
 
+> 깊은 진단은 [TROUBLESHOOTING_kr.md](TROUBLESHOOTING_kr.md) 참고. 노드 캐시 / 단위 / SDK 시그니처 / reach 경계 / 보정 잔차 등 케이스별 진단 명령어 포함.
+
+
 | 증상 | 점검 항목 |
 |------|---------|
 | `Tag A (id=58) not detected in hand-cam image` | hand-cam 이 태그를 향하고 있는가; 태그 크기가 yaml 의 `tag_a_size_m` 과 일치하는가; 태그 family 가 tag36h11 인가 |
@@ -260,6 +320,10 @@ awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
 | `Hand-eye file not found` | 1 단계 캘리브레이션 미완료 |
 | `auto_align: ... clamped` | 한 step 이 너무 커서 제한된 것, 정상 (다음 반복에서 계속 접근) |
 | 자동 정렬이 떨려서 수렴 안 함 | T_hc2ee 캘리 오차 큼 → 재캘리브레이션; 또는 `align.position_tol_m` 를 크게 |
+| `position_m` 결과가 100m 단위로 비정상 | 노드가 시작 시점에 메모리에 캐시한 `T_hc2ee.npz`가 오래된 값 → 노드 **재시작** |
+| `GetInverseKinRef() takes exactly 4 positional arguments` | Fairino SDK 버전 차이. tcp_pose.py 의 IK/MoveJ 호출 시그니처를 SDK 예제(`fairino_sdk/.../examples/`)와 다시 맞춰야 함 |
+| `T_A_world is identity` warning | `reference_tag.yaml` 미설정 상태로 노드 기동. yaml 채우거나 호출 시 `override_ref: true` 사용 |
+| `/compute` 가 `need at least N samples, got M` | `/handeye_calib/load_latest` 또는 `io.load_samples_dirs` 로 이전 세션 샘플을 합치거나 추가 `/capture` |
 
 ---
 
