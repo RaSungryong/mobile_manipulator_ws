@@ -1,0 +1,22 @@
+# Experiment data must never live inside the source tree. The locator
+# node writes runs to ~/.ros/path_tag_locator/ (configurable via
+# config/locator.yaml :: io.default_save_dir). If you accidentally
+# extract a results archive here, these patterns prevent the data from
+# being committed.
+
+# Nested wrapper directories created by unzipping result archives
+# (e.g. `unzip path_tag_locator.zip` inside this folder creates
+# `path_tag_locator/path_tag_locator/...`).
+/path_tag_locator/
+
+# Result-archive zips
+*.zip
+
+# Run directories sometimes created in-place by absolute-path mistakes
+/handeye_calib/
+/locate/
+/run_*/
+
+# Build / runtime
+__pycache__/
+*.pyc
