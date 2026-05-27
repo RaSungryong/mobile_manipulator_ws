@@ -20,26 +20,33 @@
 
 format: "pose"
 
-# Rotation convention reminder (AprilTag library):
-# A tag's local +z points INTO the tag (away from the face / camera).
-# Therefore a FLOOR TAG FACING UP (face = world +z, common scenario)
-# has tag's z = -world_z = downward, which is rpy_deg = [180, 0, 0].
+# Rotation convention (AprilTag library):
+# A tag's local +z points INTO the tag, AWAY from the printed face.
+# So the rpy_deg you declare must match each tag's PHYSICAL mounting:
 #
-# If you write rpy_deg: [0, 0, 0] for a floor tag, the chain will
-# interpret the tag as face-DOWN — almost certainly NOT what you
-# measured. Always use [180, 0, 0] (or [0, 180, 0]) for floor tags.
+#   - tag FACE DOWN (face points downward, viewed from below;
+#                    this project's default convention)
+#       -> tag's z = world +z (up)
+#       -> rpy_deg = [0, 0, 0]    (no rotation from world axes)
+#   - tag FACE UP   (face points upward, viewed from above;
+#                    common for floor stickers)
+#       -> tag's z = world -z (down)
+#       -> rpy_deg = [180, 0, 0]  (flip about x)
+#
+# The examples below assume face-DOWN tags. If yours are face-up,
+# swap rpy to [180, 0, 0] (or [0, 180, 0]).
 
 reference_tags:
   # Origin tag — chosen so its pose maps to the chosen world frame.
-  # Floor tag, face-up: rpy_deg = [180, 0, 0].
+  # Face-down (project convention).
   - id: 0
     position_m: [0.0, 0.0, 0.0]
-    rpy_deg:    [180.0, 0.0, 0.0]
+    rpy_deg:    [0.0, 0.0, 0.0]
   # Additional ref tags, measured relative to the origin above.
   # Replace example values with your actual measurements.
   - id: 100
     position_m: [1.500, 0.200, 0.000]
-    rpy_deg:    [180.0, 0.0, 0.0]      # face-up floor tag
+    rpy_deg:    [0.0, 0.0, 0.0]
   - id: 502
     position_m: [3.000, -0.150, 0.000]
-    rpy_deg:    [180.0, 0.0, 90.0]     # face-up + 90° yaw
+    rpy_deg:    [0.0, 0.0, 90.0]      # face-down + 90° yaw

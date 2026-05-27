@@ -463,22 +463,21 @@ for just that row:
 #### Convention warning: tag orientation in `reference_tags.yaml`
 
 The chain follows the AprilTag library convention: a tag's local
-**z-axis points INTO the tag**, away from the camera. For a **floor
-tag facing up** (face = world +z), this means the tag's z-axis is
-pointing DOWN into the floor. You must therefore declare:
+**z-axis points INTO the tag**, away from the printed face. Match the
+`rpy_deg` you declare to each tag's PHYSICAL mounting:
 
-```yaml
-- id: 0
-  position_m: [0.0, 0.0, 0.0]
-  rpy_deg:    [180.0, 0.0, 0.0]   # 180° about x → tag z = -world z (down)
-```
+| Physical mounting | tag's +z direction | `rpy_deg` (no yaw) |
+|-------------------|--------------------|--------------------|
+| Face DOWN (visible from below; e.g. ceiling-mounted — **this project's default**) | world +z (up)  | `[0.0, 0.0, 0.0]`  |
+| Face UP   (visible from above; common for floor stickers) | world -z (down)| `[180.0, 0.0, 0.0]`|
 
-A face-up floor tag with `rpy_deg: [0, 0, 0]` would be interpreted as
-**face down** (face pointing into the floor), which is almost certainly
-not what you measured. Always use rpy 180° about x (or y) for floor
-tags facing up.
+The bundled `reference_tags.yaml` example uses `[0, 0, 0]` for face-down
+mounting. If your tags are face-up, swap to `[180, 0, 0]` (or
+`[0, 180, 0]`). Getting this wrong produces a 180° error in the chain
+output, usually visible as path-tag positions mirrored about the tag
+plane.
 
-(Old plan continuation, with this convention in mind:)
+(Continuing the walkthrough with this convention in mind:)
 
 ```yaml
 plan:
@@ -524,6 +523,38 @@ Consequences:
   servoing).
 - The chain math (`T_B_world = T_A_world · T_A2B`) produces results in
   the **world frame**, regardless of map.yaml's accuracy.
+
+#### Post-calibration verification
+
+After a session finishes you can run any of these (most without
+touching the robot):
+
+| Script | Robot needed | Purpose |
+|--------|-------------|---------|
+| `verify_map_world.py` | No | Per-tag summary + relative-distance check against `map.yaml`'s edge graph. Flags entries whose inter-tag distance differs by more than `--threshold-m` (default 5 cm). |
+| `test_repeatability.py` | Yes (full re-run) | Calls `/map_calibrator/run_calibration` twice, diffs the two outputs. Per-tag mean |Δxy| is the actual repeatability of the chain. |
+| `verify_arm_pointing.py` | Yes (arm + cameras + base parked) | For each calibrated tag, compute the view pose using its world coordinates, MoveJ there, re-detect with the hand camera, report residual offset. Direct closed-loop check that the saved coordinates actually point the arm at the tag. |
+| `visualize_map_world.py` | RViz only | Publishes a `MarkerArray` of ref tags (red) + calibrated path tags (green) + world origin axes for visual inspection. |
+
+```bash
+# Offline (no robot)
+rosrun path_tag_locator verify_map_world.py
+rosrun path_tag_locator verify_map_world.py --threshold-m 0.10  # looser
+
+# Repeatability (robot has to re-do the full plan; base back to start)
+rosrun path_tag_locator test_repeatability.py
+
+# Arm pointing — drive base to the tag, then:
+rosrun path_tag_locator verify_arm_pointing.py --tag-id 101
+# or after the bulk run, with base parked near several tags in sequence:
+rosrun path_tag_locator verify_arm_pointing.py --all
+
+# RViz visualization (start `rviz` in another terminal with Fixed Frame = world)
+rosrun path_tag_locator visualize_map_world.py
+```
+
+Inspect failure cases by opening the per-tag archive:
+`~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/{hand_cam,front_cam}.png`.
 
 #### Output
 

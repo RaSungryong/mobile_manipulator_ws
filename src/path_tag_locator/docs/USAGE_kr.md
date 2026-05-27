@@ -529,20 +529,19 @@ plan:
 
 #### `reference_tags.yaml` 의 회전 관습 주의
 
-체인은 AprilTag 라이브러리 관습을 따른다: tag 의 local **z 축은 tag
-안쪽** (카메라 반대 방향) 을 향한다. **바닥에 face-up 으로 놓인 tag**
-(face = world +z) 의 경우 tag 의 z 는 바닥 안쪽 = world -z 방향이므로,
-다음과 같이 선언해야 한다:
+체인은 AprilTag 라이브러리 관습을 따른다: tag 의 local **z 축은 인쇄면
+반대 방향** (tag 안쪽) 을 향한다. 선언하는 `rpy_deg` 는 각 tag 의 **물리적
+설치 방향**과 일치해야 한다:
 
-```yaml
-- id: 0
-  position_m: [0.0, 0.0, 0.0]
-  rpy_deg:    [180.0, 0.0, 0.0]   # x 축 180° → tag z = -world z (down)
-```
+| 물리적 설치 | tag 의 +z 방향 | yaw=0 일 때 `rpy_deg` |
+|-------------|------------------|-----------------------|
+| Face DOWN (아래를 향함; 천장 / 구조물 부착 — **본 프로젝트 기본 관습**) | world +z (위) | `[0.0, 0.0, 0.0]`     |
+| Face UP   (위를 향함; 바닥 스티커 흔한 경우)                | world -z (아래) | `[180.0, 0.0, 0.0]`   |
 
-`rpy_deg: [0, 0, 0]` 으로 두면 **face down** (바닥을 향함) 으로 해석되어
-체인 결과가 z 축 기준 180° 어긋난다. 바닥-위 tag 는 거의 항상 rpy
-[180, 0, 0] (또는 y 180°) 가 정답.
+동봉된 `reference_tags.yaml` 예시는 face-down 기준으로 `[0, 0, 0]` 을
+사용한다. 만약 face-up 으로 바꾸면 rpy 도 `[180, 0, 0]` (또는
+`[0, 180, 0]`) 으로 함께 바꿔야 한다. 이 부분이 어긋나면 체인 결과가
+tag 평면 기준 180° 어긋난 위치로 나온다.
 
 (이전 안내 계속:)
 
@@ -556,6 +555,38 @@ plan:
 | `auto_align` xy 가 >5 cm 에서 멈춤 | `T_hc2ee` 부정확 → Phase 1 재진행; 또는 `align.position_tol_m` 완화 |
 | 결과 `position_m` 이 1 m+ 어긋남 | ref_tags 측정 오류; yaw 반대로 설치; hand_cam.png 가 다른 tag 를 봄 |
 | Fairino `MoveJ` 실패 | 컨트롤러에서 `tcp_index=1` 도구 비활성; 또는 `arm_view_tcp_mm_deg` 가 reach 밖 |
+
+### 5e+. 표보정 후 검증 스크립트
+
+세션이 끝난 뒤 결과를 검증할 수 있는 4 개 보조 스크립트 (대부분 로봇
+없이 동작):
+
+| 스크립트 | 로봇 필요 | 용도 |
+|----------|----------|------|
+| `verify_map_world.py` | ❌ | 각 tag 의 summary + `map.yaml` 의 edge 그래프 기반 상대 거리 비교. `--threshold-m` (기본 5 cm) 초과 시 표시. |
+| `test_repeatability.py` | ✓ (전체 재실행) | `/map_calibrator/run_calibration` 을 두 번 호출하고 두 결과를 diff. 평균 \|Δxy\| 가 체인의 실제 반복정밀도. |
+| `verify_arm_pointing.py` | ✓ (arm + 카메라 + base 정차) | 각 tag 의 world 좌표로 view pose 계산 → MoveJ → hand-cam 재검출 → 잔차 측정. 가장 강한 폐루프 검증. |
+| `visualize_map_world.py` | RViz 만 | 빨간색 ref tag + 녹색 calibrated tag + world 원점 축을 `MarkerArray` 로 publish. |
+
+```bash
+# 오프라인 (로봇 X)
+rosrun path_tag_locator verify_map_world.py
+rosrun path_tag_locator verify_map_world.py --threshold-m 0.10   # 더 느슨
+
+# 반복성 (같은 plan 재실행, base 출발점으로 되돌리기 필요)
+rosrun path_tag_locator test_repeatability.py
+
+# Arm pointing — base 를 해당 tag 앞에 정차 후:
+rosrun path_tag_locator verify_arm_pointing.py --tag-id 101
+# 또는 여러 tag 순차 점검:
+rosrun path_tag_locator verify_arm_pointing.py --all
+
+# RViz 시각화 (다른 터미널에서 rviz, Fixed Frame=world)
+rosrun path_tag_locator visualize_map_world.py
+```
+
+실패한 entry 의 원인 추적: `~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/`
+의 `hand_cam.png` / `front_cam.png` 를 열어 확인.
 
 ### 5f. 좌표계: `map.yaml` ≠ 사용자의 world frame
 
