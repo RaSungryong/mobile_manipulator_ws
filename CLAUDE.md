@@ -55,11 +55,11 @@ validated_at`. Render with `tools/ra_map_plotter.py <csv> [--interpolate]`.
 
 | File | IK Engine | Scan |
 |------|-----------|------|
-| `src/apriltag_nav/arm_controllerrealwithscan_v2.py` | Fairino SDK + q0 ref | Yes (default) |
+| `src/apriltag_nav/arm_controller.py` | Fairino SDK + q0 ref | Yes (default) |
 | `tools/arm_controller_sdk.py` | Fairino SDK (basic) | No |
 
 Switch via the import in `scripts/arm_controller_node.py`:
-`from apriltag_nav.arm_controllerrealwithscan_v2 import ArmController`
+`from apriltag_nav.arm_controller import ArmController`
 
 ## Architecture
 
@@ -92,7 +92,7 @@ owner node per device, other nodes reach it over topics/services.
 
 ### Arm split
 
-`arm_controller_node.py` **wraps** `arm_controllerrealwithscan_v2.ArmController`
+`arm_controller_node.py` **wraps** `arm_controller.ArmController`
 unchanged rather than reimplementing it — that controller holds `TOOL_ID=1`
 (vision_tip TCP), the q0 IK seed, the 4-DOF transform, the 13-column CSV and the
 Keyence loop. A previous node-per-device attempt (the deleted `scripts_ros/`

@@ -63,7 +63,7 @@ mobile_manipulator_ws/
 │   │   ├── src/apriltag_nav/       # Importable python package (library code)
 │   │   │   ├── paths.py                # Single source of truth for on-disk paths
 │   │   │   ├── robot_controller.py     # Mobile base navigation (Pure Pursuit)
-│   │   │   ├── arm_controllerrealwithscan_v2.py # Arm controller (default, 4-DOF calibrated)
+│   │   │   ├── arm_controller.py # Arm controller (default, 4-DOF calibrated)
 │   │   │   ├── arm_client.py           # task_executor's ROS client for the arm node
 │   │   │   ├── navifra_devices.py      # Navifra base peripherals (lift/LED/BMS/safety)
 │   │   │   ├── map_manager.py          # AprilTag topological map + BFS
@@ -197,7 +197,7 @@ TCP polling of Keyence DL-EN1 sensor at 60 Hz. Default address: 192.168.1.5:6400
 
 ### 4.1 Real Robot Controllers (Fairino SDK)
 
-**`arm_controllerrealwithscan_v2.py`** — the real robot controller (sole variant;
+**`arm_controller.py`** — the real robot controller (sole variant;
 the original `arm_controllerrealwithscan.py` was removed — it kept the broken
 sign-flip transform and opened the Basler directly, violating the camera policy):
 - **`_transform_pose`**: 4-DOF physical transform (position output in mm for Fairino)
@@ -340,7 +340,7 @@ trades that for physical interpretability.
 orientation barely changes across a scan pattern, so the CSV value is the
 cleanest source. `q0` (paired joint CSV) is used only as the IK seed.
 
-Real robot (`arm_controllerrealwithscan_v2.py`) also feeds `q0` into
+Real robot (`arm_controller.py`) also feeds `q0` into
 `GetInverseKinRef` — there the joint CSV is a **reference only** since
 real-world joint→pose mapping can diverge from the URDF FK.
 

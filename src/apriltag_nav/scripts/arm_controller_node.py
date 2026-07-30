@@ -7,7 +7,7 @@ Sole owner of the arm. task_executor no longer instantiates ArmController; it
 talks to this node through ArmClient (scripts/arm_client.py), which mirrors the
 old in-process call surface.
 
-Design note — this node WRAPS `arm_controllerrealwithscan_v2.ArmController`
+Design note — this node WRAPS `arm_controller.ArmController`
 without touching its logic. That controller carries the parts that matter and
 are easy to lose in a rewrite:
   * TOOL_ID = 1 (vision_tip TCP) on every move — not the flange
@@ -49,7 +49,7 @@ import rospy
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger, TriggerResponse
 
-from apriltag_nav.arm_controllerrealwithscan_v2 import ArmController
+from apriltag_nav.arm_controller import ArmController
 from apriltag_nav.paths import MODEL_PATH as DEFAULT_MODEL_PATH
 
 

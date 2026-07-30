@@ -19,7 +19,7 @@ Usage:
     python3 set_tool_tcp.py [--tool_id 1] [--robot_ip 192.168.58.2] [--dry_run]
 
 After running:
-    Change MoveJ / GetInverseKin calls in arm_controllerrealwithscan_v2.py:
+    Change MoveJ / GetInverseKin calls in arm_controller.py:
         tool=0  →  tool=1   (or whichever tool_id was used)
 """
 
@@ -111,7 +111,7 @@ def main():
         print(f'Verification GetTCPOffset failed: {ret}')
 
     print()
-    print('Done. Now update arm_controllerrealwithscan_v2.py:')
+    print('Done. Now update arm_controller.py:')
     print(f'  MoveJ(joints_deg, tool={args.tool_id}, user=0)')
     print(f'  GetInverseKin(0, target, config=-1)   → tool is implicit')
     print(f'  GetInverseKinRef(0, target, q0_deg)   → tool is implicit')

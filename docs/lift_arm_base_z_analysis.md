@@ -20,11 +20,11 @@ base origin in the world frame:
 robot.yaml  arm_calibration.arm_base_z: 1.0076
    │
    ▼
-arm_controllerrealwithscan_v2.py:636
+arm_controller.py:636
    body_off_z = rospy.get_param('~arm_base_z', _calib.get('arm_base_z', 1.0076))
    │
    ▼
-arm_controllerrealwithscan_v2.py:648-652
+arm_controller.py:648-652
    p_A_W = np.array([ x_base + ..., y_base + ..., body_off_z ])
                                                  ^^^^^^^^^^
                               arm base Z in world — never updated
@@ -168,12 +168,12 @@ the current accuracy without mechanical work.
 
 | What | File / line |
 |---|---|
-| Constant read | [arm_controllerrealwithscan_v2.py:636](../src/apriltag_nav/scripts/arm_controllerrealwithscan_v2.py:636) |
-| Used as arm base Z | [arm_controllerrealwithscan_v2.py:648](../src/apriltag_nav/scripts/arm_controllerrealwithscan_v2.py:648) |
+| Constant read | [arm_controller.py:636](../src/apriltag_nav/src/apriltag_nav/arm_controller.py:636) |
+| Used as arm base Z | [arm_controller.py:648](../src/apriltag_nav/src/apriltag_nav/arm_controller.py:648) |
 | Config value | [robot.yaml `arm_calibration.arm_base_z`](../src/apriltag_nav/config/robot.yaml) |
-| Lift state / commands | [navifra_devices.py](../src/apriltag_nav/scripts/navifra_devices.py) — `lift_position`, `lift_home()`, `lift_goto()`, `lift_at()` |
+| Lift state / commands | [navifra_devices.py](../src/apriltag_nav/src/apriltag_nav/navifra_devices.py) — `lift_position`, `lift_home()`, `lift_goto()`, `lift_at()` |
 | Interim guard | [task_executor.py `_check_lift_scan_height`](../src/apriltag_nav/scripts/task_executor.py) |
-| Offline re-fit | [calibrate_transform.py](../src/apriltag_nav/scripts/calibrate_transform.py) — already solves for `arm_base_z`; would need a lift-position column added to the paired CSV |
+| Offline re-fit | [calibrate_transform.py](../src/apriltag_nav/tools/calibrate_transform.py) — already solves for `arm_base_z`; would need a lift-position column added to the paired CSV |
 
 Note `calibrate_transform.py` already treats `arm_base_z` as a free parameter
 with bounds 0.80-1.20 m, so re-fitting at a new fixed height (Option A) needs

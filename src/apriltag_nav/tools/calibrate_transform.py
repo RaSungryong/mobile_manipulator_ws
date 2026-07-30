@@ -29,7 +29,7 @@ from scipy.optimize import minimize, differential_evolution
 
 
 # ==========================================================
-# Transform (mirrors _transform_pose in arm_controllerrealwithscan_v2.py)
+# Transform (mirrors _transform_pose in arm_controller.py)
 # ==========================================================
 
 def transform_world_to_arm_mm(world_xyz_m, robot_msg_x, robot_msg_y,

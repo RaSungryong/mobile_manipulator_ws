@@ -162,7 +162,7 @@ grep -n "GetInverseKinRef\|GetInverseKin\|MoveJ" \
 
 #### 처방
 
-[`tcp_pose.py:move_j_to_pose`](../src/path_tag_locator/tcp_pose.py)을 위 시그니처에 맞게 수정. apriltag_nav의 `arm_controllerrealwithscan_v2.py:549-557` 가 동작 검증된 참조.
+[`tcp_pose.py:move_j_to_pose`](../src/path_tag_locator/tcp_pose.py)을 위 시그니처에 맞게 수정. apriltag_nav의 `arm_controller.py:549-557` 가 동작 검증된 참조.
 
 ### 1.4 `Tag A not detected in hand-cam image`
 
