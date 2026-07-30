@@ -15,6 +15,7 @@ roslaunch apriltag_nav mobile_manipulator.launch
 
 Task 실행 명령
 rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line2"
 
 상태 확인
 rostopic pub -1 /task_command std_msgs/String "STATE"
@@ -29,25 +30,3 @@ roslaunch apriltag_nav mobile_manipulator.launch keyence_tol:=0.1 num_samples:=3
 rostopic echo /keyence/value          # Keyence 거리 (m 단위)
 rostopic echo /arm_controller/status  # 팔 컨트롤러 상태
 rostopic echo /task_status            # 태스크 완료 신호
-
-====isaacsim 환경====================
-Isaac Sim 실행
-play 버튼
-
-cd ~/mobile_manipulator_ws
-source devel/setup.bash
-roslaunch fr10v6_vision_251219_moveit_config fr10v6_vision_251219_isaac_execution.launch
-
-cd ~/mobile_manipulator_ws
-source devel/setup.bash
-rosrun apriltag_nav task_executor.py
-
-Task 실행 명령
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line2"
-
-상태 확인
-rostopic pub -1 /task_command std_msgs/String "STATE"
-
-즉시 중지 (이동 + 스캔 모두 정지)
-rostopic pub -1 /task_command std_msgs/String "STOP"

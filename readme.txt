@@ -25,34 +25,3 @@ rostopic pub /task_command std_msgs/String "data: 'TASK go_home'"
 # go to tag（no scan）
 rostopic pub -1 /task_command std_msgs/String "data: 'GOTO 104'"
 
-====isaacsim 환경====================
-Isaac Sim 실행
-play 버튼
-
-cd mobile_manipulator_ws
-source devel/setup.bash
-roslaunch fr10v6_vision_251219_moveit_config fr10v6_vision_251219_isaac_execution.launch 
-
-cd mobile_manipulator_ws
-source devel/setup.bash
-rosrun apriltag_nav task_executor.py
-
-Task 실행 명령
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
-
-상태 확인
-rostopic pub -1 /task_command std_msgs/String "STATE"
-
-즉시 중지 (이동 + 스캔 모두 정지)
-rostopic pub -1 /task_command std_msgs/String "STOP"
-
-
-# go_home
-rostopic pub /task_command std_msgs/String "data: 'TASK go_home'"
-
-# go to tag（no scan）
-rostopic pub -1 /task_command std_msgs/String "data: 'GOTO 104'"
-
-
-
-
