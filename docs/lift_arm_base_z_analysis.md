@@ -20,11 +20,11 @@ base origin in the world frame:
 robot.yaml  arm_calibration.arm_base_z: 1.0076
    │
    ▼
-arm_controller.py:636
+arm_transform.py  (transform_world_to_arm)
    body_off_z = rospy.get_param('~arm_base_z', _calib.get('arm_base_z', 1.0076))
    │
    ▼
-arm_controller.py:648-652
+arm_transform.py  (p_A_W construction)
    p_A_W = np.array([ x_base + ..., y_base + ..., body_off_z ])
                                                  ^^^^^^^^^^
                               arm base Z in world — never updated
@@ -168,8 +168,8 @@ the current accuracy without mechanical work.
 
 | What | File / line |
 |---|---|
-| Constant read | [arm_controller.py:636](../src/apriltag_nav/src/apriltag_nav/arm_controller.py:636) |
-| Used as arm base Z | [arm_controller.py:648](../src/apriltag_nav/src/apriltag_nav/arm_controller.py:648) |
+| Constant read | [arm_transform.py](../src/apriltag_nav/src/apriltag_nav/arm_transform.py) (`body_off_z` in `transform_world_to_arm`) |
+| Used as arm base Z | [arm_transform.py](../src/apriltag_nav/src/apriltag_nav/arm_transform.py) (`p_A_W` third component) |
 | Config value | [robot.yaml `arm_calibration.arm_base_z`](../src/apriltag_nav/config/robot.yaml) |
 | Lift state / commands | [navifra_devices.py](../src/apriltag_nav/src/apriltag_nav/navifra_devices.py) — `lift_position`, `lift_home()`, `lift_goto()`, `lift_at()` |
 | Interim guard | [task_executor.py `_check_lift_scan_height`](../src/apriltag_nav/scripts/task_executor.py) |
