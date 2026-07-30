@@ -1,0 +1,25 @@
+# On-demand capture from the wrist Basler camera.
+#
+# The camera is kept CLOSED between captures (heat / lifetime / power), and the
+# VISION lamp is only lit for the duration of the grab. Both are owned by
+# basler_camera_node — callers must NOT open the device or drive
+# /crevis/led/vision themselves, or the shutter and the lamp will desynchronise.
+#
+# This is synchronous on purpose: the reply carries the frames, so a caller can
+# never pair a scan point with a stale frame from a streaming topic.
+
+# Frames to grab in one burst. <= 0 uses the node's configured default.
+int32 num_samples
+
+# Delay between frames within the burst [s]. < 0 uses the node default.
+float32 delay_between_s
+
+# Light the VISION lamp around the burst. Set false only for diagnostics where
+# ambient light is intended — Ra inference expects the lamp on.
+bool use_vision_led
+---
+bool success
+string message
+
+# Captured frames, bgr8, in capture order. Empty when success is false.
+sensor_msgs/Image[] images
