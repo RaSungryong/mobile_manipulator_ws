@@ -1,32 +1,34 @@
-실행 방법
-====실제로봇====================
-1. ROS 실행
+How to run
+==== Real robot ====================
+1. Start ROS
 roscore
 
-2. 전체 시스템 실행 (Keyence 센서 + 팔 컨트롤러 + 태스크 실행기 통합 시작)
+2. Start the full system (all four device nodes together)
 cd ~/mobile_manipulator_ws
 source devel/setup.bash
 roslaunch apriltag_nav mobile_manipulator.launch
 
-※ 위 명령 하나로 아래 3개 노드가 모두 시작됩니다:
-   - keyence_dlen1_node  : Keyence DL-EN1 거리 센서 (192.168.1.5:64000, 60Hz)
-   - arm_controller      : Basler 카메라 + ONNX 추론 + Keyence 폐루프 제어
-   - task_executor       : 메인 태스크 오케스트레이터
+* This single command starts all four nodes:
+   - keyence_dlen1_node   : Keyence DL-EN1 distance sensor (192.168.100.105:64000)
+   - basler_camera_node   : wrist Basler camera + VISION lamp (/camera/capture)
+   - arm_controller_node  : Fairino arm + ONNX inference + Keyence closed loop
+   - task_executor        : main task orchestrator (STATUS lamp, e-stop, battery)
 
-Task 실행 명령
+Run a task
 rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
 rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line2"
 
-상태 확인
+Query state
 rostopic pub -1 /task_command std_msgs/String "STATE"
 
-즉시 중지 (이동 + 스캔 모두 정지)
+Immediate stop (halts both motion and scanning)
 rostopic pub -1 /task_command std_msgs/String "STOP"
 
-파라미터 오버라이드 예시 (선택)
+Parameter override example (optional)
 roslaunch apriltag_nav mobile_manipulator.launch keyence_tol:=0.1 num_samples:=3
 
-주요 토픽 모니터링
-rostopic echo /keyence/value          # Keyence 거리 (m 단위)
-rostopic echo /arm_controller/status  # 팔 컨트롤러 상태
-rostopic echo /task_status            # 태스크 완료 신호
+Useful topics to monitor
+rostopic echo /keyence/value     # Keyence distance
+rostopic echo /arm/status        # arm node state (idle/busy)
+rostopic echo /camera/state      # camera state (closed/open/capturing)
+rostopic echo /scan_finished     # scan completion signal

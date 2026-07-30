@@ -1,27 +1,27 @@
-실행 방법
-====실제로봇====================
-1. ROS 실행
+How to run
+==== Real robot ====================
+1. Start ROS
 cd mobile_manipulator_ws
 source devel/setup.bash
 roscore
 
-2. TaskExecutor 실행
+2. Start the system (all nodes: arm, camera, Keyence, task executor)
 cd mobile_manipulator_ws
 source devel/setup.bash
-rosrun apriltag_nav task_executor.py
+roslaunch apriltag_nav mobile_manipulator.launch
 
-Task 실행 명령
+Run a task
 rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line2"
 
-상태 확인
+Query state
 rostopic pub -1 /task_command std_msgs/String "STATE"
 
-즉시 중지 (이동 + 스캔 모두 정지)
+Immediate stop (halts both motion and scanning)
 rostopic pub -1 /task_command std_msgs/String "STOP"
 
 # go_home
 rostopic pub /task_command std_msgs/String "data: 'TASK go_home'"
 
-# go to tag（no scan）
+# go to tag (no scan)
 rostopic pub -1 /task_command std_msgs/String "data: 'GOTO 104'"
-
