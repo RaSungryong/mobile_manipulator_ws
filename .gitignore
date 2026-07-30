@@ -1,8 +1,18 @@
 # Catkin build artifacts
 build/
 devel/
+install/
 logs/
 .catkin_workspace
+
+# Isaac Sim USD scene assets (~600 MB).
+# Simulation support was removed from this workspace, so nothing here reads
+# them any more. Kept on disk but out of git — the .usd/.stp files are large
+# binaries and were never a sensible thing to version.
+polishing_env/
+
+# Local review / analysis output, not part of the deliverable
+review_reports/
 
 # Python
 __pycache__/
