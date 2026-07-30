@@ -64,7 +64,6 @@ mobile_manipulator_ws/
 │   │   │   ├── paths.py                # Single source of truth for on-disk paths
 │   │   │   ├── robot_controller.py     # Mobile base navigation (Pure Pursuit)
 │   │   │   ├── arm_controllerrealwithscan_v2.py # Arm controller (default, 4-DOF calibrated)
-│   │   │   ├── arm_controllerrealwithscan.py    # Arm controller (original variant)
 │   │   │   ├── arm_client.py           # task_executor's ROS client for the arm node
 │   │   │   ├── navifra_devices.py      # Navifra base peripherals (lift/LED/BMS/safety)
 │   │   │   ├── map_manager.py          # AprilTag topological map + BFS
@@ -198,16 +197,12 @@ TCP polling of Keyence DL-EN1 sensor at 60 Hz. Default address: 192.168.1.5:6400
 
 ### 4.1 Real Robot Controllers (Fairino SDK)
 
-**`arm_controllerrealwithscan.py`** — Original real robot controller:
-- Fairino SDK: `Robot.RPC(ip)`, `MoveJ()`, `GetInverseKin()`
-- Old `_transform_pose`: simple delta with sign flips (broken for world-frame coords)
-- Keyence closed-loop distance adjustment
-- Camera capture + ONNX inference
-
-**`arm_controllerrealwithscan_v2.py`** — Updated real robot controller:
+**`arm_controllerrealwithscan_v2.py`** — the real robot controller (sole variant;
+the original `arm_controllerrealwithscan.py` was removed — it kept the broken
+sign-flip transform and opened the Basler directly, violating the camera policy):
 - **`_transform_pose`**: 4-DOF physical transform (position output in mm for Fairino)
 - **`_exec_pose`**: uses `GetInverseKinRef(0, target, q0_deg)` when q0 available
-- All other functionality unchanged (Keyence, camera, inference)
+- Keyence closed-loop distance adjustment; frames via /camera/capture service
 
 ### 4.2 Fairino SDK API Reference (Key Methods)
 

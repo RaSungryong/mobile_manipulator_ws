@@ -56,7 +56,6 @@ validated_at`. Render with `tools/ra_map_plotter.py <csv> [--interpolate]`.
 | File | IK Engine | Scan |
 |------|-----------|------|
 | `src/apriltag_nav/arm_controllerrealwithscan_v2.py` | Fairino SDK + q0 ref | Yes (default) |
-| `src/apriltag_nav/arm_controllerrealwithscan.py` | Fairino SDK (original) | Yes |
 | `tools/arm_controller_sdk.py` | Fairino SDK (basic) | No |
 
 Switch via the import in `scripts/arm_controller_node.py`:
@@ -118,10 +117,6 @@ change. Two things to know:
 namespace** (`num_samples`, `save_images`, `output_dir`, `keyence_*`, ...). They
 used to sit on `mobile_manipulator_system`; left there they silently fall back
 to defaults.
-
-`arm_controllerrealwithscan.py` (the original real-robot variant) still opens the
-Basler itself instead of calling `/camera/capture`, so it holds the device
-powered on. Port it to the capture service before selecting it.
 
 ### Camera lifecycle — the Basler must not stay on
 
