@@ -8,8 +8,13 @@ and it is exactly the code the lift integration will have to touch —
 `arm_base_z` is a constant here while the new base can move the arm
 vertically. See docs/lift_arm_base_z_analysis.md before changing that.
 
-Validated against 328 paired joint/pose rows: mean residual 12 mm,
-max 27 mm. Calibration lookup chain per value:
+Calibration source of truth: path_tag_locator/config/extrinsics.yaml
+T_ab2mb — R = Rz(180°) exactly (mount_yaw = π, NO tilt), t = (0, 0, -1.025)
+(arm base 1.025 m above the mobile-base origin). The no-tilt claim is
+independently confirmed by the 655-point real-robot fit
+(task/csv/calib_data_params.yaml, tilt ≈ 0). Earlier USD-derived defaults
+(base_z 1.0076, tilts ±1.5°) are superseded — those tilts do not exist on
+the real platform. Lookup chain per value:
     private ROS param  >  robot.yaml `arm_calibration`  >  hardcoded default
 """
 
@@ -33,10 +38,10 @@ def transform_world_to_arm(g, msg):
     _calib = load_yaml_block('arm_calibration')
     body_off_x = rospy.get_param('~arm_body_offset_x', _calib.get('arm_body_offset_x', 0.0))
     body_off_y = rospy.get_param('~arm_body_offset_y', _calib.get('arm_body_offset_y', 0.0))
-    body_off_z = rospy.get_param('~arm_base_z',        _calib.get('arm_base_z',        1.0076))
+    body_off_z = rospy.get_param('~arm_base_z',        _calib.get('arm_base_z',        1.025))
     mount_yaw  = rospy.get_param('~arm_mount_yaw',     _calib.get('arm_mount_yaw',     np.pi))
-    tilt_x     = rospy.get_param('~arm_tilt_x',        _calib.get('arm_tilt_x',       -0.02248))
-    tilt_y     = rospy.get_param('~arm_tilt_y',        _calib.get('arm_tilt_y',        0.02639))
+    tilt_x     = rospy.get_param('~arm_tilt_x',        _calib.get('arm_tilt_x',        0.0))
+    tilt_y     = rospy.get_param('~arm_tilt_y',        _calib.get('arm_tilt_y',        0.0))
 
     x_base = -msg.y
     y_base = -msg.x

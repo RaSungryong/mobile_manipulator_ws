@@ -159,12 +159,24 @@ camera:
 # These are the source of truth; controllers may still override via ROS
 # private params if needed.
 arm_calibration:
+  # Source of truth: path_tag_locator/config/extrinsics.yaml T_ab2mb
+  # (platform-measured; R = Rz(180°) exactly, t = (0, 0, -1.025)).
+  # Two independent confirmations that the mount has NO tilt: the extrinsics
+  # measurement, and the 655-point real-robot fit (task/csv/
+  # calib_data_params.yaml) which found tilt_x/y ≈ 0.0001/0.0007 rad.
+  #
+  # Superseded values (kept for the record):
+  #   arm_base_z 1.0076 + tilts -0.02248/+0.02639 — derived from the USD sim
+  #   scene; the tilts do not exist on the real platform.
+  #   The 655-point fit's arm_base_z was 0.9541 — 71 mm below this value;
+  #   plausibly a different lift height (see navifra.scan_height_counts).
+  #   Re-validate against paired joint/pose data before precision scans.
   arm_body_offset_x: 0.0       # arm mount in body frame X (m)
   arm_body_offset_y: 0.0       # arm mount in body frame Y (m)
-  arm_base_z:        1.0076    # arm base height in world (m)
-  arm_mount_yaw:     3.14159265358979  # rad (pi)
-  arm_tilt_x:       -0.02248   # mount tilt X (rad)
-  arm_tilt_y:        0.02639   # mount tilt Y (rad)
+  arm_base_z:        1.025     # arm base height above mb origin (m)
+  arm_mount_yaw:     3.14159265358979  # rad (pi, exact per extrinsics)
+  arm_tilt_x:        0.0       # no mount tilt on the real platform
+  arm_tilt_y:        0.0       # no mount tilt on the real platform
 
 # Arm home joint angles in radians. This matches the hardcoded value used
 # across every controller (arm_controller.py, tools/arm_controller_sdk.py)

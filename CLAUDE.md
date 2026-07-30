@@ -199,21 +199,30 @@ barely changes across a scan, so the CSV quat is reliable.
 
 ## Transform Parameters (4-DOF physical model)
 
-Derived from the cell CAD geometry and validated against
-328 paired joint/pose CSV rows (mean residual 12 mm, max 27 mm; replaced
-the old 9-DOF calibration whose residual was >300 mm mean because a missing
-mount_yaw=π was absorbed into other params).
+Source of truth: **`path_tag_locator/config/extrinsics.yaml` `T_ab2mb`**
+(platform-measured; that file explicitly deprecates earlier tunings). The
+mount has **no tilt** — R is exactly Rz(180°) — which the 655-point real-robot
+fit (`task/csv/calib_data_params.yaml`, tilt ≈ 0.0001/0.0007 rad) confirms
+independently. The USD-derived values used before (base_z 1.0076, tilts
+-1.3°/+1.5°) are superseded; those tilts do not exist on the real platform.
 
 ```yaml
-arm_body_offset_x:  0.0       # arm mount in body frame X (m, CAD: 0)
-arm_body_offset_y:  0.0       # arm mount in body frame Y (m, CAD: 0)
-arm_base_z:         1.0076    # arm base height in world (m)
-arm_mount_yaw:      π         # arm base yaw vs body (rad, CAD: 180°)
-arm_tilt_x:        -0.02248   # mount tilt X (rad, ≈-1.3°)
-arm_tilt_y:         0.02639   # mount tilt Y (rad, ≈+1.5°)
+arm_body_offset_x:  0.0       # arm mount in body frame X (m)
+arm_body_offset_y:  0.0       # arm mount in body frame Y (m)
+arm_base_z:         1.025     # arm base height above mb origin (m)
+arm_mount_yaw:      π         # arm base yaw vs body (rad, exact)
+arm_tilt_x:         0.0       # no mount tilt
+arm_tilt_y:         0.0       # no mount tilt
 ```
 
 All parameters overridable via ROS `~` private params.
+
+⚠️ Open discrepancy: the 655-point fit put `arm_base_z` at **0.9541** — 71 mm
+below the extrinsics value. On the new base that is plausibly a different lift
+height (see `navifra.scan_height_counts` and `docs/lift_arm_base_z_analysis.md`).
+Re-validate against paired joint/pose data at a known lift position before
+precision pose scans; the old "12 mm mean residual" figure belonged to the
+superseded value set and no longer applies.
 
 ## Coding Conventions
 
