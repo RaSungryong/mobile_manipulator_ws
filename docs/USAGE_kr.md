@@ -141,8 +141,12 @@ python3 src/apriltag_nav/tools/ra_map_plotter.py <csv> --interpolate
 Basler 는 발열·수명·전력 때문에 **상시 켜두지 않는다**:
 
 - 평소 디바이스 **Close** 상태 (`/camera/state` = "closed").
-- 스캔 점마다 `/camera/capture` 서비스 호출 → 열기 → VISION 램프 점등 →
-  촬영 → 소등 → (5초 유휴 후) 닫기. 연속 스캔 점 사이에는 열림 유지.
+- 스캔 점 시작 시 **선(先)오픈**: 팔이 이동을 시작하기 전에 카메라를 미리
+  열어 두어, 오픈 지연이 이동+Keyence 조정 시간과 겹쳐 숨겨진다.
+- 점별 흐름: 선오픈 → 이동 → 안정화 → Keyence 거리 조정 →
+  `/camera/capture` (VISION 램프 점등 → 촬영 → 소등) → 추론.
+- 스캔 종료/취소 시 즉시 닫힘. VISION 램프는 선오픈과 무관하게 **촬영
+  순간에만** 점등된다 (셔터와 묶임).
 - 수동 강제 개폐(진단용): `rostopic pub -1 /camera/set_active std_msgs/Bool "data: true"`
 
 ---

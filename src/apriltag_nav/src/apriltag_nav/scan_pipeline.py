@@ -22,7 +22,7 @@ import numpy as np
 import cv2
 
 import rospy
-from std_msgs.msg import Float32, String
+from std_msgs.msg import Bool, Float32, String
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
@@ -60,6 +60,40 @@ class RaScanPipeline:
         self.ra_pub     = rospy.Publisher("/scan/ra_value",     Float32, queue_size=10)
         self.result_pub = rospy.Publisher("/scan/point_result", String,  queue_size=10)
         self.image_pub  = rospy.Publisher("/scan/image",        Image,   queue_size=1)
+        # Manual open/close override on the camera node (see preopen/release).
+        self._active_pub = rospy.Publisher("/camera/set_active", Bool, queue_size=1)
+
+    # --------------------------------------------------
+    # DEVICE PRE-OPEN (latency hiding)
+    # --------------------------------------------------
+    def preopen(self):
+        """Ask the camera node to open the device NOW.
+
+        Called at the start of each scan point, before the arm starts moving,
+        so the device-open latency overlaps the motion + Keyence adjustment
+        instead of adding to it at capture time. Without this the camera's
+        idle timer (~5 s) closes the device between points, because
+        move+stabilize+adjust usually takes longer than that.
+
+        The VISION lamp is NOT touched here — it stays bracketed with the
+        shutter inside the capture service. Best-effort: if the message is
+        lost, the capture service opens the device itself as before.
+        """
+        try:
+            self._active_pub.publish(Bool(True))
+        except Exception as e:
+            rospy.logwarn(f"[Scan] camera preopen failed: {e}")
+
+    def release(self):
+        """Let the camera close immediately (end of scan / cancel).
+
+        Counterpart of preopen(): without it the device would stay warm for
+        idle_close_sec after the last point for no benefit.
+        """
+        try:
+            self._active_pub.publish(Bool(False))
+        except Exception as e:
+            rospy.logwarn(f"[Scan] camera release failed: {e}")
 
     # --------------------------------------------------
     # CAPTURE (via basler_camera_node service)

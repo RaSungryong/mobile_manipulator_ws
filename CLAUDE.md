@@ -131,6 +131,11 @@ shutter is open. So:
   scan point can never be paired with a stale topic frame.
 - `camera.idle_close_sec` keeps the device open briefly between adjacent scan
   points to avoid Open/Close thrash, then closes it automatically.
+- The scan loop **pre-opens** the device (`/camera/set_active` true) at the
+  start of each scan point, so the open latency overlaps arm motion + Keyence
+  adjustment instead of adding to capture time, and releases it when the scan
+  ends or is cancelled. The lamp is untouched by pre-open — it stays bracketed
+  with the shutter inside the capture service.
 
 LED ownership is split by channel: `STATUS_{red,green,blue}` → `task_executor`,
 `VISION` → `basler_camera_node`. Use `devices.shutdown(leds='status')` from any

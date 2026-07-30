@@ -210,6 +210,11 @@ class ArmController:
 
                 rospy.loginfo(f"[Arm REAL] Execute scan point {i+1}/{len(scan_points)}")
 
+                # Pre-open the camera before the arm starts moving, so the
+                # device-open latency runs in parallel with motion + Keyence
+                # adjustment instead of serially at capture time.
+                self.pipeline.preopen()
+
                 entry = {
                     "point_id":          pid,
                     "group_id":          gid,
@@ -279,6 +284,9 @@ class ArmController:
             rospy.logerr(f"[Arm REAL] Scan exception: {e}")
 
         finally:
+            # Scan over (finished or cancelled) — let the camera close now
+            # rather than idling warm for idle_close_sec.
+            self.pipeline.release()
             # Always publish done so task_executor never hangs
             self.publish_done()
             self.busy = False
