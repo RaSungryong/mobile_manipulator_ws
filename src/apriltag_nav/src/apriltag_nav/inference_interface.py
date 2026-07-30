@@ -64,7 +64,18 @@ class InferenceInterface:
                 .astype(np.float32)
             )
             output = self.session.run(None, {self.input_name: input_np})[0]
-            return float(output.squeeze())
+            ra_value = float(output.squeeze())
+            # Guard against NaN/Inf from a misbehaving model (e.g. all-zero
+            # input or numerical issues). Returning None lets callers treat
+            # this as a failed sample and record success=False rather than
+            # polluting the Ra CSV with garbage.
+            if not np.isfinite(ra_value):
+                rospy.logwarn(
+                    f"[Inference] Non-finite Ra value produced "
+                    f"({ra_value}); discarding sample"
+                )
+                return None
+            return ra_value
         except Exception as e:
             rospy.logerr(f"[Inference] Error: {e}")
             return None

@@ -15,16 +15,15 @@ from robot_msgs.msg import Pose2DWithFlag
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
-from camera_interface import CameraInterface
-from inference_interface import InferenceInterface
+from apriltag_nav.camera_interface import CameraInterface
+from apriltag_nav.inference_interface import InferenceInterface
 
 # ================= Fairino SDK =================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FAIRINO_PATH = os.path.join(
-    BASE_DIR,
-    "../../fairino_sdk/fairino-python-sdk/Linux"
-)
-sys.path.append(FAIRINO_PATH)
+# Resolved via paths.py — this module moved into the python package, so the old
+# __file__-relative "../../fairino_sdk" walk no longer lands in the src space.
+from apriltag_nav import paths
+if not paths.add_fairino_sdk_to_path():
+    rospy.logwarn(f"[Arm REAL] Fairino SDK not found at {paths.FAIRINO_SDK_PATH}")
 from fairino import Robot
 
 
@@ -40,6 +39,11 @@ class ArmController:
     """
 
     def __init__(self, robot_ip="192.168.58.2", model_path=None):
+        # NOTE: unlike arm_controllerrealwithscan_v2, this variant still opens
+        # the Basler camera itself instead of calling /camera/capture, so it
+        # holds the device powered on for the whole node lifetime. That breaks
+        # the "camera must not stay on" requirement — see CLAUDE.md. Port it to
+        # the capture service before selecting it in arm_controller_node.py.
 
         # ---------- state ----------
         self.busy = False
@@ -275,7 +279,7 @@ class ArmController:
             # Compute tool Z-axis direction in robot base frame
             # Fairino uses degrees for Euler angles
             r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
-            z_vec = r.as_matrix()[:, 2]  # third column of rotation matrix
+            z_vec = r.as_dcm()[:, 2]  # third column of rotation matrix
 
             # Apply offset while keeping orientation (rx, ry, rz) unchanged
             new_pose = [
@@ -419,13 +423,13 @@ class ArmController:
 
         R_base = R.from_euler('y', np.pi)
         R_yaw  = R.from_euler('z', msg.theta)
-        R_mb   = (R_base * R_yaw).as_matrix()
+        R_mb   = (R_base * R_yaw).as_dcm()
 
         T_mb = self._T(R_mb, [base_x, base_y, self.pose_mb_z])
-        T_ba = self._T(R.from_euler('z', np.pi).as_matrix(), [0, 0, self.pose_arm_z])
+        T_ba = self._T(R.from_euler('z', np.pi).as_dcm(), [0, 0, self.pose_arm_z])
 
         T    = T_mb @ T_ba
-        R_ab = R.from_matrix(T[:3, :3])
+        R_ab = R.from_dcm(T[:3, :3])
 
         r_tag  = R.from_euler('xyz', [g["rx"], g["ry"], g["rz"]])
         r_goal = R_ab.inv() * r_tag

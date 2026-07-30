@@ -76,10 +76,28 @@ class TaskManager:
 
 
         # ---------------- scan (joint, new) ----------------
-        "scan_joints_line1_new": {
-            "file": "optimized_joints_line1_new.csv",
+        # "scan_joints_line1_new": {
+        #     "file": "optimized_joints_line1_new.csv",
+        #     "type": "scan",
+        #     "scan_mode": "joint",
+        # },
+
+        # ---------------- full scan (line1 + line2, joint) ----------------
+        "scan_full_joints": {
+            "files": ["optimized_joints_line1.csv", "optimized_joints_line2.csv"],
+            "pose_files": ["grid_path_line1.csv", "grid_path_line2.csv"],
             "type": "scan",
             "scan_mode": "joint",
+            "result_name": "scan_full_joints_ra_map.csv",
+        },
+
+        # ---------------- full scan (line1 + line2, pose) ----------------
+        "scan_full_pose": {
+            "files": ["grid_path_line1.csv", "grid_path_line2.csv"],
+            "joint_files": ["optimized_joints_line1.csv", "optimized_joints_line2.csv"],
+            "type": "scan",
+            "scan_mode": "pose",
+            "result_name": "scan_full_pose_ra_map.csv",
         },
 
         # ---------------- move-only CSV  --------
@@ -118,41 +136,90 @@ class TaskManager:
 
         for task_name, cfg in self.TASK_DEFS.items():
 
-            csv_path = os.path.join(self.task_dir, cfg["file"])
-            if not os.path.isfile(csv_path):
-                rospy.logerr(f"[TaskManager] CSV not found: {csv_path}")
+            # Input CSVs: accept `files` (list) or `file` (single), concat in order
+            input_files = cfg.get("files") or (
+                [cfg["file"]] if cfg.get("file") else []
+            )
+            if not input_files:
+                rospy.logerr(f"[TaskManager] Task '{task_name}' has no input file(s)")
                 continue
 
-            rows = self._read_csv(csv_path)
-            if not rows:
-                rospy.logwarn(f"[TaskManager] Empty CSV: {csv_path}")
+            all_rows = []
+            missing = False
+            for fname in input_files:
+                fpath = os.path.join(self.task_dir, fname)
+                if not os.path.isfile(fpath):
+                    rospy.logerr(f"[TaskManager] CSV not found: {fpath}")
+                    missing = True
+                    break
+                all_rows.extend(self._read_csv(fpath))
+            if missing or not all_rows:
+                if not all_rows:
+                    rospy.logwarn(f"[TaskManager] Empty input for '{task_name}'")
                 continue
+
+            # Output path: explicit `result_name` or `{first_input_stem}_result.csv`
+            result_name = cfg.get("result_name")
+            if result_name:
+                result_csv_path = os.path.join(self.task_dir, result_name)
+            else:
+                base, ext = os.path.splitext(input_files[0])
+                result_csv_path = os.path.join(self.task_dir, f"{base}_result{ext}")
 
             task_type = cfg["type"]
 
             if task_type == "scan":
-                # Load paired joint CSV for IK seed (pose mode only)
+                scan_mode = cfg["scan_mode"]
+
+                # Paired joint CSV(s) for IK seed (pose mode)
                 joint_rows = None
-                jf = cfg.get("joint_file")
-                if jf and cfg.get("scan_mode") == "pose":
-                    jpath = os.path.join(self.task_dir, jf)
-                    if os.path.isfile(jpath):
-                        joint_rows = self._read_csv(jpath)
+                if scan_mode == "pose":
+                    joint_files = cfg.get("joint_files") or (
+                        [cfg["joint_file"]] if cfg.get("joint_file") else []
+                    )
+                    if joint_files:
+                        joint_rows = []
+                        for jf in joint_files:
+                            jpath = os.path.join(self.task_dir, jf)
+                            if os.path.isfile(jpath):
+                                joint_rows.extend(self._read_csv(jpath))
                         rospy.loginfo(
-                            f"[TaskManager] Loaded IK seed: {jf} "
-                            f"({len(joint_rows)} rows)"
+                            f"[TaskManager] Loaded IK seeds from {len(joint_files)} "
+                            f"file(s) ({len(joint_rows)} rows)"
+                        )
+
+                # Paired pose CSV(s) for (x, y, z) in joint mode Ra map
+                pose_lookup = None
+                if scan_mode == "joint":
+                    pose_files = cfg.get("pose_files") or (
+                        [cfg["pose_file"]] if cfg.get("pose_file") else []
+                    )
+                    if pose_files:
+                        pose_lookup = {}
+                        for pf in pose_files:
+                            ppath = os.path.join(self.task_dir, pf)
+                            if os.path.isfile(ppath):
+                                for r in self._read_csv(ppath):
+                                    key = (int(r["group_id"]), int(r["point_id"]))
+                                    pose_lookup[key] = (
+                                        float(r["x"]), float(r["y"]), float(r["z"])
+                                    )
+                        rospy.loginfo(
+                            f"[TaskManager] Loaded world coords from {len(pose_files)} "
+                            f"pose file(s) ({len(pose_lookup)} keys)"
                         )
 
                 self._build_scan_task(
                     task_name,
-                    rows,
-                    scan_mode=cfg["scan_mode"],
+                    all_rows,
+                    scan_mode=scan_mode,
                     joint_rows=joint_rows,
-                    csv_path=csv_path,
+                    csv_path=result_csv_path,
+                    pose_lookup=pose_lookup,
                 )
 
             elif task_type == "move":
-                self._build_move_only_task(task_name, rows)
+                self._build_move_only_task(task_name, all_rows)
 
             else:
                 rospy.logerr(
@@ -199,7 +266,8 @@ class TaskManager:
     # ==================================================
     # BUILD TASKS
     # ==================================================
-    def _build_scan_task(self, task_name, rows, scan_mode, joint_rows=None, csv_path=""):
+    def _build_scan_task(self, task_name, rows, scan_mode, joint_rows=None,
+                         csv_path="", pose_lookup=None):
 
         task_steps = []
         scan_points_by_tag = defaultdict(list)
@@ -245,7 +313,7 @@ class TaskManager:
 
             # ---- scan point ----
             if scan_mode == "joint":
-                scan_points_by_tag[gid].append({
+                point = {
                     "mode": "joint",
                     "joints": [
                         float(r["q1"]), float(r["q2"]), float(r["q3"]),
@@ -256,7 +324,13 @@ class TaskManager:
                     "group_id": gid,
                     "csv_path": csv_path,
                     "is_discontinuous": is_disc,
-                })
+                }
+                # Attach world (x, y, z) from paired pose CSV — used for Ra map output
+                if pose_lookup is not None:
+                    xyz = pose_lookup.get((gid, pid))
+                    if xyz is not None:
+                        point["x"], point["y"], point["z"] = xyz
+                scan_points_by_tag[gid].append(point)
 
             elif scan_mode == "pose":
                 point = {

@@ -31,8 +31,9 @@ def parse_response(resp: bytes) -> Tuple[bool, Optional[int], str]:
 
 class KeyenceDLEN1Client:
     """
-    connect -> send -> shutdown(SHUT_WR) -> recv -> close
-    (ROS2 성공 코드와 동일 동작)
+    TCP client for Keyence DL-EN1 displacement sensor.
+    Lifecycle per request: connect -> send -> shutdown(SHUT_WR) -> recv -> close
+    (mirrors the proven ROS2 driver behaviour).
     """
     def __init__(self, host: str, port: int, timeout_s: float = 0.5):
         self.host = host
@@ -47,7 +48,7 @@ class KeyenceDLEN1Client:
             s.connect((self.host, self.port))
             try:
                 s.sendall(payload)
-                # nc 파이프라인처럼 "보낼 거 끝"을 명확히
+                # Signal end-of-write so the sensor flushes its reply
                 try:
                     s.shutdown(socket.SHUT_WR)
                 except OSError:
@@ -79,8 +80,8 @@ class KeyenceDLEN1Client:
 def main():
     rospy.init_node("keyence_dlen1_node", anonymous=False)
 
-    # ROS2 성공 코드 기본값에 맞춤
-    host = rospy.get_param("~host", "192.168.1.5")
+    # Defaults match the proven ROS2 driver configuration
+    host = rospy.get_param("~host", "192.168.100.105")
     port = int(rospy.get_param("~port", 64000))
     rate_hz = float(rospy.get_param("~rate_hz", 60.0))
     timeout_s = float(rospy.get_param("~timeout_s", 0.5))
@@ -88,7 +89,7 @@ def main():
     offset = float(rospy.get_param("~offset", 0.0))
     warn_throttle_s = float(rospy.get_param("~warn_throttle_s", 1.0))
 
-    # ROS2 성공 코드: use_crlf=True
+    # Proven ROS2 driver uses CRLF line endings
     use_crlf = bool(rospy.get_param("~use_crlf", True))
 
     pub_raw = rospy.Publisher("keyence/raw", Int32, queue_size=1)

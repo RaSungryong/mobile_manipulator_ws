@@ -25,7 +25,7 @@ A mobile manipulator system combining a mobile base with a Fairino FR10v6 6-DOF 
 - **Autonomous navigation** based on AprilTag visual markers (Pure Pursuit algorithm)
 - **Arm scanning tasks** at designated positions
 - **Surface roughness (Ra) prediction** using ResNet3D + ONNX Runtime
-- **Dual mode support**: real robot (Fairino SDK) and simulation (Isaac Sim + roboticstoolbox)
+- **Real robot control** via Fairino SDK (simulation support removed)
 
 ### Technology Stack
 
@@ -34,8 +34,8 @@ A mobile manipulator system combining a mobile base with a Fairino FR10v6 6-DOF 
 | ROS | Noetic (Ubuntu 20.04) |
 | Languages | Python 3.8, C++17 (GCC 9.4) |
 | Build | Catkin (CMake 3.16) |
-| Arm Control (Sim) | roboticstoolbox-python (URDF FK/IK) |
-| Arm Control (Real) | Fairino SDK (XML-RPC/TCP) |
+| Arm Control | Fairino SDK (XML-RPC/TCP) |
+| Offline Validation | roboticstoolbox-python (URDF FK, dev tools only) |
 | Hardware Interface | ros_control, frrobot_hw_interface |
 | Visual Localization | dt_apriltags (tag36h11, 60mm) |
 | Camera | Basler (PyPylon) / USB (OpenCV) |
@@ -52,25 +52,31 @@ mobile_manipulator_ws/
 ├── CLAUDE.md                       # Quick reference for Claude Code
 ├── docs.md                         # This file (detailed documentation)
 ├── modification_report_kr.md       # Modification report (Korean)
-├── readme.txt                      # Isaac Sim setup instructions
-├── polishing_env/                  # Isaac Sim USD scene files
+├── readme.txt                      # Run instructions (Korean)
 ├── src/
 │   ├── apriltag_nav/               # Core navigation & task execution package
-│   │   ├── scripts/                # Python nodes (main business logic)
-│   │   │   ├── task_executor.py        # System entry point, state machine
+│   │   ├── scripts/                # ROS node entry points (one per device)
+│   │   │   ├── task_executor.py        # Orchestrator: state machine, STATUS lamp, e-stop
+│   │   │   ├── arm_controller_node.py  # Fairino arm node (wraps the v2 controller)
+│   │   │   ├── basler_camera_node.py   # Wrist Basler + VISION lamp (capture service)
+│   │   │   └── keyence_dlen1_node.py   # Keyence distance sensor node
+│   │   ├── src/apriltag_nav/       # Importable python package (library code)
+│   │   │   ├── paths.py                # Single source of truth for on-disk paths
 │   │   │   ├── robot_controller.py     # Mobile base navigation (Pure Pursuit)
-│   │   │   ├── arm_controller.py       # Arm control - sim, rtb (no scan)
-│   │   │   ├── arm_controllerwithscan.py       # Arm control - sim, rtb + scan
-│   │   │   ├── arm_controllerrealwithscan.py   # Arm control - real, Fairino (original)
-│   │   │   ├── arm_controllerrealwithscan_v2.py # Arm control - real, Fairino (v2, calibrated)
-│   │   │   ├── arm_controller_sdk.py   # Arm control - real, Fairino (basic, no scan)
+│   │   │   ├── arm_controllerrealwithscan_v2.py # Arm controller (default, 4-DOF calibrated)
+│   │   │   ├── arm_controllerrealwithscan.py    # Arm controller (original variant)
+│   │   │   ├── arm_client.py           # task_executor's ROS client for the arm node
+│   │   │   ├── navifra_devices.py      # Navifra base peripherals (lift/LED/BMS/safety)
 │   │   │   ├── map_manager.py          # AprilTag topological map + BFS
 │   │   │   ├── task_manager.py         # CSV task loader + q0 seed support
-│   │   │   ├── keyence_dlen1_node.py   # Keyence distance sensor node
-│   │   │   ├── camera_interface.py     # Basler/Webcam camera abstraction
+│   │   │   ├── camera_interface.py     # Basler (PyPylon) device wrapper
 │   │   │   ├── inference_interface.py  # ONNX Runtime inference wrapper
-│   │   │   ├── send_debug_cmd.py       # Debug command sender
 │   │   │   └── utils.py               # Config loading utilities
+│   │   ├── tools/                  # Standalone one-off scripts (not installed)
+│   │   │   ├── calibrate_transform.py / collect_calib_data.py  # transform calibration
+│   │   │   ├── validate_transform.py / validate_compare.py     # offline FK validation
+│   │   │   ├── ra_map_plotter.py / set_tool_tcp.py / test_hardware.py
+│   │   │   └── navigate.py / send_debug_cmd.py / FrCmd.py / arm_controller_sdk.py
 │   │   ├── config/
 │   │   │   ├── robot.yaml              # Robot parameters
 │   │   │   └── map.yaml               # AprilTag topological map
@@ -87,10 +93,9 @@ mobile_manipulator_ws/
 │       ├── frcobot_description/    # URDF/Xacro robot models
 │       │   └── urdf/
 │       │       ├── fr10v6.urdf             # Standard FR10v6
-│       │       ├── fr10v6_vision.urdf      # FR10v6 + vision link (used by rtb)
+│       │       ├── fr10v6_vision.urdf      # FR10v6 + vision link (offline FK validation)
 │       │       └── ...
 │       ├── frcobot_hw/             # C++ hardware status node
-│       ├── fr10v6_moveit_config/   # MoveIt config (standard)
 │       ├── fr10v6_vision_moveit_config/        # MoveIt config (vision)
 │       ├── fr10v6_vision_251219_moveit_config/ # MoveIt config (latest vision)
 │       └── ros_control_boilerplate/frrobot_control/ # ros_control HW interface (C++)
@@ -133,12 +138,12 @@ AprilTag-based visual servoing with Pure Pursuit algorithm and S-curve velocity 
 
 **`/robot_pose` output:** Published once after arriving at each tag. Contains:
 - `x, y` — mobile base center in **manipulator frame** (meters)
-- `theta` — heading in **Isaac world frame** (degrees)
+- `theta` — heading in **world frame** (degrees)
 - `id` — tag ID
 
 **Coordinate conversion in `calculate_robot_pose()`:**
-1. Isaac Sim camera position from detected tag
-2. `isaac_to_manipulator`: `manip_x = -isaac_y`, `manip_y = -isaac_x`
+1. World-frame camera position from detected tag
+2. `world_to_manipulator`: `manip_x = -world_y`, `manip_y = -world_x`
 3. Camera-to-robot-center offset applied per zone
 
 ### 3.3 map_manager.py — Map & Path Planning
@@ -159,7 +164,7 @@ Loads CSV scan tasks from `task/csv/` directory. Supports runtime GOTO task gene
 
 **Scan point modes:**
 - `joint` mode: direct joint angles (radians)
-- `pose` mode: Cartesian pose (x, y, z, rx, ry, rz) in Isaac Sim world frame
+- `pose` mode: Cartesian pose (x, y, z, rx, ry, rz) in the world frame
 
 **Joint CSV q0 seed:** For pose tasks with a `joint_file` defined, the corresponding joint values are loaded and attached to each scan point as `q0` for IK initialization.
 
@@ -191,40 +196,20 @@ TCP polling of Keyence DL-EN1 sensor at 60 Hz. Default address: 192.168.1.5:6400
 
 ## 4. Arm Controller Architecture
 
-### 4.1 Simulation Controllers (roboticstoolbox)
-
-**`arm_controller.py`** — Basic sim controller (no scanning):
-- Loads URDF: `fr10v6_vision.urdf` via `rtb.ERobot.URDF()`
-- FK/IK: `robot.fkine()`, `robot.ikine_LM()`
-- Trajectory: `jtraj()` 5th-order polynomial interpolation
-- Publishes `/joint_states` at 50 Hz
-- Pose goals use calibrated 9-DOF `process_transforms`
-- Supports `q0` IK seed from paired joint CSV
-- Joint/velocity limit validation (`JOINT_LIMITS`, `VELOCITY_LIMITS`)
-- `is_discontinuous` support (Home before discontinuous points)
-- Returns `(bool, str)` from motion methods for success/failure tracking
-
-**`arm_controllerwithscan.py`** — Sim controller with camera + inference:
-- Same rtb-based control as above
-- Adds: Basler/Webcam camera capture, ONNX Ra inference at each scan point
-- Publishes `/scan/ra_value`, `/scan/point_result`, `/scan/image`
-- Incremental result saving to `{csv_name}_result.csv` via pandas
-- Isaac Sim collision detection flag
-
-### 4.2 Real Robot Controllers (Fairino SDK)
+### 4.1 Real Robot Controllers (Fairino SDK)
 
 **`arm_controllerrealwithscan.py`** — Original real robot controller:
 - Fairino SDK: `Robot.RPC(ip)`, `MoveJ()`, `GetInverseKin()`
-- Old `_transform_pose`: simple delta with sign flips (broken for Isaac Sim coords)
+- Old `_transform_pose`: simple delta with sign flips (broken for world-frame coords)
 - Keyence closed-loop distance adjustment
 - Camera capture + ONNX inference
 
 **`arm_controllerrealwithscan_v2.py`** — Updated real robot controller:
-- **`_transform_pose`**: calibrated 9-DOF transform (position output in mm for Fairino)
+- **`_transform_pose`**: 4-DOF physical transform (position output in mm for Fairino)
 - **`_exec_pose`**: uses `GetInverseKinRef(0, target, q0_deg)` when q0 available
 - All other functionality unchanged (Keyence, camera, inference)
 
-### 4.3 Fairino SDK API Reference (Key Methods)
+### 4.2 Fairino SDK API Reference (Key Methods)
 
 | Method | Parameters | Description |
 |--------|-----------|-------------|
@@ -237,7 +222,7 @@ TCP polling of Keyence DL-EN1 sensor at 60 Hz. Default address: 192.168.1.5:6400
 | `SetSpeed(speed)` | speed: int | Set motion speed |
 | `StopMotion()` | — | Emergency stop |
 
-### 4.4 Safety & Validation
+### 4.3 Safety & Validation
 
 **Joint Limits (FR10v6):**
 
@@ -264,7 +249,6 @@ When `is_discontinuous == 1` for a scan point, the arm returns to Home position 
 - `(True, "Success")` — motion completed
 - `(False, "IK failed")` — inverse kinematics failed
 - `(False, "Joint limit violation: ...")` — target exceeds limits
-- `(False, "Isaac Sim Collision Detected")` — collision during execution
 
 **Result tracking (withscan only):**
 Execution results are saved incrementally to `{original_csv}_result.csv` with columns:
@@ -272,7 +256,7 @@ Execution results are saved incrementally to `{original_csv}_result.csv` with co
 - `execution_message` — status description
 - `validated_at` — timestamp
 
-### 4.5 Public API (Common Interface)
+### 4.4 Public API (Common Interface)
 
 All arm controller variants expose the same API consumed by `task_executor.py`:
 
@@ -294,60 +278,76 @@ class ArmController:
 
 | Frame | Used By | Units | Notes |
 |-------|---------|-------|-------|
-| Isaac Sim World | CSV pose files | m, rad | Origin at sim world origin |
-| Manipulator | `/robot_pose` msg | m, deg | Rotated: `manip_x = -isaac_y`, `manip_y = -isaac_x` |
-| Arm base_link (rtb) | IK input (sim) | m, rad | URDF root frame |
-| Arm base_link (Fairino) | IK input (real) | mm, deg | Same frame, different units |
+| World | CSV pose files | m, rad | Origin at the polishing cell |
+| Manipulator | `/robot_pose` msg | m, deg | Rotated: `manip_x = -world_y`, `manip_y = -world_x` |
+| Arm base_link (Fairino) | IK input | mm, deg | URDF root frame, Fairino units |
 
 ### 5.2 Transform Pipeline (process_transforms)
 
 ```
-CSV World Pose (x, y, z, rx, ry, rz)     [meters, radians, ZYX euler]
+CSV World Pose (x, y, z, rx, ry, rz)     [meters, radians, ZYX intrinsic]
          │
-         │  1. robot_pose: manip → Isaac world
-         │     isaac_x = -msg.y, isaac_y = -msg.x
+         │  1. robot_pose (manip) → world:
+         │     x_base = -msg.y,  y_base = -msg.x,  θ = radians(msg.theta)
          │
-         │  2. Arm base in world:
-         │     body_offset rotated by Rz(theta + heading_bias)
-         │     arm_world = isaac_pos + rotated_offset + [0, 0, arm_base_z]
+         │  2. Arm base origin in world:
+         │     p_A_W = (x_base + Rz(θ)·body_off).x
+         │             (x_base + Rz(θ)·body_off).y
+         │             body_off_z
          │
-         │  3. R_aw = Rz(theta) · Ry(tilt_y) · Rx(tilt_x)
-         │     T_aw = [R_aw | -R_aw @ arm_world]
+         │  3. R_WA = Rz(θ + mount_yaw) · Ry(tilt_y) · Rx(tilt_x)
+         │     R_AW = R_WAᵀ                 # world → arm frame
          │
-         │  4. Position: p_arm = T_aw @ p_world
-         │     Orientation: r_arm = R_aw · R_corr · R_csv_zyx
+         │  4. Position:    p_A = R_AW · (p_W − p_A_W)
+         │     Orientation: r_A = R_AW · R_zyx(rx, ry, rz)         (CSV value used directly)
          ▼
-Arm base_link Pose (p_arm, r_arm)         [meters for rtb, mm for Fairino]
+Arm base_link Pose (p_A, r_A)            [mm for Fairino]
 ```
 
-### 5.3 Calibration
+### 5.3 Physical Model (4-DOF)
 
-Calibrated from 655 paired data points across 4 tag groups:
-- **Zone B** (tags 105, 106): heading ≈ +90°
-- **Zone C** (tags 117, 118): heading ≈ -90°
+Parameters derived from the USD scene geometry (`polishing_env_10255.usd`)
+and refined by SVD Procrustes fit on 328 paired joint/pose CSV rows. The
+**old 9-DOF calibration was overfit** — it absorbed a missing
+`mount_yaw = π` into `body_off_x/y`, `tilt_*`, and `ori_corr_*`, yielding
+355 mm mean residual on re-evaluation. The physical 4-DOF model below
+scores 12 mm mean residual with fewer parameters and direct physical
+interpretation.
 
-**9-DOF Parameters:**
+**Parameters** (all overridable via ROS `~` private params):
 
-| Parameter | ROS Param | Value | Description |
-|-----------|-----------|-------|-------------|
-| Body offset X | `~arm_body_offset_x` | -0.166715 m | Arm mount offset in body frame |
-| Body offset Y | `~arm_body_offset_y` | -0.254772 m | Arm mount offset in body frame |
-| Base Z | `~arm_base_z` | 0.974167 m | Arm base height in world |
-| Tilt X | `~arm_tilt_x` | 0.054898 rad | R_aw X-axis tilt (3.15°) |
-| Tilt Y | `~arm_tilt_y` | 0.017894 rad | R_aw Y-axis tilt (1.03°) |
-| Heading bias | `~arm_heading_bias` | 0.014368 rad | Heading offset (0.82°) |
-| Ori corr X | `~arm_ori_corr_x` | -0.095520 rad | Orientation correction (-5.47°) |
-| Ori corr Y | `~arm_ori_corr_y` | -0.052944 rad | Orientation correction (-3.03°) |
-| Ori corr Z | `~arm_ori_corr_z` | -0.008688 rad | Orientation correction (-0.50°) |
+| Parameter | ROS Param | Value | Source | Meaning |
+|---|---|---|---|---|
+| Body offset X | `~arm_body_offset_x` | 0.0 m | USD | Arm mount x in body frame |
+| Body offset Y | `~arm_body_offset_y` | 0.0 m | USD | Arm mount y in body frame |
+| Base Z | `~arm_base_z` | 1.0076 m | fit | Arm base height above ground |
+| Mount yaw | `~arm_mount_yaw` | π | USD | Arm base yaw vs body (180°) |
+| Tilt X | `~arm_tilt_x` | -0.02248 rad | fit | Small mount roll (-1.29°) |
+| Tilt Y | `~arm_tilt_y` | 0.02639 rad | fit | Small mount pitch (+1.51°) |
 
-**Accuracy:**
+**Accuracy** (4-DOF model, 328 paired rows across groups 105/106):
 
-| Group | Zone | Pos Mean | Pos Max | Ori Mean | IK |
-|-------|------|----------|---------|----------|-----|
-| 105 | B | 20.9 mm | 39.1 mm | 4.62° | 100% |
-| 106 | B | 17.5 mm | 27.6 mm | 5.10° | 100% |
-| 117 | C | 8.6 mm | 14.2 mm | 5.63° | 100% |
-| 118 | C | 14.2 mm | 21.5 mm | 4.10° | 100% |
+| Metric | Value |
+|---|---|
+| Position mean residual | **12 mm** |
+| Position max residual | 27 mm |
+| IK success | 100% |
+| Parameters | 4 (was 9) |
+
+Sub-mm per-group fit is achievable (Procrustes per-group gives 0.7 mm RMS,
+4.5 mm max) but requires group-specific rotation — the single-param model
+trades that for physical interpretability.
+
+### 5.4 Pose Control Orientation
+
+`_execute_pose_goal` uses **CSV-derived orientation** (via
+`process_transforms`) as the IK target, not `FK(q0).R`. Reason: end-effector
+orientation barely changes across a scan pattern, so the CSV value is the
+cleanest source. `q0` (paired joint CSV) is used only as the IK seed.
+
+Real robot (`arm_controllerrealwithscan_v2.py`) also feeds `q0` into
+`GetInverseKinRef` — there the joint CSV is a **reference only** since
+real-world joint→pose mapping can diverge from the URDF FK.
 
 ---
 
@@ -366,24 +366,59 @@ Fields: 6 joint angles in **radians**.
 
 ```csv
 group_id,point_id,x,y,z,rx,ry,rz,speed,comment
-106,1,1.1766,2.5154,0.5712,1.5741,-0.0891,3.1049,80,
+106,1,1.1766,2.5154,0.5712,1.5741,-0.0891,3.1049,30,
 ```
 
 Fields: position in **meters**, orientation as **ZYX intrinsic euler in radians**.
+`speed` is scan-motion speed factor (0–100; current datasets use 30).
 
-### 6.3 Task Execution Flow
+### 6.3 Registered Tasks
+
+`task_manager.TASK_DEFS` — `file` (single) / `files` (list) forms are both accepted:
+
+| Task | Mode | Inputs | Output |
+|---|---|---|---|
+| `scan_joints_line1` | joint | `optimized_joints_line1.csv` | `..._result.csv` |
+| `scan_joints_line2` | joint | `optimized_joints_line2.csv` | `..._result.csv` |
+| `scan_grid_line1` | pose | `grid_path_line1.csv` + paired joint CSV (q0) | `..._result.csv` |
+| `scan_grid_line2` | pose | `grid_path_line2.csv` + paired joint CSV (q0) | `..._result.csv` |
+| `scan_joints_line1_new` | joint | `optimized_joints_line1_new.csv` | `..._result.csv` |
+| **`scan_full_joints`** | joint | line1+line2 joint CSVs (+pose CSVs for xyz) | **`scan_full_joints_ra_map.csv`** |
+| **`scan_full_pose`** | pose | line1+line2 pose CSVs (+joint CSVs for q0) | **`scan_full_pose_ra_map.csv`** |
+| `go_home` | move | — | — |
+
+### 6.4 Ra Map Output (merged tasks)
+
+Merged scan tasks persist Ra statistics to a single 13-column CSV:
 
 ```
-1. TASK scan_grid_line1
-2. task_manager loads grid_path_line1.csv (pose) + optimized_joints_line1.csv (q0)
-3. For each group_id (= tag_id):
+group_id, point_id, x, y, z,
+ra_mean, ra_std, ra_min, ra_max, num_samples,
+success, execution_message, validated_at
+```
+
+- Written incrementally (one append per scan point) — partial results
+  survive `STOP` / cancel.
+- Joint-mode `x, y, z` come from the paired pose CSV via
+  `task_manager`'s `pose_files` key.
+- Visualize with `scripts/ra_map_plotter.py <csv> [--interpolate] [--metric ra_std]`
+  → PNG alongside the CSV.
+
+### 6.5 Task Execution Flow
+
+```
+1. TASK scan_full_pose
+2. task_manager concatenates grid_path_line1.csv + grid_path_line2.csv
+   (q0 IK seeds loaded from optimized_joints_line{1,2}.csv)
+3. For each group_id in sorted order (105 → 106 → 117 → 118):
    a. Navigate mobile base to tag (robot_controller)
    b. robot_controller publishes /robot_pose
-   c. arm_controller builds goals via process_transforms
+   c. arm_controller builds goals via process_transforms (4-DOF)
    d. For each scan point:
-      - IK solve (with q0 seed if available)
-      - Move arm to target
-      - [If scan enabled] Capture image → ONNX inference → publish Ra
+      - IK solve (seeded with paired q0)
+      - Move arm to target (orientation from CSV quat)
+      - Capture images (num_samples) → ONNX ResNet3D → Ra scalar
+      - Append row to scan_full_pose_ra_map.csv
 4. Return arm to home position
 5. Publish /scan_finished
 ```
@@ -420,7 +455,7 @@ Fields: position in **meters**, orientation as **ZYX intrinsic euler in radians*
 std_msgs/Header header
 float64 x           # position X (manipulator frame, meters)
 float64 y           # position Y (manipulator frame, meters)
-float64 theta       # heading (Isaac world frame, degrees)
+float64 theta       # heading (world frame, degrees)
 float64 theta_web   # heading for web display
 bool flag           # validity flag
 int32 id            # tag ID
@@ -445,7 +480,7 @@ Robot hardware status (joint positions, torques, IO, etc.).
 ```
 [mobile_manipulator_system process]
 ├── RobotController   → subscribes /rgb, publishes /cmd_vel, /robot_pose
-├── ArmController     → rtb IK (sim) or Fairino SDK (real)
+├── ArmController     → Fairino SDK IK
 │                     → subscribes keyence/value, /robot_pose
 │                     → publishes /scan_finished, /scan/ra_value
 ├── TaskManager       → loads CSV tasks
@@ -499,28 +534,25 @@ rosrun apriltag_nav task_executor.py
 rosrun apriltag_nav keyence_dlen1_node.py
 ```
 
-### Isaac Sim
-
-```bash
-# After starting Isaac Sim (see readme.txt)
-roslaunch fr10v6_vision_251219_moveit_config fr10v6_vision_isaac_execution.launch
-rosrun apriltag_nav task_executor.py
-```
-
 ### Commands
 
 ```bash
-# Predefined task
+# Per-line tasks
 rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_grid_line1"
 
-# Navigation
+# Merged full-line scan → unified Ra map CSV
+rostopic pub -1 /task_command std_msgs/String "TASK scan_full_pose"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_full_joints"
+
+# Navigation / pose test / debug
 rostopic pub -1 /task_command std_msgs/String "GOTO 108"
-
-# Pose test
 rostopic pub -1 /task_command std_msgs/String "TEST_POSE 0.737 2.14 0.704"
-
-# Debug
 rosrun apriltag_nav send_debug_cmd.py
+
+# Render Ra map heatmap from a completed scan
+python3 src/apriltag_nav/scripts/ra_map_plotter.py \
+        src/apriltag_nav/task/csv/scan_full_pose_ra_map.csv --interpolate
 ```
 
 ---
@@ -539,7 +571,8 @@ rosrun apriltag_nav send_debug_cmd.py
 
 ### Arm Transform Params (ROS `~` private)
 
-See [Section 5.3 Calibration](#53-calibration) for the full list.
+See [Section 5.3 Physical Model (4-DOF)](#53-physical-model-4-dof) for the full list
+(`~arm_body_offset_x/y`, `~arm_base_z`, `~arm_mount_yaw`, `~arm_tilt_x/y`).
 
 ### Network Addresses
 

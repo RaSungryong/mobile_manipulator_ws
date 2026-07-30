@@ -154,7 +154,7 @@ class ArmController:
 
                 time.sleep(0.3)
 
-            # 정상 종료 시만 Home 복귀
+            # Return home only on normal (non-cancelled) completion
             if not self.cancel_requested:
                 rospy.loginfo("[Arm REAL] Scan finished → Home")
                 self.move_to_home()
@@ -250,18 +250,18 @@ class ArmController:
         R_yaw = R.from_euler('z', msg.theta)
 
         # Mobile base rotation
-        R_mb = (R_base * R_yaw).as_matrix()
+        R_mb = (R_base * R_yaw).as_dcm()
 
         # Homogeneous transforms
         T_mb = self._T(R_mb, [base_x, base_y, 0.18])
         T_ba = self._T(
-            R.from_euler('z', np.pi).as_matrix(),
+            R.from_euler('z', np.pi).as_dcm(),
             [0, 0, -1.02]
         )
 
         # Final transform: mobile base -> arm base
         T = T_mb @ T_ba
-        R_ab = R.from_matrix(T[:3, :3])
+        R_ab = R.from_dcm(T[:3, :3])
 
         # --------------------------------------------------
         # Orientation from CSV (rx, ry, rz in radians)

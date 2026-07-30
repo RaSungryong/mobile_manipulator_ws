@@ -1,5 +1,11 @@
 robot:
   # Dimensions (meters)
+  # TODO(new-base): these are the OLD mobile base. They have NOT been
+  # re-measured for the Navifra KU Polishing Robot and are known inconsistent:
+  # the new base reports wheel_separation 0.65 m (navifra param.yaml
+  # base_controller), so width MUST be > 0.65, not 0.50. These values feed
+  # wall_dist_* / min_wall_clearance below, so the wall-hugging clearance
+  # margin is currently WRONG (too optimistic) until the new base is measured.
   length: 0.80
   width: 0.50
   camera_offset: 0.45  # Distance from robot center to camera lens
@@ -67,6 +73,118 @@ topics:
   camera_rgb: "/rgb"
   camera_info: "/camera_info"
   scan_signal: "/scan_finished"
+  # cmd_vel / odom are consumed by the Navifra driver's base_controller node
+  # (KU Polishing Robot Driver v0.16). Names already match the driver defaults.
   cmd_vel: "/cmd_vel"
   odom: "/odom"
   robot_pose: "/robot_pose"
+
+# Navifra KU Polishing Robot Driver v0.16 peripherals (navifra_devices.py).
+# Drive control is NOT here — that is topics.cmd_vel / topics.odom above.
+navifra:
+  # --- Safety policy ---------------------------------------------------
+  # Emergency stop is a HARDWARE circuit (PILZ PNOZmulti 2) that cuts motor
+  # power independently of ROS. /safety/estop is read-only state feedback.
+  # The software /estop topic was removed in driver v0.11 — do not look for it.
+  #
+  # require_safety_link: true  = refuse to move unless /safety/estop is fresh
+  #                              and the Safety PLC reports connected
+  #                     false = warn only, so the stack still runs when
+  #                              safety_io_driver was not launched
+  require_safety_link: false
+  safety_timeout_s: 3.0       # /safety/estop older than this counts as stale
+
+  # --- Battery ---------------------------------------------------------
+  low_battery_pct: 20.0       # warn below this (/bms/state.percentage x100)
+
+  # --- Lighting --------------------------------------------------------
+  # LED ownership is split by channel and must stay split:
+  #   VISION                  -> basler_camera_node (see the camera: block)
+  #   STATUS_{red,green,blue}  -> task_executor (task state, below)
+  # The VISION lamp is bracketed with the shutter inside the camera node so the
+  # two cannot desynchronise; nothing else may drive /crevis/led/vision.
+
+  # STATUS lamp colour per task state (one RGB lamp, 3 Bool channels)
+  status_colors:
+    idle:     "green"
+    moving:   "blue"
+    scanning: "cyan"
+    error:    "red"
+
+  # --- Lift ------------------------------------------------------------
+  # Position is INCREMENTAL (encoder) and lost on power cycle, so homing is
+  # required once per power cycle before any absolute position command.
+  # Stroke measured 0 .. ~7000 counts; full travel ~28 s at 2000 rpm.
+  lift_settle_tol: 20         # |target-current| <= this counts as arrived
+  lift_home_timeout_s: 130.0  # driver home_timeout_sec is 120 — allow margin
+  lift_move_timeout_s: 60.0
+  #
+  # TODO(lift-transform): scan_height_counts is the lift position the arm
+  # transform was calibrated at. arm_calibration.arm_base_z below is a CONSTANT
+  # and does NOT track the lift, so moving the lift silently invalidates every
+  # pose IK result. See docs/lift_arm_base_z_analysis.md before changing this.
+  # Leave null to disable the scan-height guard.
+  scan_height_counts: null
+  scan_height_guard: "warn"   # "warn" | "refuse" | "off"
+
+# Wrist Basler camera — owned exclusively by basler_camera_node.
+#
+# The device is kept CLOSED between captures (heat / sensor lifetime / power),
+# NOT merely "not grabbing". Callers request frames over the /camera/capture
+# service and get them in the reply; there is no continuous image stream.
+# basler_camera_node also owns the VISION lamp so it is lit only while the
+# shutter is open. Nothing else may open the camera or drive
+# /crevis/led/vision.
+#
+# NOTE: this is the wrist/scan camera only. The front navigation camera is a
+# separate device and publishes topics.camera_rgb above.
+camera:
+  service: "/camera/capture"
+  num_samples: 1              # frames per capture when the request says <= 0
+  delay_between_s: 0.2        # delay between frames inside one burst
+  use_vision_led: true        # light the VISION lamp around the grab
+  warmup_s: 0.15              # settle time after lamp on / grabbing start
+  grab_timeout_ms: 5000       # per-frame RetrieveResult timeout
+  capture_timeout_s: 20.0     # client-side wait_for_service timeout
+  publish_last: true          # also echo frames on /basler/image_raw (debug)
+
+  # Seconds to keep the device open after a capture, so a multi-point scan does
+  # not thrash Open/Close. 0 = close immediately after every capture.
+  # Must stay well above the arm's travel time between adjacent scan points,
+  # otherwise the saving is lost to reopen latency.
+  idle_close_sec: 5.0
+
+# 4-DOF physical mounting model — validated against 328 paired joint/pose
+# rows (mean residual 12 mm, max 27 mm). See CLAUDE.md "Transform Parameters".
+# These are the source of truth; controllers may still override via ROS
+# private params if needed.
+arm_calibration:
+  arm_body_offset_x: 0.0       # arm mount in body frame X (m)
+  arm_body_offset_y: 0.0       # arm mount in body frame Y (m)
+  arm_base_z:        1.0076    # arm base height in world (m)
+  arm_mount_yaw:     3.14159265358979  # rad (pi)
+  arm_tilt_x:       -0.02248   # mount tilt X (rad)
+  arm_tilt_y:        0.02639   # mount tilt Y (rad)
+
+# Arm home joint angles in radians. This matches the hardcoded value used
+# across every controller (arm_controllerrealwithscan*.py, arm_controller_sdk.py)
+# — they all use j1 = -1.5708, not 0.0. Keep this in sync if either side changes.
+arm_home:
+  joints_rad: [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
+
+# Keyence DL-EN1 displacement sensor closed-loop tuning
+keyence:
+  ip: "192.168.100.105"
+  port: 64000
+  target_distance_mm: 30.0
+  tolerance_mm: 0.5
+  max_steps: 5
+  kp: 0.5
+  timeout_s: 0.5
+
+# Inference / model
+inference:
+  input_height: 900
+  input_width: 900
+  mean: [0.5, 0.5, 0.5]
+  std:  [0.5, 0.5, 0.5]

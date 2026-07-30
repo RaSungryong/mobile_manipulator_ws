@@ -83,21 +83,23 @@ def main():
     # Format 2 — /task_command (Plan A & Plan B)
     # ------------------------------------------
     # cmd_str = 'TASK scan_joints_line1'
-    cmd_str = 'TASK scan_grid_line1'
+    # cmd_str = 'TASK scan_grid_line1'
+    # cmd_str = 'TASK scan_full_joints'
+    # cmd_str = "TASK scan_full_pose"
     # cmd_str =  'TASK scan_joints_line1_new'
-    # cmd_str = 'GOTO 108'
+    cmd_str = 'GOTO 100'
     # cmd_str = 'STOP'
 
     # Plan A — pose test: TEST_POSE x y z [rx ry rz]
-    # cmd_str = 'TEST_POSE 0.737 2.54 0.704'
+    # cmd_str = 'TEST_POSE -0.3975 3.65 1.03 1.574065673 -0.089124087 3.104877335'
     # cmd_str = 'STATE'
 
     # Plan A only (self.arm / self.mobile exist)
     # cmd_str = 'EVAL self.state.name'
     # cmd_str = 'EXEC self.arm.move_to_home()'
-    # cmd_str = 'EXEC self.arm._execute_joint_goal([0.0, -1.57, 1.57, -1.57, -1.57, 0.0], 50)'
-    # cmd_str = 'EXEC self.arm._execute_joint_goal([-1.58081596,-0.084689954,0.608351288,-2.097363859,-1.665561886,-0.010076786],50)'
-    # cmd_str = 'EXEC self.arm.execute_scan_points([{"mode": "joint", "joints": [0.0, -1.57, 1.57, -1.57, -1.57, 0.0], "speed": 50}])'
+    # cmd_str = 'EXEC self.arm._exec_joint([0.0, -1.57, 1.57, -1.57, -1.57, 0.0], 30)'
+    # cmd_str = 'EXEC self.arm._exec_joint([-1.58081596,-0.084689954,0.608351288,-2.097363859,-1.665561886,-0.010076786],50)'
+    # cmd_str = 'EXEC self.arm.execute_scan_points([{"mode": "joint", "joints": [0.0, -1.57, 1.57, -1.57, -1.57, 0.0], "speed": 30}])'
     # cmd_str = 'EXEC self.mobile.move_to_tag(108)'
 
     # Plan A — pose mode test (inject fake robot_pose + execute pose scan)

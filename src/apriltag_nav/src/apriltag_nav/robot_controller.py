@@ -98,18 +98,24 @@ class RobotController:
                                             camera_params=self.camera_params, 
                                             tag_size=self.cfg['robot']['tag_size'])
             
-            self.detected_tags.clear()
+            # Atomic swap: build a fresh dict locally, then replace the
+            # attribute in one assignment. This avoids the race where
+            # consumers iterating `self.detected_tags` from the main
+            # control thread would see a transiently empty/partial dict
+            # while the callback rebuilds it in-place.
+            new_tags = {}
             for det in detections:
                 # Store relevant info
                 # pose_t[0] = lateral (x), pose_t[2] = distance (z)
-                self.detected_tags[det.tag_id] = {
+                new_tags[det.tag_id] = {
                     'x': det.pose_t[0][0],
                     'y': det.pose_t[1][0],
                     'z': det.pose_t[2][0],
                     'corners': det.corners,
                     'center_y': det.center[1]
                 }
-            
+            self.detected_tags = new_tags
+
             if self.detected_tags:
                 rospy.loginfo_throttle(2.0, f"[Vision] Tags detected: {list(self.detected_tags.keys())}")
             else:
@@ -276,7 +282,7 @@ class RobotController:
         tag_info = self.map_mgr.get_tag_info(tag_id)
         zone = tag_info.get('zone', 'A') if tag_info else 'A'
         
-        # 1. Calculate Isaac Sim Coordinates (Camera Position)
+        # 1. Calculate World Coordinates (Camera Position)
         # Mirroring get_robot_pose_from_tag logic
         tag_x = tag_info['x'] if tag_info else 0.0
         tag_y = tag_info['y'] if tag_info else 0.0
@@ -293,7 +299,7 @@ class RobotController:
         else:
             robot_x, robot_y, heading = tag_x, tag_y, 0.0
 
-        # 2. Convert to Manipulator Coordinates (isaac_to_manipulator)
+        # 2. Convert to Manipulator Coordinates (world_to_manipulator)
         manip_cam_x = -robot_y
         manip_cam_y = -robot_x
         

@@ -20,7 +20,7 @@ import time
 # CONFIG — edit if your IPs differ
 # ============================================================
 ARM_IP       = '192.168.58.2'
-KEYENCE_HOST = '192.168.1.5'
+KEYENCE_HOST = '192.168.100.105'
 KEYENCE_PORT = 64000
 
 # Fairino SDK path

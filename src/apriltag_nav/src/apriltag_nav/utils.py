@@ -7,9 +7,10 @@ import yaml
 
 def get_package_path():
     """Returns the absolute path to the package root."""
-    # Assuming this script is in <pkg>/scripts/
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.dirname(script_dir)
+    # Delegates to paths.py — this module no longer lives in <pkg>/scripts/,
+    # so the old "walk up one level from __file__" would resolve to <pkg>/src/.
+    from apriltag_nav.paths import PKG_DIR
+    return PKG_DIR
 
 def list_excel_files(directory):
     """

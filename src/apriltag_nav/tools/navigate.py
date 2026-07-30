@@ -14,9 +14,48 @@ import rospy
 import os
 import argparse
 import yaml
-from map_manager import MapManager
-from robot_controller import RobotController
-import utils
+from std_msgs.msg import String
+from apriltag_nav.map_manager import MapManager
+from apriltag_nav.robot_controller import RobotController
+from apriltag_nav import utils
+# ----------------------------------------------------------------------
+# Scan delegation
+# ----------------------------------------------------------------------
+# navigate.py is the lower-level navigation-only entry point (Plan B).
+# Scanning is owned by task_executor.py (Plan A). When Mode 3 needs to
+# trigger a scan at a target tag, we publish a TASK command on
+# /task_command so task_executor picks it up. If task_executor is not
+# running, the call is a no-op with a warning.
+_scan_cmd_pub = None
+
+
+def _get_scan_cmd_pub():
+    global _scan_cmd_pub
+    if _scan_cmd_pub is None:
+        _scan_cmd_pub = rospy.Publisher('/task_command', String, queue_size=1)
+        # Allow a brief moment for subscriber connection.
+        rospy.sleep(0.3)
+    return _scan_cmd_pub
+
+
+def _request_scan_via_task_executor(target_tag_id):
+    """Publish a scan request to task_executor for the given tag id.
+
+    Replaces the legacy RobotController.perform_scan_procedure(), which
+    no longer exists (the scanning role moved to ArmController via
+    task_executor). If no subscriber is connected, logs a warning.
+    """
+    pub = _get_scan_cmd_pub()
+    if pub.get_num_connections() == 0:
+        rospy.logwarn(
+            f"[navigate] No subscriber on /task_command — scan at tag "
+            f"{target_tag_id} skipped. Run task_executor.py in parallel "
+            f"to enable scan delegation."
+        )
+        return
+    msg = f"GOTO {target_tag_id}"
+    rospy.loginfo(f"[navigate] Delegating scan/visit to task_executor: {msg}")
+    pub.publish(String(data=msg))
 
 # Hardcoded paths relative to this script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,7 +197,7 @@ def main():
             # Skip if already at target
             if current_id == target:
                 rospy.loginfo(f"Already at target {target}. Starting scan directly.")
-                robot.perform_scan_procedure(target)
+                _request_scan_via_task_executor(target)
                 continue
                 
             path = map_mgr.find_path(current_id, target)
@@ -177,7 +216,7 @@ def main():
             
             # 2. Arrived at Destination -> Scan
             rospy.loginfo(f"Arrived at Destination Target: {target}. Triggering Scan.")
-            robot.perform_scan_procedure(target)
+            _request_scan_via_task_executor(target)
             
         # Return to dock
         rospy.loginfo("Mission tasks complete. Returning to dock...")
@@ -202,10 +241,9 @@ def main():
                 rospy.logerr(f"Failed to reach tag {wp}. Aborting.")
                 break
             current_id = wp
-            
+
     rospy.loginfo("Mission Complete.")
-            
-    rospy.loginfo("Mission Complete.")
+
 
 if __name__ == '__main__':
     main()

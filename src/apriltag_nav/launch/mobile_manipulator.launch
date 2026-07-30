@@ -1,34 +1,51 @@
 <launch>
 
-    <!-- Keyence DL-EN1 distance sensor node
-    <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
-        <param name="host"           value="192.168.1.5"/>
+    <!-- Keyence DL-EN1 distance sensor node -->
+    <!-- <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
+        <param name="host"           value="192.168.100.105"/>
         <param name="port"           value="64000"/>
-        <param name="rate_hz"        value="60.0"/>
-        <param name="timeout_s"      value="0.5"/>
+        <param name="rate_hz"        value="30.0"/>
+        <param name="timeout_s"      value="5.0"/>
         <param name="scale"          value="0.001"/>
         <param name="offset"         value="0.0"/>
         <param name="use_crlf"       value="true"/>
     </node> -->
 
-    <!-- Task executor — main orchestrator (includes arm control + navigation) -->
-    <!-- ArmController is instantiated inside task_executor; params use ~ (private) namespace -->
-    <node name="mobile_manipulator_system" pkg="apriltag_nav" type="task_executor.py" output="screen">
+    <!-- Wrist Basler camera — on-demand capture server.
+         REQUIRED: task_executor's arm controller no longer opens the camera
+         itself, it calls this node's /camera/capture service. Without this node
+         running, every scan point returns zero frames.
+         This node is also the sole owner of the VISION lamp.
+         Defaults come from robot.yaml `camera:`; override with ~params here. -->
+    <node name="basler_camera_node" pkg="apriltag_nav" type="basler_camera_node.py" output="screen"/>
+
+    <!-- Arm controller — owns the Fairino FR10v6.
+         REQUIRED: task_executor drives the arm through /arm/scan_command,
+         /arm/cancel and /arm/move_home. Without this node, tasks stall waiting
+         for /scan_finished.
+         NOTE: these ~params used to sit on mobile_manipulator_system. They are
+         read by ArmController, which now lives HERE, so they must stay in this
+         node's private namespace or they silently fall back to defaults. -->
+    <node name="arm_controller_node" pkg="apriltag_nav" type="arm_controller_node.py" output="screen">
+        <param name="robot_ip"              value="192.168.58.2"/>
+
         <param name="num_samples"           value="1"/>
         <param name="delay_between_samples" value="0.2"/>
         <param name="stabilization_time"    value="0.5"/>
-        <param name="save_images"           value="false"/>
-        <param name="output_dir"            value="/tmp/scan_results"/>
+        <param name="save_images"           value="true"/>
+        <param name="output_dir"            value="/home/lcl/scan_results"/>
 
         <param name="keyence_tol"           value="0.2"/>
         <param name="keyence_dir"           value="1.0"/>
         <param name="keyence_kp"            value="0.8"/>
         <param name="keyence_max_steps"     value="10"/>
         <param name="keyence_max_step_mm"   value="5.0"/>
+    </node>
 
-        <param name="pose_base_z"           value="-0.835"/>
-        <param name="pose_mb_z"             value="0.18"/>
-        <param name="pose_arm_z"            value="-1.02"/>
+    <!-- Task executor — orchestration only (navigation + state machine).
+         Arm and camera are separate nodes; this node owns the STATUS lamp,
+         e-stop handling and battery monitoring. -->
+    <node name="mobile_manipulator_system" pkg="apriltag_nav" type="task_executor.py" output="screen">
     </node>
 
 </launch>

@@ -20,22 +20,33 @@ class MapManager:
         try:
             with open(yaml_path, 'r') as f:
                 data = yaml.safe_load(f)
-                
+
+            # yaml.safe_load returns None for empty files; guard explicitly so
+            # downstream `.get()` calls don't AttributeError.
+            if data is None:
+                rospy.logerr(
+                    f"[MapManager] Map file is empty or unparsable: {yaml_path}"
+                )
+                return
+
             # 1. Load Tags
             # YAML format: {id: {x: ..., y: ...}, ...}
-            self.tags = data.get('tags', {})
-            
+            self.tags = data.get('tags', {}) or {}
+
             # 2. Load Edges
             # YAML format: [{from: ..., to: ..., direction: ...}, ...]
-            raw_edges = data.get('edges', [])
+            raw_edges = data.get('edges', []) or []
             for e in raw_edges:
-                u, v = e['from'], e['to']
-                if u not in self.edges: self.edges[u] = []
+                u = e['from']
+                if u not in self.edges:
+                    self.edges[u] = []
                 self.edges[u].append(e)
-            
-            
+
         except Exception as e:
-            rospy.logerr(f"[MapManager] Error loading map: {e}")
+            # Loud failure: without a map, every subsequent GOTO/path call
+            # would silently return None and the operator would have no idea
+            # why navigation is dead.
+            rospy.logerr(f"[MapManager] Error loading map '{yaml_path}': {e}")
 
     def get_tag_info(self, tag_id):
         """Returns the dictionary info for a specific tag ID."""

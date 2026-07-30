@@ -8,28 +8,34 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   nav_msgs
   cv_bridge
+  # robot_msgs supplies Pose2DWithFlag (long-standing) and CaptureImages.srv.
+  # Declaring it is what guarantees robot_msgs' generated Python is built before
+  # this package installs — without it the build order is luck.
+  robot_msgs
 )
 
 catkin_python_setup()
 
-catkin_package()
+catkin_package(
+  CATKIN_DEPENDS
+    rospy
+    std_msgs
+    geometry_msgs
+    sensor_msgs
+    nav_msgs
+    cv_bridge
+    robot_msgs
+)
 
+# Only node entry points are installed as programs. Library modules live in
+# src/apriltag_nav/ and are installed as a python package by
+# catkin_python_setup() (see setup.py); tools/ is developer-only and not
+# installed. Every PROGRAM lands in one directory, so keep basenames unique.
 install(PROGRAMS
-  scripts/navigate.py
-  scripts/robot_controller.py
-  scripts/map_manager.py
-  scripts/utils.py
-  scripts/arm_controller.py
-  scripts/arm_controller_sdk.py
-  scripts/FrCmd.py
   scripts/task_executor.py
-  scripts/task_manager.py
-  # Plan B — distributed ROS node architecture (real robot)
-  scripts_ros/basler_camera_node.py
-  scripts_ros/arm_controller_ros.py
-  scripts_ros/task_executor_ros.py
-  # Plan B — Isaac Sim testing
-  scripts_ros/arm_controller_ros_sim.py
+  scripts/arm_controller_node.py
+  scripts/basler_camera_node.py
+  scripts/keyence_dlen1_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
