@@ -11,6 +11,11 @@ at `~/navifra`, systemd unit `navifra-robot`). It owns `/cmd_vel` + `/odom` plus
 the lift / lighting / battery / Safety-PLC peripherals. Field tuning lives in
 `~/navifra/param.yaml`, not in this workspace.
 
+**Read `docs/HANDOVER.md` before substantive work** — it holds the base-swap
+transition state: what is verified vs still open (motor-2 repair, lift
+integration, arm_base_z re-validation, base dimensions) and the interim
+operating rules.
+
 ## Tech Stack
 
 - **ROS Noetic** / Ubuntu 20.04 / Python 3.8 / C++17
