@@ -1,24 +1,89 @@
 robot:
-  # Dimensions (meters)
-  # TODO(new-base): these are the OLD mobile base. They have NOT been
-  # re-measured for the Navifra KU Polishing Robot and are known inconsistent:
-  # the new base reports wheel_separation 0.65 m (navifra param.yaml
-  # base_controller), so width MUST be > 0.65, not 0.50. These values feed
-  # wall_dist_* / min_wall_clearance below, so the wall-hugging clearance
-  # margin is currently WRONG (too optimistic) until the new base is measured.
-  length: 0.80
-  width: 0.50
-  camera_offset: 0.45  # Distance from robot center to camera lens
+  # Drivetrain geometry, copied from ~/navifra/param.yaml `base_controller`
+  # (2026-08-13). ⚠️ That file is the SOURCE OF TRUTH — the navifra driver owns
+  # odometry and nothing in apriltag_nav reads these two. They are duplicated
+  # here only so the base's geometry is visible in one place; if they ever
+  # disagree, param.yaml wins and this copy is the stale one.
+  wheel_radius: 0.0825     # [m] wheel radius (0.165 m diameter)
+  wheel_separation: 0.65   # [m] left/right wheel track
+
+  # Dimensions (meters) — the replacement base, measured 2026-08-13. The old
+  # one was 0.80 x 0.50; the body grew 100 mm longer and 200 mm wider, which
+  # also resolves the impossible 0.50 width (narrower than the 0.65 wheel
+  # track). Nothing in apriltag_nav reads either key — see the clearance
+  # warning at wall_dist_work_zone below, which is now the live consequence.
+  length: 0.90
+  width: 0.70
+  # Distance from robot centre to the front_cam lens, along +body X (forward).
+  # 0.45 -> 0.547 on 2026-08-13 (measured on the replacement base), -> 0.55 on
+  # 2026-08-21. 0.55 is the number the new cell's map.yaml was GENERATED from:
+  # every tag sits at `stop pose + 0.55 * heading`, so a different value here
+  # puts the computed pose somewhere the tag grid does not agree with.
+  # ⚠️ The 3 mm against the 2026-08-13 measurement is unreconciled — if 547 is
+  # the true lens position, the tags are the thing to move, not this key.
+  # Must equal the tx of path_tag_locator/config/extrinsics.yaml `T_mb2fc`.
+  # This is the ONE key in this block that code actually reads
+  # (mobile_controller.calculate_robot_pose).
+  camera_offset: 0.55
 
   # Movement limits
-  max_linear_speed: 0.05    # Maximum linear velocity (m/s)
+  max_linear_speed: 0.1    # Maximum linear velocity (m/s)
   max_angular_speed: 0.25   # Maximum angular velocity (rad/s)
   slow_factor: 0.3          # Speed multiplier for docking/precision
 
   # Minimum velocity settings (as ratio of max speed)
-  # These prevent motor stiction while allowing low-speed operation
+  # ⚠️ Both of these are read by nothing (see CLAUDE.md).
   min_linear_factor: 0.3    # min_linear = 0.3 * max_linear = 0.015 m/s
   min_angular_factor: 0.25  # min_angular = 0.25 * max_angular = 0.0625 rad/s
+
+  # ⚠️ THERE IS NO ABSOLUTE SPEED FLOOR. A `min_drive_speed: 0.015` clamp was
+  # added on 2026-08-14 and REMOVED the same day, on the user's decision, once
+  # it turned out to have no source: no minimum rpm and no deadband is
+  # documented anywhere in the navifra driver (param.yaml, base_controller.yaml,
+  # motor_driver.yaml all checked), and the 2026-08-12 hardware drive ran a
+  # 0.01 m/s floor (~10.4 rpm at the motor) with the base moving normally.
+  # Clamping every command up to an invented number is worse than not clamping:
+  # it silently changes commanded motion to defend a limit nobody has measured.
+  #
+  # If a real stiction floor is ever MEASURED, this is where it goes — and it
+  # belongs here as an absolute m/s value rather than as a ratio of
+  # max_linear_speed, because a ratio walks the floor every time the top speed
+  # is retuned (0.2 * max is 0.02 m/s today but was 0.01 m/s at max 0.05).
+
+  # Speed the robot is at when the tag reaches the stop point, m/s. NOT a floor
+  # — it applies only inside final_approach_dist below, and nothing else is
+  # clamped to it. 0.010 m/s is ~10.4 rpm at the motor (0.010 / 0.0825 m wheel
+  # radius, x9 gear), which is the floor the 2026-08-12 hardware drive ran at
+  # with the base moving normally.
+  final_approach_speed: 0.010
+
+  # FINAL APPROACH (mobile_controller.execute_pure_pursuit).
+  # Distance before the tag reaches the stop point at which the robot drops to
+  # final_approach_speed and holds it until the stop condition fires. Measured from
+  # the SAME pixel quantity the stop test uses (center_x vs
+  # center_x_stop_offset), converted to metres with the tag depth and fx, so
+  # the trigger and the stop cannot disagree about where the target is.
+  #
+  # Latched: once inside, the robot stays at final_approach_speed even if the tag
+  # flickers out of detection for a frame, and the latch clears when the stop
+  # condition fires. Without the latch a single dropped detection re-accelerates
+  # the robot a few centimetres from the tag.
+  #
+  # This distance is honoured REGARDLESS of max_linear_speed. The approach does
+  # not step the target and let the normal ramp chase it — it captures the
+  # entry speed at the latch and follows its own braking envelope
+  #     v(remaining) = sqrt(v_final^2 + 2 * a * remaining)
+  # with `a` solved so the curve passes through the entry speed at this
+  # distance and reaches final_approach_speed at the stop point:
+  #     a = (v_entry^2 - v_final^2) / (2 * final_approach_dist)
+  # Deceleration is constant, so speed falls linearly in time.
+  #
+  # ⚠️ That `a` can EXCEED linear_accel, and is allowed to. Entering at the
+  # full 0.1 m/s needs 0.0825 m/s^2, 1.65x the normal 0.05 ramp; entering at
+  # 0.05 m/s needs only 0.020 and the normal ramp is used instead. Shortening
+  # this distance raises the required deceleration quadratically in the entry
+  # speed — 0.03 m at 0.1 m/s would demand 0.165 m/s^2.
+  final_approach_dist: 0.06
 
   # Velocity ramping (for smooth start/stop)
   # Set to 0 to disable ramping
@@ -27,19 +92,80 @@ robot:
   ramp_enabled: true        # Enable/disable velocity ramping
 
   # AprilTag settings
-  tag_size: 0.06
+  # tag_size here is only the per-camera fallback for robot_camera.tag_size
+  # below, which is where the real sizes live — the cell has two of them.
+  # 0.09 = the floor tags, the majority case.
+  tag_size: 0.09
   tag_family: "tag36h11"
 
   # Wall Distance Safety (meters)
   # Robot's right side is always facing the wall
-  wall_dist_work_zone: 0.35  # Zones B, C, D, E
-  wall_dist_zone_a: 0.6275   # Zone A
+  #
+  # These are centre-to-wall distances and they track the body half-width:
+  #   old base: 0.35 - 0.25 (half of 0.50) = 0.10 = min_wall_clearance
+  #   new base: 0.45 - 0.35 (half of 0.70) = 0.10, preserved
+  # Raised 0.35 -> 0.45 on 2026-08-13, confirmed by the user: the 0.70 m body
+  # has to sit 100 mm further off the wall. The arm was physically moved 100 mm
+  # the other way (see arm_calibration.arm_body_offset_y) so its absolute
+  # position over the workpiece is unchanged.
+  #
+  # Both now describe the new cell (2026-08-21), where every corridor lane sits
+  # exactly 450 from the 정반 face — so work zone keeps 0.45 unchanged and its
+  # 0.10 clearance. Zone A does NOT follow that rule: its lane is y = 3.02 and
+  # 정반 1's top edge is y = 2.50, i.e. 0.52, chosen to balance the pivot
+  # between the north wall and the plate corner rather than to hold 0.10.
+  # (0.6275 was the old cell's zone A and no longer describes anything.)
+  # Nothing in apriltag_nav reads these three keys — the robot's real stop
+  # position comes from centring the tag under front_cam, not from here.
+  wall_dist_work_zone: 0.45  # Zones B, C, D, E
+  wall_dist_zone_a: 0.52     # Zone A
   min_wall_clearance: 0.10
 
   # Pure Pursuit Tuning
   look_ahead_base: 0.4
   pp_gain_forward: 1.0
   pp_gain_backward: 0.8
+
+  # Predictive centering before the next tag is visible.
+  # When a tag-to-tag move starts, mobile_controller projects /odom motion onto
+  # the calibrated start→target tag line and steers the front camera toward a
+  # preview point on that line. As soon as target_id appears in front_cam, the
+  # existing visual Pure Pursuit + image-centre stop condition takes over.
+  predictive_centering:
+    enabled: true
+    # "latest" means newest ~/.ros/path_tag_locator/map_world_*.yaml from the
+    # calibration pipeline. If absent or if either endpoint is missing, the
+    # controller leaves blind steering exactly as the old code did (omega=0).
+    use_map_world: true
+    fallback_to_map_yaml: false
+    map_world_path: "latest"
+    lookahead_m: 0.4
+    gain_forward: 1.0
+    gain_backward: 0.8
+    # Small yaw hold term in addition to the preview curvature. Keep modest:
+    # it should keep the body aligned with the calibrated segment, not fight
+    # the visual controller once the tag is detected.
+    heading_gain: 0.4
+    # Once the target tag is visible, blend tag-edge yaw error into the normal
+    # Pure Pursuit steering so final align_to_tag() is only a small trim.
+    approach_heading_gain: 0.8
+    # Near the center_x stop line, slow the approach if lateral image-centre
+    # error or yaw error is still large. This gives the moving Pure Pursuit
+    # segment time to remove y error before the final in-place trim.
+    approach_center_y_tolerance_px: 20.0
+    approach_yaw_tolerance_deg: 0.5
+    approach_slow_window_px: 180.0
+    approach_error_slow_speed: 0.010
+    # Keep the old post-move align_to_tag() by default. Set false only when
+    # calibrated predictive approach is active and should replace the large
+    # in-place yaw trim that can break front-camera y-centering on this base.
+    post_move_align_enabled: true
+    post_move_align_y_tolerance_px: 20.0
+    # After align_to_tag() completes, save the final camera-centre residual in
+    # a separate YAML. The latest map_world_*.yaml is only read as the reference
+    # tag position; the calibration YAML itself is not modified.
+    record_alignment_result: true
+    alignment_result_path: "~/.ros/path_tag_locator/tag_alignment_results.yaml"
 
   # Alignment Tuning
   align_gain: 0.8           # Proportional gain for alignment rotation
@@ -55,12 +181,19 @@ robot:
   s_curve_decel_ratio: 0.4  # Last 40% of distance: decelerate
   s_curve_min_speed_factor: 0.2  # Minimum speed = 0.2 * max_speed
 
-  # Stopping Condition (Pixels relative to Center Y)
-  # 0 = Center of image.
-  # Negative = Stops 'earlier' (Top of frame).
-  # Positive = Stops 'later' (Bottom of frame).
-  center_y_stop_offset: -50.0
-  center_y_stop_tolerance: 10.0
+  # Stopping condition, in pixels relative to the image centre X.
+  #
+  # ⚠️ This was `center_y_stop_offset: -50.0` until 2026-08-13. front_cam was
+  # rotated -90 deg about its optical axis, so the FORE/AFT axis in the image
+  # is now the COLUMN axis, not the row axis — and it DECREASES as the robot
+  # drives forward (image right = robot forward). Both the key and the sign
+  # flipped; +50.0 here is the same physical stopping point the old -50.0 gave.
+  #
+  # 0 = image centre.
+  # Positive = stops 'earlier' (tag still ahead, toward the right of frame).
+  # Negative = stops 'later'  (robot has driven further over the tag).
+  center_x_stop_offset: 50.0
+  center_x_stop_tolerance: 10.0
 
   # Delays (seconds)
   stop_sleep_duration: 1.0
@@ -70,14 +203,31 @@ robot:
   navigation_timeout: 8.0
 
 topics:
-  camera_rgb: "/rgb"
-  camera_info: "/camera_info"
+  # camera_rgb / camera_info are GONE. They pointed at /rgb and /camera_info
+  # for a navigation camera that no launch in this workspace ever started, so
+  # mobile_controller's own detector never saw a frame and /robot_pose never
+  # published. Navigation now consumes front_cam_detections / front_cam_info
+  # below, which robot_camera_node already produces.
   scan_signal: "/scan_finished"
   # cmd_vel / odom are consumed by the Navifra driver's base_controller node
   # (KU Polishing Robot Driver v0.16). Names already match the driver defaults.
   cmd_vel: "/cmd_vel"
   odom: "/odom"
   robot_pose: "/robot_pose"
+
+  # New cameras owned by robot_camera_node (see robot_camera: / vision_stop:
+  # below). Vendor launch args (camera_name= for orbbec, camera= for
+  # realsense) already namespace image/camera_info under /front_cam/ and
+  # /side_cam/; only override here if the vendor launch is customized.
+  front_cam_image:      "/front_cam/color/image_raw"
+  front_cam_info:       "/front_cam/color/camera_info"
+  front_cam_detections: "/front_cam/tag_detections"
+  side_cam_image:       "/side_cam/color/image_raw"
+  side_cam_info:        "/side_cam/color/camera_info"
+  side_cam_detections:  "/side_cam/tag_detections"
+  hand_cam_image:       "/hand_cam/color/image_raw"
+  hand_cam_info:        "/hand_cam/color/camera_info"
+  hand_cam_detections:  "/hand_cam/tag_detections"
 
 # Navifra KU Polishing Robot Driver v0.16 peripherals (navifra_devices.py).
 # Drive control is NOT here — that is topics.cmd_vel / topics.odom above.
@@ -114,7 +264,10 @@ navifra:
   # --- Lift ------------------------------------------------------------
   # Position is INCREMENTAL (encoder) and lost on power cycle, so homing is
   # required once per power cycle before any absolute position command.
-  # Stroke measured 0 .. ~7000 counts; full travel ~28 s at 2000 rpm.
+  # Stroke measured 0 .. 6900 counts = 343.3 mm of arm-base extension; full
+  # travel ~27.8 s. The drive is capped at 1000 rpm in hardware, so
+  # up_speed_rpm / post_home_speed_scale in ~/navifra/param.yaml cannot make it
+  # faster — see the note at jog_timeout_s.
   lift_settle_tol: 20         # |target-current| <= this counts as arrived
   lift_home_timeout_s: 130.0  # driver home_timeout_sec is 120 — allow margin
   lift_move_timeout_s: 60.0
@@ -126,6 +279,90 @@ navifra:
   # Leave null to disable the scan-height guard.
   scan_height_counts: null
   scan_height_guard: "warn"   # "warn" | "refuse" | "off"
+
+# What task_executor does when a task finishes NORMALLY. Does not apply to a
+# preempted or failed task: a preempt means something else was asked for, and a
+# failure leaves the robot where a human needs to look at it — unattended motion
+# in either case would be a surprise.
+#
+# Tasks are meant to be composable, so finishing one does NOT drive back to
+# START_TAG. Returning is its own task: send `TASK go_home` after it. That keeps
+# every task a self-contained block that can be queued in any order.
+task_flow:
+  # Lift origin homing after the last scan group. Only for tasks whose CSV
+  # carries a lift_height column, i.e. only tasks that raised it in the first
+  # place. Runs AFTER the arm returns to its home pose, and it is what lets the
+  # next task assume the lift starts at the origin.
+  lift_home_on_finish: true
+
+# lifter_node — the ONLY thing in apriltag_nav that commands the lift.
+# Everything else reads /lifter/state (or NavifraDevices.lift_position,
+# read-only) instead of publishing to /lift/*.
+lifter:
+  # Soft travel clamp [counts]. Every absolute target and every jog is clamped
+  # to this range before it reaches the driver.
+  #
+  # soft_max is 6900 as of 2026-08-14 (was 7000): the top of travel, and the
+  # count the scale below was measured at. It still does real work beyond
+  # capping absolute targets — the same clamp bounds jog and the open-ended
+  # up/down commands, and the upper end has NO limit switch (only the lower one
+  # is wired), so anything driven past the stop is a stall, and that stall is
+  # what corrupts the count (a descent from the upper stop counts backwards
+  # ~500 for a few seconds). Do not raise this above 6900.
+  soft_min_counts: 0
+  soft_max_counts: 6900
+
+  # ⚠️ There is no anti-backlash origin pass any more (removed 2026-08-10).
+  # The drive has backlash, so a count reached by descending is NOT the same
+  # physical height as the same count reached by climbing. The node used to
+  # route every descending move through the origin to guarantee an upward
+  # approach; that cost up to 56 s and guarded a case the task flow cannot
+  # produce — every task ends with lift origin homing and nothing lowers the
+  # lift mid-task, so absolute moves only ever climb from 0.
+  #
+  # What this means in practice: reach a scan height by homing and climbing.
+  # A descending `goto`, or any `jog` / `up` / `down`, leaves the drive loaded
+  # the other way and is logged as such. Absolute moves before origin homing
+  # are refused outright, since the driver would silently ignore them.
+
+  # Count -> millimetre scale for /lifter/height.
+  # 343.2 mm / 6897 counts = 0.04976077, re-measured at the top of travel on
+  # 2026-08-14: commanded to 6900 the drive settled at count 6897 (inside
+  # lift_settle_tol) and the gauge read 343.2 mm of extension there. The scale
+  # is derived from the count actually REACHED, not the commanded one.
+  # The manipulator base therefore sits 652 mm above the ground at the lift
+  # origin and ~995 mm at the top of the stroke.
+  # Was 0.0487143 (341 mm / 7000, 2026-08-13), which ran 7.2 mm low over the
+  # full stroke. Both sides are still real measurements, so mm_calibrated stays
+  # true and the node does not warn at startup.
+  mm_per_count: 0.04976077
+  mm_calibrated: true
+
+  # LIFT ORIGIN HOMING once at node start. This is the lift descending to its
+  # lower limit switch to zero the encoder — NOT the arm's home pose
+  # (/arm/move_home), which is a different device and a different node.
+  # Default false for the same reason the arm does not move at startup:
+  # launching the stack is not a request to move hardware.
+  # ⚠️ true here makes the lift DESCEND to the lower limit immediately.
+  # Note the driver has its own auto_home_on_start (true in ~/navifra/param.yaml
+  # on this robot), so the lift may already be origin-homed before this node
+  # starts. Two settings, two processes; this one does not override that one.
+  auto_home_on_start: false
+
+  # Bound on an open-ended `up`/`down` jog, which the driver would otherwise
+  # run until stopped.
+  #
+  # ⚠️ The drive is capped at 1000 rpm by a HARDWARE setting on the MDROBOT
+  # controller (raisable to 16000, deliberately left at 1000). Raising
+  # up_speed_rpm or post_home_speed_scale in ~/navifra/param.yaml therefore
+  # changes nothing — the current 2000 and 2.0 are both already clipped. So
+  # full travel is ~28.2 s over 7000 counts, and a worst-case jog (0 -> 6900)
+  # takes ~27.8 s of it, leaving only ~7.2 s of margin here. If anyone ever
+  # lowers the hardware cap, raise this with it or a legitimate jog will time
+  # out mid-travel.
+  jog_timeout_s: 35.0
+
+  publish_rate_hz: 2.0
 
 # Wrist Basler camera — owned exclusively by basler_camera_node.
 #
@@ -154,26 +391,109 @@ camera:
   # otherwise the saving is lost to reopen latency.
   idle_close_sec: 5.0
 
+# robot_camera_node — owns front_cam (Orbbec Femto Bolt) and side_cam (Intel
+# RealSense D405), runs AprilTag detection on each, and ONLY publishes results
+# (topics.front_cam_detections / topics.side_cam_detections above). It must
+# never touch /cmd_vel or any stop method -- that decision lives in
+# vision_stop: below / mobile_controller.py. See CLAUDE.md "Vision-Triggered
+# Soft Stop".
+robot_camera:
+  tag_family: null   # null = reuse robot.tag_family above
+
+  # Tag size is PER CAMERA, because the cell uses two physical tag sizes and
+  # dt_apriltags scales pose_t linearly by this number: a wrong value corrupts
+  # tag.z (the final-approach trigger) and tag.y (lateral, which feeds
+  # /robot_pose). One global size cannot serve both cameras.
+  #   front_cam — 90 mm floor tags, read straight down
+  #   side_cam  — 30 mm tags on the 80 mm 정반 step, read horizontally
+  # An entry set to null falls back to robot.tag_size above.
+  tag_size:
+    front_cam: 0.09
+    side_cam:  0.03
+    hand_cam:  null
+
+  # Per-camera on/off for the detectors, and the persistent default for each
+  # camera. This controls robot_camera_node only; the driver that publishes
+  # the images is started by mobile_manipulator.launch's use_<name>_cam args.
+  # Setting use_<name>_cam:=false there also forces the detector off (a
+  # detector with no driver would wait forever), so the launch arg is the
+  # one to reach for when disabling a camera for a single run:
+  #   roslaunch apriltag_nav mobile_manipulator.launch use_hand_cam:=false
+  # Turning a camera off HERE alone stops the detection but still runs the
+  # driver, so it keeps costing USB bandwidth — useful only when something
+  # else needs that camera's images.
+  enabled:
+    front_cam: true    # Orbbec Femto Bolt — feeds the vision_stop consumer
+    side_cam:  true    # RealSense D405
+    hand_cam:  true    # RealSense D435
+
+  # Vendor service that starts/stops the camera's own stream, called by
+  # /robot_camera/<name>/set_enabled so one command turns the whole camera
+  # off rather than just muting detection. Both vendors use std_srvs/SetBool
+  # but name it differently. Set an entry to null to leave that driver
+  # running and switch the detector alone.
+  driver_toggle:
+    front_cam: "/front_cam/toggle_color"   # orbbec_camera, per-stream
+    side_cam:  "/side_cam/enable"          # realsense2_camera, whole device
+    hand_cam:  "/hand_cam/enable"          # realsense2_camera, whole device
+
+# Vision-triggered soft stop, handled entirely in mobile_controller.py. When
+# front_cam sees a configured AprilTag ID centered in frame, mobile_controller
+# calls preempt_stop_robot() -- the SAME stop_requested latch that TASK/GOTO
+# already clear inside move_to_tag() via clear_stop_flag(), so the robot stays
+# stopped until an explicit next TASK/GOTO command; no separate "hold until
+# resumed" logic exists or is needed.
+#
+# *** stop_tag_ids is a PLACEHOLDER. The real tag ID(s) that should trigger a
+# stop have NOT been decided yet -- do not deploy to the real robot with a
+# guessed ID. Fill in before hardware testing. ***
+vision_stop:
+  enabled: true
+  stop_tag_ids: []          # PLACEHOLDER -- e.g. [42]. Empty = feature inert.
+  center_tolerance_px: 40.0 # max pixel distance from image center to count as "centered"
+
 # 4-DOF physical mounting model — validated against 328 paired joint/pose
 # rows (mean residual 12 mm, max 27 mm). See CLAUDE.md "Transform Parameters".
 # These are the source of truth; controllers may still override via ROS
 # private params if needed.
 arm_calibration:
   # Source of truth: path_tag_locator/config/extrinsics.yaml T_ab2mb
-  # (platform-measured; R = Rz(180°) exactly, t = (0, 0, -1.025)).
+  # (platform-measured; R = Rz(180°) exactly, t = (0, -0.100, -0.652)).
   # Two independent confirmations that the mount has NO tilt: the extrinsics
   # measurement, and the 655-point real-robot fit (task/csv/
   # calib_data_params.yaml) which found tilt_x/y ≈ 0.0001/0.0007 rad.
   #
-  # Superseded values (kept for the record):
+  # ⚠️ arm_base_z is the height WITH THE LIFT AT ITS ORIGIN. The lift adds up
+  # to 343 mm on top of it (0.652 -> 0.995 m at 6900 counts) and this value
+  # does NOT track it — see the TODO at navifra.scan_height_counts.
+  #
+  # ⚠️ 0.651 -> 0.652 on 2026-08-23, and that 1 mm is a DESIGN FIGURE overriding
+  # a measurement, not a re-measurement. 651 was taped on the replacement base
+  # 2026-08-13; 652 is what the cell design record (the parent directory's
+  # CLAUDE.md, §3 mounts table) specifies. Unreconciled, same shape as the
+  # camera_offset 547/550 conflict above. It must stay equal to -tz of
+  # extrinsics.yaml T_ab2mb and to the fallback in arm_transform.py — three
+  # sites, change them together.
+  #
+  # Superseded values (kept for the record — all belong to the OLD mobile base,
+  # which was replaced 2026-08-13):
+  #   arm_base_z 1.025 — the old base's measured height, and what every earlier
+  #   note in this file and in CLAUDE.md was written against.
   #   arm_base_z 1.0076 + tilts -0.02248/+0.02639 — derived from the USD sim
   #   scene; the tilts do not exist on the real platform.
-  #   The 655-point fit's arm_base_z was 0.9541 — 71 mm below this value;
-  #   plausibly a different lift height (see navifra.scan_height_counts).
-  #   Re-validate against paired joint/pose data before precision scans.
+  #   The 655-point fit's arm_base_z was 0.9541. That fit is old-base data and
+  #   no longer comparable to the value below; the "71 mm discrepancy" it used
+  #   to raise is moot.
   arm_body_offset_x: 0.0       # arm mount in body frame X (m)
-  arm_body_offset_y: 0.0       # arm mount in body frame Y (m)
-  arm_base_z:        1.025     # arm base height above mb origin (m)
+  # Moved 100 mm toward the wall (body -Y, the side_cam side) on 2026-08-13 to
+  # cancel the 100 mm the wider 0.70 m body pushes the robot centre away from
+  # the wall. Net absolute arm position is unchanged — that is the whole point.
+  # Read by arm_transform.py into p_A_W, so POSE mode follows it automatically.
+  # ⚠️ JOINT mode does not: those CSVs are absolute arm configurations and no
+  # transform touches them, so they are only still valid if the robot's stop
+  # position really does move the matching 100 mm.
+  arm_body_offset_y: -0.100    # arm mount in body frame Y (m)
+  arm_base_z:        0.652     # arm base height above the ground (m), lift at origin
   arm_mount_yaw:     3.14159265358979  # rad (pi, exact per extrinsics)
   arm_tilt_x:        0.0       # no mount tilt on the real platform
   arm_tilt_y:        0.0       # no mount tilt on the real platform
@@ -188,11 +508,85 @@ arm_home:
 keyence:
   ip: "192.168.100.105"
   port: 64000
-  target_distance_mm: 30.0
-  tolerance_mm: 0.5
-  max_steps: 5
-  kp: 0.5
-  timeout_s: 0.5
+
+  # INFORMATIONAL ONLY — nothing reads this. The zero point is configured in
+  # the DL-EN1 itself; the controller simply drives the published value to 0.
+  # Measured on the real sensor: the reading is zero at a 10 mm standoff.
+  # (It said 30.0 until 2026-08-05, which matched no hardware setting.)
+  target_distance_mm: 10.0
+
+  # SENSOR POLARITY (set in the DL-EN1, confirmed on the robot 2026-08-05):
+  #   distance > 10 mm (too far)   -> reading NEGATIVE
+  #   distance = 10 mm             -> reading 0
+  #   distance < 10 mm (too close) -> reading POSITIVE
+  # i.e. the reading rises as the tool approaches the surface. That is the same
+  # thing the sweep in tools/measure_keyence_angle.py measures as k > 0, and it
+  # is what forces keyence_dir = -sign(k) = -1.0 (set in the launch file):
+  # a NEGATIVE reading means retreat is wrong, the tool must move CLOSER.
+  # Both routes agree; re-derive both if the sensor is reconfigured.
+
+  # Angle between the laser beam and the tool Z axis, degrees. The beam is
+  # mounted OBLIQUE on this platform, so the reading is a distance along the
+  # beam, not the perpendicular standoff: a perpendicular error e reads as
+  # e/cos(angle). arm_controller projects the reading by cos(angle) FIRST and
+  # then does everything else in perpendicular millimetres.
+  #
+  # Consequence for tuning: tolerance_mm, keyence_max_step_mm and
+  # keyence_activate_threshold are all PERPENDICULAR standoff mm — the quantity
+  # the scan actually cares about — never the raw reading. At 42.6 deg the raw
+  # reading is 36% larger than the perpendicular error it represents.
+  #
+  # MEASURED on the real robot 2026-08-05 with tools/measure_keyence_angle.py,
+  # tool pointing straight down (tool Z = [0, 0, -1] in base) on the workpiece:
+  #   sweep +/-1 mm, 5 pts -> k = 1.3717 -> 43.20 deg  (R^2 0.99899)
+  #   sweep +/-2 mm, 5 pts -> k = 1.3450 -> 41.97 deg  (R^2 0.99911)
+  # The 1.2 deg spread is dominated by surface topography, not sensor noise
+  # (sensor sd is ~3 um): because the beam is oblique the spot TRANSLATES
+  # across the surface as Z changes, so each sample sees slightly different
+  # material. Re-measure if the sensor is remounted.
+  #
+  # The loop is insensitive to this 1.2 deg residual uncertainty: once the
+  # projection is applied the 1/cos factor cancels, so the per-step residual is
+  # |1 - kp| regardless of the angle. The angle only has to be right enough
+  # that cos is right — 42.0 vs 43.2 deg differs by 2% in cos.
+  #
+  # NOTE the angle was NOT harmless before it was measured: leaving this at 0
+  # kept the reading's 1/cos factor, making the true gain kp/cos. At the launch
+  # file's kp 0.8 and this 42.6 deg mount that came to 1.087 — accidentally
+  # close to deadbeat, which is why the uncorrected loop appeared to work. That
+  # coincidence would have broken the moment kp was retuned or the sensor
+  # remounted; an uncompensated mount diverges past 66.4 deg at kp 0.8.
+  beam_angle_deg: 42.6
+
+  # Direction sign. The same measurement found k POSITIVE (the reading grows as
+  # the tool moves +Z, toward the surface), and dir must be -sign(k), so the
+  # correct value is -1.0. It was +1.0 — an unverified default — which amplified
+  # the error by (1 + kp) every step and drove the tool into the workpiece.
+  # It lives as ~keyence_dir on arm_node; the launch file sets -1.0.
+  #
+  # --- Closed-loop tuning ------------------------------------------------
+  # PRECEDENCE: arm_controller reads ~params on arm_node FIRST and
+  # falls back to these. mobile_manipulator.launch sets keyence_tol, keyence_kp,
+  # keyence_max_steps and keyence_max_step_mm, so for a normal launch THOSE win
+  # and these are only the fallback for running the controller without the
+  # launch file. They were 0.5 / 5 / 0.5 while the launch used 0.2 / 10 / 0.8 —
+  # aligned 2026-08-05 so both paths behave the same.
+  #
+  # UNITS: every value below is PERPENDICULAR standoff mm. The raw reading is
+  # projected by cos(beam_angle_deg) before any of them is applied.
+  tolerance_mm:        0.2    # ~keyence_tol        — converged when |perp| <= this
+  kp:                  0.8    # ~keyence_kp         — per-step residual is |1 - kp|
+  max_steps:           10     # ~keyence_max_steps  — give up after this many
+  max_step_mm:         1.0    # ~keyence_max_step_mm — single-step clamp
+                              #   TEMPORARY bring-up value; launch says 5.0 is
+                              #   the normal setting. See the launch comment.
+  activate_threshold:  5.0    # ~keyence_activate_threshold — skip the loop when
+                              #   |perp| >= this (too far to trust the reading)
+
+  # NOTE: there is no timeout_s here on purpose. The socket timeout belongs to
+  # keyence_dlen1_node (~timeout_s, 5.0 in the launch file), not to this
+  # controller-side block. A `timeout_s: 0.5` key sat here until 2026-08-05 and
+  # was read by nothing at all.
 
 # Inference / model
 inference:

@@ -40,7 +40,7 @@ def model_v2(goals, msg, body_off_x=0.0, body_off_y=0.0, body_off_z=1.0,
     # Mount tilt applied in body frame after yaw
     R_WA = (R.from_euler('z', alpha)
             * R.from_euler('y', tilt_y)
-            * R.from_euler('x', tilt_x)).as_dcm()
+            * R.from_euler('x', tilt_x)).as_matrix()
     R_AW = R_WA.T
     return np.array([R_AW @ (np.array([g['x'], g['y'], g['z']]) - p_A_W)
                      for g in goals])
@@ -57,7 +57,7 @@ def model_9dof(goals, msg):
     arm_world = np.array([x_base + c*body_off_x - s*body_off_y,
                           y_base + s*body_off_x + c*body_off_y, arm_base_z])
     R_aw = (R.from_euler('z', theta) * R.from_euler('y', tilt_y)
-            * R.from_euler('x', tilt_x)).as_dcm()
+            * R.from_euler('x', tilt_x)).as_matrix()
     return np.array([R_aw @ (np.array([g['x'], g['y'], g['z']]) - arm_world)
                      for g in goals])
 
@@ -68,7 +68,7 @@ def body_pose_from_fit(gid, MOUNT_YAW=np.pi):
     Pa = np.array([robot.fkine(q).t for q in Q])
     Pw = pg[['x','y','z']].values
     Rm, t_fit = full_procrustes(Pa, Pw)
-    arm_yaw = R.from_dcm(Rm).as_euler('zyx', degrees=True)[0]
+    arm_yaw = R.from_matrix(Rm).as_euler('zyx', degrees=True)[0]
     body_yaw = arm_yaw - np.degrees(MOUNT_YAW)
     return {'x': -t_fit[1], 'y': -t_fit[0], 'theta': body_yaw}, Pa, Pw
 

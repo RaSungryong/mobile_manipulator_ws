@@ -8,7 +8,7 @@ motor_driver / bms_driver / lift_driver / crevis_io_driver / safety_io_driver.
 
 This wraps the driver's peripheral topics so the rest of apriltag_nav never
 talks to raw driver topics. Drive control (/cmd_vel, /odom) is deliberately
-NOT here — RobotController already owns that and needs no change.
+NOT here — mobile_node owns that through MobileController.
 
 Covered subsystems:
   safety   : /safety/estop, /safety/connected        (read-only, hardware PLC)
@@ -118,6 +118,11 @@ class NavifraDevices:
         self._lift_homed = None
         self._lift_error = None
         self._lift_alarm = None
+        # Set by lift_stop() so a blocking lift_home()/lift_goto() running in
+        # another thread returns at once instead of sitting out its timeout.
+        # Without this a stop request looks like it did nothing: the drive does
+        # halt, but the waiter keeps polling until lift_move_timeout_s expires.
+        self._lift_cancel = False
 
         # ---------- Lighting / charging state ----------
         self._led_state_all = None
@@ -373,13 +378,24 @@ class NavifraDevices:
         return self._lift_status
 
     def lift_up(self):
+        """Start moving up. Runs until lift_stop() — the upper end has NO limit
+        switch, so the caller must bound this. See lifter_node."""
         self._pub_lift_command.publish(String("up"))
 
     def lift_down(self):
+        """Start moving down. The lower limit switch stops the drive itself."""
         self._pub_lift_command.publish(String("down"))
 
     def lift_stop(self):
+        self._lift_cancel = True
         self._pub_lift_command.publish(String("stop"))
+
+    def lift_velocity(self, rpm):
+        """Raw velocity command [rpm], sign = direction. Manual mode only.
+
+        Same unbounded-at-the-top caveat as lift_up(); prefer lift_goto().
+        """
+        self._pub_lift_velocity_cmd.publish(Int16(int(rpm)))
 
     def lift_reset_alarm(self):
         """Manual alarm reset (PID_ALARM_RESET). Driver may auto-reset first."""
@@ -399,12 +415,15 @@ class NavifraDevices:
             return False, f"lift_home refused: {why}"
 
         self._lift_homed = None
+        self._lift_cancel = False
         self._pub_lift_home.publish(Bool(True))
         rospy.loginfo("[Navifra] Lift homing started")
 
         deadline = time.time() + timeout_s
         rate = rospy.Rate(5)
         while time.time() < deadline and not rospy.is_shutdown():
+            if self._lift_cancel:
+                return False, "lift homing cancelled by stop"
             if self.estop_active:
                 return False, "e-stop during lift homing"
             if self._lift_error:
@@ -427,12 +446,42 @@ class NavifraDevices:
                            "until lift_home() runs this power cycle")
 
         target = int(counts)
+        self._lift_cancel = False
         self._pub_lift_position_cmd.publish(Int32(target))
         rospy.loginfo(f"[Navifra] Lift -> {target} counts")
+        return self._wait_lift_settle(target, timeout_s)
 
+    def lift_jog(self, delta_counts, timeout_s=None):
+        """Move the lift by a RELATIVE count offset (/lift/inc_position_cmd).
+
+        Unlike lift_goto() this does not require homing — the driver ignores
+        absolute position commands until homed, but relative ones work off the
+        raw incremental count. Use it to reach a working height before the
+        first homing of a power cycle, not to reach a repeatable position:
+        the count drifts 1000-1800 per full up-down cycle (driver guide 3.5).
+        """
+        timeout_s = float(timeout_s if timeout_s is not None
+                          else self.cfg.get('lift_move_timeout_s', 60.0))
+        ok, why = self.safe_to_move()
+        if not ok:
+            return False, f"lift_jog refused: {why}"
+        if self._lift_position is None:
+            return False, "lift position unknown (lift_driver running?)"
+
+        target = int(self._lift_position) + int(delta_counts)
+        self._lift_cancel = False
+        self._pub_lift_inc_cmd.publish(Int32(int(delta_counts)))
+        rospy.loginfo(f"[Navifra] Lift {int(delta_counts):+d} counts "
+                      f"-> ~{target}")
+        return self._wait_lift_settle(target, timeout_s)
+
+    def _wait_lift_settle(self, target, timeout_s):
+        """Block until the lift is within lift_settle_tol of target."""
         deadline = time.time() + timeout_s
         rate = rospy.Rate(5)
         while time.time() < deadline and not rospy.is_shutdown():
+            if self._lift_cancel:
+                return False, "lift move cancelled by stop"
             if self.estop_active:
                 return False, "e-stop during lift move"
             if self._lift_error:

@@ -197,6 +197,9 @@ class BaslerCameraNode:
         with self._lock:
             self._cancel_idle_timer()
 
+            # Whether THIS call had to open the device decides whether the
+            # warmup below is needed at all — see the comment there.
+            was_open = self._is_open
             if not self._open_locked():
                 resp.success = False
                 resp.message = "camera open failed"
@@ -208,7 +211,20 @@ class BaslerCameraNode:
                 if use_led:
                     self._devices.vision_led(True)
                     led_on = True
-                if self._warmup_s > 0:
+
+                # The warmup covers two settling effects, and only one of them
+                # applies to every call: the VISION lamp reaching brightness,
+                # and the sensor settling after StartGrabbing. So skip it when
+                # neither happened — i.e. an already-open device with the lamp
+                # off, which is exactly the operator UI's live preview.
+                #
+                # This matters because the wrist camera is a 5 fps part
+                # (acA5472-5gm). A fixed 150 ms on every frame is a third of
+                # the whole 200 ms budget, spent settling a lamp that is not
+                # on. Scan captures are unaffected: they use the lamp, so they
+                # still warm up.
+                needs_warmup = use_led or not was_open
+                if self._warmup_s > 0 and needs_warmup:
                     rospy.sleep(self._warmup_s)
 
                 frames = self._grab_burst(n, delay)
@@ -247,7 +263,13 @@ class BaslerCameraNode:
             if frame is None:
                 rospy.logwarn(f"[BaslerCamera] Sample {i + 1}/{n} grab failed")
             else:
-                msg = self._bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+                # Encoding follows the sensor, not a hardcoded assumption: a
+                # mono part used to be widened to bgr8 here, tripling every
+                # frame to 59.9 MB with three identical channels. cv_bridge
+                # widens mono8 for any consumer that asks for bgr8, so nothing
+                # downstream had to change.
+                msg = self._bridge.cv2_to_imgmsg(
+                    frame, encoding=self._camera.encoding)
                 msg.header.stamp = rospy.Time.now()
                 out.append(msg)
                 if self._publish_last:

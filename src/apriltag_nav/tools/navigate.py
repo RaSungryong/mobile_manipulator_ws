@@ -8,6 +8,13 @@ This script orchestrates the navigation process:
 2. Interacts with the user to select a mode.
 3. Generates the sequence of waypoints (tasks).
 4. Commands the robot controller to execute the path.
+
+⚠️ Holds its own MobileController, so it publishes /cmd_vel itself. Since
+2026-08-11 mobile_node is the sole /cmd_vel publisher in the running stack, and
+there is no arbitration below it — navifra's base_controller obeys whichever
+message arrived last. **Never run this while mobile_manipulator.launch is up.**
+It is a standalone bring-up tool for a stack that is not running; to drive from
+a live stack use `GOTO <tag>` on /task_command, or /mobile/goto_tag directly.
 """
 
 import rospy
@@ -16,7 +23,7 @@ import argparse
 import yaml
 from std_msgs.msg import String
 from apriltag_nav.map_manager import MapManager
-from apriltag_nav.robot_controller import RobotController
+from apriltag_nav.mobile_controller import MobileController
 from apriltag_nav import utils
 # ----------------------------------------------------------------------
 # Scan delegation
@@ -27,6 +34,9 @@ from apriltag_nav import utils
 # /task_command so task_executor picks it up. If task_executor is not
 # running, the call is a no-op with a warning.
 _scan_cmd_pub = None
+
+# Dock tag. Must match TaskManager.START_TAG and the DOCK entry in map.yaml.
+DOCK_TAG = 500
 
 
 def _get_scan_cmd_pub():
@@ -41,7 +51,7 @@ def _get_scan_cmd_pub():
 def _request_scan_via_task_executor(target_tag_id):
     """Publish a scan request to task_executor for the given tag id.
 
-    Replaces the legacy RobotController.perform_scan_procedure(), which
+    Replaces the legacy MobileController.perform_scan_procedure(), which
     no longer exists (the scanning role moved to ArmController via
     task_executor). If no subscriber is connected, logs a warning.
     """
@@ -87,7 +97,7 @@ def main():
     
     # Initialize Modules
     map_mgr = MapManager(MAP_PATH)
-    robot = RobotController(robot_config, map_mgr)
+    robot = MobileController(robot_config, map_mgr)
     
     # --- 3. Mode Selection Logic ---
     mode = args.mode
@@ -148,7 +158,7 @@ def main():
         # Get Current Position
         current_id = robot.get_current_tag_id()
         if not current_id:
-             current_id = 508 # Default dock if lost
+             current_id = DOCK_TAG # Default dock if lost
              rospy.logwarn(f"Current tag not detected, assuming start at {current_id}")
              
         waypoints = map_mgr.find_path(current_id, target_id)
@@ -190,7 +200,7 @@ def main():
     
     if mode == 3:
         # Task-Aware Execution for Excel
-        current_id = 508
+        current_id = DOCK_TAG
         for target in scan_targets:
             if rospy.is_shutdown(): break
             
@@ -220,7 +230,7 @@ def main():
             
         # Return to dock
         rospy.loginfo("Mission tasks complete. Returning to dock...")
-        return_path = map_mgr.find_path(current_id, 508)
+        return_path = map_mgr.find_path(current_id, DOCK_TAG)
         if return_path:
             for wp in return_path[1:]:
                 if rospy.is_shutdown(): break

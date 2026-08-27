@@ -11,7 +11,7 @@ roslaunch apriltag_nav mobile_manipulator.launch
 * This single command starts all four nodes:
    - keyence_dlen1_node   : Keyence DL-EN1 distance sensor (192.168.100.105:64000)
    - basler_camera_node   : wrist Basler camera + VISION lamp (/camera/capture)
-   - arm_controller_node  : Fairino arm + ONNX inference + Keyence closed loop
+   - arm_node  : Fairino arm + ONNX inference + Keyence closed loop
    - task_executor        : main task orchestrator (STATUS lamp, e-stop, battery)
 
 Run a task

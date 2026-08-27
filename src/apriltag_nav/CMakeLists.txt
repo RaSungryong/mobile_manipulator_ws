@@ -31,11 +31,20 @@ catkin_package(
 # src/apriltag_nav/ and are installed as a python package by
 # catkin_python_setup() (see setup.py); tools/ is developer-only and not
 # installed. Every PROGRAM lands in one directory, so keep basenames unique.
+# Keep this list equal to scripts/*.py. lifter_node and camera_viewer_node were
+# missing here until 2026-08-11 — they ran anyway because roslaunch resolves
+# `type=` from the source tree in a devel-space build, so the gap only shows up
+# in an installed workspace.
 install(PROGRAMS
   scripts/task_executor.py
-  scripts/arm_controller_node.py
+  scripts/mobile_node.py
+  scripts/arm_node.py
+  scripts/lifter_node.py
   scripts/basler_camera_node.py
   scripts/keyence_dlen1_node.py
+  scripts/robot_camera_node.py
+  scripts/camera_viewer_node.py
+  scripts/inference_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -1,583 +1,558 @@
 # AprilTag Navigation Map Configuration
 # All map topology, tag coordinates, and task definitions
+#
+# Frame: origin = centre of 정반 1, +x = east, +y = north, unit = metre.
+# Tag positions are the FLOOR TAG, not the robot stop pose: the front camera
+# sits 0.55 m ahead of robot centre and looks straight down, so the robot
+# centre stops 0.55 m behind the tag along its heading.
+# zone selects the tag->pose transform in mobile_controller: A/DOCK = heading 0
+# (east), B/D = +90 (north), C/E = -90 (south).
 
 # Tag Database
 tags:
-  # Dock
-  508:
-    x: -0.3975
-    y: 5.35
+  # Dock (charger, robot centre stops at x -1.9123)
+  500:
+    x: -1.3623
+    y: 3.02
     type: DOCK
     zone: DOCK
 
-  # Pivot Tags
-  500:
-    x: 0.0525
-    y: 5.35
+  # Pivot Tags — Entry = read facing east on the zone A lane,
+  #              Exit  = read after the pivot, facing into the corridor
+  501:
+    x: -1.16
+    y: 3.02
     type: PIVOT
     zone: A
-    name: Entry_LB
-  501:
-    x: -0.3975
-    y: 5.80
+    name: Entry_B
+  505:
+    x: -1.71
+    y: 3.57
     type: PIVOT
     zone: B
-    name: Exit_LB
+    name: Exit_B
+
   502:
-    x: 3.2525
-    y: 5.35
+    x: 2.26
+    y: 3.02
     type: PIVOT
     zone: A
-    name: Entry_MB
-  503:
-    x: 2.8025
-    y: 4.90
+    name: Entry_C
+  506:
+    x: 1.71
+    y: 2.47
     type: PIVOT
     zone: C
-    name: Exit_MB
-  504:
-    x: 3.9225
-    y: 5.35
+    name: Exit_C
+
+  503:
+    x: 2.73
+    y: 3.02
     type: PIVOT
     zone: A
-    name: Entry_MB_R
-  505:
-    x: 3.4725
-    y: 5.80
+    name: Entry_D
+  507:
+    x: 2.18
+    y: 3.57
     type: PIVOT
     zone: D
-    name: Exit_MB_R
-  506:
-    x: 7.1225
-    y: 5.35
+    name: Exit_D
+
+  504:
+    x: 6.15
+    y: 3.02
     type: PIVOT
     zone: A
-    name: Entry_RB
-  507:
-    x: 6.6725
-    y: 4.90
+    name: Entry_E
+  508:
+    x: 5.6
+    y: 2.47
     type: PIVOT
     zone: E
-    name: Exit_RB
+    name: Exit_E
 
-  # Zone A Moving Tags (Left)
+  # Zone A Moving Tags (west -> east)
   400:
-    x: 0.4525
-    y: 5.35
+    x: -0.66
+    y: 3.02
     type: MOVE
     zone: A
   401:
-    x: 0.8525
-    y: 5.35
+    x: -0.16
+    y: 3.02
     type: MOVE
     zone: A
   402:
-    x: 1.2525
-    y: 5.35
+    x: 0.34
+    y: 3.02
     type: MOVE
     zone: A
   403:
-    x: 1.6525
-    y: 5.35
+    x: 0.84
+    y: 3.02
     type: MOVE
     zone: A
   404:
-    x: 2.0525
-    y: 5.35
+    x: 1.34
+    y: 3.02
     type: MOVE
     zone: A
   405:
-    x: 2.4525
-    y: 5.35
+    x: 1.84
+    y: 3.02
     type: MOVE
     zone: A
   406:
-    x: 2.8525
-    y: 5.35
+    x: 3.23
+    y: 3.02
     type: MOVE
     zone: A
-
-  # Zone A Moving Tags (Right)
+  407:
+    x: 3.73
+    y: 3.02
+    type: MOVE
+    zone: A
   408:
-    x: 4.3225
-    y: 5.35
+    x: 4.23
+    y: 3.02
     type: MOVE
     zone: A
   409:
-    x: 4.7225
-    y: 5.35
+    x: 4.73
+    y: 3.02
     type: MOVE
     zone: A
   410:
-    x: 5.1225
-    y: 5.35
+    x: 5.23
+    y: 3.02
     type: MOVE
     zone: A
   411:
-    x: 5.5225
-    y: 5.35
-    type: MOVE
-    zone: A
-  412:
-    x: 5.9225
-    y: 5.35
-    type: MOVE
-    zone: A
-  413:
-    x: 6.3225
-    y: 5.35
-    type: MOVE
-    zone: A
-  414:
-    x: 6.7225
-    y: 5.35
+    x: 5.73
+    y: 3.02
     type: MOVE
     zone: A
 
-  # Transition Moving Tags
-  407:
-    x: 2.8025
-    y: 4.395
-    type: MOVE
-    zone: C
-  415:
-    x: 6.6725
-    y: 4.395
-    type: MOVE
-    zone: E
-
-  # Zone B Work Tags (111 -> 100)
+  # Zone B Work Tags (112 -> 100)
+  112:
+    x: -1.71
+    y: 2.95
+    type: WORK
+    zone: B
   111:
-    x: -0.3975
-    y: 4.85
+    x: -1.71
+    y: 2.55
     type: WORK
     zone: B
   110:
-    x: -0.3975
-    y: 4.45
+    x: -1.71
+    y: 2.15
     type: WORK
     zone: B
   109:
-    x: -0.3975
-    y: 4.05
+    x: -1.71
+    y: 1.75
     type: WORK
     zone: B
   108:
-    x: -0.3975
-    y: 3.65
+    x: -1.71
+    y: 1.35
     type: WORK
     zone: B
   107:
-    x: -0.3975
-    y: 3.25
+    x: -1.71
+    y: 0.95
     type: WORK
     zone: B
   106:
-    x: -0.3975
-    y: 2.85
+    x: -1.71
+    y: 0.55
     type: WORK
     zone: B
   105:
-    x: -0.3975
-    y: 2.45
+    x: -1.71
+    y: 0.15
     type: WORK
     zone: B
   104:
-    x: -0.3975
-    y: 2.05
+    x: -1.71
+    y: -0.25
     type: WORK
     zone: B
   103:
-    x: -0.3975
-    y: 1.65
+    x: -1.71
+    y: -0.65
     type: WORK
     zone: B
   102:
-    x: -0.3975
-    y: 1.25
+    x: -1.71
+    y: -1.05
     type: WORK
     zone: B
   101:
-    x: -0.3975
-    y: 0.85
+    x: -1.71
+    y: -1.45
     type: WORK
     zone: B
   100:
-    x: -0.3975
-    y: 0.45
+    x: -1.71
+    y: -1.85
     type: WORK
     zone: B
 
-  # Zone C Work Tags (112 -> 123)
-  112:
-    x: 2.8025
-    y: 3.995
-    type: WORK
-    zone: C
+  # Zone C Work Tags (113 -> 125)
   113:
-    x: 2.8025
-    y: 3.595
+    x: 1.71
+    y: 1.85
     type: WORK
     zone: C
   114:
-    x: 2.8025
-    y: 3.195
+    x: 1.71
+    y: 1.45
     type: WORK
     zone: C
   115:
-    x: 2.8025
-    y: 2.795
+    x: 1.71
+    y: 1.05
     type: WORK
     zone: C
   116:
-    x: 2.8025
-    y: 2.395
+    x: 1.71
+    y: 0.65
     type: WORK
     zone: C
   117:
-    x: 2.8025
-    y: 1.995
+    x: 1.71
+    y: 0.25
     type: WORK
     zone: C
   118:
-    x: 2.8025
-    y: 1.595
+    x: 1.71
+    y: -0.15
     type: WORK
     zone: C
   119:
-    x: 2.8025
-    y: 1.195
+    x: 1.71
+    y: -0.55
     type: WORK
     zone: C
   120:
-    x: 2.8025
-    y: 0.795
+    x: 1.71
+    y: -0.95
     type: WORK
     zone: C
   121:
-    x: 2.8025
-    y: 0.395
+    x: 1.71
+    y: -1.35
     type: WORK
     zone: C
   122:
-    x: 2.8025
-    y: -0.005
+    x: 1.71
+    y: -1.75
     type: WORK
     zone: C
   123:
-    x: 2.8025
-    y: -0.405
+    x: 1.71
+    y: -2.15
+    type: WORK
+    zone: C
+  124:
+    x: 1.71
+    y: -2.55
+    type: WORK
+    zone: C
+  125:
+    x: 1.71
+    y: -2.95
     type: WORK
     zone: C
 
-  # Zone D Work Tags (135 -> 124)
+  # Zone D Work Tags (137 -> 126)
+  137:
+    x: 2.18
+    y: 2.55
+    type: WORK
+    zone: D
+  136:
+    x: 2.18
+    y: 2.15
+    type: WORK
+    zone: D
   135:
-    x: 3.4725
-    y: 4.85
+    x: 2.18
+    y: 1.75
     type: WORK
     zone: D
   134:
-    x: 3.4725
-    y: 4.45
+    x: 2.18
+    y: 1.35
     type: WORK
     zone: D
   133:
-    x: 3.4725
-    y: 4.05
+    x: 2.18
+    y: 0.95
     type: WORK
     zone: D
   132:
-    x: 3.4725
-    y: 3.65
+    x: 2.18
+    y: 0.55
     type: WORK
     zone: D
   131:
-    x: 3.4725
-    y: 3.25
+    x: 2.18
+    y: 0.15
     type: WORK
     zone: D
   130:
-    x: 3.4725
-    y: 2.85
+    x: 2.18
+    y: -0.25
     type: WORK
     zone: D
   129:
-    x: 3.4725
-    y: 2.45
+    x: 2.18
+    y: -0.65
     type: WORK
     zone: D
   128:
-    x: 3.4725
-    y: 2.05
+    x: 2.18
+    y: -1.05
     type: WORK
     zone: D
   127:
-    x: 3.4725
-    y: 1.65
+    x: 2.18
+    y: -1.45
     type: WORK
     zone: D
   126:
-    x: 3.4725
-    y: 1.25
-    type: WORK
-    zone: D
-  125:
-    x: 3.4725
-    y: 0.85
-    type: WORK
-    zone: D
-  124:
-    x: 3.4725
-    y: 0.45
+    x: 2.18
+    y: -1.85
     type: WORK
     zone: D
 
-  # Zone E Work Tags (136 -> 147)
-  136:
-    x: 6.6725
-    y: 3.995
-    type: WORK
-    zone: E
-  137:
-    x: 6.6725
-    y: 3.595
-    type: WORK
-    zone: E
+  # Zone E Work Tags (138 -> 150)
   138:
-    x: 6.6725
-    y: 3.195
+    x: 5.6
+    y: 1.85
     type: WORK
     zone: E
   139:
-    x: 6.6725
-    y: 2.795
+    x: 5.6
+    y: 1.45
     type: WORK
     zone: E
   140:
-    x: 6.6725
-    y: 2.395
+    x: 5.6
+    y: 1.05
     type: WORK
     zone: E
   141:
-    x: 6.6725
-    y: 1.995
+    x: 5.6
+    y: 0.65
     type: WORK
     zone: E
   142:
-    x: 6.6725
-    y: 1.595
+    x: 5.6
+    y: 0.25
     type: WORK
     zone: E
   143:
-    x: 6.6725
-    y: 1.195
+    x: 5.6
+    y: -0.15
     type: WORK
     zone: E
   144:
-    x: 6.6725
-    y: 0.795
+    x: 5.6
+    y: -0.55
     type: WORK
     zone: E
   145:
-    x: 6.6725
-    y: 0.395
+    x: 5.6
+    y: -0.95
     type: WORK
     zone: E
   146:
-    x: 6.6725
-    y: -0.005
+    x: 5.6
+    y: -1.35
     type: WORK
     zone: E
   147:
-    x: 6.6725
-    y: -0.405
+    x: 5.6
+    y: -1.75
+    type: WORK
+    zone: E
+  148:
+    x: 5.6
+    y: -2.15
+    type: WORK
+    zone: E
+  149:
+    x: 5.6
+    y: -2.55
+    type: WORK
+    zone: E
+  150:
+    x: 5.6
+    y: -2.95
     type: WORK
     zone: E
 
 # Navigation Graph Edges
 edges:
-  # Zone A corridor (bidirectional forward/backward)
-  - from: 508
-    to: 500
-    direction: forward
-    type: move
-  - from: 500
-    to: 508
-    direction: backward
-    type: move
-
-  - from: 500
-    to: 400
-    direction: forward
-    type: move
-  - from: 400
-    to: 500
-    direction: backward
-    type: move
-
-  - from: 400
-    to: 401
-    direction: forward
-    type: move
-  - from: 401
-    to: 400
-    direction: backward
-    type: move
-
-  - from: 401
-    to: 402
-    direction: forward
-    type: move
-  - from: 402
-    to: 401
-    direction: backward
-    type: move
-
-  - from: 402
-    to: 403
-    direction: forward
-    type: move
-  - from: 403
-    to: 402
-    direction: backward
-    type: move
-
-  - from: 403
-    to: 404
-    direction: forward
-    type: move
-  - from: 404
-    to: 403
-    direction: backward
-    type: move
-
-  - from: 404
-    to: 405
-    direction: forward
-    type: move
-  - from: 405
-    to: 404
-    direction: backward
-    type: move
-
-  - from: 405
-    to: 406
-    direction: forward
-    type: move
-  - from: 406
-    to: 405
-    direction: backward
-    type: move
-
-  - from: 406
-    to: 502
-    direction: forward
-    type: move
-  - from: 502
-    to: 406
-    direction: backward
-    type: move
-
-  - from: 502
-    to: 504
-    direction: forward
-    type: move
-  - from: 504
-    to: 502
-    direction: backward
-    type: move
-
-  - from: 504
-    to: 408
-    direction: forward
-    type: move
-  - from: 408
-    to: 504
-    direction: backward
-    type: move
-
-  - from: 408
-    to: 409
-    direction: forward
-    type: move
-  - from: 409
-    to: 408
-    direction: backward
-    type: move
-
-  - from: 409
-    to: 410
-    direction: forward
-    type: move
-  - from: 410
-    to: 409
-    direction: backward
-    type: move
-
-  - from: 410
-    to: 411
-    direction: forward
-    type: move
-  - from: 411
-    to: 410
-    direction: backward
-    type: move
-
-  - from: 411
-    to: 412
-    direction: forward
-    type: move
-  - from: 412
-    to: 411
-    direction: backward
-    type: move
-
-  - from: 412
-    to: 413
-    direction: forward
-    type: move
-  - from: 413
-    to: 412
-    direction: backward
-    type: move
-
-  - from: 413
-    to: 414
-    direction: forward
-    type: move
-  - from: 414
-    to: 413
-    direction: backward
-    type: move
-
-  - from: 414
-    to: 506
-    direction: forward
-    type: move
-  - from: 506
-    to: 414
-    direction: backward
-    type: move
-
-  # Zone B (after pivot at 500->501)
+  # Zone A corridor (forward = east, backward = reversing west)
   - from: 500
     to: 501
-    direction: turn_ccw_90
-    type: pivot
+    direction: forward
+    type: move
   - from: 501
     to: 500
+    direction: backward
+    type: move
+  - from: 501
+    to: 400
+    direction: forward
+    type: move
+  - from: 400
+    to: 501
+    direction: backward
+    type: move
+  - from: 400
+    to: 401
+    direction: forward
+    type: move
+  - from: 401
+    to: 400
+    direction: backward
+    type: move
+  - from: 401
+    to: 402
+    direction: forward
+    type: move
+  - from: 402
+    to: 401
+    direction: backward
+    type: move
+  - from: 402
+    to: 403
+    direction: forward
+    type: move
+  - from: 403
+    to: 402
+    direction: backward
+    type: move
+  - from: 403
+    to: 404
+    direction: forward
+    type: move
+  - from: 404
+    to: 403
+    direction: backward
+    type: move
+  - from: 404
+    to: 405
+    direction: forward
+    type: move
+  - from: 405
+    to: 404
+    direction: backward
+    type: move
+  - from: 405
+    to: 502
+    direction: forward
+    type: move
+  - from: 502
+    to: 405
+    direction: backward
+    type: move
+  - from: 502
+    to: 503
+    direction: forward
+    type: move
+  - from: 503
+    to: 502
+    direction: backward
+    type: move
+  - from: 503
+    to: 406
+    direction: forward
+    type: move
+  - from: 406
+    to: 503
+    direction: backward
+    type: move
+  - from: 406
+    to: 407
+    direction: forward
+    type: move
+  - from: 407
+    to: 406
+    direction: backward
+    type: move
+  - from: 407
+    to: 408
+    direction: forward
+    type: move
+  - from: 408
+    to: 407
+    direction: backward
+    type: move
+  - from: 408
+    to: 409
+    direction: forward
+    type: move
+  - from: 409
+    to: 408
+    direction: backward
+    type: move
+  - from: 409
+    to: 410
+    direction: forward
+    type: move
+  - from: 410
+    to: 409
+    direction: backward
+    type: move
+  - from: 410
+    to: 411
+    direction: forward
+    type: move
+  - from: 411
+    to: 410
+    direction: backward
+    type: move
+  - from: 411
+    to: 504
+    direction: forward
+    type: move
+  - from: 504
+    to: 411
+    direction: backward
+    type: move
+
+  # Zone B (pivot at 501 -> 505, then backward into the corridor)
+  - from: 501
+    to: 505
+    direction: turn_ccw_90
+    type: pivot
+  - from: 505
+    to: 501
     direction: turn_cw_90
     type: pivot
-
-  - from: 501
+  - from: 505
+    to: 112
+    direction: backward
+    type: move
+  - from: 112
+    to: 505
+    direction: forward
+    type: move
+  - from: 112
     to: 111
     direction: backward
     type: move
   - from: 111
-    to: 501
+    to: 112
     direction: forward
     type: move
-
   - from: 111
     to: 110
     direction: backward
@@ -586,7 +561,6 @@ edges:
     to: 111
     direction: forward
     type: move
-
   - from: 110
     to: 109
     direction: backward
@@ -595,7 +569,6 @@ edges:
     to: 110
     direction: forward
     type: move
-
   - from: 109
     to: 108
     direction: backward
@@ -604,7 +577,6 @@ edges:
     to: 109
     direction: forward
     type: move
-
   - from: 108
     to: 107
     direction: backward
@@ -613,7 +585,6 @@ edges:
     to: 108
     direction: forward
     type: move
-
   - from: 107
     to: 106
     direction: backward
@@ -622,7 +593,6 @@ edges:
     to: 107
     direction: forward
     type: move
-
   - from: 106
     to: 105
     direction: backward
@@ -631,7 +601,6 @@ edges:
     to: 106
     direction: forward
     type: move
-
   - from: 105
     to: 104
     direction: backward
@@ -640,7 +609,6 @@ edges:
     to: 105
     direction: forward
     type: move
-
   - from: 104
     to: 103
     direction: backward
@@ -649,7 +617,6 @@ edges:
     to: 104
     direction: forward
     type: move
-
   - from: 103
     to: 102
     direction: backward
@@ -658,7 +625,6 @@ edges:
     to: 103
     direction: forward
     type: move
-
   - from: 102
     to: 101
     direction: backward
@@ -667,7 +633,6 @@ edges:
     to: 102
     direction: forward
     type: move
-
   - from: 101
     to: 100
     direction: backward
@@ -677,43 +642,23 @@ edges:
     direction: forward
     type: move
 
-  # Zone C (after pivot at 502->503)
+  # Zone C (pivot at 502 -> 506, then forward into the corridor)
   - from: 502
-    to: 503
+    to: 506
     direction: turn_cw_90
     type: pivot
-  - from: 503
+  - from: 506
     to: 502
     direction: turn_ccw_90
     type: pivot
-
-  - from: 503
-    to: 407
-    direction: forward
-    type: move
-  - from: 407
-    to: 503
-    direction: backward
-    type: move
-
-  - from: 407
-    to: 112
-    direction: forward
-    type: move
-  - from: 112
-    to: 407
-    direction: backward
-    type: move
-
-  - from: 112
+  - from: 506
     to: 113
     direction: forward
     type: move
   - from: 113
-    to: 112
+    to: 506
     direction: backward
     type: move
-
   - from: 113
     to: 114
     direction: forward
@@ -722,7 +667,6 @@ edges:
     to: 113
     direction: backward
     type: move
-
   - from: 114
     to: 115
     direction: forward
@@ -731,7 +675,6 @@ edges:
     to: 114
     direction: backward
     type: move
-
   - from: 115
     to: 116
     direction: forward
@@ -740,7 +683,6 @@ edges:
     to: 115
     direction: backward
     type: move
-
   - from: 116
     to: 117
     direction: forward
@@ -749,7 +691,6 @@ edges:
     to: 116
     direction: backward
     type: move
-
   - from: 117
     to: 118
     direction: forward
@@ -758,7 +699,6 @@ edges:
     to: 117
     direction: backward
     type: move
-
   - from: 118
     to: 119
     direction: forward
@@ -767,7 +707,6 @@ edges:
     to: 118
     direction: backward
     type: move
-
   - from: 119
     to: 120
     direction: forward
@@ -776,7 +715,6 @@ edges:
     to: 119
     direction: backward
     type: move
-
   - from: 120
     to: 121
     direction: forward
@@ -785,7 +723,6 @@ edges:
     to: 120
     direction: backward
     type: move
-
   - from: 121
     to: 122
     direction: forward
@@ -794,7 +731,6 @@ edges:
     to: 121
     direction: backward
     type: move
-
   - from: 122
     to: 123
     direction: forward
@@ -803,171 +739,146 @@ edges:
     to: 122
     direction: backward
     type: move
-
-  # Zone D (after pivot at 504->505)
-  - from: 504
-    to: 505
-    direction: turn_ccw_90
-    type: pivot
-  - from: 505
-    to: 504
-    direction: turn_cw_90
-    type: pivot
-
-  - from: 505
-    to: 135
-    direction: backward
-    type: move
-  - from: 135
-    to: 505
-    direction: forward
-    type: move
-
-  - from: 135
-    to: 134
-    direction: backward
-    type: move
-  - from: 134
-    to: 135
-    direction: forward
-    type: move
-
-  - from: 134
-    to: 133
-    direction: backward
-    type: move
-  - from: 133
-    to: 134
-    direction: forward
-    type: move
-
-  - from: 133
-    to: 132
-    direction: backward
-    type: move
-  - from: 132
-    to: 133
-    direction: forward
-    type: move
-
-  - from: 132
-    to: 131
-    direction: backward
-    type: move
-  - from: 131
-    to: 132
-    direction: forward
-    type: move
-
-  - from: 131
-    to: 130
-    direction: backward
-    type: move
-  - from: 130
-    to: 131
-    direction: forward
-    type: move
-
-  - from: 130
-    to: 129
-    direction: backward
-    type: move
-  - from: 129
-    to: 130
-    direction: forward
-    type: move
-
-  - from: 129
-    to: 128
-    direction: backward
-    type: move
-  - from: 128
-    to: 129
-    direction: forward
-    type: move
-
-  - from: 128
-    to: 127
-    direction: backward
-    type: move
-  - from: 127
-    to: 128
-    direction: forward
-    type: move
-
-  - from: 127
-    to: 126
-    direction: backward
-    type: move
-  - from: 126
-    to: 127
-    direction: forward
-    type: move
-
-  - from: 126
-    to: 125
-    direction: backward
-    type: move
-  - from: 125
-    to: 126
-    direction: forward
-    type: move
-
-  - from: 125
+  - from: 123
     to: 124
+    direction: forward
+    type: move
+  - from: 124
+    to: 123
     direction: backward
     type: move
   - from: 124
     to: 125
     direction: forward
     type: move
+  - from: 125
+    to: 124
+    direction: backward
+    type: move
 
-  # Zone E (after pivot at 506->507)
-  - from: 506
+  # Zone D (pivot at 503 -> 507, then backward into the corridor)
+  - from: 503
     to: 507
+    direction: turn_ccw_90
+    type: pivot
+  - from: 507
+    to: 503
     direction: turn_cw_90
     type: pivot
   - from: 507
-    to: 506
-    direction: turn_ccw_90
-    type: pivot
-
-  - from: 507
-    to: 415
-    direction: forward
+    to: 137
+    direction: backward
     type: move
-  - from: 415
+  - from: 137
     to: 507
-    direction: backward
-    type: move
-
-  - from: 415
-    to: 136
     direction: forward
     type: move
-  - from: 136
-    to: 415
+  - from: 137
+    to: 136
     direction: backward
     type: move
-
   - from: 136
     to: 137
     direction: forward
     type: move
-  - from: 137
-    to: 136
+  - from: 136
+    to: 135
     direction: backward
     type: move
+  - from: 135
+    to: 136
+    direction: forward
+    type: move
+  - from: 135
+    to: 134
+    direction: backward
+    type: move
+  - from: 134
+    to: 135
+    direction: forward
+    type: move
+  - from: 134
+    to: 133
+    direction: backward
+    type: move
+  - from: 133
+    to: 134
+    direction: forward
+    type: move
+  - from: 133
+    to: 132
+    direction: backward
+    type: move
+  - from: 132
+    to: 133
+    direction: forward
+    type: move
+  - from: 132
+    to: 131
+    direction: backward
+    type: move
+  - from: 131
+    to: 132
+    direction: forward
+    type: move
+  - from: 131
+    to: 130
+    direction: backward
+    type: move
+  - from: 130
+    to: 131
+    direction: forward
+    type: move
+  - from: 130
+    to: 129
+    direction: backward
+    type: move
+  - from: 129
+    to: 130
+    direction: forward
+    type: move
+  - from: 129
+    to: 128
+    direction: backward
+    type: move
+  - from: 128
+    to: 129
+    direction: forward
+    type: move
+  - from: 128
+    to: 127
+    direction: backward
+    type: move
+  - from: 127
+    to: 128
+    direction: forward
+    type: move
+  - from: 127
+    to: 126
+    direction: backward
+    type: move
+  - from: 126
+    to: 127
+    direction: forward
+    type: move
 
-  - from: 137
+  # Zone E (pivot at 504 -> 508, then forward into the corridor)
+  - from: 504
+    to: 508
+    direction: turn_cw_90
+    type: pivot
+  - from: 508
+    to: 504
+    direction: turn_ccw_90
+    type: pivot
+  - from: 508
     to: 138
     direction: forward
     type: move
   - from: 138
-    to: 137
+    to: 508
     direction: backward
     type: move
-
   - from: 138
     to: 139
     direction: forward
@@ -976,7 +887,6 @@ edges:
     to: 138
     direction: backward
     type: move
-
   - from: 139
     to: 140
     direction: forward
@@ -985,7 +895,6 @@ edges:
     to: 139
     direction: backward
     type: move
-
   - from: 140
     to: 141
     direction: forward
@@ -994,7 +903,6 @@ edges:
     to: 140
     direction: backward
     type: move
-
   - from: 141
     to: 142
     direction: forward
@@ -1003,7 +911,6 @@ edges:
     to: 141
     direction: backward
     type: move
-
   - from: 142
     to: 143
     direction: forward
@@ -1012,7 +919,6 @@ edges:
     to: 142
     direction: backward
     type: move
-
   - from: 143
     to: 144
     direction: forward
@@ -1021,7 +927,6 @@ edges:
     to: 143
     direction: backward
     type: move
-
   - from: 144
     to: 145
     direction: forward
@@ -1030,7 +935,6 @@ edges:
     to: 144
     direction: backward
     type: move
-
   - from: 145
     to: 146
     direction: forward
@@ -1039,7 +943,6 @@ edges:
     to: 145
     direction: backward
     type: move
-
   - from: 146
     to: 147
     direction: forward
@@ -1048,5 +951,27 @@ edges:
     to: 146
     direction: backward
     type: move
-
-
+  - from: 147
+    to: 148
+    direction: forward
+    type: move
+  - from: 148
+    to: 147
+    direction: backward
+    type: move
+  - from: 148
+    to: 149
+    direction: forward
+    type: move
+  - from: 149
+    to: 148
+    direction: backward
+    type: move
+  - from: 149
+    to: 150
+    direction: forward
+    type: move
+  - from: 150
+    to: 149
+    direction: backward
+    type: move

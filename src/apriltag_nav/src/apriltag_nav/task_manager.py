@@ -5,7 +5,7 @@ import csv
 import os
 import rospy
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class TaskManager:
@@ -41,7 +41,7 @@ class TaskManager:
     # USER CONFIG
     # ==================================================
 
-    START_TAG = 508   # Home tag
+    START_TAG = 500   # Home tag (dock)
 
     TASK_DEFS = {
 
@@ -57,6 +57,13 @@ class TaskManager:
             "type": "scan",
             "scan_mode": "joint",
         },
+
+        # `scan_joints_line1_lift` / `joints_line1_lift.csv` were retired
+        # 2026-08-13: optimized_joints_line1.csv now carries the lift_height
+        # column itself, so the two were the same task. The CSV outlived the
+        # task def in this checkout and was deleted 2026-08-23, after
+        # confirming it was byte-identical to optimized_joints_line1.csv
+        # (328 rows, all 10 columns, zero value differences).
 
         # ---------------- scan (pose) ----------------
         "scan_grid_line1": {
@@ -105,6 +112,7 @@ class TaskManager:
         #     "file": "move_route_A.csv",
         #     "type": "move",
         # },
+
     }
 
     # ==================================================
@@ -119,6 +127,10 @@ class TaskManager:
 
         # task_name -> tag_id -> [scan points]
         self.scan_points: Dict[str, Dict[int, List[dict]]] = defaultdict(dict)
+
+        # task_name -> lift height [mm], or None when the CSV has no
+        # lift_height column. See _extract_lift_height.
+        self.lift_heights: Dict[str, Optional[float]] = {}
 
         rospy.loginfo(f"[TaskManager] Loading tasks from: {task_dir}")
 
@@ -156,6 +168,12 @@ class TaskManager:
             if missing or not all_rows:
                 if not all_rows:
                     rospy.logwarn(f"[TaskManager] Empty input for '{task_name}'")
+                continue
+
+            # Lift height for the whole task. A disagreement is fatal for the
+            # task, so resolve it before anything gets registered.
+            lift_ok, lift_mm = self._extract_lift_height(task_name, all_rows)
+            if not lift_ok:
                 continue
 
             # Output path: explicit `result_name` or `{first_input_stem}_result.csv`
@@ -227,10 +245,70 @@ class TaskManager:
                     f"for task '{task_name}'"
                 )
 
+            self.lift_heights[task_name] = lift_mm
+
             rospy.loginfo(
                 f"[TaskManager] Task '{task_name}' loaded "
-                f"(steps={len(self.tasks.get(task_name, []))})"
+                f"(steps={len(self.tasks.get(task_name, []))}, "
+                f"lift_height={'none' if lift_mm is None else f'{lift_mm} mm'})"
             )
+
+    # ==================================================
+    # LIFT HEIGHT
+    # ==================================================
+    def _extract_lift_height(self, task_name, rows):
+        """Read the optional `lift_height` column [mm]. Returns (ok, value).
+
+        The lift is set once per task and held until it finishes, so ONE value
+        has to cover every row — the joint angles in a scan CSV were solved at
+        a specific base height, and running them at a different one drives the
+        arm somewhere else entirely. A file that disagrees with itself is
+        therefore rejected outright rather than resolved by picking a winner:
+        there is no safe way to guess which rows are the wrong ones.
+
+        (ok=False) means the task must not be registered at all. A CSV with no
+        such column returns (True, None) — the lift is simply not commanded,
+        which is how every pre-existing task keeps working.
+        """
+        present = [r for r in rows if str(r.get('lift_height', '')).strip()]
+        if not present:
+            if any('lift_height' in r for r in rows):
+                rospy.logerr(
+                    f"[TaskManager] Task '{task_name}': lift_height column is "
+                    "present but every cell is empty — refusing to load. "
+                    "Remove the column or fill it in."
+                )
+                return False, None
+            return True, None
+
+        if len(present) != len(rows):
+            rospy.logerr(
+                f"[TaskManager] Task '{task_name}': lift_height is set on "
+                f"{len(present)} of {len(rows)} rows. Refusing to load — a "
+                "blank cell is not the same as 0 mm and guessing which is "
+                "meant is not safe."
+            )
+            return False, None
+
+        try:
+            values = {float(r['lift_height']) for r in present}
+        except ValueError as e:
+            rospy.logerr(
+                f"[TaskManager] Task '{task_name}': lift_height is not "
+                f"numeric ({e}). Refusing to load."
+            )
+            return False, None
+
+        if len(values) > 1:
+            rospy.logerr(
+                f"[TaskManager] Task '{task_name}': lift_height disagrees "
+                f"across rows ({sorted(values)}). The lift is set once per "
+                "task and held, so the CSV must name a single height. "
+                "Refusing to load."
+            )
+            return False, None
+
+        return True, values.pop()
 
     # ==================================================
     # SYSTEM TASKS (NO CSV)
@@ -245,6 +323,7 @@ class TaskManager:
             {"tag": self.START_TAG, "scan": False}
         ]
         self.scan_points["go_home"] = {}
+        self.lift_heights["go_home"] = None
 
         rospy.loginfo(
             f"[TaskManager] System task registered: go_home → tag {self.START_TAG}"
@@ -393,6 +472,10 @@ class TaskManager:
 
     def get_scan_points(self, task_name: str, tag_id: int) -> List[dict]:
         return self.scan_points.get(task_name, {}).get(tag_id, [])
+
+    def get_lift_height(self, task_name: str) -> Optional[float]:
+        """Lift height [mm] the task runs at, or None to leave the lift alone."""
+        return self.lift_heights.get(task_name)
 
     def get_all_task_names(self) -> List[str]:
         return list(self.tasks.keys())

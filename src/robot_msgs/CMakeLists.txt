@@ -11,11 +11,15 @@ add_message_files(
   FILES
   Pose2DWithFlag.msg
   NavDebugStatus.msg
+  AprilTagDetection.msg
+  AprilTagDetectionArray.msg
+  ArmState.msg
 )
 
 add_service_files(
   FILES
   CaptureImages.srv
+  PredictRa.srv
 )
 
 generate_messages(

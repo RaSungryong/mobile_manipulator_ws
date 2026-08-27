@@ -1,7 +1,43 @@
 <launch>
 
-    <!-- Keyence DL-EN1 distance sensor node -->
-    <!-- <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
+    <!-- Per-camera switches. Each one gates BOTH the vendor driver that
+         publishes the images and the matching detector inside
+         robot_camera_node, so turning a camera off here really does free its
+         USB bandwidth and CPU rather than just muting the detections.
+         robot.yaml's robot_camera.enabled: block is the default when a camera
+         is left on here; setting an arg false always wins.
+         e.g. roslaunch apriltag_nav mobile_manipulator.launch use_hand_cam:=false -->
+    <arg name="use_front_cam" default="true"/>
+    <arg name="use_side_cam"  default="true"/>
+    <arg name="use_hand_cam"  default="true"/>
+
+    <!-- EXEC/EVAL debug channel on /task_command. See the node below. -->
+    <arg name="debug_mode" default="false"/>
+
+    <!-- front_cam colour resolution. The Femto Bolt's default (0 = let the
+         driver pick) is 1920x1080 MJPG, which measured 140 ms of latency
+         inside the driver alone and held AprilTag detection to 17 Hz against
+         a 30 Hz stream — the detector cost scales with pixel count, and
+         side_cam at 848x480 was doing the same work in 26 ms end to end.
+         Nothing here needs 1080p: front_cam's floor tags are 90 mm and
+         detection is the only consumer. Raise it if long-range tag pickup starts failing;
+         lower it if the latency is still too high. -->
+    <arg name="front_cam_width"  default="1280"/>
+    <arg name="front_cam_height" default="720"/>
+    <arg name="front_cam_fps"    default="30"/>
+
+    <!-- Keyence DL-EN1 distance sensor node.
+         REQUIRED for the scan distance loop. It publishes /keyence/value, which
+         ArmController._adjust_distance_to_surface() reads before every capture.
+         Without it that method logs one "Keyence value NOT available" warning
+         and returns, so the scan proceeds at whatever standoff the arm happened
+         to stop at — with NO error recorded in the scan result. It was commented
+         out until 2026-08-05, which is why the distance loop had never actually
+         run on this robot (and why the keyence_dir sign error below survived).
+         Uncommented 2026-08-05 so the loop comes up with the rest of the stack.
+         host/port match robot.yaml keyence:; scale 0.001 converts the raw
+         integer to mm. -->
+    <node name="keyence_dlen1_node" pkg="apriltag_nav" type="keyence_dlen1_node.py" output="screen">
         <param name="host"           value="192.168.100.105"/>
         <param name="port"           value="64000"/>
         <param name="rate_hz"        value="30.0"/>
@@ -9,7 +45,7 @@
         <param name="scale"          value="0.001"/>
         <param name="offset"         value="0.0"/>
         <param name="use_crlf"       value="true"/>
-    </node> -->
+    </node>
 
     <!-- Wrist Basler camera — on-demand capture server.
          REQUIRED: task_executor's arm controller no longer opens the camera
@@ -26,26 +62,204 @@
          NOTE: these ~params used to sit on mobile_manipulator_system. They are
          read by ArmController, which now lives HERE, so they must stay in this
          node's private namespace or they silently fall back to defaults. -->
-    <node name="arm_controller_node" pkg="apriltag_nav" type="arm_controller_node.py" output="screen">
+    <node name="arm_node" pkg="apriltag_nav" type="arm_node.py" output="screen">
         <param name="robot_ip"              value="192.168.58.2"/>
 
         <param name="num_samples"           value="1"/>
         <param name="delay_between_samples" value="0.2"/>
         <param name="stabilization_time"    value="0.5"/>
         <param name="save_images"           value="true"/>
-        <param name="output_dir"            value="/home/lcl/scan_results"/>
+        <param name="output_dir"            value="$(env HOME)/scan_results"/>
 
         <param name="keyence_tol"           value="0.2"/>
-        <param name="keyence_dir"           value="1.0"/>
+        <!-- MEASURED 2026-08-05 (tools/measure_keyence_angle.py): the reading
+             GROWS as the tool moves +Z, i.e. toward the surface, so a positive
+             reading means "too close" and the fix is to retreat along -Z.
+             dir must therefore be -sign(k) = -1.0.
+             It was +1.0 here, which multiplies the error by (1 + kp) = 1.8 every
+             step and drives the tool INTO the workpiece — never observed only
+             because keyence_dlen1_node was commented out above, so the loop had
+             never actually run. That node is enabled now, so this sign is live.
+             Re-measure it with the tool in sensor range if the sensor is
+             remounted or its polarity is reconfigured. -->
+        <!-- Sensor polarity (robot.yaml keyence: documents it in full): the
+             reading is 0 at a 10 mm standoff, NEGATIVE when too far, POSITIVE
+             when too close — so a negative reading must move the tool closer. -->
+        <param name="keyence_dir"           value="-1.0"/>
         <param name="keyence_kp"            value="0.8"/>
         <param name="keyence_max_steps"     value="10"/>
-        <param name="keyence_max_step_mm"   value="5.0"/>
+        <!-- TEMPORARY 1.0 (was 5.0), 2026-08-05: bring-up guard for the first
+             real run of the distance loop after the keyence_dir sign fix above.
+             Caps how far one bad correction can travel, and with the 42.6 deg
+             beam it also caps the laser spot's lateral walk to 1*tan(42.6) =
+             0.92 mm per step, so a correction stays on roughly the same spot.
+             Still sufficient, not just safe: the loop only engages below the
+             5 mm activate threshold, and from that worst case it converges in
+             5 clamped steps, inside keyence_max_steps=10.
+             Restore 5.0 once the loop is trusted.
+             NOTE all three of keyence_tol / _max_step_mm / _activate_threshold
+             are PERPENDICULAR standoff mm, not raw along-the-beam reading. -->
+        <param name="keyence_max_step_mm"   value="1.0"/>
     </node>
 
-    <!-- Task executor — orchestration only (navigation + state machine).
-         Arm and camera are separate nodes; this node owns the STATUS lamp,
-         e-stop handling and battery monitoring. -->
+    <!-- front_cam — Orbbec Femto Bolt, owned by the orbbec_camera driver.
+         REQUIRED for robot_camera_node's front_cam AprilTag stop-detection.
+         camera_name=front_cam namespaces every topic under /front_cam/...
+         (topics.front_cam_image / front_cam_info in robot.yaml).
+         Depth/IR/point-cloud/IMU streams disabled, only color is needed
+         for AprilTag detection; re-enable if a future consumer needs them. -->
+    <include file="$(find orbbec_camera)/launch/femto_bolt.launch"
+             if="$(arg use_front_cam)">
+        <arg name="camera_name"        value="front_cam"/>
+        <arg name="color_width"        value="$(arg front_cam_width)"/>
+        <arg name="color_height"       value="$(arg front_cam_height)"/>
+        <arg name="color_fps"          value="$(arg front_cam_fps)"/>
+        <arg name="enable_depth"       value="false"/>
+        <arg name="enable_ir"          value="false"/>
+        <arg name="enable_point_cloud" value="false"/>
+        <arg name="enable_accel"       value="false"/>
+        <arg name="enable_gyro"        value="false"/>
+    </include>
+
+    <!-- side_cam — Intel RealSense D405, and hand_cam — Intel RealSense D435.
+         Both are driven by realsense2_camera, built from source in this
+         workspace (src/realsense-ros, ros1-legacy): the apt build is pinned to
+         librealsense 2.50 and rejects the D405 outright with "Unsupported
+         device! Product ID: 0x0B5B".
+         Published only — no consumer acts on either camera's detections yet.
+         camera=<name> namespaces every topic under /<name>/..., matching
+         topics.<name>_image / <name>_info in robot.yaml.
+
+         serial_no is mandatory here, not a nicety: three RealSense-class
+         devices share this PC's USB bus, and without a serial each wrapper
+         opens whichever device it enumerates first — so side_cam and hand_cam
+         could swap, silently pairing each camera with the other's intrinsics
+         and producing wrong tag poses. Update these if a camera is swapped
+         (rs-enumerate-devices -s prints the serials).
+         Neither D405 nor D435 is used for depth here, so depth/infra are off;
+         the D405 has no onboard IMU. -->
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch"
+             if="$(arg use_side_cam)">
+        <arg name="camera"        value="side_cam"/>
+        <arg name="serial_no"     value="409122271601"/>   <!-- D405 -->
+        <arg name="enable_depth"  value="false"/>
+        <arg name="enable_infra1" value="false"/>
+        <arg name="enable_infra2" value="false"/>
+    </include>
+
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch"
+             if="$(arg use_hand_cam)">
+        <arg name="camera"        value="hand_cam"/>
+        <arg name="serial_no"     value="935322071325"/>   <!-- D435 -->
+        <arg name="enable_depth"  value="false"/>
+        <arg name="enable_infra1" value="false"/>
+        <arg name="enable_infra2" value="false"/>
+    </include>
+
+    <!-- Robot camera node — AprilTag detection for front_cam + side_cam +
+         hand_cam. REQUIRED for the vision-triggered soft stop (robot.yaml
+         vision_stop:). Publish-only: never touches /cmd_vel itself.
+         mobile_controller.py (inside mobile_node below) subscribes to
+         topics.front_cam_detections and decides whether to
+         call preempt_stop_robot(). Harmless to run even if
+         vision_stop.stop_tag_ids is still the empty placeholder; the
+         feature is simply inert until that is filled in.
+         driver_* tells the node which drivers this launch actually started;
+         a camera whose driver is absent gets no detector, since it would wait
+         forever on a topic nobody publishes. Cameras whose driver IS running
+         are left to robot.yaml's robot_camera.enabled: block, so neither
+         switch silently overrides the other.
+         These are written unconditionally on purpose. Setting them only in
+         the false case would leave a stale `false` from an earlier
+         use_<name>_cam:=false run sitting on the (long-lived) master, quietly
+         overriding robot.yaml on every later launch. -->
+    <node name="robot_camera_node" pkg="apriltag_nav" type="robot_camera_node.py" output="screen">
+        <param name="driver_front_cam" value="$(arg use_front_cam)"/>
+        <param name="driver_side_cam"  value="$(arg use_side_cam)"/>
+        <param name="driver_hand_cam"  value="$(arg use_hand_cam)"/>
+    </node>
+
+    <!-- Camera viewer — debug only, opens RViz with all three camera images.
+         Starts CLOSED: bringing the stack up must not throw a GUI on screen,
+         and on a headless boot there may be no display at all. Open and close
+         it while everything else keeps running:
+           rosservice call /camera_viewer/set_enabled "data: true"
+           rosservice call /camera_viewer/set_enabled "data: false"
+         Being a node here is what bounds its lifetime — roslaunch shuts it
+         down with the rest, and it kills its RViz child on the way out, so no
+         window is left behind. Set auto_start true only for a debug session
+         that should come up with the window already open. -->
+    <node name="camera_viewer_node" pkg="apriltag_nav" type="camera_viewer_node.py" output="screen">
+        <param name="auto_start" value="true"/>
+    </node>
+
+    <!-- Inference — on-demand Ra prediction over ONNX.
+         OPTIONAL. Nothing in the scan path needs it: the scan pipeline runs
+         its own session inside arm_node. This node exists for consumers that
+         want to score one frame on request, chiefly the operator UI, which
+         must not load a model of its own (two resident copies is ~250 MB
+         duplicated and two answers that drift apart).
+         The primary slot defaults to the SAME graph the scan pipeline uses, so
+         an on-demand number is comparable with the scan CSVs.
+         ⚠️ It centre-crops 900x900 where inference_interface.py resizes — see
+         the node docstring and CLAUDE.md before making the two agree; changing
+         the scan path moves every Ra value already recorded.
+         Loading two graphs costs ~4 s at startup; set model_secondary to ''
+         to run only the primary. -->
+    <node name="inference_node" pkg="apriltag_nav" type="inference_node.py" output="screen">
+        <param name="require_all" value="false"/>
+    </node>
+
+    <!-- Base lifter — sole owner of the manipulator base lift.
+         REQUIRED as the single writer: nothing else in apriltag_nav may
+         publish to /lift/*. Reading lift state elsewhere (task_executor's
+         scan-height guard goes through NavifraDevices read-only) does not need
+         this node, so the stack degrades rather than breaks without it — but
+         then nothing is enforcing the soft travel clamp.
+         Defaults come from robot.yaml `lifter:`; the two ~params below
+         are the ones worth having visible at launch.
+         ⚠️ auto_home_on_start here means LIFT ORIGIN HOMING — the lift
+         descending to its lower limit switch to zero the encoder. It is NOT
+         the arm's home pose (/arm/move_home), which is a different device on
+         a different node; see the terminology table in CLAUDE.md. true makes
+         the lift DESCEND the moment the stack comes up, so it is left false
+         for the same reason arm_node does not move the arm at
+         startup. The Navifra driver has its OWN auto_home_on_start (currently
+         true in ~/navifra/param.yaml) — a third setting, on a separate
+         process, that this one neither reads nor overrides. -->
+    <node name="lifter_node" pkg="apriltag_nav" type="lifter_node.py" output="screen">
+        <param name="auto_home_on_start" value="false"/>
+        <!-- Top of travel as re-measured 2026-08-14: 6900 counts = 343.3 mm of
+             arm-base extension (was 7000 / 341 mm). The clamp still matters
+             even at the top of travel, because it also bounds jog and the
+             open-ended up/down commands — the upper end has no limit switch,
+             so anything past the stop is a stall, and that stall is what
+             corrupts the encoder count.
+             ⚠️ This ~param OVERRIDES robot.yaml, so both have to agree. -->
+        <param name="soft_max_counts"    value="6900"/>
+    </node>
+
+    <!-- Mobile base — sole owner of the drive, and the ONLY publisher of
+         /cmd_vel and /robot_pose in apriltag_nav. REQUIRED: without it no
+         TASK or GOTO can move the robot, because task_executor no longer
+         drives anything itself (split out 2026-08-11).
+         ⚠️ /cmd_vel has no arbitration below it — navifra's base_controller
+         obeys the last message it received — so never run a second publisher
+         alongside this node. -->
+    <node name="mobile_node" pkg="apriltag_nav" type="mobile_node.py" output="screen">
+        <param name="state_rate_hz" value="5.0"/>
+    </node>
+
+    <!-- Task executor — orchestration only: state machine, STATUS lamp,
+         e-stop handling, battery monitoring. Owns no device. Reaches the
+         drive / arm / lift through MobileClient / ArmClient / LiftClient. -->
     <node name="mobile_manipulator_system" pkg="apriltag_nav" type="task_executor.py" output="screen">
+        <!-- Gates the EXEC/EVAL channel on /task_command, which runs arbitrary
+             Python in this process from an unauthenticated topic. Off unless
+             asked for: roslaunch … debug_mode:=true, for a debug session only.
+             Written on every run so a `true` from an earlier session cannot
+             linger on the master and silently re-open the channel. -->
+        <param name="debug_mode" value="$(arg debug_mode)"/>
     </node>
 
 </launch>

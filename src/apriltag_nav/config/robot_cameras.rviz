@@ -1,0 +1,105 @@
+Panels:
+  - Class: rviz/Displays
+    Help Height: 0
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /front_cam tags1
+        - /front_cam1
+        - /side_cam1
+        - /hand_cam1
+      Splitter Ratio: 0.5
+    Tree Height: 200
+Visualization Manager:
+  Class: ""
+  Displays:
+    # AprilTag overlay first: it is the same front_cam frame with the centre
+    # crosshair, tag IDs and orientation numbers drawn on, so it is the panel
+    # to read. The raw feeds below are for checking the cameras themselves.
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /front_cam/tag_overlay
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: front_cam tags
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /front_cam/color/image_raw
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: front_cam
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /side_cam/color/image_raw
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: side_cam
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+    - Class: rviz/Image
+      Enabled: true
+      Image Topic: /hand_cam/color/image_raw
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: hand_cam
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Unreliable: false
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    # This robot has no global TF tree yet — only each camera's own frames.
+    # Image displays do not use the fixed frame, so the panels render even
+    # when Global Status flags it; nothing else in this config needs TF.
+    Fixed Frame: front_cam_link
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/MoveCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 3
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Yaw: 0.785
+      Pitch: 0.785
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 800
+  Hide Left Dock: false
+  Hide Right Dock: true
+  Width: 1500
+  X: 60
+  Y: 60
+  front_cam tags:
+    collapsed: false
+  front_cam:
+    collapsed: false
+  side_cam:
+    collapsed: false
+  hand_cam:
+    collapsed: false

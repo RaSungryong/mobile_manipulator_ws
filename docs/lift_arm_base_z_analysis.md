@@ -51,11 +51,23 @@ On the new base the arm base height is
 
 ### Magnitude
 
-Full lift stroke is 0..~7000 counts (driver guide 3.5). The count-to-metre
-scale is unmeasured, but the error is *the entire lift displacement* — for any
-plausible stroke that is centimetres to tens of centimetres, i.e. 10x-100x the
-12 mm mean residual the 4-DOF model was validated to. This is not a tuning
-nuisance; it invalidates the pose pipeline.
+Full lift stroke is 0..6900 counts = **~343 mm**, re-measured on the
+replacement mobile base 2026-08-14 at the top of travel: commanded to 6900 the
+drive settled at count **6897** and the gauge read **343.2 mm** of extension.
+`lifter.mm_per_count` is therefore 343.2 / 6897 = **0.04976077** — derived from
+the count actually reached, not the commanded one — and `mm_calibrated` is
+**true**. The manipulator base sits **652 mm** above the ground at the origin
+(`arm_base_z`, corrected 651 → 652 on 2026-08-23 to match the cell design
+record) and **~995 mm** at the top. (Superseded: 341 mm / 7000 = 0.0487143 from
+2026-08-13, 7.2 mm low over the stroke; and 350 mm / 7031 = 0.0497795 before
+that, where the count was measured but the 350 mm was a catalogue figure — that
+is what §4.2 below existed to fix.)
+
+The magnitude of the *bug* is unchanged by that: the error is still **the
+entire lift displacement**, now ~343 mm at full stroke, i.e. 10x-100x the
+12 mm mean residual the 4-DOF model was validated to. Knowing the scale
+precisely does not shrink the offset — it only makes a dynamic `arm_base_z`
+implementable. This is not a tuning nuisance; it invalidates the pose pipeline.
 
 ---
 
@@ -120,7 +132,16 @@ switch, which the guide states is always accurate regardless of accumulated
 count error. So: home first, always, and treat count 0 as the only trustworthy
 absolute reference.
 
-### 4.2 Measure `k` (metres per count)
+### 4.2 Measure `k` (metres per count) — DONE 2026-08-13, re-measured 2026-08-14
+
+**Answered on the replacement base: k = 343.2 mm / 6897 counts = 0.04976077 mm
+per count**, from a direct height measurement of the manipulator base (652 mm
+above the ground at the origin, ~995 mm at the top of the stroke).
+`mm_per_count` and `mm_calibrated: true` in `robot.yaml` `lifter:` reflect it.
+
+The procedure below is kept for re-derivation if the lift or base changes
+again, and because it produces a *linearity residual* the two-point measurement
+does not — that residual is what tells you whether backlash forces Option A.
 
 At a *fixed* base pose, with the arm holding a *fixed* joint configuration:
 
@@ -175,15 +196,18 @@ the current accuracy without mechanical work.
 | Interim guard | [task_executor.py `_check_lift_scan_height`](../src/apriltag_nav/scripts/task_executor.py) |
 | Offline re-fit | [calibrate_transform.py](../src/apriltag_nav/tools/calibrate_transform.py) — already solves for `arm_base_z`; would need a lift-position column added to the paired CSV |
 
-Note `calibrate_transform.py` already treats `arm_base_z` as a free parameter
-with bounds 0.80-1.20 m, so re-fitting at a new fixed height (Option A) needs
-no solver change — only a fresh data capture at that height.
+Note `calibrate_transform.py` already treats `arm_base_z` as a free parameter,
+so re-fitting at a new fixed height (Option A) needs no solver change — only a
+fresh data capture at that height. Its bounds were **0.80-1.20 m, which
+excluded the replacement base's 0.652** and would have silently clamped a fit
+to the floor rather than failing; widened to 0.55-1.20 on 2026-08-13.
 
 ---
 
 ## 6. Open items
 
-- [ ] Measure `k` (metres per count) — blocks both options.
+- [x] Measure `k` (metres per count) — done 2026-08-13, re-measured
+      2026-08-14, see §4.2. 0.04976077 mm/count (343.2 mm / 6897 counts).
 - [ ] Choose the scan height and fill `navifra.scan_height_counts`.
 - [ ] Recalibrate `arm_base_z` at that height; update `robot.yaml` and the
       residual figure in `CLAUDE.md`.
