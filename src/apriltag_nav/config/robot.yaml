@@ -143,8 +143,10 @@ robot:
   predictive_centering:
     enabled: true
     # "latest" means newest ~/.ros/path_tag_locator/map_world_*.yaml from the
-    # calibration pipeline. If absent or if either endpoint is missing, the
-    # controller leaves blind steering exactly as the old code did (omega=0).
+    # calibration pipeline. If absent, the controller uses the package
+    # map.yaml geometry for predictive steering. If a map_world file exists
+    # but either endpoint is missing, fallback_to_map_yaml controls whether
+    # map.yaml may be used for that incomplete segment.
     use_map_world: true
     fallback_to_map_yaml: false
     map_world_path: "latest"

@@ -163,6 +163,7 @@ class MobileController:
         self._last_prediction_segment_active = False
         self.pred_calibrated_xy = {}
         self.pred_loaded_map_world_path = None
+        self.pred_map_world_available = False
         if self.pred_centering_enabled and self.pred_use_map_world:
             self._load_calibrated_prediction_map(self.pred_map_world_path)
 
@@ -191,7 +192,15 @@ class MobileController:
         if not self.pred_centering_enabled or not self.pred_use_map_world:
             return
         yaml_path = self._resolve_map_world_path(self.pred_map_world_path)
-        if yaml_path and yaml_path != self.pred_loaded_map_world_path:
+        if not yaml_path:
+            if self.pred_map_world_available:
+                rospy.logwarn(
+                    "[PredictiveCentering] map_world_*.yaml disappeared; using map.yaml geometry")
+            self.pred_calibrated_xy = {}
+            self.pred_loaded_map_world_path = None
+            self.pred_map_world_available = False
+            return
+        if yaml_path != self.pred_loaded_map_world_path:
             self._load_calibrated_prediction_map(self.pred_map_world_path)
 
     def _load_calibrated_prediction_map(self, path):
@@ -199,8 +208,9 @@ class MobileController:
         try:
             yaml_path = self._resolve_map_world_path(path)
             if not yaml_path:
+                self.pred_map_world_available = False
                 rospy.logwarn(
-                    "[PredictiveCentering] no map_world_*.yaml found; blind steering unchanged")
+                    "[PredictiveCentering] no map_world_*.yaml found; using map.yaml geometry")
                 return
             with open(yaml_path, 'r') as f:
                 data = yaml.safe_load(f) or {}
@@ -216,18 +226,21 @@ class MobileController:
                 "[PredictiveCentering] loaded %d calibrated tag positions from %s",
                 len(loaded), yaml_path)
             self.pred_loaded_map_world_path = yaml_path
+            self.pred_map_world_available = True
         except Exception as e:
             self.pred_calibrated_xy = {}
             self.pred_loaded_map_world_path = None
+            self.pred_map_world_available = False
             rospy.logwarn(
-                "[PredictiveCentering] failed to load map_world '%s': %s; blind steering unchanged",
+                "[PredictiveCentering] failed to load map_world '%s': %s; using map.yaml geometry",
                 path, e)
 
     def _prediction_xy(self, tag_id):
         """Return ((x, y), source) for blind steering."""
         if int(tag_id) in self.pred_calibrated_xy:
             return self.pred_calibrated_xy[int(tag_id)], 'map_world'
-        if self.pred_use_map_world and not self.pred_fallback_to_map_yaml:
+        if (self.pred_use_map_world and self.pred_map_world_available and
+                not self.pred_fallback_to_map_yaml):
             return None, None
         xy = self._map_yaml_xy(tag_id)
         return (xy, 'map.yaml') if xy is not None else (None, None)
