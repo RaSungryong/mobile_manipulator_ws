@@ -84,6 +84,12 @@ class MobileController:
         self.scan_finished_signal = False
         self.last_known_tag = None  # Tracks the last visited tag
         self.stop_sleep_duration = self.cfg['robot'].get('stop_sleep_duration', 0.0)
+        temp_cfg = self.cfg['robot'].get('temporary_missing_tags', {}) or {}
+        self.temp_missing_tags_enabled = bool(temp_cfg.get('enabled', False))
+        self.temp_missing_tag_ids = set(
+            int(v) for v in (temp_cfg.get('tag_ids', []) or []))
+        self.temp_missing_arrival_ratio = float(
+            temp_cfg.get('odom_arrival_ratio', 0.98))
 
         # Velocity ramping state (for smooth acceleration/deceleration)
         self.current_linear_vel = 0.0
@@ -162,6 +168,10 @@ class MobileController:
 
         self.stop_requested = False      # Any interruption
         self.emergency_stop = False      # Only true STOP command
+
+    def _is_temp_missing_tag(self, tag_id):
+        return (self.temp_missing_tags_enabled and
+                int(tag_id) in self.temp_missing_tag_ids)
 
     def _expand_path(self, path):
         return os.path.expandvars(os.path.expanduser(str(path)))
@@ -771,6 +781,15 @@ class MobileController:
 
         current_id = self.get_current_tag_id()
 
+        if (known_start_id is not None and
+                self._is_temp_missing_tag(known_start_id) and
+                current_id != known_start_id and
+                self.map_mgr.get_edge(known_start_id, target_id)):
+            rospy.logwarn(
+                "[TemporaryMissingTag] using virtual start tag %s instead of visible tag %s",
+                known_start_id, current_id)
+            current_id = known_start_id
+
         if current_id is None:
             if known_start_id is not None:
                 rospy.logwarn(f"No tag visible. Using known start ID: {known_start_id}")
@@ -818,6 +837,12 @@ class MobileController:
 
             if not ok:
                 return False
+
+            if self._is_temp_missing_tag(target_id):
+                rospy.logwarn(
+                    "[TemporaryMissingTag] skip align_to_tag(%s); tag is temporarily virtual",
+                    target_id)
+                return True
 
             # Preserve the old behaviour unless the calibrated predictive
             # approach was actually active for this segment. Without a
@@ -1215,6 +1240,17 @@ class MobileController:
 
             # Also check if we've traveled the expected distance (backup stop)
             if traveled_dist >= total_distance * 0.95:
+                if self._is_temp_missing_tag(target_id):
+                    arrival_ratio = max(0.0, min(1.0,
+                                                 self.temp_missing_arrival_ratio))
+                    if traveled_dist >= total_distance * arrival_ratio:
+                        self._final_approach = False
+                        self.stop()
+                        rospy.logwarn(
+                            "[TemporaryMissingTag] arrived at virtual tag %s by odom "
+                            "(traveled:%.3fm / target:%.3fm)",
+                            target_id, traveled_dist, total_distance)
+                        return True
                 # We've traveled most of the distance, slow down and look for tag
                 if not tag_visible:
                     speed = min_speed * move_dir_sign

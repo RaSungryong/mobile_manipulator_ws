@@ -126,6 +126,15 @@ robot:
   pp_gain_forward: 1.0
   pp_gain_backward: 0.8
 
+  # Temporary bypass for pivot-exit tags that are not physically installed.
+  # These tag IDs still exist in map.yaml so BFS can route through them, but
+  # navigation does not require front_cam detection or final align_to_tag() for
+  # them. Remove the IDs or set enabled=false once the physical tags are placed.
+  temporary_missing_tags:
+    enabled: true
+    tag_ids: [506, 507, 508]
+    odom_arrival_ratio: 0.98
+
   # Predictive centering before the next tag is visible.
   # When a tag-to-tag move starts, mobile_controller projects /odom motion onto
   # the calibrated start→target tag line and steers the front camera toward a
