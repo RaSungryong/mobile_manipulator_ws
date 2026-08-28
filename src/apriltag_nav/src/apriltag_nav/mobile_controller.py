@@ -99,6 +99,12 @@ class MobileController:
         # Cache frequently used config values
         self.max_linear = self.cfg['robot']['max_linear_speed']
         self.max_angular = self.cfg['robot']['max_angular_speed']
+        self.move_max_angular = float(
+            self.cfg['robot'].get('move_max_angular_speed',
+                                  self.max_angular))
+        self.align_max_angular = float(
+            self.cfg['robot'].get('align_max_angular_speed',
+                                  self.move_max_angular))
         self.min_linear = self.max_linear * self.cfg['robot'].get('min_linear_factor', 0.3)
         self.min_angular = self.max_angular * self.cfg['robot'].get('min_angular_factor', 0.25)
         self.linear_accel = self.cfg['robot'].get('linear_accel', 0.05)
@@ -132,6 +138,11 @@ class MobileController:
         self.pred_map_world_path = pred_cfg.get('map_world_path', 'latest')
         self.pred_lookahead = float(
             pred_cfg.get('lookahead_m', self.cfg['robot']['look_ahead_base']))
+        self.pred_min_lookahead = float(
+            pred_cfg.get('min_lookahead_m',
+                         min(0.20, self.cfg['robot']['look_ahead_base'])))
+        self.pred_lookahead_segment_ratio = float(
+            pred_cfg.get('lookahead_segment_ratio', 0.40))
         self.pred_gain_forward = float(
             pred_cfg.get('gain_forward', self.cfg['robot']['pp_gain_forward']))
         self.pred_gain_backward = float(
@@ -323,7 +334,12 @@ class MobileController:
         rel_y = ry - sy
         progress = rel_x * ux + rel_y * uy
 
-        lookahead = max(0.05, self.pred_lookahead)
+        # Keep the blind controller tuned from the existing Pure Pursuit
+        # values, but shorten preview distance on short tag-to-tag segments.
+        # A 0.62 m pivot-exit segment should not use the full 0.4 m preview.
+        dynamic_lookahead = segment['seg_len'] * self.pred_lookahead_segment_ratio
+        lookahead = min(self.pred_lookahead, dynamic_lookahead)
+        lookahead = max(self.pred_min_lookahead, lookahead, 0.05)
         preview_s = min(segment['seg_len'], max(0.0, progress + lookahead))
         tx = sx + ux * preview_s
         ty = sy + uy * preview_s
@@ -352,7 +368,8 @@ class MobileController:
                                    math.cos(heading_error))
 
         omega = abs(speed) * curvature * gain + self.pred_heading_gain * heading_error
-        return float(np.clip(omega, -self.max_angular, self.max_angular))
+        return float(np.clip(omega, -self.move_max_angular,
+                             self.move_max_angular))
 
     def _atomic_write_yaml(self, data, path):
         p = self._expand_path(path)
@@ -722,7 +739,8 @@ class MobileController:
                 return True
 
             angular_vel = -math.radians(angle_deg) * align_gain
-            angular_vel = np.clip(angular_vel, -self.max_angular, self.max_angular)
+            angular_vel = np.clip(angular_vel, -self.align_max_angular,
+                                  self.align_max_angular)
 
             self.send_vel(0, angular_vel)
             rate.sleep()
@@ -1246,7 +1264,8 @@ class MobileController:
                 # Pursuit + post-align behaviour untouched.
                 if prediction_segment is not None:
                     omega += -math.radians(heading_error_deg) * self.approach_heading_gain
-                omega = np.clip(omega, -self.max_angular, self.max_angular)
+                omega = np.clip(omega, -self.move_max_angular,
+                                self.move_max_angular)
             elif prediction_segment is not None:
                 omega = self._predictive_centering_omega(
                     prediction_segment, speed)

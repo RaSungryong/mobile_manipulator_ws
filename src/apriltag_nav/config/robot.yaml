@@ -28,7 +28,12 @@ robot:
 
   # Movement limits
   max_linear_speed: 0.1    # Maximum linear velocity (m/s)
-  max_angular_speed: 0.25   # Maximum angular velocity (rad/s)
+  max_angular_speed: 0.25   # Maximum angular velocity (rad/s), pivot turn only
+  # Non-pivot steering cap. The skid base is wide and tag spacing is short, so
+  # move segments should make modest heading corrections instead of aggressive
+  # angular commands. Pivot turns still use max_angular_speed above.
+  move_max_angular_speed: 0.12
+  align_max_angular_speed: 0.12
   slow_factor: 0.3          # Speed multiplier for docking/precision
 
   # Minimum velocity settings (as ratio of max speed)
@@ -150,7 +155,12 @@ robot:
     use_map_world: true
     fallback_to_map_yaml: false
     map_world_path: "latest"
+    # Blind steering uses the same base Pure Pursuit tuning as visible-tag
+    # steering, but caps lookahead by segment length so short pivot-exit moves
+    # react before the large skid base runs out of distance.
     lookahead_m: 0.4
+    min_lookahead_m: 0.20
+    lookahead_segment_ratio: 0.40
     gain_forward: 1.0
     gain_backward: 0.8
     # Small yaw hold term in addition to the preview curvature. Keep modest:
