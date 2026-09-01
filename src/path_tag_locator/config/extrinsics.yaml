@@ -7,12 +7,46 @@
 #   T_ab2mb: pose of mb(mobile_base) in ab(arm_base) frame.
 #            R = diag(-1, -1, +1)  -> mb axes vs ab: x=-x, y=-y, z=+z
 #                                     (= Rz(180°), matches arm mounted backwards)
-#            t = (0, 0, -1.025) m  -> mb origin is 1.025 m below the arm base
-#                                     along ab.z (arm sits on top of the cart).
+#            t = (0, -0.1, -0.652) m -> mb origin is 652 mm below the arm base
+#                                     along ab.z (arm sits on top of the cart),
+#                                     and 100 mm off along y.
+#            Measured on the REPLACEMENT mobile base 2026-08-13 with the lift
+#            at its origin; the previous base read -1.025. Corrected 651 -> 652
+#            on 2026-08-23 to match the cell design record. The lift adds up to
+#            343 mm on top of this and is NOT reflected here.
+#            The y term is the 2026-08-13 arm relocation: the arm base was
+#            shifted 100 mm toward the wall, i.e. mb-frame y = -0.100. Both
+#            signs come out negative because Rz(180) flips y and the inverse
+#            flips it back. Must equal robot.yaml `arm_body_offset_y`.
 #   T_mb2fc: pose of fc(front_cam) in mb(mobile_base) frame.
-#            R columns are fc axes in mb:
-#                fc.x = -mb.y, fc.y = -mb.x, fc.z = -mb.z  (downward camera)
-#            t = (0.45, 0, 0.3) m  -> fc origin in mb frame.
+#            fc IS the camera optical frame the detector reports in: z along the
+#            optical axis (down), x = image column +, y = image row +. So
+#            dt_apriltags pose_t maps straight onto these axes.
+#            t = (0.55, 0, 0.300) m -> fc origin in mb frame. tz re-measured on
+#            the REPLACEMENT base 2026-08-13; the previous base read
+#            (0.45, 0, 0.293). tx must equal robot.yaml `camera_offset`.
+#            ⚠️ tx 0.547 -> 0.55 on 2026-08-21, following that key. 0.547 was
+#            measured 2026-08-13; 0.55 is what the new cell's map.yaml was
+#            generated from, and only 0.55 reproduces its documented dock stop
+#            (x -1.9123). The 3 mm is unreconciled — see robot.yaml.
+#            The lens is on the centreline before and after, so it sits ON the
+#            rotation axis; the 100 mm is the new mount, not the rotation.
+#
+#            R: the camera was physically turned -90° about its own (downward)
+#            optical axis on 2026-08-13, i.e. R_new = R_old · Rz(-90°):
+#                fc.x = +mb.x  -> image RIGHT is the robot's FORWARD
+#                fc.y = -mb.y  -> image DOWN  is the robot's RIGHT (wall side)
+#                fc.z = -mb.z  -> optical axis, down
+#            (Before the rotation: fc.x = -mb.y, fc.y = -mb.x.)
+#
+#            Confirmed by what the operator sees in the FOV, which is worth
+#            keeping because the two observations look contradictory until you
+#            notice the mounting: THE LENS IS 100 mm AHEAD OF THE FRONT BUMPER
+#            (body is 0.90 m long -> front face at 0.45 m; the lens is at
+#            0.55 m). So the bumper is BEHIND the camera and the tag is ahead:
+#                front bumper -> appears on the LEFT  of the image (aft side)
+#                approaching tag -> enters from the RIGHT of the image
+#            Both follow from fc.x = +mb.x, and both were observed.
 #
 # Re-measure on the real platform if geometry changes (the previous tuning
 # from tranformation_ws/transform_chain/constants.py used different numbers
@@ -20,12 +54,12 @@
 
 T_ab2mb_row_major:
   [-1.0,  0.0,  0.0,  0.0,
-    0.0, -1.0,  0.0,  0.0,
-    0.0,  0.0,  1.0, -1.025,
+    0.0, -1.0,  0.0, -0.100,
+    0.0,  0.0,  1.0, -0.652,
     0.0,  0.0,  0.0,  1.0]
 
 T_mb2fc_row_major:
-  [ 0.0, -1.0,  0.0,  0.45,
-   -1.0,  0.0,  0.0,  0.0,
-    0.0,  0.0, -1.0,  0.293,
+  [ 1.0,  0.0,  0.0,  0.55,
+    0.0, -1.0,  0.0,  0.0,
+    0.0,  0.0, -1.0,  0.300,
     0.0,  0.0,  0.0,  1.0]

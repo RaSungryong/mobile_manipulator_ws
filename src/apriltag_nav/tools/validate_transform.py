@@ -41,7 +41,7 @@ def process_transforms_v2(goals, msg):
         BODY_OFF_Z
     ])
     alpha = theta + MOUNT_YAW
-    R_AW = R.from_euler('z', -alpha).as_dcm()
+    R_AW = R.from_euler('z', -alpha).as_matrix()
     out = []
     for g in goals:
         p_W = np.array([g['x'], g['y'], g['z']])
@@ -76,7 +76,7 @@ for gid in sorted(j.group_id.unique()):
     # Ground-truth body pose from full rigid fit
     Rm, t_fit = full_procrustes(Pa_fk, Pw)
     # arm-world yaw from fit (Z rotation)
-    euler = R.from_dcm(Rm).as_euler('zyx', degrees=True)
+    euler = R.from_matrix(Rm).as_euler('zyx', degrees=True)
     arm_yaw = euler[0]                    # world yaw of arm base
     body_yaw_world = arm_yaw - np.degrees(MOUNT_YAW)  # undo mount_yaw
     # Body world xy = t_fit xy (since body_off_xy=0)
@@ -112,7 +112,7 @@ for gid in sorted(j.group_id.unique()):
     Pa_fk = np.array([robot.fkine(q).t for q in Q])
     Pw = pg[['x','y','z']].values
     Rm, t_fit = full_procrustes(Pa_fk, Pw)
-    arm_yaw = R.from_dcm(Rm).as_euler('zyx', degrees=True)[0]
+    arm_yaw = R.from_matrix(Rm).as_euler('zyx', degrees=True)[0]
     body_yaw_world = arm_yaw - np.degrees(MOUNT_YAW)
     body_x_world, body_y_world = t_fit[0], t_fit[1]
     msg = {'x':-body_y_world, 'y':-body_x_world, 'theta':body_yaw_world}

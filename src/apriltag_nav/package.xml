@@ -23,4 +23,11 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>robot_msgs</exec_depend>
   <exec_depend>python-pandas</exec_depend>
+
+  <!-- front_cam (Orbbec Femto Bolt) / side_cam (RealSense D405) drivers.
+       robot_camera_node.py only subscribes to their sensor_msgs/Image and
+       CameraInfo topics at runtime; it never imports their message types,
+       so these are launch-time deps only, not build deps. -->
+  <exec_depend>orbbec_camera</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
 </package>

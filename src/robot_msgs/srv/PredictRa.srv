@@ -1,0 +1,55 @@
+# On-demand surface-roughness (Ra) prediction for a single frame.
+#
+# Correctly a SERVICE, by this workspace's own rule (duration / cancellability /
+# is there a result): inference is sub-second, there is nothing to cancel, and
+# the whole point is the returned number. Compare CaptureImages.srv, which is a
+# service for the same three reasons.
+#
+# Served by inference_node, which owns the ONNX session the way
+# basler_camera_node owns the camera: loaded and warmed up once at startup, so
+# callers pay no load cost and several consumers share one resident copy. A UI
+# must call this rather than loading a model of its own — two copies is ~250 MB
+# of duplicated RAM and two answers that drift apart the moment the paths do.
+#
+# ⚠️ PREPROCESSING IS CenterCrop(900, 900), NOT Resize.
+# These graphs take a fixed 900x900 input and their first act is to cut it into
+# a 3x3 grid of 300x300 tiles fed to Conv3d (visible in the exported graph as
+# Slice/Transpose into 3D convolutions). The tiles are meant to be NATIVE Basler
+# pixels. The camera delivers 5472x3648, so resizing to 900x900 makes each tile
+# cover ~6x the surface at ~1/6 the detail, and the texture scale a roughness
+# model reads is destroyed — while it still returns a confident-looking number.
+#
+# The scan pipeline resized until 2026-08-12 and now centre-crops through the
+# same RaPredictor, so the two paths cannot disagree. Ra values recorded before
+# that date came out of the resize transform and are NOT comparable with new
+# ones. See CLAUDE.md.
+
+# Frame to score, bgr8. Take it straight from CaptureImages' reply rather than
+# from a streaming topic, so the pose it was captured at is unambiguous.
+sensor_msgs/Image image
+
+# Optional label carried through to the reply, e.g. a point id or a file name.
+# Purely for the caller's own bookkeeping; inference ignores it.
+string tag
+---
+bool success
+string message
+
+# The primary model's prediction — the slot inference_node lists first, which
+# is by default the same graph the scan pipeline uses, so a UI reading only this
+# field gets a number comparable with the scan CSVs. NaN when unavailable;
+# callers must check, since success only means SOME slot produced a value.
+float32 ra
+
+# Every configured slot, in order. Parallel arrays: model_names[i] produced
+# ra_values[i]. Kept generic rather than fixed fields because which models are
+# worth comparing is a config decision that changes without a rebuild — a slot
+# that failed to load appears here with NaN so the caller can see it was tried.
+string[] model_names
+float32[] ra_values
+
+# Wall-clock seconds spent inside inference, excluding transport.
+float32 elapsed_s
+
+# Echoed back from the request.
+string tag

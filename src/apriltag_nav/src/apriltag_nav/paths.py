@@ -40,7 +40,20 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, 'robot.yaml')
 MAP_PATH = os.path.join(CONFIG_DIR, 'map.yaml')
 
 TASK_DIR = os.path.join(PKG_DIR, 'task', 'csv')
-MODEL_PATH = os.path.join(PKG_DIR, 'model', 'exported', 'resnet3D.onnx')
+MODEL_DIR = os.path.join(PKG_DIR, 'model')
+EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
+
+# The graph the scan pipeline runs, and inference_node's primary slot — the same
+# file on purpose, so an on-demand Ra from the UI is comparable with the numbers
+# in the scan CSVs rather than being a second opinion nobody can reconcile.
+MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D.onnx')
+
+# inference_node's secondary slot: a different architecture over the same input,
+# so it is a cross-check rather than a replicate. Optional — a missing file
+# costs the comparison, not the primary prediction.
+RA_MODEL_SECONDARY = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D_gray.onnx')
+
+# Both are gitignored (*.onnx), so a fresh clone has to copy them in.
 
 # The Fairino SDK is a sibling package in the catkin source space, not part of
 # apriltag_nav, so it is resolved relative to the source space rather than the

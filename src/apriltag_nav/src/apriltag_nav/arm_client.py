@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ArmClient — task_executor's handle on arm_controller_node.
+ArmClient — task_executor's handle on arm_node.
 
 Deliberately exposes exactly the surface task_executor used when it constructed
 ArmController in-process:
@@ -116,7 +116,7 @@ class ArmClient:
         Latched, so it lands even if the arm node subscribes late.
 
         Safe because task_executor only injects when current_pose_msg is None —
-        i.e. when nothing (including robot_controller) is publishing poses, so
+        i.e. when nothing (including mobile_controller) is publishing poses, so
         there is no publisher to fight with.
         """
         self._current_pose_msg = msg
@@ -168,7 +168,7 @@ class ArmClient:
             except rospy.ROSException:
                 rospy.logerr(
                     f"[ArmClient] {self._home_service} unavailable — "
-                    "is arm_controller_node running?")
+                    "is arm_node running?")
                 return False, "arm node unavailable"
         try:
             resp = self._home_srv()

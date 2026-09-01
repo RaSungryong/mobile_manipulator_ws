@@ -1,0 +1,28 @@
+<launch>
+  <!-- Operator UI. Starts nothing else on purpose: it is a client of the
+       stack, not part of it, so it can be restarted mid-session without
+       disturbing a running task. Bring the stack up first with
+       `roslaunch apriltag_nav mobile_manipulator.launch`.
+
+       inference_node is NOT started here either — it belongs to apriltag_nav
+       and is shared with anything else wanting Ra, not owned by the UI. -->
+  <arg name="plugin_dir" default="$(find robot_ui)/plugins"/>
+  <arg name="save_dir"   default="/tmp/robot_ui_captures"/>
+
+  <!-- Which X display the window opens on.
+       This needs saying because the failure is misleading: a shell with no
+       DISPLAY (ssh, a systemd unit, a terminal that lost its environment)
+       makes Qt abort with "Could not load the Qt platform plugin xcb ...
+       Reinstalling the application may fix this problem", which has nothing
+       to do with the install. optenv takes the inherited DISPLAY when there
+       is one and falls back to :0, the local desktop session.
+       Set display:=offscreen-style use via QT_QPA_PLATFORM instead if you
+       genuinely want no window. -->
+  <arg name="display" default="$(optenv DISPLAY :0)"/>
+
+  <node pkg="robot_ui" type="robot_ui_node.py" name="robot_ui" output="screen">
+    <env name="DISPLAY" value="$(arg display)"/>
+    <param name="plugin_dir" value="$(arg plugin_dir)"/>
+    <param name="save_dir"   value="$(arg save_dir)"/>
+  </node>
+</launch>

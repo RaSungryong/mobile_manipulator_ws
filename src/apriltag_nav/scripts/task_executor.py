@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import os
 import re
 import threading
@@ -11,17 +12,17 @@ from std_msgs.msg import Bool, String
 from enum import Enum, auto
 from typing import List, Optional
 
-from apriltag_nav.map_manager import MapManager
 from apriltag_nav.task_manager import TaskManager
-from apriltag_nav.robot_controller import RobotController
 from apriltag_nav.navifra_devices import NavifraDevices
 
 
-# The arm runs in its own node (arm_controller_node.py). ArmClient mirrors the
-# call surface the in-process ArmController had, so the call sites below are
-# unchanged. To pick a different arm controller implementation, change the
-# import inside arm_controller_node.py — not here.
-from apriltag_nav.arm_client import ArmClient
+# Every device this node commands lives in its own node, reached through a
+# client that mirrors the call surface the in-process controller had — so the
+# call sites below never changed as each one was split out. To swap an
+# implementation, change the import inside that device's node, not here.
+from apriltag_nav.arm_client import ArmClient          # arm_node
+from apriltag_nav.lift_client import LiftClient        # lifter_node
+from apriltag_nav.mobile_client import MobileClient    # mobile_node
 from apriltag_nav import utils
 # ============================================================
 # STATE ENUM
@@ -38,8 +39,8 @@ class MobileManipulatorState(Enum):
 # ============================================================
 # PATHS — resolved centrally, see apriltag_nav/paths.py
 # ============================================================
-from apriltag_nav.paths import CONFIG_PATH, MAP_PATH, TASK_DIR
-# The Ra model is loaded by arm_controller_node (~model_path), not here.
+from apriltag_nav.paths import CONFIG_PATH, TASK_DIR
+# The Ra model is loaded by arm_node (~model_path), not here.
 
 # ============================================================
 # TASK EXECUTOR
@@ -54,7 +55,8 @@ class MobileManipulatorTaskExecutor:
         robot_config = utils.load_config(CONFIG_PATH)
 
         # ---------- Managers ----------
-        self.map_mgr = MapManager(MAP_PATH)
+        # The tag map is not here any more: path finding belongs to whoever
+        # drives, and that is mobile_node.
         self.task_mgr = TaskManager(TASK_DIR)
 
         # ---------- State ----------
@@ -90,14 +92,22 @@ class MobileManipulatorTaskExecutor:
             on_estop=self._abort_for_estop,
         )
 
-        # ---------- Controllers ----------
-        self.mobile = RobotController(
-            config=robot_config,
-            map_manager=self.map_mgr
-        )
-        # Arm lives in arm_controller_node; this is a ROS client, not the
-        # controller. The model path is now that node's ~model_path param.
+        # ---------- Device clients ----------
+        # None of these is a controller. Each is a proxy onto the node that
+        # owns the device; this process publishes to no device topic at all.
+        #
+        # Drive lives in mobile_node — it is the only publisher of /cmd_vel.
+        self.mobile = MobileClient()
+
+        # Arm lives in arm_node. The model path is that node's ~model_path.
         self.arm = ArmClient()
+
+        # Lift lives in lifter_node. Only used when a task CSV carries a
+        # lift_height column; tasks without one never touch the lift.
+        self.lift = LiftClient()
+        self._task_flow = robot_config.get('task_flow', {}) or {}
+        self._lift_home_on_finish = bool(
+            self._task_flow.get('lift_home_on_finish', True))
 
         # ---------- Debug mode (gates EXEC/EVAL RCE channel) ----------
         # The /task_command topic is unauthenticated; any node publishing to it
@@ -118,8 +128,25 @@ class MobileManipulatorTaskExecutor:
         rospy.Subscriber("/scan_finished", Bool, self._scan_done_cb, queue_size=1)
         rospy.Subscriber("/task_command", String, self._command_cb, queue_size=10)
 
+        # ---------- Outward state ----------
+        # The state machine used to be visible only through rospy.loginfo and
+        # the three-colour STATUS lamp, so nothing outside this process could
+        # tell IDLE from SCANNING — a GUI could send a TASK and then had no way
+        # to know when it finished, or which group it was on. Latched, so a
+        # viewer that connects mid-task sees the current state immediately
+        # instead of waiting for the next transition.
+        self._task_state_pub = rospy.Publisher("/task_state", String,
+                                               queue_size=1, latch=True)
+        # Progress within the running task. Not derivable from the state enum:
+        # a task visits several tags and SCANNING is entered once per group.
+        self._progress_index = 0
+        self._progress_total = 0
+        self._progress_tag = -1
+        self._progress_note = ''
+
         # Reflect the initial state on the STATUS lamp.
         self._publish_status_color()
+        self._publish_task_state()
 
         rospy.loginfo("[Executor] System ready (IDLE)")
 
@@ -137,6 +164,34 @@ class MobileManipulatorTaskExecutor:
         self._state = new_state
         if changed:
             self._publish_status_color()
+            self._publish_task_state()
+
+    def _publish_task_state(self, note=None):
+        """Publish /task_state. Never raises — a blind GUI is worse than a log.
+
+        JSON rather than a custom .msg on purpose: this is the one place whose
+        shape is still moving (the block-coding GUI will want fields nobody has
+        named yet), and a JSON string can gain a key without a rebuild of every
+        consumer. Freeze it into robot_msgs once the GUI stops changing it.
+        """
+        if note is not None:
+            self._progress_note = note
+        try:
+            payload = {
+                'state': self._state.name,
+                # IDLE alone does not mean "finished": it is also the state
+                # before anything has ever run. `task` is None in that case.
+                'task': self._current_task_name,
+                'group_index': self._progress_index,
+                'group_total': self._progress_total,
+                'tag_id': self._progress_tag,
+                'note': self._progress_note,
+                'stop_requested': bool(self._stop_requested),
+                'stamp': rospy.get_time(),
+            }
+            self._task_state_pub.publish(String(json.dumps(payload)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Executor] task_state publish failed: {e}")
 
     def _publish_status_color(self):
         """Map the task state onto the RGB STATUS lamp. Never raises."""
@@ -222,6 +277,74 @@ class MobileManipulatorTaskExecutor:
                 self._battery_warned = False
         except Exception:
             pass
+
+    def _set_task_lift_height(self, mm):
+        """Raise/lower the lift to the height the task CSV asks for. (ok, why).
+
+        Called once, at the first scan step, and then left alone for the rest
+        of the task: the joint angles were solved at this base height, so it
+        has to stay put between groups. Nothing else in the task loop touches
+        the lift, so "hold" needs no enforcement beyond not commanding it.
+
+        Deliberately after arriving at the first tag rather than before driving
+        — a raised lift puts the arm's mass high while the base is moving.
+        """
+        rospy.loginfo(f"[TASK] Setting lift to {mm:.1f} mm before scanning")
+        ok, why = self.lift.goto_mm(mm)
+        if not ok:
+            rospy.logerr(f"[TASK] Lift height {mm:.1f} mm not reached — {why}")
+            return False, why
+        rospy.loginfo(f"[TASK] {why}; holding for the rest of the task")
+
+        # One-shot conflict report. The per-group guard is skipped for this
+        # task (see _run_task), so this is the only place it gets said.
+        target = self._navifra_cfg.get('scan_height_counts')
+        guard = str(self._navifra_cfg.get('scan_height_guard', 'warn')).lower()
+        if target is not None and guard != 'off':
+            rospy.logwarn(
+                f"[TASK] Task CSV asks for {mm:.1f} mm but "
+                f"navifra.scan_height_counts is {target} counts — two sources "
+                "of truth for the lift height. Pose-mode IK uses the constant "
+                "arm_calibration.arm_base_z and will be off by the difference; "
+                "joint-mode scans are unaffected. See "
+                "docs/lift_arm_base_z_analysis.md."
+            )
+        return True, why
+
+    def _finish_task(self, task_name):
+        """End-of-task sequence: arm home pose, then lift origin homing.
+
+        Only on normal completion. A preempt is a request to do something else
+        immediately, and a navigation/scan failure leaves the robot where a
+        human needs to look at it — neither should trigger unattended motion.
+
+        The robot deliberately stays where it finished. Driving back is the
+        separate `go_home` task, so a caller can queue "scan, then go home" or
+        "scan, then scan again" from the same building blocks.
+        """
+        rospy.loginfo("[TASK] Task finished normally")
+        # Say so before the lift tail runs. A GUI queueing the next block reads
+        # "completed" here; the state enum alone cannot distinguish a normal
+        # finish from a preempt, since both end up back at IDLE.
+        self._publish_task_state(note=f"task '{task_name}' completed")
+
+        if not (self._lift_home_on_finish and
+                self.task_mgr.get_lift_height(task_name) is not None):
+            return
+
+        # The lift is about to move underneath the arm. The arm already homes
+        # itself after each scan group, so this guards a cancelled or scan-less
+        # path having left it extended, rather than being routine.
+        try:
+            self.arm.move_to_home()
+        except Exception as e:
+            rospy.logwarn(f"[TASK] Arm home before finish failed: {e}")
+
+        rospy.loginfo("[TASK] Lift origin homing (end of task)")
+        ok, why = self.lift.home()
+        if not ok:
+            rospy.logerr(f"[TASK] Lift origin homing failed — {why}")
+            self.state = MobileManipulatorState.ERROR
 
     def _check_lift_scan_height(self):
         """Guard the constant-arm_base_z assumption against lift movement.
@@ -516,7 +639,17 @@ class MobileManipulatorTaskExecutor:
                     base = re.sub(r'_\d{8}_\d{6}$', '', base)
                     sp["csv_path"] = f"{base}_{ts}{ext}"
 
-        for item in task_items:
+        # Height from the CSV's lift_height column; None means this task does
+        # not command the lift at all.
+        lift_target = self.task_mgr.get_lift_height(task_name)
+        lift_set = False
+
+        self._progress_index = 0
+        self._progress_total = len(task_items)
+        self._progress_tag = -1
+        self._publish_task_state(note='task started')
+
+        for idx, item in enumerate(task_items, start=1):
 
             if self._stop_requested:
                 rospy.logwarn("[TASK] Task preempted safely")
@@ -524,6 +657,9 @@ class MobileManipulatorTaskExecutor:
 
             tag_id = item["tag"]
             do_scan = item.get("scan", False)
+
+            self._progress_index = idx
+            self._progress_tag = tag_id
 
             # ---------- MOVE ----------
             self.state = MobileManipulatorState.MOVING
@@ -542,13 +678,24 @@ class MobileManipulatorTaskExecutor:
 
             # ---------- SCAN ----------
             if do_scan:
-                # Lift must sit at the height the arm transform was calibrated
-                # at, otherwise every pose IK result is offset. Warn or refuse
-                # per navifra.scan_height_guard.
-                lift_ok, _lift_why = self._check_lift_scan_height()
-                if not lift_ok:
-                    self.state = MobileManipulatorState.ERROR
-                    return
+                if lift_target is not None:
+                    # The CSV names the height, so it is the authority here and
+                    # the scan_height_counts guard below would only second-guess
+                    # it once per group. Set once, then held.
+                    if not lift_set:
+                        ok, _why = self._set_task_lift_height(lift_target)
+                        if not ok:
+                            self.state = MobileManipulatorState.ERROR
+                            return
+                        lift_set = True
+                else:
+                    # Lift must sit at the height the arm transform was
+                    # calibrated at, otherwise every pose IK result is offset.
+                    # Warn or refuse per navifra.scan_height_guard.
+                    lift_ok, _lift_why = self._check_lift_scan_height()
+                    if not lift_ok:
+                        self.state = MobileManipulatorState.ERROR
+                        return
 
                 self.state = MobileManipulatorState.SCANNING
                 rospy.loginfo(f"[TASK] Start scan at tag {tag_id}")
@@ -573,7 +720,7 @@ class MobileManipulatorTaskExecutor:
                 self.state = MobileManipulatorState.SCAN_DONE
                 rospy.loginfo(f"[TASK] Scan finished at tag {tag_id}")
 
-        rospy.loginfo("[TASK] Task finished normally")
+        self._finish_task(task_name)
 
 
 # ============================================================

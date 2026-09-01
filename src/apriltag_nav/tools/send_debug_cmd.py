@@ -73,11 +73,14 @@ def main():
     # Cancel arm
     # cmd_str = '/arm/cancel std_msgs/Bool true'
 
-    # Navigate to tag (Plan B robot_controller_ros)
+    # Navigate to tag — bypasses task_executor, straight to mobile_node.
+    # Returns immediately; watch /mobile/state for the outcome.
     # cmd_str = '/mobile/goto_tag std_msgs/Int32 108'
 
-    # Stop mobile base
-    # cmd_str = '/mobile/stop std_msgs/Bool true'
+    # Stopping the base is a service, not a topic — no publish form exists:
+    #   rosservice call /mobile/stop        # emergency, latches
+    #   rosservice call /mobile/cancel      # preempt, no latch
+    #   rosservice call /mobile/clear_stop  # release both
 
     # ------------------------------------------
     # Format 2 — /task_command (Plan A & Plan B)

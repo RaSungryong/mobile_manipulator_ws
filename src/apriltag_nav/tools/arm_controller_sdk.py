@@ -65,10 +65,11 @@ class ArmController:
             queue_size=1
         )
 
-        rospy.loginfo("[Arm REAL] Move to Home (init)")
-        self.move_to_home()
-
-        rospy.loginfo("[ArmController REAL] Ready")
+        # No homing on startup — see the same note in arm_controller.py.
+        # Bringing the stack up must never command arm motion; homing is
+        # explicit only (task start, or the /arm/move_home service).
+        rospy.loginfo("[ArmController REAL] Ready — arm left in place "
+                      "(call /arm/move_home to home it)")
 
     # --------------------------------------------------
     # robot_pose cache
@@ -101,12 +102,44 @@ class ArmController:
     # EMERGENCY CANCEL (STOP)
     # --------------------------------------------------
     def cancel(self):
+        """Halt the arm now. Returns True once StopMotion has been accepted.
+
+        ⚠️ The retry is load-bearing, not defensive padding. One RPC socket,
+        held by a blocking MoveCart/MoveJ, means a StopMotion from the calling
+        thread is often rejected with `Request-sent`. Measured on the robot
+        2026-08-12: a single-shot stop visibly did nothing while the arm moved;
+        a second attempt ~14 ms later went through. Full reasoning is in
+        arm_controller.ArmController.cancel — this variant is kept in step with
+        it deliberately, since arm_node can be pointed at either.
+        """
         rospy.logwarn("[Arm REAL] CANCEL requested")
         self.cancel_requested = True
-        try:
-            self.robot.StopMotion()
-        except Exception as e:
-            rospy.logerr(f"[Arm REAL] Stop failed: {e}")
+
+        attempts = int(rospy.get_param('~cancel_attempts', 10))
+        interval = float(rospy.get_param('~cancel_retry_s', 0.02))
+
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                ret = self.robot.StopMotion()
+            except Exception as e:
+                last_error = e
+            else:
+                if not isinstance(ret, int) or ret == 0:
+                    if attempt > 1:
+                        rospy.logwarn(
+                            f"[Arm REAL] Stop accepted on attempt {attempt} "
+                            f"(earlier: {last_error})")
+                    return True
+                last_error = f"error code {ret}"
+            if attempt < attempts:
+                time.sleep(interval)
+
+        rospy.logerr(
+            f"[Arm REAL] Stop REJECTED after {attempts} attempts "
+            f"(last: {last_error}). The arm may still be moving — use the "
+            "hardware e-stop.")
+        return False
 
     # --------------------------------------------------
     # MAIN ENTRY
@@ -250,18 +283,18 @@ class ArmController:
         R_yaw = R.from_euler('z', msg.theta)
 
         # Mobile base rotation
-        R_mb = (R_base * R_yaw).as_dcm()
+        R_mb = (R_base * R_yaw).as_matrix()
 
         # Homogeneous transforms
         T_mb = self._T(R_mb, [base_x, base_y, 0.18])
         T_ba = self._T(
-            R.from_euler('z', np.pi).as_dcm(),
+            R.from_euler('z', np.pi).as_matrix(),
             [0, 0, -1.02]
         )
 
         # Final transform: mobile base -> arm base
         T = T_mb @ T_ba
-        R_ab = R.from_dcm(T[:3, :3])
+        R_ab = R.from_matrix(T[:3, :3])
 
         # --------------------------------------------------
         # Orientation from CSV (rx, ry, rz in radians)

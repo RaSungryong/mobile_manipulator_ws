@@ -1,5 +1,22 @@
 # AprilTag Navigation Map Configuration
 # All map topology, tag coordinates, and task definitions
+#
+# 🛑 STALE AS OF 2026-08-21 — THIS IS THE OLD CELL. DO NOT USE IT.
+# apriltag_nav/config/map.yaml was replaced with the new cell's map (72 tags,
+# origin = centre of 정반 1, dock = 500, floor tags 90 mm). This copy still
+# describes the retired cell: dock 508, a different origin, different tag
+# coordinates and the old ID bands. Every id below still *parses*, which is
+# what makes it dangerous — 105 resolves here and in the real map, to places
+# ~2.3 m apart.
+#
+# Deliberately NOT ported, for the same reason this package's launches are
+# already quarantined (see the workspace CLAUDE.md): its nav/robot_controller.py
+# was never updated for the 2026-08-13 front_cam -90° rotation. Porting the map
+# alone would make the package LOOK current while still steering on the wrong
+# image axes. Port the navigation code and this file together, or neither.
+# The `waypoints:` lists near the bottom are old IDs too, as are
+# robot_nav.yaml (camera_offset 0.45, tag_size 0.06) and
+# calibration_plan.yaml (nav_start_id 508).
 
 # Tag Database
 tags:

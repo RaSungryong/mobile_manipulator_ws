@@ -59,7 +59,7 @@ def transform_world_to_arm_mm(world_xyz_m, robot_msg_x, robot_msg_y,
     alpha = theta + mount_yaw
     R_WA = (R.from_euler('z', alpha)
             * R.from_euler('y', tilt_y)
-            * R.from_euler('x', tilt_x)).as_dcm()
+            * R.from_euler('x', tilt_x)).as_matrix()
     R_AW = R_WA.T
 
     p_W   = np.array(world_xyz_m)
@@ -163,7 +163,11 @@ def main():
     bounds = [
         (-0.10,  0.10),   # body_off_x  (m)
         (-0.10,  0.10),   # body_off_y  (m)
-        ( 0.80,  1.20),   # arm_base_z  (m)
+        # Spans the replacement base (0.652 at the lift origin, 0.995 at the
+        # top of the 343 mm stroke) as well as the retired one (1.025). The old
+        # 0.80 floor predates the base swap and would have clamped a new-base
+        # fit to a wrong answer instead of failing visibly.
+        ( 0.55,  1.20),   # arm_base_z  (m)
         ( 2.80,  3.48),   # mount_yaw   (rad, ≈π ± 20°)
         (-0.15,  0.15),   # tilt_x      (rad, ≈±8.6°)
         (-0.15,  0.15),   # tilt_y      (rad, ≈±8.6°)

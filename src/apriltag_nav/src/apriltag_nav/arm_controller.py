@@ -16,7 +16,7 @@ Everything that is not motion control was extracted, same package:
   * scan_results.py  — incremental 13-column result CSV persistence
 
 The public surface is unchanged: execute_scan_points / move_to_home / cancel /
-current_pose_msg / publish_done / is_busy / shutdown. arm_controller_node.py
+current_pose_msg / publish_done / is_busy / shutdown. arm_node.py
 wraps this class; nothing else instantiates it.
 """
 
@@ -61,6 +61,13 @@ class ArmController:
         self.busy = False
         self.cancel_requested = False
         self.current_pose_msg = None
+
+        # StopMotion retry budget — see cancel() for why this is not one shot.
+        # 10 x 20 ms = 200 ms worst case; observed successes land on attempt 2,
+        # ~14 ms in. Raising the count costs nothing when the stop is accepted
+        # early, since the loop returns immediately.
+        self.cancel_attempts = int(rospy.get_param('~cancel_attempts', 10))
+        self.cancel_retry_s = float(rospy.get_param('~cancel_retry_s', 0.02))
 
         # ---------- Fairino ----------
         rospy.loginfo("[Arm REAL] Connecting to Fairino robot...")
@@ -111,22 +118,64 @@ class ArmController:
         self.keyence_dir          = rospy.get_param('~keyence_dir', 1.0)                                         # direction sign (1.0 or -1.0)
         self.keyence_kp           = rospy.get_param('~keyence_kp',  _keyence_cfg.get('kp', 0.8))                 # proportional gain
         self.keyence_max_steps    = rospy.get_param('~keyence_max_steps', _keyence_cfg.get('max_steps', 10))     # max adjustment iterations
-        self.keyence_max_step_mm  = rospy.get_param('~keyence_max_step_mm', 5.0)                                 # single-step move limit (mm)
-        self.keyence_activate_threshold = rospy.get_param('~keyence_activate_threshold', 5.0)                    # only adjust when |val| < this (mm)
+        self.keyence_max_step_mm  = rospy.get_param('~keyence_max_step_mm', _keyence_cfg.get('max_step_mm', 1.0))                     # single-step move limit (mm)
+        self.keyence_activate_threshold = rospy.get_param('~keyence_activate_threshold', _keyence_cfg.get('activate_threshold', 5.0)) # only adjust when |perp| < this (mm)
+        # Angle between the DL-EN1 laser beam and the tool Z axis. The sensor
+        # measures along its BEAM, but the correction below moves along tool Z,
+        # so the reading must be projected: a perpendicular error e shows up as
+        # a reading e/cos(angle), and the matching step is reading*cos(angle).
+        # 0.0 = normal incidence = no projection (the historical behaviour).
+        self.keyence_beam_angle_deg = rospy.get_param(
+            '~keyence_beam_angle_deg', _keyence_cfg.get('beam_angle_deg', 0.0))
+        self._keyence_cos = float(np.cos(np.radians(self.keyence_beam_angle_deg)))
+        if self._keyence_cos <= 1e-3:
+            rospy.logerr(
+                f"[Arm REAL] keyence_beam_angle_deg="
+                f"{self.keyence_beam_angle_deg} is at/over 90 deg — the beam "
+                "never reaches the surface. Falling back to no projection.")
+            self._keyence_cos = 1.0
+        # Stability. With the projection applied the reading's 1/cos factor is
+        # cancelled, so a perpendicular error e leaves e*(1 - kp) after a step:
+        # the loop gain is kp ALONE, independent of the beam angle. kp = 1 would
+        # be deadbeat; below 1 is under-damped and safe; 2 diverges.
+        if not 0.0 < self.keyence_kp < 2.0:
+            rospy.logerr(
+                f"[Arm REAL] keyence_kp={self.keyence_kp} is outside (0, 2) — "
+                "the distance loop does not converge. Expected ~0.8.")
+        elif self.keyence_kp > 1.5:
+            rospy.logwarn(
+                f"[Arm REAL] keyence_kp={self.keyence_kp} > 1.5 — the distance "
+                "loop will overshoot and oscillate before settling.")
+
+        # An unset angle is the dangerous case: the reading keeps its 1/cos
+        # factor, so the TRUE gain becomes kp/cos(real angle) and the loop
+        # diverges once that reaches 2 — silently, since nothing else notices.
+        if self.keyence_beam_angle_deg == 0.0:
+            rospy.logwarn(
+                "[Arm REAL] keyence_beam_angle_deg is 0 (no projection). If the "
+                "laser is actually mounted oblique, every correction overshoots "
+                f"by 1/cos and the loop diverges past "
+                f"{np.degrees(np.arccos(min(1.0, self.keyence_kp / 2.0))):.1f} deg. "
+                "Measure it with tools/measure_keyence_angle.py.")
 
         # ---------- ROS ----------
         rospy.Subscriber("/robot_pose", Pose2DWithFlag, self.pose_cb, queue_size=1)
         rospy.Subscriber("keyence/value", Float32, self.keyence_cb, queue_size=1)
         self.done_pub = rospy.Publisher("/scan_finished", Bool, queue_size=1)
 
-        rospy.loginfo("[Arm REAL] Move to Home (init)")
+        # Clear faults and enter automatic mode, but do NOT move. Bringing the
+        # stack up must never command arm motion: whatever pose the arm powered
+        # up in may be inside a fixture or against the workpiece, and an
+        # unattended MoveJ out of it is a collision risk with nobody expecting
+        # the arm to move. Homing is explicit only — task_executor homes before
+        # every task, and /arm/move_home triggers it manually.
         self.robot.ResetAllError()
         time.sleep(0.3)
         self.robot.Mode(0)
         time.sleep(0.5)
-        self.move_to_home()
 
-        rospy.loginfo("[ArmController REAL] Ready")
+        rospy.loginfo("[ArmController REAL] Ready — arm left in place "
+                      "(call /arm/move_home to home it)")
 
     # --------------------------------------------------
     # ROS CALLBACKS
@@ -162,12 +211,62 @@ class ArmController:
     # EMERGENCY CANCEL
     # --------------------------------------------------
     def cancel(self):
+        """Halt the arm now. Returns True once StopMotion has been accepted.
+
+        ⚠️ RETRIES ARE LOAD-BEARING — a single StopMotion loses a race it hits
+        often. The Fairino Robot.RPC is one socket, and MoveCart / MoveJ hold it
+        while they block, so a StopMotion issued from another thread (which is
+        the only way a stop can arrive) is frequently rejected by the SDK with
+        `Request-sent`: a request is already outstanding.
+
+        Measured on the robot 2026-08-12. Both times the arm was genuinely
+        moving, the first StopMotion was rejected and a second one ~14 ms later
+        went through, with MoveCart returning 5 ms after that — the arm
+        stopping. Those second attempts only existed because STOP ALL happens to
+        publish /arm/cancel twice (once directly, once via task_executor's STOP).
+        The UI's own "Cancel arm motion" button publishes once, and the user
+        confirmed it did nothing: same collision, nothing behind it.
+
+        So the retry is what makes a stop reliable rather than lucky. Do not
+        "simplify" this back to a single call. A second dedicated RPC connection
+        was considered and is unnecessary — the socket frees within tens of ms.
+
+        This runs on a rospy callback thread and can block for up to
+        attempts * interval (default 200 ms). That is deliberate: a stop is
+        worth blocking one callback thread for, and it returns as soon as one
+        attempt is accepted, which is the normal case on the first or second.
+        """
         rospy.logwarn("[Arm REAL] CANCEL requested")
+        # Set before the first attempt, never after: the flag is what the
+        # blocking movers poll, so it must already be true if StopMotion
+        # succeeds immediately.
         self.cancel_requested = True
-        try:
-            self.robot.StopMotion()
-        except Exception as e:
-            rospy.logerr(f"[Arm REAL] Stop failed: {e}")
+
+        last_error = None
+        for attempt in range(1, self.cancel_attempts + 1):
+            try:
+                ret = self.robot.StopMotion()
+            except Exception as e:
+                last_error = e
+            else:
+                # The SDK returns an error code on some builds and raises on
+                # others; treat a non-int return as success.
+                if not isinstance(ret, int) or ret == 0:
+                    if attempt > 1:
+                        rospy.logwarn(
+                            f"[Arm REAL] Stop accepted on attempt {attempt} "
+                            f"(earlier: {last_error})")
+                    return True
+                last_error = f"error code {ret}"
+            if attempt < self.cancel_attempts:
+                time.sleep(self.cancel_retry_s)
+
+        rospy.logerr(
+            f"[Arm REAL] Stop REJECTED after {self.cancel_attempts} attempts "
+            f"over {self.cancel_attempts * self.cancel_retry_s:.2f}s "
+            f"(last: {last_error}). The arm may still be moving — use the "
+            "hardware e-stop.")
+        return False
 
     # --------------------------------------------------
     # MAIN ENTRY
@@ -312,22 +411,35 @@ class ArmController:
 
             val = self.current_keyence_val
 
-            if abs(val) >= self.keyence_activate_threshold:
+            # Project the beam reading onto the surface normal FIRST, then use
+            # that everywhere. keyence_tol / keyence_activate_threshold /
+            # keyence_max_step_mm are all PERPENDICULAR standoff millimetres —
+            # the physical quantity the scan cares about — so they must not be
+            # compared against the raw along-the-beam reading, which is larger
+            # by 1/cos (at 42.6 deg, 36% larger).
+            perp = val * self._keyence_cos
+
+            if abs(perp) >= self.keyence_activate_threshold:
                 rospy.logwarn(
-                    f"[Arm REAL] Keyence reading {val:.3f} mm >= "
-                    f"{self.keyence_activate_threshold} mm, skipping adjustment."
+                    f"[Arm REAL] Keyence {val:.3f} mm (beam) = {perp:.3f} mm "
+                    f"perpendicular >= {self.keyence_activate_threshold} mm, "
+                    "skipping adjustment."
                 )
                 break
 
-            if abs(val) <= self.keyence_tol:
-                rospy.loginfo(f"[Arm REAL] Distance reached target. Current: {val:.3f} mm")
+            if abs(perp) <= self.keyence_tol:
+                rospy.loginfo(
+                    f"[Arm REAL] Distance reached target. Current: {val:.3f} mm "
+                    f"(beam) = {perp:.3f} mm perpendicular")
                 break
 
-            # Displacement along tool Z-axis (mm):
-            # val > 0 → too far → move +Z; val < 0 → too close → move -Z
-            # Clamped to sensor measurement range (±keyence_max_step_mm)
+            # Displacement along tool Z-axis (mm). `perp` is already the
+            # perpendicular error, so this is a plain proportional step in the
+            # same units, clamped by keyence_max_step_mm (also perpendicular mm).
+            # keyence_dir carries the sensor's polarity: it must be -sign(k),
+            # where k = d(reading)/d(toolZ) — see tools/measure_keyence_angle.py.
             dz = np.clip(
-                val * self.keyence_dir * self.keyence_kp,
+                perp * self.keyence_dir * self.keyence_kp,
                 -self.keyence_max_step_mm,
                 self.keyence_max_step_mm
             )
@@ -342,7 +454,7 @@ class ArmController:
             # Compute tool Z-axis direction in robot base frame
             # Fairino uses degrees for Euler angles
             r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
-            z_vec = r.as_dcm()[:, 2]  # third column of rotation matrix
+            z_vec = r.as_matrix()[:, 2]  # third column of rotation matrix
 
             # Apply offset while keeping orientation (rx, ry, rz) unchanged
             new_pose = [
@@ -354,7 +466,10 @@ class ArmController:
 
             rospy.loginfo(
                 f"  -> [Adjust {step+1}/{self.keyence_max_steps}] "
-                f"Sensor: {val:.3f} mm. Shifting tool Z by {dz:.3f} mm (Kp={self.keyence_kp})"
+                f"Sensor: {val:.3f} mm (beam) -> {perp:.3f} mm perpendicular. "
+                f"Shifting tool Z by {dz:.3f} mm "
+                f"(Kp={self.keyence_kp}, dir={self.keyence_dir}, "
+                f"beam={self.keyence_beam_angle_deg} deg)"
             )
 
             # Use low speed for fine distance adjustment
@@ -410,6 +525,116 @@ class ArmController:
         ret = self.robot.MoveJ(joints, tool=TOOL_ID, user=0)
         if ret != 0:
             rospy.logerr(f"[Arm REAL] MoveJ failed: {ret}")
+
+    # --------------------------------------------------
+    # MANUAL TEACHING — read pose, absolute move, incremental jog
+    # --------------------------------------------------
+    # These exist for the operator UI (finding a data-collection pose by hand).
+    # They are NOT used by the scan loop, which goes through _exec_joint /
+    # _exec_pose with the q0 IK seed. Three rules hold for all three:
+    #
+    #   * TOOL_ID, not tool 0. A pose read or commanded against the flange is a
+    #     different point in space than the same numbers against vision_tip, and
+    #     mixing the two is how the deleted scripts_ros/ tree got its TCP wrong.
+    #   * self.busy is refused, not queued. A jog arriving mid-scan would move
+    #     the arm out from under the scan point that is being captured.
+    #   * MoveCart, not MoveJ. The operator is watching Cartesian axes; solving
+    #     IK and driving joints can swing the elbow through a different arc for
+    #     the same endpoint.
+
+    def get_tcp_pose(self):
+        """Current TCP pose [x,y,z mm, rx,ry,rz deg], or None if the read fails.
+
+        Returning None rather than raising: this is polled ~10 Hz for a live
+        display, and a single dropped RPC read must not take the node down.
+        """
+        try:
+            ret, pose = self.robot.GetActualTCPPose()
+            if ret != 0:
+                return None
+            return [float(v) for v in pose]
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[Arm REAL] TCP pose read failed: {e}")
+            return None
+
+    def get_joints_deg(self):
+        """Current joint angles J1..J6 [deg], or None if the read fails."""
+        try:
+            ret, joints = self.robot.GetActualJointPosDegree()
+            if ret != 0:
+                return None
+            return [float(v) for v in joints]
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[Arm REAL] Joint read failed: {e}")
+            return None
+
+    def move_cart(self, pose, vel=30.0, acc=50.0):
+        """Absolute Cartesian move to [x,y,z mm, rx,ry,rz deg].
+
+        Returns (ok, message). Blocks until the SDK call returns.
+        """
+        if len(pose) != 6:
+            return False, "move_cart needs 6 values [x y z rx ry rz]"
+        if self.busy:
+            return False, "refused: arm busy"
+
+        self.busy = True
+        self.cancel_requested = False
+        try:
+            target = [float(v) for v in pose]
+            rospy.loginfo(f"[Arm REAL] MoveCart → {[round(v, 2) for v in target]} "
+                          f"(vel={vel}, acc={acc})")
+            ret = self.robot.MoveCart(target, TOOL_ID, 0, float(vel), float(acc))
+            if ret != 0:
+                rospy.logerr(f"[Arm REAL] MoveCart failed: {ret}")
+                return False, f"MoveCart error {ret}"
+            if self.cancel_requested:
+                return False, "cancelled"
+            return True, "move_cart ok"
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] MoveCart exception: {e}")
+            return False, f"exception: {e}"
+        finally:
+            self.busy = False
+
+    # Axis order matches the Fairino TCP pose vector, which is also the order the
+    # UI's six fields are laid out in. Keep them in step.
+    JOG_AXES = ('x', 'y', 'z', 'rx', 'ry', 'rz')
+
+    def jog(self, axis, delta, vel=30.0, acc=50.0, max_step=50.0):
+        """Move one Cartesian axis by `delta` (mm for x/y/z, deg for rx/ry/rz).
+
+        Reads the CURRENT pose first rather than accumulating onto a cached one:
+        a cached target drifts away from reality after any refused or clamped
+        step, and the operator holding the button would not see it happen.
+        """
+        axis = str(axis).lower()
+        if axis not in self.JOG_AXES:
+            return False, f"unknown axis '{axis}' (expected one of {self.JOG_AXES})"
+        try:
+            delta = float(delta)
+        except (TypeError, ValueError):
+            return False, f"jog delta '{delta}' is not a number"
+
+        # Bring-up guard. A typo'd step (a stray zero) is the realistic way to
+        # drive the tool into the workpiece with an operator's hand on the
+        # button; there is no soft limit below this in the SDK path.
+        if abs(delta) > max_step:
+            return False, (f"jog {delta} exceeds max_step {max_step} — "
+                           "raise ~jog_max_step deliberately if this is intended")
+        if self.busy:
+            return False, "refused: arm busy"
+
+        current = self.get_tcp_pose()
+        if current is None:
+            return False, "refused: current TCP pose unreadable"
+
+        target = list(current)
+        target[self.JOG_AXES.index(axis)] += delta
+        ok, msg = self.move_cart(target, vel=vel, acc=acc)
+        if not ok:
+            return ok, msg
+        return True, f"jog {axis} {delta:+g} ok"
 
     # --------------------------------------------------
     # PUBLISH / STATUS
