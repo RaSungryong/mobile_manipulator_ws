@@ -262,4 +262,10 @@
         <param name="debug_mode" value="$(arg debug_mode)"/>
     </node>
 
+    <!-- path_tag_locator's calibration nodes are NOT started here — they
+         have their own path_tag_locator.launch, run alongside this stack
+         only for a calibration session. They still own no hardware (arm
+         via arm_node, base via mobile_node, observations via
+         robot_camera_node), so this launch must already be up. -->
+
 </launch>

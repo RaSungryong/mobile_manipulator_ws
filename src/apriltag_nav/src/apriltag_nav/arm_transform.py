@@ -56,11 +56,15 @@ def transform_world_to_arm(g, msg):
     ])
 
     alpha = theta + mount_yaw
-    R_WA = (R.from_euler('z', alpha)
-            * R.from_euler('y', tilt_y)
-            * R.from_euler('x', tilt_x)).as_matrix()
+    _rot_WA = (R.from_euler('z', alpha)
+               * R.from_euler('y', tilt_y)
+               * R.from_euler('x', tilt_x))
+    # scipy compat: >=1.4 as_matrix()/from_matrix(), 1.3 as_dcm()/from_dcm()
+    R_WA = (_rot_WA.as_matrix() if hasattr(_rot_WA, 'as_matrix')
+            else _rot_WA.as_dcm())
     R_AW = R_WA.T
-    R_AW_rot = R.from_matrix(R_AW)
+    R_AW_rot = (R.from_matrix(R_AW) if hasattr(R, 'from_matrix')
+                else R.from_dcm(R_AW))
 
     # Position: world → arm base_link, then meters → mm for Fairino
     p_W = np.array([g["x"], g["y"], g["z"]])

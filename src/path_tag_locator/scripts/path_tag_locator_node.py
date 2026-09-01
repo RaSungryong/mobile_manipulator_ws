@@ -21,11 +21,16 @@ import rospkg
 from geometry_msgs.msg import Pose, PoseStamped
 
 from path_tag_locator.align_runner import run_auto_align
+from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
 from path_tag_locator.constants import (
     load_extrinsics,
     load_locator_cfg_from_dict,
     load_reference_tag,
+)
+from path_tag_locator.detections import (
+    detection_to_T_cam2tag,
+    wait_for_tag_detection,
 )
 from path_tag_locator.geometry import (
     assert_rigid,
@@ -34,9 +39,9 @@ from path_tag_locator.geometry import (
     rot2rpy_deg,
 )
 from path_tag_locator.hand_eye import load_T_hc2ee
+from path_tag_locator.lift_listener import LiftHeightListener
 from path_tag_locator.persistence import save_locate_failure, save_locate_run
-from path_tag_locator.ros_image import grab_image_and_K
-from path_tag_locator.tcp_pose import FairinoTCPClient
+from path_tag_locator.ros_image import grab_image
 from path_tag_locator.srv import (
     LocatePathTag,
     LocatePathTagResponse,
@@ -95,16 +100,19 @@ class PathTagLocatorNode:
                 "%s or pass override_ref=true in the service request.",
                 ref_tag_path)
 
-        self.tcp_client = None
-        if cfg.robot.use_sdk:
-            self.tcp_client = FairinoTCPClient(
-                robot_ip=cfg.robot.robot_ip,
-                sdk_path=cfg.robot.fairino_sdk_path,
-                tcp_index=cfg.robot.tcp_index,
-                default_vel=cfg.align.move_vel,
-                default_acc=cfg.align.move_acc,
-                default_ovl=cfg.align.move_ovl,
-            )
+        # Arm access goes through arm_node (main stack owns the arm); no
+        # second Fairino RPC connection is opened from this package.
+        self.tcp_client = ArmInterface(
+            state_topic=cfg.arm.state_topic,
+            move_cart_topic=cfg.arm.move_cart_topic,
+            default_vel=cfg.align.move_vel,
+            default_acc=cfg.align.move_acc,
+            default_ovl=cfg.align.move_ovl,
+            motion_timeout_s=cfg.arm.motion_timeout_s,
+        )
+        # T_ab2mb is measured with the lift at origin; compensate the
+        # chain by the live lift extension (see chain.compensate_T_ab2mb).
+        self.lift = LiftHeightListener()
 
         # Publisher (latched) and service
         self.pub = rospy.Publisher("~tag_world_pose", PoseStamped,
@@ -144,20 +152,7 @@ class PathTagLocatorNode:
             else:
                 T_A_world = self.T_A_world_default
 
-            timeout = float(self.cfg.io.image_wait_timeout)
-            hc_img, K_hc = grab_image_and_K(
-                self.cfg.topics.hand_cam_image,
-                self.cfg.topics.hand_cam_info,
-                timeout=timeout,
-            )
-            fc_img, K_fc = grab_image_and_K(
-                self.cfg.topics.front_cam_image,
-                self.cfg.topics.front_cam_info,
-                timeout=timeout,
-            )
-
-            if self.tcp_client is None:
-                raise RuntimeError("robot.use_sdk=false: no TCP pose source")
+            timeout = float(self.cfg.io.detection_wait_timeout)
 
             align_iters = 0
             align_xy = 0.0
@@ -172,21 +167,35 @@ class PathTagLocatorNode:
 
             tcp_pose = self.tcp_client.get_tcp_pose()
 
+            # Tag observations from the shared detector, rescaled from the
+            # detector's per-camera tag size to the actual tag sizes.
+            det_a = wait_for_tag_detection(
+                self.cfg.topics.hand_cam_detections,
+                int(self.cfg.tag.tag_a_id), timeout=timeout)
+            T_hc2A = detection_to_T_cam2tag(
+                det_a, float(self.cfg.tag.tag_a_size_m),
+                float(self.cfg.detector.hand_cam_tag_size_m))
+            det_b = wait_for_tag_detection(
+                self.cfg.topics.front_cam_detections,
+                tag_b_id, timeout=timeout)
+            T_fc2B = detection_to_T_cam2tag(
+                det_b, float(self.cfg.tag.tag_b_size_m),
+                float(self.cfg.detector.front_cam_tag_size_m))
+
+            lift_height_m = self.lift.height_m()
+            if lift_height_m:
+                rospy.loginfo("path_tag_locator: compensating chain for "
+                              "lift height %.1f mm", lift_height_m * 1000.0)
             out = compute_T_A2B(
-                image_hc=hc_img,
-                image_fc=fc_img,
+                T_hc2A=T_hc2A,
+                T_fc2B=T_fc2B,
                 tcp_pose_mm_deg=tcp_pose,
                 T_hc2ee=self.T_hc2ee,
-                K_hc=K_hc,
-                K_fc=K_fc,
                 T_ab2mb=self.T_ab2mb,
                 T_mb2fc=self.T_mb2fc,
-                tag_a_id=int(self.cfg.tag.tag_a_id),
-                tag_b_id=tag_b_id,
-                tag_a_size_m=float(self.cfg.tag.tag_a_size_m),
-                tag_b_size_m=float(self.cfg.tag.tag_b_size_m),
-                family=self.cfg.tag.family,
+                lift_height_m=lift_height_m,
             )
+            request_echo["lift_height_m"] = float(lift_height_m)
             T_A2B = out["T_A2B"]
             T_B_world = compute_T_B_world(T_A_world, T_A2B)
             pos, quat = matrix_to_pose(T_B_world)
@@ -218,15 +227,17 @@ class PathTagLocatorNode:
             stamped.pose = resp.tag_b_world_pose
             self.pub.publish(stamped)
 
-            # Always persist (raw images, K, all transforms, CSV append).
+            # Always persist (observations, transforms, CSV append; raw
+            # image snapshots are best-effort and may lag the detection
+            # frame slightly — they are for human inspection only).
             try:
                 run_dir = save_locate_run(
                     root_dir=save_dir_req,
                     tag_b_id=tag_b_id,
-                    image_hc=hc_img,
-                    image_fc=fc_img,
-                    K_hc=K_hc,
-                    K_fc=K_fc,
+                    image_hc=self._snapshot(self.cfg.topics.hand_cam_image),
+                    image_fc=self._snapshot(self.cfg.topics.front_cam_image),
+                    T_hc2A=T_hc2A,
+                    T_fc2B=T_fc2B,
                     T_A_world=T_A_world,
                     T_hc2ee=self.T_hc2ee,
                     T_ab2mb=self.T_ab2mb,
@@ -308,6 +319,17 @@ class PathTagLocatorNode:
         }
 
     # ------------------------------------------------------------------
+    def _snapshot(self, image_topic):
+        """Best-effort raw-frame grab for the persistence record. Returns
+        None on empty topic name or timeout — never raises."""
+        if not image_topic:
+            return None
+        try:
+            return grab_image(image_topic, timeout=1.0)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
     def _auto_align(self, initial_tcp_mm_deg):
         """Delegate to the shared align_runner module."""
         return run_auto_align(
@@ -316,10 +338,11 @@ class PathTagLocatorNode:
             T_hc2ee=self.T_hc2ee,
             tag_a_id=int(self.cfg.tag.tag_a_id),
             tag_a_size_m=float(self.cfg.tag.tag_a_size_m),
-            tag_family=self.cfg.tag.family,
-            hand_cam_image_topic=self.cfg.topics.hand_cam_image,
-            hand_cam_info_topic=self.cfg.topics.hand_cam_info,
-            image_wait_timeout_s=float(self.cfg.io.image_wait_timeout),
+            hand_cam_detections_topic=self.cfg.topics.hand_cam_detections,
+            hand_cam_detector_size_m=float(
+                self.cfg.detector.hand_cam_tag_size_m),
+            detection_wait_timeout_s=float(
+                self.cfg.io.detection_wait_timeout),
             initial_tcp_mm_deg=initial_tcp_mm_deg,
         )
 

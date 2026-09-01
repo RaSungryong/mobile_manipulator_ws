@@ -51,10 +51,12 @@ def _expand(p):
 def save_locate_run(*,
                     root_dir,
                     tag_b_id,
-                    image_hc,
-                    image_fc,
-                    K_hc,
-                    K_fc,
+                    image_hc=None,
+                    image_fc=None,
+                    K_hc=None,
+                    K_fc=None,
+                    T_hc2A=None,
+                    T_fc2B=None,
                     T_A_world,
                     T_hc2ee,
                     T_ab2mb,
@@ -90,9 +92,10 @@ def save_locate_run(*,
     if K_fc is not None:
         np.savez(str(run_dir / "K_fc.npz"), K_fc=np.asarray(K_fc, dtype=np.float64))
 
-    # Result npz (everything needed to recompute T_A2B offline)
-    np.savez(
-        str(run_dir / "result.npz"),
+    # Result npz (everything needed to recompute T_A2B offline). Since the
+    # shared-detector refactor the tag observations are saved as ready-made
+    # T_hc2A / T_fc2B matrices; K and raw images are best-effort extras.
+    arrays = dict(
         T_B_world=np.asarray(T_B_world, dtype=np.float64),
         T_A2B=np.asarray(T_A2B, dtype=np.float64),
         T_A_world=np.asarray(T_A_world, dtype=np.float64),
@@ -100,11 +103,14 @@ def save_locate_run(*,
         T_ab2mb=np.asarray(T_ab2mb, dtype=np.float64),
         T_mb2fc=np.asarray(T_mb2fc, dtype=np.float64),
         tcp_pose_mm_deg=np.asarray(tcp_pose_mm_deg, dtype=np.float64),
-        K_hc=np.asarray(K_hc, dtype=np.float64),
-        K_fc=np.asarray(K_fc, dtype=np.float64),
         position_m=np.asarray(position_m, dtype=np.float64),
         rpy_deg=np.asarray(rpy_deg, dtype=np.float64),
     )
+    for key, val in (("K_hc", K_hc), ("K_fc", K_fc),
+                     ("T_hc2A", T_hc2A), ("T_fc2B", T_fc2B)):
+        if val is not None:
+            arrays[key] = np.asarray(val, dtype=np.float64)
+    np.savez(str(run_dir / "result.npz"), **arrays)
 
     # YAML summary
     summary = {

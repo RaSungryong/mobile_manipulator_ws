@@ -20,11 +20,18 @@ Services:
 Parameters (under ``~`` namespace, see ``config/handeye_calib.yaml``):
   topics.hand_cam_image, topics.hand_cam_info,
   tag.id, tag.size_m, tag.family,
-  robot.use_sdk, robot.robot_ip, robot.fairino_sdk_path, robot.tcp_index,
+  arm.state_topic (TCP pose comes from arm_node's /arm/state — this node
+                   opens no SDK connection; move the arm with the teach
+                   pendant or robot_ui jog between captures),
   io.image_wait_timeout, io.output_path, io.min_samples,
   io.load_samples_dirs (optional: list of prior run/samples dirs to
                         preload at node start; also accepts a single
                         string).
+
+Note this node deliberately keeps grabbing RAW hand-cam frames (not the
+shared detector's output): cv2.calibrateHandEye needs per-sample
+T_cam2target re-detections over archived images, and samples must stay
+reloadable from disk across runs.
 """
 import os
 import re
@@ -41,9 +48,9 @@ from path_tag_locator.handeye_calib import (
     save_result,
     summarize,
 )
+from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.persistence import HandeyeRunRecorder, load_handeye_samples
 from path_tag_locator.ros_image import grab_image_and_K
-from path_tag_locator.tcp_pose import FairinoTCPClient
 
 
 _FIND_RE = re.compile(r"\$\(find\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)")
@@ -78,14 +85,12 @@ class HandeyeCalibNode:
         self.run_root = _resolve_ros_path(
             root["io"].get("run_root", "~/.ros/path_tag_locator"))
 
-        robot = root["robot"]
-        self.tcp_client = None
-        if bool(robot.get("use_sdk", True)):
-            self.tcp_client = FairinoTCPClient(
-                robot_ip=str(robot["robot_ip"]),
-                sdk_path=robot.get("fairino_sdk_path"),
-                tcp_index=int(robot.get("tcp_index", 1)),
-            )
+        arm = root.get("arm", {})
+        # Read-only TCP pose from arm_node; this node never moves the arm.
+        self.tcp_client = ArmInterface(
+            state_topic=str(arm.get("state_topic", "/arm/state")),
+            move_cart_topic=str(arm.get("move_cart_topic", "/arm/move_cart")),
+        )
 
         self.samples = []           # list[CalibSample]
         self.last_result = None     # CalibResult | None
@@ -166,8 +171,6 @@ class HandeyeCalibNode:
     # ------------------------------------------------------------------
     def _on_capture(self, _req):
         try:
-            if self.tcp_client is None:
-                raise RuntimeError("robot.use_sdk=false: no TCP pose source")
             img, K = grab_image_and_K(self.topic_image, self.topic_info,
                                       timeout=self.image_wait_timeout)
             tcp = self.tcp_client.get_tcp_pose()

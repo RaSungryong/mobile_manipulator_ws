@@ -1,10 +1,43 @@
 <launch>
-  <arg name="config" default="$(find path_tag_locator)/config/locator.yaml"/>
+  <!--
+    path_tag_locator — tag-map calibration services (2026-09-01 refactor).
 
-  <node pkg="path_tag_locator"
-        type="path_tag_locator_node.py"
-        name="path_tag_locator"
-        output="screen">
-    <rosparam command="load" file="$(arg config)"/>
+    Run ALONGSIDE the main stack, which must already be up:
+
+        roslaunch apriltag_nav mobile_manipulator.launch
+        roslaunch path_tag_locator path_tag_locator.launch
+
+    These nodes own NO hardware: the arm is reached through arm_node
+    (/arm/state + /arm/move_cart), the base through mobile_node
+    (MobileClient), and tag observations come from robot_camera_node's
+    /hand_cam/tag_detections + /front_cam/tag_detections. Without the
+    main stack their service calls fail with clear timeouts.
+
+    ⚠️ map_calibrator is a SECOND commander of /mobile/goto_tag after
+    task_executor: do not issue TASK/GOTO while a calibration session is
+    running (mobile_node refuses overlapping moves, so the session would
+    fail its nav step). Idle, the nodes cost nothing — they only act on
+    service calls.
+  -->
+  <arg name="use_handeye_calib" default="false"/>
+
+  <node name="path_tag_locator" pkg="path_tag_locator"
+        type="path_tag_locator_node.py" output="screen">
+    <rosparam command="load" file="$(find path_tag_locator)/config/locator.yaml"/>
   </node>
+
+  <node name="map_calibrator" pkg="path_tag_locator"
+        type="map_calibrator_node.py" output="screen">
+    <rosparam command="load" file="$(find path_tag_locator)/config/locator.yaml"/>
+    <rosparam command="load" file="$(find path_tag_locator)/config/map_calibrator.yaml"/>
+  </node>
+
+  <!-- One-off interactive hand-eye calibration; enable only for a
+       calibration session: roslaunch … use_handeye_calib:=true -->
+  <node if="$(arg use_handeye_calib)"
+        name="handeye_calib" pkg="path_tag_locator"
+        type="handeye_calib_node.py" output="screen">
+    <rosparam command="load" file="$(find path_tag_locator)/config/handeye_calib.yaml"/>
+  </node>
+
 </launch>

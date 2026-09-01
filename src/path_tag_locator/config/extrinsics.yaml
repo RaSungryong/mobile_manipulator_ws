@@ -14,6 +14,9 @@
 #            at its origin; the previous base read -1.025. Corrected 651 -> 652
 #            on 2026-08-23 to match the cell design record. The lift adds up to
 #            343 mm on top of this and is NOT reflected here.
+#            Since 2026-09-01 path_tag_locator's chain compensates for the
+#            lift at runtime (chain.compensate_T_ab2mb + live /lifter/height),
+#            so KEEP this value lift-at-origin — never bake a lift height in.
 #            The y term is the 2026-08-13 arm relocation: the arm base was
 #            shifted 100 mm toward the wall, i.e. mb-frame y = -0.100. Both
 #            signs come out negative because Rz(180) flips y and the inverse

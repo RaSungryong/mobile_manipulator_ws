@@ -42,13 +42,15 @@ def _latest_map_world():
 
 
 def _default_map_yaml():
+    # The in-package map.yaml copy was deleted (2026-09-01 refactor);
+    # apriltag_nav's map is the single source of truth.
     try:
         import rospkg
-        return str(Path(rospkg.RosPack().get_path("path_tag_locator")) /
+        return str(Path(rospkg.RosPack().get_path("apriltag_nav")) /
                    "config" / "map.yaml")
     except Exception:
-        here = Path(__file__).resolve().parent.parent
-        return str(here / "config" / "map.yaml")
+        here = Path(__file__).resolve().parent.parent.parent
+        return str(here / "apriltag_nav" / "config" / "map.yaml")
 
 
 def per_tag_summary(mw: dict) -> None:

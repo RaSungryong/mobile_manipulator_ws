@@ -2,8 +2,26 @@
 
 Online localization of human-placed ground-path AprilTags in the world
 frame, using a user-supplied reference tag whose accurate world pose is
-known. This package is independent of `apriltag_nav` (no imports, no
-shared messages, no shared topics).
+known.
+
+**2026-09-01 refactor — no standalone HARDWARE mode.** The nodes keep
+their own `launch/path_tag_locator.launch` (run it alongside the main
+stack, which must already be up; `use_handeye_calib:=true` adds the
+hand-eye node) but own no hardware: the arm is reached through `arm_node`
+(`/arm/state` + `/arm/move_cart`), the base through `mobile_node`
+(`MobileClient`), and tag observations come from `robot_camera_node`'s
+`/hand_cam/tag_detections` / `/front_cam/tag_detections`. The former
+in-package nav stack (`nav/`), the Fairino SDK client (`tcp_pose.py`),
+and the map/robot_nav config copies were deleted with it.
+⚠️ `map_calibrator` is a second commander of `/mobile/goto_tag` after
+`task_executor` — do not issue `TASK`/`GOTO` during a calibration
+session.
+
+Korean field guide: [docs/CALIBRATION_GUIDE_kr.md](docs/CALIBRATION_GUIDE_kr.md).
+
+The workflow is also drivable from **robot_ui**: the `map_calibration` and
+`locate_tag` scripts in the Scripts tab call these services through
+`RosBridge`, and per-tag session progress streams into the UI log.
 
 ## Method
 
@@ -24,15 +42,13 @@ T_B_world = T_A_world · T_A2B
 | Path | Purpose |
 |------|---------|
 | `srv/LocatePathTag.srv` | Service: request tag_b_id (or default), optional T_A_world override, optional save |
-| `config/locator.yaml` | Topics, tag IDs/sizes, robot IP, file paths |
+| `config/locator.yaml` | Detections/arm topics, tag IDs/sizes, detector sizes, file paths |
 | `config/reference_tag.yaml` | Default T_A_world (pose or 4x4) |
 | `config/extrinsics.yaml` | T_AB2MB / T_MB2FC (row-major 4x4) |
 | `config/handeye_calib.yaml` | Hand-eye calibration node config |
 | `config/hand_eye/T_hc2ee.npz` | 4x4 hand-eye calibration (produced by handeye_calib_node) |
 | `config/reference_tags.yaml` | Multi-ref-tag ground truth for batch map calibration |
 | `config/calibration_plan.yaml` | Ordered path_tag → ref_tag plan |
-| `config/map.yaml` | Self-contained copy of `apriltag_nav/config/map.yaml` |
-| `config/robot_nav.yaml` | Base nav subset of `apriltag_nav/config/robot.yaml` |
 | `config/map_calibrator.yaml` | Orchestrator default file paths |
 | `srv/RunMapCalibration.srv` | Batch calibration service |
 | `scripts/path_tag_locator_node.py` | Locator ROS node |
@@ -40,7 +56,10 @@ T_B_world = T_A_world · T_A2B
 | `scripts/map_calibrator_node.py` | Batch map-calibration orchestrator |
 | `src/path_tag_locator/align.py` | Auto-align logic (target EE pose, per-step clamp, metrics) |
 | `src/path_tag_locator/align_runner.py` | Shared iterative align driver (used by both locate and calibrator) |
-| `src/path_tag_locator/nav/` | Self-contained base nav (MapManager + Pure-Pursuit RobotController + Navigator facade) |
+| `src/path_tag_locator/arm_interface.py` | arm_node proxy (get_tcp_pose / move_j_to_pose over `/arm/state` + `/arm/move_cart`) |
+| `src/path_tag_locator/base_interface.py` | mobile_node proxy (MobileClient + /odom heading) |
+| `src/path_tag_locator/detections.py` | shared-detector observations -> T_cam2tag (with tag-size rescale) |
+| `src/path_tag_locator/lift_listener.py` | live `/lifter/height` for T_ab2mb lift compensation in the chain |
 | `src/path_tag_locator/calibration/` | plan_io + map_io + orchestrator for batch calibration |
 | `src/path_tag_locator/` | Python module (chain, geometry, detect, handeye_calib, align, ...) |
 
@@ -83,9 +102,9 @@ Each capture is immediately archived to disk, so you can interrupt the
 session and resume later (see "Reusing previous samples" below).
 
 ```bash
-# Edit config/handeye_calib.yaml (topic names, tag_id/size, robot_ip,
+# Edit config/handeye_calib.yaml (topic names, tag_id/size,
 # output_path, min_samples). Then:
-roslaunch path_tag_locator handeye_calib.launch
+roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
 
 # Move the arm so the hand-cam sees the calibration tag from a new pose,
 # then capture; repeat ~15-30 times with diverse orientations:
@@ -119,10 +138,10 @@ You may freely mix loaded + new `/capture` samples before `/compute`.
 #    installation (position_m + rpy_deg, or matrix_4x4).
 # 2. Ensure your hand-cam and front-cam publish on the topics named in
 #    config/locator.yaml (or update the topic names there).
-# 3. Make sure the Fairino SDK path in config/locator.yaml is correct.
+# 3. Make sure arm_node and robot_camera_node are up (main launch).
 
 # Run
-roslaunch path_tag_locator path_tag_locator.launch
+roslaunch path_tag_locator path_tag_locator.launch   # main stack must already be up
 
 # Call service (use yaml defaults, no auto-align)
 rosservice call /path_tag_locator/locate_path_tag "{
@@ -177,10 +196,10 @@ quaternion).
 
 For the larger workflow of **recalibrating every path tag in `map.yaml`**
 against multiple user-provided reference tags, use the
-`map_calibrator_node`. This wraps the base navigation (a self-contained
-copy of the Pure-Pursuit logic — no runtime dependency on `apriltag_nav`)
-and the per-tag locate call into a single autonomous session that emits
-`map_updated.yaml`.
+`map_calibrator_node`. This drives the base through `mobile_node` (apriltag_nav's
+`MobileClient` — since the 2026-09-01 refactor there is no in-package
+navigation) and the per-tag locate call into a single autonomous session
+that emits a world-frame `map_world_<ts>.yaml`.
 
 #### Config files (`config/`)
 
@@ -188,17 +207,17 @@ and the per-tag locate call into a single autonomous session that emits
 |------|---------|
 | `reference_tags.yaml` | Multiple ref tags with **accurate** world poses (6-DOF: position_m + rpy_deg, or a 4×4 matrix). User-measured ground truth — these are what every path tag is calibrated against. |
 | `calibration_plan.yaml` | Ordered list of `{path_tag_id, ref_tag_id}` assignments. Per-entry can override `arm_view_tcp_mm_deg` (initial arm pose so hand-cam sees the assigned ref tag) and `nav_start_id` (base nav starting tag for BFS). |
-| `map.yaml` | Local copy of `apriltag_nav/config/map.yaml`. Self-contained so the package never imports apriltag_nav at runtime. |
-| `robot_nav.yaml` | Subset of `apriltag_nav/config/robot.yaml` — only the base-nav knobs (max_linear_speed, look_ahead_base, S-curve ratios, …) and topics (`cmd_vel`, `odom`, `camera_rgb`, `robot_pose`). No arm/keyence/inference sections. |
 | `map_calibrator.yaml` | Default file paths for the orchestrator (overridable per service call). |
 
 #### Workflow
 
 ```bash
-# Park the base at a known map tag (e.g. DOCK 508) BEFORE launching, so
+# Park the base at a known map tag (e.g. DOCK 500) BEFORE launching, so
 # the very first nav has a known starting point.
-# Launch (closes /cmd_vel conflicts: make sure apriltag_nav main node is NOT running):
-roslaunch path_tag_locator map_calibrator.launch
+# The MAIN STACK MUST ALREADY BE UP (arm_node / mobile_node /
+# robot_camera_node are the hardware owners). Do not send TASK/GOTO
+# while a session runs.
+roslaunch path_tag_locator path_tag_locator.launch
 
 # Dry-run: parses plan + ref tags + map.yaml without moving anything.
 rosservice call /map_calibrator/run_calibration "{
@@ -218,8 +237,8 @@ rostopic echo /map_calibrator/current_target_tag
 ```
 
 The service response carries `num_succeeded`, `num_failed`, and the
-`output_yaml_path`. Failed entries do **not** abort the session; their
-`(x, y)` in `map_updated.yaml` remain at the original values, and a
+`output_yaml_path`. Failed entries do **not** abort the session; they are simply absent
+from the output's `tags:` (map.yaml itself is never written), and a
 `run_*_FAILED/` directory under `~/.ros/path_tag_locator/locate/` holds
 the error and request echo.
 
@@ -235,9 +254,8 @@ the error and request echo.
 4. Capture fresh hand-cam + front-cam images, read live TCP pose.
 5. Run the chain (`compute_T_A2B` → `compute_T_B_world`) with the
    trusted `T_A_world` from `reference_tags.yaml`.
-6. Update the in-memory `map_data['tags'][path_tag_id]` with the new
-   `(x, y)` and **atomically** rewrite `map_updated.yaml` (tmp +
-   `os.replace`).
+6. Upsert the tag's world pose into the in-memory output and
+   **atomically** rewrite `map_world_<ts>.yaml` (tmp + `os.replace`).
 7. Persist the full 6-DOF result + raw images via
    `persistence.save_locate_run` (same archive layout as the locator).
 
@@ -286,7 +304,7 @@ rosrun path_tag_locator save_npz.py             # refuses to overwrite
 rosrun path_tag_locator save_npz.py --force     # force overwrite
 
 # B. Real calibration: 15-30 captures + cv2.calibrateHandEye.
-roslaunch path_tag_locator handeye_calib.launch
+roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
 rosservice call /handeye_calib/capture "{}"     # repeat per arm pose
 rosservice call /handeye_calib/compute "{}"
 ```
@@ -315,13 +333,13 @@ defaults:
 plan:
   - path_tag_id: 101
     ref_tag_id:  0
-    nav_start_id: 508       # base-nav start tag (e.g. DOCK)
+    nav_start_id: 500       # base-nav start tag (e.g. DOCK)
 ```
 
-`config/locator.yaml` / `config/handeye_calib.yaml` — make sure topic
-names match your real cameras (`/vision_cam/color/image_raw`,
-`/front_cam/color/image_raw`, etc.) and `robot.robot_ip` /
-`fairino_sdk_path` are correct.
+`config/locator.yaml` / `config/handeye_calib.yaml` — make sure the
+detections topics match robot_camera_node's outputs
+(`/hand_cam/tag_detections`, `/front_cam/tag_detections`) and the
+`detector:` tag sizes mirror robot.yaml `robot_camera.tag_size`.
 
 **Phase 3 — Capture `arm_view_tcp_mm_deg`**
 
@@ -334,16 +352,12 @@ roughly sees ref tag 0, then record its TCP:
 
 # 2. Once the base is parked, jog the arm via the teach pendant until
 #    the hand camera sees ref tag 0 (use rqt_image_view on
-#    /vision_cam/color/image_raw to confirm — tag 0 just needs to be
+#    /hand_cam/color/image_raw to confirm — tag 0 just needs to be
 #    visible; auto_align will center it later).
 
-# 3. Read the live TCP pose:
-python3 -c "
-from fairino import Robot
-r = Robot.RPC('192.168.58.2')
-err, pose = r.GetActualTCPPose()
-print(pose)   # [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg]
-"
+# 3. Read the live TCP pose from arm_node (never open a second RPC
+#    connection to the arm):
+rostopic echo -n1 /arm/state/tcp_pose
 
 # 4. Paste those 6 numbers into calibration_plan.yaml — either
 #    defaults.arm_view_tcp_mm_deg or the entry's override.
@@ -352,14 +366,14 @@ print(pose)   # [x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg]
 **Phase 4 — Launch the calibrator**
 
 ```bash
-# Kill any node that publishes /cmd_vel (apriltag_nav main) to avoid conflicts:
-rosnode kill /navigate /robot_controller /task_executor 2>/dev/null || true
+# Keep the main stack RUNNING (mobile_node drives the base for the
+# session); just make sure no TASK/GOTO is in flight.
 
-# Park the base in front of nav_start_id (DOCK 508). The first goto needs
+# Park the base in front of nav_start_id (DOCK 500). The first goto needs
 # a tag the front cam can see, otherwise BFS has no starting node.
 
 # Launch:
-roslaunch path_tag_locator map_calibrator.launch
+roslaunch path_tag_locator path_tag_locator.launch   # main stack must already be up
 ```
 
 **Phase 5 — Dry-run, then real run**
@@ -383,7 +397,7 @@ rosservice call /map_calibrator/run_calibration "{
 ```
 
 Inside, for that one entry:
-1. base nav: `508 → … → 101` (front-cam keeps the tag in view, decelerates).
+1. base nav: `500 → … → 101` (front-cam keeps the tag in view, decelerates).
 2. arm `MoveJ` to your `arm_view_tcp_mm_deg`.
 3. `auto_align` (~3–5 iterations) — hand-cam centers ref tag 0:
    ```
@@ -441,7 +455,7 @@ So the practical plan for adding more tags:
 plan:
   - path_tag_id: 101
     ref_tag_id: 0
-    nav_start_id: 508
+    nav_start_id: 500
   - path_tag_id: 102            # arm_view_tcp_mm_deg auto-estimated
     ref_tag_id: 0
   - path_tag_id: 103            # auto-estimated again
@@ -471,9 +485,8 @@ The chain follows the AprilTag library convention: a tag's local
 | Face DOWN (visible from below; e.g. ceiling-mounted — **this project's default**) | world +z (up)  | `[0.0, 0.0, 0.0]`  |
 | Face UP   (visible from above; common for floor stickers) | world -z (down)| `[180.0, 0.0, 0.0]`|
 
-The bundled `reference_tags.yaml` example uses `[0, 0, 0]` for face-down
-mounting. If your tags are face-up, swap to `[180, 0, 0]` (or
-`[0, 180, 0]`). Getting this wrong produces a 180° error in the chain
+The bundled `reference_tags.yaml` holds the REAL cross tags — face-up
+on the plate, `[180, 0, 0]`. Getting this wrong produces a 180° error in the chain
 output, usually visible as path-tag positions mirrored about the tag
 plane.
 
@@ -483,7 +496,7 @@ plane.
 plan:
   - path_tag_id: 101
     ref_tag_id: 0
-    nav_start_id: 508
+    nav_start_id: 500
   - path_tag_id: 102
     ref_tag_id: 0
   - path_tag_id: 405

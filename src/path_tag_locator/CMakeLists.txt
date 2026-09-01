@@ -44,6 +44,7 @@ install(PROGRAMS
   scripts/path_tag_locator_node.py
   scripts/handeye_calib_node.py
   scripts/map_calibrator_node.py
+  scripts/generate_calibration_artifacts.py
   scripts/save_npz.py
   scripts/verify_map_world.py
   scripts/test_repeatability.py

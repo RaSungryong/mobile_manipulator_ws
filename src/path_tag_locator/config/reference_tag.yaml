@@ -6,8 +6,15 @@
 #
 # Edit these defaults to match your real installation. The service may also
 # override the value at call time (override_ref=true + ref_pose).
+#
+# 2026-09-01: set to CROSS TAG id 0 (locator.yaml tag_a_id), from the
+# design record — world frame = map.yaml frame (origin at 정반 1 centre,
+# z = 0 at the plate top). Face-up on the plate -> rpy [180, 0, 0]; yaw
+# assumed 0, same caveat as reference_tags.yaml. If the arm views a
+# DIFFERENT cross tag during a single locate call, pass override_ref with
+# that tag's pose (or change tag_a_id + this file together).
 reference_tag:
   format: "pose"
-  position_m: [0.0, 0.0, 0.0]
-  rpy_deg:    [0.0, 0.0, 0.0]
+  position_m: [-0.600, -1.200, 0.0]
+  rpy_deg:    [180.0, 0.0, 0.0]
   # matrix_4x4: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]

@@ -1,18 +1,19 @@
 handeye_calib:
   topics:
-    hand_cam_image:   "/vision_cam/color/image_raw"
-    hand_cam_info:    "/vision_cam/color/camera_info"
+    # Raw frames on purpose: calibrateHandEye re-detects over archived
+    # sample images, so samples must be reloadable from disk.
+    hand_cam_image:   "/hand_cam/color/image_raw"
+    hand_cam_info:    "/hand_cam/color/camera_info"
 
   tag:
     id:               0            # calibration tag (the same one used as reference tag A)
-    size_m:           0.060
+    size_m:           0.090   # ref tags are 90 mm since 2026-09-01
     family:           "tag36h11"
 
-  robot:
-    use_sdk:          true
-    robot_ip:         "192.168.58.2"
-    fairino_sdk_path: "/home/ku/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
-    tcp_index:        1
+  # TCP pose is read from arm_node's /arm/state — no SDK connection.
+  # Move the arm between captures with the teach pendant or robot_ui jog.
+  arm:
+    state_topic:      "/arm/state"
 
   io:
     image_wait_timeout: 3.0

@@ -5,8 +5,9 @@
   <description>
     Online localization of ground-path AprilTags in world frame, using a
     user-provided reference tag observed by an arm end-effector camera and a
-    path tag observed by a front/floor camera. Independent ROS package; no
-    dependency on apriltag_nav.
+    path tag observed by a front/floor camera. Runs inside the main stack
+    (mobile_manipulator.launch): hardware is reached exclusively through
+    apriltag_nav's owner nodes (arm_node / mobile_node / robot_camera_node).
   </description>
   <maintainer email="user@example.com">User</maintainer>
   <license>TODO</license>
@@ -24,6 +25,7 @@
   <build_depend>robot_msgs</build_depend>
 
   <exec_depend>rospy</exec_depend>
+  <exec_depend>apriltag_nav</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>tf</exec_depend>

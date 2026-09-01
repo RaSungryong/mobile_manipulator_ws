@@ -427,11 +427,14 @@ robot_camera:
   # /robot_pose). One global size cannot serve both cameras.
   #   front_cam — 90 mm floor tags, read straight down
   #   side_cam  — 30 mm tags on the 80 mm 정반 step, read horizontally
+  #   hand_cam  — 90 mm reference tags (path_tag_locator's tag A, six of
+  #               them, switched from 60 mm on 2026-09-01; locator.yaml
+  #               detector.hand_cam_tag_size_m must match)
   # An entry set to null falls back to robot.tag_size above.
   tag_size:
     front_cam: 0.09
     side_cam:  0.03
-    hand_cam:  null
+    hand_cam:  0.09
 
   # Per-camera on/off for the detectors, and the persistent default for each
   # camera. This controls robot_camera_node only; the driver that publishes

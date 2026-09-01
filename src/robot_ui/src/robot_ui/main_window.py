@@ -613,6 +613,7 @@ class MainWindow(QMainWindow):
         self.bridge.battery_state.connect(self._on_battery)
         self.bridge.estop_state.connect(self._on_estop)
         self.bridge.camera_state.connect(self._on_camera_state)
+        self.bridge.calib_progress.connect(self._on_calib_progress)
         self.bridge.log.connect(self.append_log)
 
         # Ask for whatever already arrived. The bridge subscribes in its own
@@ -628,6 +629,20 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is not None:
             view.set_frame(bgr)
+
+    def _on_calib_progress(self, entry):
+        """Per-tag status from a running map-calibration session."""
+        status = entry.get('status', '?')
+        tag = entry.get('tag', '?')
+        if status == 'ok':
+            self.append_log(
+                f"[calib] tag {tag}: OK  x={entry.get('x', 0):.3f} "
+                f"y={entry.get('y', 0):.3f}")
+        elif status == 'fail':
+            self.append_log(
+                f"[calib] tag {tag}: FAIL — {entry.get('error', '')}")
+        else:
+            self.append_log(f'[calib] tag {tag}: {status}')
 
     def _on_arm_state(self, state):
         if state['pose_valid']:

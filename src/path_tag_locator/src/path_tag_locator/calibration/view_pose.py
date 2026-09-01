@@ -93,7 +93,8 @@ def propagate_world_mb(anchor: BaseAnchor,
 
 
 # ----------------------------------------------------------------------
-def _target_T_A2hc(view_distance_m: float) -> np.ndarray:
+def _target_T_A2hc(view_distance_m: float,
+                   yaw_deg: float = 0.0) -> np.ndarray:
     """Desired pose of hand-cam in ref-tag-A's frame: squarely above the
     tag at the given height.
 
@@ -102,8 +103,18 @@ def _target_T_A2hc(view_distance_m: float) -> np.ndarray:
     pose in the tag frame, ``[[I | (0, 0, -d)]; [0 0 0 1]]``, i.e. cam
     sits at -d along the tag's z-axis. For a floor tag (z up), that
     places the cam at +d above the floor — the intended geometry.
+
+    ``yaw_deg`` spins the camera about the tag normal (its own optical
+    axis). The view stays square — alignment converges on xy offset +
+    tilt, never yaw — so this is a FREE parameter; the planner uses it
+    to swing the vision_tip tool overhang toward the arm base and pull
+    the FLANGE closer (reach is a flange constraint, not a TCP one).
     """
+    c = math.cos(math.radians(yaw_deg))
+    s = math.sin(math.radians(yaw_deg))
     T = np.eye(4, dtype=np.float64)
+    T[0, 0], T[0, 1] = c, -s
+    T[1, 0], T[1, 1] = s, c
     T[2, 3] = -float(view_distance_m)
     return T
 
@@ -112,10 +123,13 @@ def compute_view_tcp(T_A_world: np.ndarray,
                      T_world2mb: np.ndarray,
                      T_ab2mb: np.ndarray,
                      T_hc2ee: np.ndarray,
-                     view_distance_m: float) -> list:
+                     view_distance_m: float,
+                     yaw_deg: float = 0.0) -> list:
     """Compute the FR5 TCP pose ([x_mm, y_mm, z_mm, rx, ry, rz] deg, ZYX
     intrinsic) that places hand-cam ``view_distance_m`` above ref tag A,
     squarely facing it, assuming the base is at ``T_world2mb``.
+    ``yaw_deg`` — free camera spin about the tag normal, see
+    ``_target_T_A2hc``.
 
     Chain (T_X2Y = pose of Y in X):
         T_world2hc_desired = T_A_world · T_A2hc_desired
@@ -124,7 +138,7 @@ def compute_view_tcp(T_A_world: np.ndarray,
         T_ab2ee            = T_ab2hc · T_hc2ee
         view_tcp           = matrix_m_to_pose_fr5(T_ab2ee)
     """
-    T_A2hc_desired = _target_T_A2hc(view_distance_m)
+    T_A2hc_desired = _target_T_A2hc(view_distance_m, yaw_deg)
     T_world2hc_desired = T_A_world @ T_A2hc_desired
     T_world2ab = T_world2mb @ invert_T(T_ab2mb)
     T_ab2hc = invert_T(T_world2ab) @ T_world2hc_desired

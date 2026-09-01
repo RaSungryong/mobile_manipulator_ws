@@ -73,6 +73,7 @@ class RosBridge(QObject):
     battery_state = pyqtSignal(dict)
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
+    calib_progress = pyqtSignal(dict)
     log = pyqtSignal(str)
 
     def __init__(self, node_name='robot_ui', init_node=True):
@@ -150,6 +151,14 @@ class RosBridge(QObject):
         self._sub('/camera/state', String, self._cb_camera_state, queue_size=1)
         self._sub('/bms/state', BatteryState, self._cb_battery, queue_size=1)
         self._sub('/safety/estop', Bool, self._cb_estop, queue_size=1)
+        # Per-tag status lines from a running calibration session. Larger
+        # queue than the periodic states: entries can complete in bursts and
+        # every one matters in the log. Deliberately NOT routed through
+        # _cb_json/_emit: the cache+replay machinery exists for latched
+        # STATE topics, and replaying the last per-tag event to a late
+        # consumer would look like a live session.
+        self._sub('/map_calibrator/progress', String,
+                  self._cb_calib_progress, queue_size=64)
 
     def _sub(self, topic, msg_type, callback, **kwargs):
         sub = rospy.Subscriber(topic, msg_type, callback, **kwargs)
@@ -236,6 +245,15 @@ class RosBridge(QObject):
         if not self._alive:
             return
         self._emit(self.camera_state, msg.data)
+
+    def _cb_calib_progress(self, msg):
+        """Event stream, not state: emit without caching (see subscriber)."""
+        if not self._alive:
+            return
+        try:
+            self.calib_progress.emit(json.loads(msg.data))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f'[UI] bad calib progress: {e}')
 
     def _cb_battery(self, msg):
         if not self._alive:
@@ -411,6 +429,102 @@ class RosBridge(QObject):
         self._pub_task_cmd.publish(String(text))
         self.log.emit(f'[UI] /task_command <- {text}')
         return True
+
+    # ==========================================================
+    # TAG-MAP CALIBRATION (path_tag_locator nodes)
+    # ==========================================================
+    # These nodes are NOT part of mobile_manipulator.launch — run
+    # `roslaunch path_tag_locator path_tag_locator.launch` alongside the
+    # stack first, or every call below fails with a wait_for_service
+    # timeout. Progress arrives on the calib_progress signal.
+    # ⚠️ A calibration session drives the base through /mobile/goto_tag —
+    # do not send TASK/GOTO while one is running.
+
+    def locate_path_tag(self, tag_b_id=-1, auto_align=False,
+                        initial_tcp=None):
+        """One LocatePathTag call. BLOCKS (unbounded, like every ROS1
+        service proxy here) — call from a worker thread.
+
+        Returns a dict: success/message plus position_m + rpy_deg on
+        success. tag_b_id -1 uses locator.yaml's default tag.
+        """
+        try:
+            from path_tag_locator.srv import LocatePathTag
+        except ImportError as e:
+            return {'success': False,
+                    'message': f'path_tag_locator not built: {e}'}
+        try:
+            rospy.wait_for_service('/path_tag_locator/locate_path_tag',
+                                   timeout=5.0)
+            proxy = rospy.ServiceProxy('/path_tag_locator/locate_path_tag',
+                                       LocatePathTag)
+            req = LocatePathTag._request_class()
+            req.tag_b_id = int(tag_b_id)
+            req.auto_align = bool(auto_align)
+            if initial_tcp is not None:
+                req.align_initial_tcp_mm_deg = [float(v)
+                                                for v in initial_tcp]
+            resp = proxy(req)
+        except Exception as e:
+            return {'success': False, 'message': f'locate failed: {e}'}
+        return {
+            'success': bool(resp.success),
+            'message': resp.message,
+            'position_m': list(resp.position_m),
+            'rpy_deg': list(resp.rpy_deg),
+            'align_iterations': int(resp.align_iterations_used),
+        }
+
+    def run_map_calibration(self, dry_run=False, plan_path='',
+                            ref_tags_path=''):
+        """Full RunMapCalibration session.
+
+        Empty paths use map_calibrator.yaml's defaults (the 정반 1
+        session). Sessions run PER PLATE — both plates carry cross tags
+        with the same ids, so plan_path and ref_tags_path must be
+        swapped TOGETHER for 정반 2.
+
+        BLOCKS for the whole session (minutes) — call from a worker
+        thread. Per-tag results stream on calib_progress meanwhile.
+        Returns (ok, message, report dict).
+        """
+        try:
+            from path_tag_locator.srv import RunMapCalibration
+        except ImportError as e:
+            return False, f'path_tag_locator not built: {e}', {}
+        try:
+            rospy.wait_for_service('/map_calibrator/run_calibration',
+                                   timeout=5.0)
+            proxy = rospy.ServiceProxy('/map_calibrator/run_calibration',
+                                       RunMapCalibration)
+            req = RunMapCalibration._request_class()
+            req.dry_run = bool(dry_run)
+            req.plan_path = str(plan_path)
+            req.ref_tags_path = str(ref_tags_path)
+            resp = proxy(req)
+        except Exception as e:
+            return False, f'run_calibration failed: {e}', {}
+        return bool(resp.success), resp.message, {
+            'num_succeeded': int(resp.num_succeeded),
+            'num_failed': int(resp.num_failed),
+            'output_yaml_path': resp.output_yaml_path,
+        }
+
+    def cancel_map_calibration(self):
+        """Cooperative session abort: the calibrator stops after the
+        current entry, keeping the partial output. Not an e-stop."""
+        return self._call_trigger('/map_calibrator/cancel_calibration',
+                                  10.0)
+
+    def handeye_capture(self):
+        """One hand-eye sample (needs use_handeye_calib:=true launch)."""
+        return self._call_trigger('/handeye_calib/capture', 30.0)
+
+    def handeye_compute(self):
+        return self._call_trigger('/handeye_calib/compute', 120.0)
+
+    def handeye_status(self):
+        return self._call_trigger('/handeye_calib/status', 10.0)
 
     # ==========================================================
     # SERVICE HELPERS

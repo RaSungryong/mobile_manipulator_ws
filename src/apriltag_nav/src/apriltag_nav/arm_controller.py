@@ -454,7 +454,9 @@ class ArmController:
             # Compute tool Z-axis direction in robot base frame
             # Fairino uses degrees for Euler angles
             r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
-            z_vec = r.as_matrix()[:, 2]  # third column of rotation matrix
+            # scipy compat: >=1.4 as_matrix(), 1.3 as_dcm()
+            r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
+            z_vec = r_mat[:, 2]  # third column of rotation matrix
 
             # Apply offset while keeping orientation (rx, ry, rz) unchanged
             new_pose = [

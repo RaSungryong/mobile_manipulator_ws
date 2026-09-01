@@ -1,14 +1,30 @@
 map_calibrator:
   # Default paths (overridable by the service request).
+  #
+  # ⚠️ Calibration runs PER PLATE (정반 1 / 정반 2) — both plates carry
+  # cross tags with the SAME ids 0-5, so plan and ref file must be
+  # swapped together. Defaults below are the 정반 1 session (zones B+C).
+  # For 정반 2 (zones D+E) pass in the service request:
+  #   plan_path:     $(find path_tag_locator)/config/calibration_plan_plate2.yaml
+  #   ref_tags_path: $(find path_tag_locator)/config/reference_tags_plate2.yaml
+  # (or use robot_ui's map_calibration script, PLATE = 2).
   ref_tags_yaml:  "$(find path_tag_locator)/config/reference_tags.yaml"
-  plan_yaml:      "$(find path_tag_locator)/config/calibration_plan.yaml"
-  map_in_path:    "$(find path_tag_locator)/config/map.yaml"
-  # Empty -> ~/.ros/path_tag_locator/map_updated_<ts>.yaml
+  plan_yaml:      "$(find path_tag_locator)/config/calibration_plan_plate1.yaml"
+  # Single source of truth: the main stack's map. The old in-package
+  # map.yaml copy was deleted with the standalone-mode refactor — base
+  # navigation now goes through mobile_node, which loads this same file.
+  map_in_path:    "$(find apriltag_nav)/config/map.yaml"
+  # Empty -> ~/.ros/path_tag_locator/map_world_<ts>.yaml
   map_out_path:   ""
 
-  # Navigation
-  robot_nav_yaml:   "$(find path_tag_locator)/config/robot_nav.yaml"
-  # map.yaml that the Navigator (base nav) loads. Defaults to the same
-  # path as map_in_path so the orchestrator and the navigator agree on
-  # tag positions for the duration of the session.
-  map_yaml_for_nav: "$(find path_tag_locator)/config/map.yaml"
+  # Fixed lift height for the whole calibration session (mm above origin).
+  # null = don't touch the lift. The chain compensates by LIVE height either
+  # way; setting this just makes the session move the lift there first and
+  # guard against drift.
+  lift_height_mm: null
+  # Home (descend to the lower limit switch, re-zeroing the encoder) before
+  # moving to lift_height_mm. The driver guide documents ~1000-1800 counts
+  # of error after an up-then-down stroke — a single home+up stroke is the
+  # only reliable way to a known height. Only used when lift_height_mm is
+  # set. Leave true unless the lift was just homed.
+  lift_home_first: true

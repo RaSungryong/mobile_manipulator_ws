@@ -9,28 +9,32 @@ Reuses (NEVER reimplements):
 - ``chain.compute_T_A2B`` + ``compute_T_B_world``
 - ``align_runner.run_auto_align``
 - ``persistence.save_locate_run`` + ``save_locate_failure``
-- ``ros_image.grab_image_and_K``
-- ``tcp_pose.FairinoTCPClient``
+- ``detections`` helpers (shared-detector observations)
+- ``arm_interface.ArmInterface`` (injected as ``tcp_client``)
+- ``base_interface.BaseInterface`` (injected as ``base``)
 - ``geometry`` helpers
-- ``nav.Navigator``
+
+Hardware is reached exclusively through the main stack's owner nodes
+(arm_node / mobile_node / robot_camera_node) via the two injected
+interfaces — this package publishes no /cmd_vel and opens no SDK
+connection of its own.
 """
-import datetime as _dt
 import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import rospy
 from std_msgs.msg import Int32, String
 
+from ..align import clamp_step
 from ..align_runner import run_auto_align
-from ..chain import compute_T_A2B, compute_T_B_world
+from ..geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
+from ..chain import compensate_T_ab2mb, compute_T_A2B, compute_T_B_world
+from ..detections import detection_to_T_cam2tag, wait_for_tag_detection
 from ..geometry import rot2rpy_deg
-from ..nav.navigator import Navigator
 from ..persistence import save_locate_failure, save_locate_run
-from ..ros_image import grab_image_and_K
+from ..ros_image import grab_image
 from .map_io import (
     atomic_write,
     load_map,
@@ -63,20 +67,22 @@ class OrchestratorCfg:
     map_in_path: str
     map_out_path: str
     save_dir: str                         # persistence root (~/.ros/...)
-    # Reused from locator.yaml
-    hand_cam_image_topic: str
-    hand_cam_info_topic: str
-    front_cam_image_topic: str
-    front_cam_info_topic: str
-    image_wait_timeout_s: float
-    tag_family: str
+    # Shared-detector observations (reused from locator.yaml)
+    hand_cam_detections_topic: str
+    front_cam_detections_topic: str
+    hand_cam_detector_size_m: float
+    front_cam_detector_size_m: float
+    detection_wait_timeout_s: float
     tag_a_size_m_default: float
     tag_b_size_m: float
-    # nav (loaded from robot_nav.yaml)
-    robot_nav_yaml: str
-    map_yaml_for_nav: str
     # arm
     align_cfg: Any                        # AlignCfg dataclass
+    # Raw-frame snapshot topics for the persistence record (optional,
+    # best-effort; empty string disables)
+    hand_cam_image_topic: str = ""
+    front_cam_image_topic: str = ""
+    # Metadata only (the shared detector owns the actual family setting)
+    tag_family: str = "tag36h11"
     # Behavior
     dry_run: bool = False
 
@@ -103,13 +109,19 @@ class CalibrationOrchestrator:
                  T_ab2mb,
                  T_mb2fc,
                  tcp_client,
+                 base=None,
+                 lift=None,
+                 cancel_check=None,
                  progress_pub: Optional[rospy.Publisher] = None,
                  target_pub: Optional[rospy.Publisher] = None):
         self.cfg = cfg
         self.T_hc2ee = T_hc2ee
-        self.T_ab2mb = T_ab2mb
+        self.T_ab2mb = T_ab2mb        # lift-at-origin (extrinsics.yaml)
         self.T_mb2fc = T_mb2fc
-        self.tcp_client = tcp_client
+        self.tcp_client = tcp_client   # arm_interface.ArmInterface
+        self.base = base               # base_interface.BaseInterface
+        self.lift = lift               # lift_listener.LiftHeightListener
+        self._cancel_check = cancel_check   # callable -> bool, or None
         self._progress_pub = progress_pub
         self._target_pub = target_pub
 
@@ -142,6 +154,8 @@ class CalibrationOrchestrator:
         # successful chain; used to estimate arm_view_tcp_mm_deg for
         # subsequent entries that don't supply one explicitly.
         self._anchor: Optional[BaseAnchor] = None
+        # Session-start lift height (set in run(); drift-guard baseline).
+        self._session_lift_m: Optional[float] = None
 
         rospy.loginfo(
             "[Calibrator] loaded %d ref tags (origin=%s), %d plan entries; "
@@ -149,15 +163,12 @@ class CalibrationOrchestrator:
             len(self.ref_tags), origin_id, len(self.plan.entries),
             cfg.map_out_path, cfg.dry_run)
 
-        # Lazy Navigator — only construct if not in dry_run, since it
-        # spins up ROS subscribers that bind to live camera topics.
-        self.nav: Optional[Navigator] = None
-        if not cfg.dry_run:
-            self.nav = Navigator(
-                robot_cfg=cfg.robot_nav_yaml,
-                map_yaml_path=cfg.map_yaml_for_nav,
-                wait_for_camera_s=5.0,
-            )
+        # Base navigation goes through mobile_node (injected interface);
+        # required unless dry_run.
+        if not cfg.dry_run and self.base is None:
+            raise RuntimeError(
+                "CalibrationOrchestrator needs a BaseInterface unless "
+                "dry_run=true")
 
     # ------------------------------------------------------------------
     def _publish_progress(self, payload: dict):
@@ -175,6 +186,23 @@ class CalibrationOrchestrator:
             self._target_pub.publish(Int32(data=int(tag_id)))
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    def _lift_height_m(self) -> float:
+        """Live lift extension for T_ab2mb compensation; 0.0 when no
+        listener was injected (assume lift at origin, as before)."""
+        return float(self.lift.height_m()) if self.lift is not None else 0.0
+
+    # ------------------------------------------------------------------
+    def _snapshot(self, image_topic):
+        """Best-effort raw-frame grab for the persistence record. Returns
+        None on empty topic name or timeout — never raises."""
+        if not image_topic:
+            return None
+        try:
+            return grab_image(image_topic, timeout=1.0)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     def _resolve_ref_size(self, ref: RefTag) -> float:
@@ -196,16 +224,17 @@ class CalibrationOrchestrator:
 
         # 2. Bootstrap auto-estimate.
         if (bool(getattr(self.cfg.align_cfg, "auto_view_pose", False))
-                and self._anchor is not None and self.nav is not None):
+                and self._anchor is not None and self.base is not None):
             try:
                 map_xy_now = self._lookup_path_map_xy(entry.path_tag_id)
-                theta_now = float(self.nav.robot.current_theta)
+                theta_now = float(self.base.current_theta)
                 T_world2mb_estimate = propagate_world_mb(
                     self._anchor, map_xy_now, theta_now)
                 tcp = compute_view_tcp(
                     T_A_world=ref.T_world,
                     T_world2mb=T_world2mb_estimate,
-                    T_ab2mb=self.T_ab2mb,
+                    T_ab2mb=compensate_T_ab2mb(self.T_ab2mb,
+                                               self._lift_height_m()),
                     T_hc2ee=self.T_hc2ee,
                     view_distance_m=float(
                         self.cfg.align_cfg.auto_view_distance_m),
@@ -250,8 +279,8 @@ class CalibrationOrchestrator:
         path_xy_map) for use as a seed by subsequent entries."""
         T_world2mb = compute_T_world2mb_from_chain(
             T_B_world=T_B_world, T_fc2B=T_fc2B, T_mb2fc=self.T_mb2fc)
-        theta = (float(self.nav.robot.current_theta)
-                 if self.nav is not None else 0.0)
+        theta = (float(self.base.current_theta)
+                 if self.base is not None else 0.0)
         map_xy = self._lookup_path_map_xy(entry.path_tag_id)
         self._anchor = BaseAnchor(
             T_world2mb=T_world2mb,
@@ -271,7 +300,24 @@ class CalibrationOrchestrator:
             num_succeeded=0, num_failed=0,
             output_yaml_path=str(self.cfg.map_out_path))
 
+        # Fixed-height sessions: remember where the lift started so any
+        # mid-session drift is flagged. The chain always compensates by
+        # the LIVE height, so accuracy only suffers if the encoder LIES —
+        # which is exactly what a silent height change suggests.
+        self._session_lift_m = (self._lift_height_m()
+                                if not self.cfg.dry_run else None)
+        if self._session_lift_m:
+            rospy.loginfo("[Calibrator] session lift height: %.1f mm",
+                          self._session_lift_m * 1000.0)
+
         for entry in self.plan.entries:
+            if self._cancel_check is not None and self._cancel_check():
+                rospy.logwarn('[Calibrator] session cancelled before '
+                              'tag=%d — stopping (partial output kept)',
+                              entry.path_tag_id)
+                self._publish_progress({'tag': entry.path_tag_id,
+                                        'status': 'cancelled'})
+                break
             self._publish_target(entry.path_tag_id)
             resolved = self.plan.resolved(entry)
             ref = self.ref_tags.get(entry.ref_tag_id)
@@ -301,9 +347,28 @@ class CalibrationOrchestrator:
                     report.entries.append({
                         "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
                         "status": "dry_run"})
+                    # Publish too — consumers (robot_ui log) show per-tag
+                    # lines for dry runs as well, not just live sessions.
+                    self._publish_progress({
+                        "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
+                        "status": "dry_run"})
                     continue
 
-                self._run_one(entry, resolved, ref)
+                # retry_count from the plan (defaults block / per entry):
+                # N retries AFTER the first failed attempt. Re-runs the
+                # whole entry including nav + align.
+                attempts = 1 + max(0, int(resolved.get("retry_count", 0)))
+                for attempt in range(1, attempts + 1):
+                    try:
+                        self._run_one(entry, resolved, ref)
+                        break
+                    except Exception as e:
+                        if attempt >= attempts:
+                            raise
+                        rospy.logwarn(
+                            "[Calibrator] tag=%d attempt %d/%d failed "
+                            "(%s) — retrying", entry.path_tag_id,
+                            attempt, attempts, e)
 
                 world_entry = self.world_data["tags"][entry.path_tag_id]
                 pos_x, pos_y, pos_z = world_entry["position_m"]
@@ -351,15 +416,15 @@ class CalibrationOrchestrator:
     def _run_one(self, entry: PlanEntry, resolved: dict, ref: RefTag):
         """Process a single plan entry; raises on any failure."""
 
-        # 1. Navigate base. If nav_start_id is supplied, go there first so
-        # the controller has a known starting tag for path finding to
-        # path_tag_id.
+        # 1. Navigate base through mobile_node. If nav_start_id is
+        # supplied, go there first so the controller has a known starting
+        # tag for path finding to path_tag_id.
         if resolved.get("nav_start_id") is not None:
-            ok = self.nav.goto(resolved["nav_start_id"])
+            ok = self.base.goto(resolved["nav_start_id"])
             if not ok:
                 raise RuntimeError(
                     f"base nav to nav_start_id={resolved['nav_start_id']} failed")
-        ok = self.nav.goto(entry.path_tag_id)
+        ok = self.base.goto(entry.path_tag_id)
         if not ok:
             raise RuntimeError(
                 f"base nav to path_tag_id={entry.path_tag_id} failed")
@@ -379,46 +444,80 @@ class CalibrationOrchestrator:
                 T_hc2ee=self.T_hc2ee,
                 tag_a_id=entry.ref_tag_id,
                 tag_a_size_m=self._resolve_ref_size(ref),
-                tag_family=self.cfg.tag_family,
-                hand_cam_image_topic=self.cfg.hand_cam_image_topic,
-                hand_cam_info_topic=self.cfg.hand_cam_info_topic,
-                image_wait_timeout_s=self.cfg.image_wait_timeout_s,
+                hand_cam_detections_topic=self.cfg.hand_cam_detections_topic,
+                hand_cam_detector_size_m=self.cfg.hand_cam_detector_size_m,
+                detection_wait_timeout_s=self.cfg.detection_wait_timeout_s,
                 initial_tcp_mm_deg=view_tcp,
             )
         else:
-            self.tcp_client.move_j_to_pose(view_tcp)
+            # align_required=false skips run_auto_align — which is also
+            # where the initial-step CLAMP lives. Apply the same clamp
+            # here so a bad per-entry pose or a wild bootstrap estimate
+            # cannot go to the arm as one unbounded MoveJ.
+            T_cur = pose_fr5_to_matrix_m(self.tcp_client.get_tcp_pose())
+            T_tgt = pose_fr5_to_matrix_m(view_tcp)
+            step = clamp_step(
+                T_cur, T_tgt,
+                max_step_m=self.cfg.align_cfg.max_initial_step_m,
+                max_step_deg=self.cfg.align_cfg.max_initial_step_deg)
+            if step.clamped:
+                rospy.logwarn(
+                    "[Calibrator] view move clamped (Δt=%.3f m, "
+                    "Δrot=%.2f deg)", step.delta_t_norm_m,
+                    step.delta_rot_deg)
+            self.tcp_client.move_j_to_pose(
+                matrix_m_to_pose_fr5(step.T_ab2ee_step))
 
-        # 3. Capture fresh inputs and run the chain.
-        hc_img, K_hc = grab_image_and_K(
-            self.cfg.hand_cam_image_topic, self.cfg.hand_cam_info_topic,
-            timeout=self.cfg.image_wait_timeout_s)
-        fc_img, K_fc = grab_image_and_K(
-            self.cfg.front_cam_image_topic, self.cfg.front_cam_info_topic,
-            timeout=self.cfg.image_wait_timeout_s)
+        # 3. Capture fresh observations from the shared detector and run
+        # the chain.
+        det_a = wait_for_tag_detection(
+            self.cfg.hand_cam_detections_topic, int(entry.ref_tag_id),
+            timeout=self.cfg.detection_wait_timeout_s)
+        T_hc2A = detection_to_T_cam2tag(
+            det_a, self._resolve_ref_size(ref),
+            self.cfg.hand_cam_detector_size_m)
+        det_b = wait_for_tag_detection(
+            self.cfg.front_cam_detections_topic, int(entry.path_tag_id),
+            timeout=self.cfg.detection_wait_timeout_s)
+        T_fc2B = detection_to_T_cam2tag(
+            det_b, self.cfg.tag_b_size_m,
+            self.cfg.front_cam_detector_size_m)
         tcp_pose = self.tcp_client.get_tcp_pose()
 
+        lift_height_m = self._lift_height_m()
+        if lift_height_m:
+            rospy.loginfo("[Calibrator] compensating chain for lift "
+                          "height %.1f mm", lift_height_m * 1000.0)
+        if (self._session_lift_m is not None
+                and abs(lift_height_m - self._session_lift_m) > 0.005):
+            rospy.logwarn(
+                "[Calibrator] lift height drifted %.1f mm from session "
+                "start (%.1f -> %.1f mm). Compensation follows the live "
+                "value, but on this lift a silent change usually means "
+                "the ENCODER drifted — consider re-homing and re-running "
+                "affected entries.",
+                (lift_height_m - self._session_lift_m) * 1000.0,
+                self._session_lift_m * 1000.0, lift_height_m * 1000.0)
         out = compute_T_A2B(
-            image_hc=hc_img, image_fc=fc_img,
+            T_hc2A=T_hc2A, T_fc2B=T_fc2B,
             tcp_pose_mm_deg=tcp_pose,
             T_hc2ee=self.T_hc2ee,
-            K_hc=K_hc, K_fc=K_fc,
             T_ab2mb=self.T_ab2mb, T_mb2fc=self.T_mb2fc,
-            tag_a_id=entry.ref_tag_id, tag_b_id=entry.path_tag_id,
-            tag_a_size_m=self._resolve_ref_size(ref),
-            tag_b_size_m=self.cfg.tag_b_size_m,
-            family=self.cfg.tag_family,
+            lift_height_m=lift_height_m,
         )
         T_A2B = out["T_A2B"]
         T_B_world = compute_T_B_world(ref.T_world, T_A2B)
         pos_m = T_B_world[:3, 3]
         rpy_deg = rot2rpy_deg(T_B_world[:3, :3])
 
-        # 4. Persist the full 6-DOF result (image + K + transforms + CSV).
+        # 4. Persist the full 6-DOF result (observations + transforms +
+        # CSV; raw-frame snapshots are best-effort extras).
         save_locate_run(
             root_dir=self.cfg.save_dir,
             tag_b_id=entry.path_tag_id,
-            image_hc=hc_img, image_fc=fc_img,
-            K_hc=K_hc, K_fc=K_fc,
+            image_hc=self._snapshot(self.cfg.hand_cam_image_topic),
+            image_fc=self._snapshot(self.cfg.front_cam_image_topic),
+            T_hc2A=T_hc2A, T_fc2B=T_fc2B,
             T_A_world=ref.T_world,
             T_hc2ee=self.T_hc2ee,
             T_ab2mb=self.T_ab2mb, T_mb2fc=self.T_mb2fc,
@@ -436,6 +535,7 @@ class CalibrationOrchestrator:
                 "nav_start_id": entry.nav_start_id,
                 "arm_view_tcp_mm_deg": view_tcp,
                 "view_tcp_source": view_source,
+                "lift_height_m": lift_height_m,
             }},
             success=True,
             message="ok",

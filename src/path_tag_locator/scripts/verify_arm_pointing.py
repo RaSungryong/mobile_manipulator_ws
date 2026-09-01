@@ -55,7 +55,7 @@ from path_tag_locator.detect import detect_apriltag
 from path_tag_locator.geometry import assert_rigid, rpy_deg_to_R
 from path_tag_locator.hand_eye import load_T_hc2ee
 from path_tag_locator.ros_image import grab_image_and_K
-from path_tag_locator.tcp_pose import FairinoTCPClient
+from path_tag_locator.arm_interface import ArmInterface
 
 
 _FIND_RE = re.compile(r"\$\(find\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)")
@@ -115,16 +115,18 @@ def main():
     assert_rigid(T_hc2ee, name="T_hc2ee")
     T_ab2mb, T_mb2fc = load_extrinsics(_resolve_ros_path(cfg.extrinsics_yaml))
 
-    if not cfg.robot.use_sdk:
-        rospy.logfatal("robot.use_sdk=false: this test needs the arm")
+    if not (cfg.topics.hand_cam_image and cfg.topics.hand_cam_info
+            and cfg.topics.front_cam_image and cfg.topics.front_cam_info):
+        rospy.logfatal("this test re-detects over RAW frames; configure "
+                       "topics.{hand,front}_cam_image/_info in locator.yaml")
         sys.exit(2)
-    client = FairinoTCPClient(
-        robot_ip=cfg.robot.robot_ip,
-        sdk_path=cfg.robot.fairino_sdk_path,
-        tcp_index=cfg.robot.tcp_index,
+    client = ArmInterface(
+        state_topic=cfg.arm.state_topic,
+        move_cart_topic=cfg.arm.move_cart_topic,
         default_vel=cfg.align.move_vel,
         default_acc=cfg.align.move_acc,
         default_ovl=cfg.align.move_ovl,
+        motion_timeout_s=cfg.arm.motion_timeout_s,
     )
 
     mw_path = args.map_world or _latest_map_world()
@@ -156,7 +158,7 @@ def main():
         try:
             fc_img, K_fc = grab_image_and_K(
                 cfg.topics.front_cam_image, cfg.topics.front_cam_info,
-                timeout=cfg.io.image_wait_timeout)
+                timeout=cfg.io.detection_wait_timeout)
         except Exception as e:
             rospy.logwarn("front-cam capture failed: %s", e)
             results.append((tid, None, None, "fc_capture_failed"))
@@ -199,7 +201,7 @@ def main():
         try:
             hc_img, K_hc = grab_image_and_K(
                 cfg.topics.hand_cam_image, cfg.topics.hand_cam_info,
-                timeout=cfg.io.image_wait_timeout)
+                timeout=cfg.io.detection_wait_timeout)
         except Exception as e:
             rospy.logwarn("  hand-cam capture failed: %s", e)
             results.append((tid, None, None, f"hc_capture_failed: {e}"))

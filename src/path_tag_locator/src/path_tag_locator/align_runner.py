@@ -7,15 +7,19 @@ into a module so the map-calibration orchestrator can reuse the exact
 same logic.
 
 Logic (per iteration):
-    1. Initial MoveJ to ``initial_tcp_mm_deg`` (clamped by initial-step
+    1. Initial move to ``initial_tcp_mm_deg`` (clamped by initial-step
        thresholds). Skipped if ``skip_initial_move=True``.
-    2. Capture hand-cam Image + CameraInfo via the configured topics.
-    3. Detect tag A; if not detected -> RuntimeError.
-    4. Compute alignment metrics (xy_offset, tilt).
-    5. If both metrics ≤ tolerances -> converged.
-    6. Else compute target EE pose via ``compute_target_ee_pose``,
-       clamp by per-step thresholds, MoveJ to the clamped target,
+    2. Wait for a hand-cam detection of tag A on the shared detector's
+       detections topic; not detected within timeout -> RuntimeError.
+    3. Compute alignment metrics (xy_offset, tilt).
+    4. If both metrics ≤ tolerances -> converged.
+    5. Else compute target EE pose via ``compute_target_ee_pose``,
+       clamp by per-step thresholds, move to the clamped target,
        settle, and loop.
+
+``tcp_client`` is duck-typed: anything with ``get_tcp_pose()`` and
+``move_j_to_pose(pose, settle_s=...)`` works — since the refactor that
+is ``arm_interface.ArmInterface`` (arm_node proxy), not an SDK client.
 
 The function uses rospy logging (loginfo / logwarn) but never calls
 init_node or rospy.spin — callers run it from whatever node they own.
@@ -28,9 +32,8 @@ from .align import (
     compute_target_ee_pose,
     is_converged,
 )
-from .detect import detect_apriltag
+from .detections import detection_to_T_cam2tag, wait_for_tag_detection
 from .geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
-from .ros_image import grab_image_and_K
 
 
 def _fmt_pose(p):
@@ -44,10 +47,9 @@ def run_auto_align(*,
                    T_hc2ee,
                    tag_a_id: int,
                    tag_a_size_m: float,
-                   tag_family: str,
-                   hand_cam_image_topic: str,
-                   hand_cam_info_topic: str,
-                   image_wait_timeout_s: float,
+                   hand_cam_detections_topic: str,
+                   hand_cam_detector_size_m: float,
+                   detection_wait_timeout_s: float,
                    initial_tcp_mm_deg,
                    skip_initial_move: bool = False) -> dict:
     """Drive the hand camera squarely onto tag A. Returns a report dict::
@@ -55,12 +57,12 @@ def run_auto_align(*,
         {"iterations": int, "xy_offset_m": float, "tilt_deg": float,
          "final_tcp": list[float]}
 
-    Raises ``RuntimeError`` if the TCP client is missing, the initial
+    Raises ``RuntimeError`` if the arm interface is missing, the initial
     pose argument is invalid, or tag A is not detected during the
     refinement loop.
     """
     if tcp_client is None:
-        raise RuntimeError("auto_align requires robot.use_sdk=true")
+        raise RuntimeError("auto_align requires an arm interface")
 
     initial = [float(v) for v in initial_tcp_mm_deg]
     if len(initial) != 6 or all(v == 0.0 for v in initial):
@@ -87,15 +89,16 @@ def run_auto_align(*,
     iters = 0
     for i in range(int(align_cfg.max_iterations)):
         iters = i + 1
-        img, K = grab_image_and_K(
-            hand_cam_image_topic, hand_cam_info_topic,
-            timeout=image_wait_timeout_s)
-        T_cam2tag = detect_apriltag(
-            img, K, float(tag_a_size_m), int(tag_a_id), family=tag_family)
-        if T_cam2tag is None:
+        try:
+            det = wait_for_tag_detection(
+                hand_cam_detections_topic, int(tag_a_id),
+                timeout=detection_wait_timeout_s)
+        except RuntimeError as e:
             raise RuntimeError(
                 f"auto_align: tag A (id={tag_a_id}) not detected at "
-                f"iteration {iters} — adjust initial pose")
+                f"iteration {iters} — adjust initial pose ({e})")
+        T_cam2tag = detection_to_T_cam2tag(
+            det, float(tag_a_size_m), float(hand_cam_detector_size_m))
         metrics = alignment_metrics(T_cam2tag)
         last_metrics = metrics
         rospy.loginfo(

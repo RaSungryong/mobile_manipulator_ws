@@ -209,6 +209,15 @@ owner node per device, other nodes reach it over topics/services.
 `mobile_manipulator.launch` starts all eight. Seven are required;
 `camera_viewer_node` is the only optional one (a debug aid that owns no device).
 
+The calibration nodes (`path_tag_locator` + `map_calibrator`, plus
+`handeye_calib` behind `use_handeye_calib:=false`) live in a SEPARATE
+`path_tag_locator/launch/path_tag_locator.launch`, run alongside this
+stack for a calibration session — the main launch must already be up.
+Since the 2026-09-01 refactor they own **no** hardware: arm via
+`/arm/move_cart`, base via `MobileClient`, observations via
+`/<cam>/tag_detections`. ⚠️ `map_calibrator` is a second commander of
+`/mobile/goto_tag`: no `TASK`/`GOTO` during a calibration session.
+
 ⚠️ **`/lifter/*` (this workspace) and `/lift/*` (the navifra driver) differ by
 one character.** `/lift/*` is the raw driver with none of the guards below —
 no soft travel clamp, no origin check. Read the topic name twice before
@@ -1026,13 +1035,12 @@ three independent places, all now fixed:
 | `center_y` stop condition | image Y runs fore/aft, and grows as you approach | **`center_x`** vs `camera_params[2]`, falling back to `image_width/2`. It **decreases** on forward approach, so **both comparisons are inverted** and the config key became `center_x_stop_offset: +50.0` |
 | `align_to_tag` / `corner0→corner1` angle | edge angle reads 0 when square | the shared `tag_edge_angle_deg()` helper **subtracts 90°** before the wrap. Measured, not assumed: a floor direction along `+mb.x` imaged at −90° before and 0° after |
 
-⚠️ **`path_tag_locator` carries a second, unfixed copy.** Its
-`nav/robot_controller.py` + `config/robot_nav.yaml` duplicate this navigation
-logic and still hold `center_y_stop_offset: -50.0` and `lateral = tag['x']`.
-That package is **not** started by `mobile_manipulator.launch` — it has its own
-`map_calibrator.launch` / `path_tag_locator.launch` / `handeye_calib.launch` —
-so it was deliberately left alone. But it drives the same base off the same
-rotated camera, so **do not run those launches until it is ported.**
+`path_tag_locator` carried a second, unfixed copy of this logic in
+`nav/robot_controller.py` + `config/robot_nav.yaml`. **Resolved 2026-09-01 by
+deletion**: the copy was first ported (verified offline, 16 checks) and then
+the same-day standalone-mode refactor deleted the whole `nav/` tree — base
+navigation now goes through `mobile_node` via `MobileClient`, so there is
+exactly one implementation of this logic in the workspace.
 
 `get_current_tag_id` is safe — `hypot(x, y)` is invariant to in-plane rotation.
 `dist_to_tag = tag['z']` is also unaffected, but note it was **already** just
@@ -1062,11 +1070,16 @@ both directions, and `tag_edge_angle_deg` reading 0 for a square tag.
 - **Comments in English**
 - **ROS topics:** lowercase with `/` separator, scan results under `/scan/`
 - **Config:** all tunable params in `config/robot.yaml`, not hardcoded
-- **scipy:** requires **scipy >= 1.4** — use `as_matrix()` / `from_matrix()`.
-  The old `as_dcm()` / `from_dcm()` spelling was dropped: it only exists in
-  scipy < 1.6, and no scipy that old is usable here. numpy must be >= 1.21.6
-  (`onnxruntime` requires it), but scipy < 1.6 calls `np.typeDict`, which numpy
-  removed in 1.21 — so every scipy that has `as_dcm()` fails to import.
+- **scipy:** write COMPAT calls —
+  `rot.as_matrix() if hasattr(rot, 'as_matrix') else rot.as_dcm()` (same
+  for `from_matrix`/`from_dcm`). The earlier ">= 1.4 only, old scipy
+  cannot even import" claim is empirically FALSE on this robot PC: it
+  runs scipy **1.3.3** with numpy 1.23.5 and imports fine (the
+  `np.typeDict` failure does not hit `scipy.spatial.transform`), so bare
+  `as_matrix()` crashes at runtime here — it silently emptied every
+  `/…/tag_detections` array until 2026-09-01 (found in review; three
+  files patched: `robot_camera_node.py`, `arm_transform.py`,
+  `arm_controller.py`).
 
 ---
 
@@ -1112,6 +1125,187 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-01 — full review of the day's work: 12 findings fixed, 2 of them serious
+
+Two parallel review passes over the whole staged set (49 files) before
+commit. Everything below is fixed and re-verified (33-check suite, build
+clean); nothing ran on hardware.
+
+**The two serious ones:**
+- **The shared detector never published a detection on this machine.**
+  `robot_camera_node._orientation` calls `R.from_matrix` — absent in this
+  PC's scipy 1.3.3 — and the per-frame `except` swallowed the
+  AttributeError, so `/…/tag_detections` carried empty arrays for every
+  frame WITH a tag. The entire refactored calibration path (and
+  mobile_node's vision stop) depended on it. Compat fallbacks applied in
+  three files; convention rewritten (see Coding Conventions — the ">=1.4
+  or it won't even import" premise was empirically false).
+- **`BaseInterface.goto()` auto-cleared the EMERGENCY stop latch** before
+  every move — a mid-session e-stop would fail one entry and the next
+  entry would drive the base again. Now: refuses to drive while
+  emergency/estop is latched (deliberate clear required); only a
+  leftover preempt latch is cleared.
+
+**The rest:** move_cart completion could be claimed by a scan's
+motion_seq bump (now attributed via result_message, with arm_node-restart
+detection); stale-state guard on `/arm/state` (1 s freshness, previously
+a dead arm_node served its last pose forever); pub-connection wait before
+the first `move_cart` (rospy drops pre-connection publishes);
+`align._target_T_cam2tag` servoed the camera yaw back to zero, undoing
+the planner's flange-reach optimization — it now preserves the current
+spin and corrects only tilt (regression-tested); `retry_count` was
+parsed-but-ignored (now a real retry loop); `run_calibration` gained a
+one-session lock + `~cancel_calibration` (cooperative, stops after the
+current entry); `align_required: false` moves now go through the same
+initial-step clamp as the align path; `wait_for_tag_detection` uses one
+persistent subscriber per call instead of churning `wait_for_message`;
+dry runs publish per-tag progress; map_calibrator reads its own private
+locator params before the global copy; README/USAGE_kr purged of
+pre-refactor instructions (the worst told operators to `rosnode kill
+/task_executor` before a session).
+
+### 2026-09-01 — path_tag_locator refactored into the main stack; standalone mode removed
+
+Two passes in one day; the first is kept here because its verification is
+what makes the second safe.
+
+**Pass 1 — un-quarantine (rotation port + new map, together, as the 🛑
+headers demanded).** The `nav/robot_controller.py` copy got the three
+already-verified `mobile_controller` fixes (`lateral = tag['y']`,
+`center_x_stop_offset: +50.0` with inverted comparisons, the
+`tag_edge_angle_deg()` −90° helper); `map.yaml` became a verbatim copy of the
+new 72-tag cell map. Verified offline (16 checks, `verify_ptl_port.py`):
+helper parity over 200 random rotations, `calculate_robot_pose` parity vs
+`mobile_controller` over all 72 tags, dock 500 reproducing the design
+record's **−1.9123**, stop condition monotone. Also fixed while there:
+dock 508 → 500 in `calibration_plan.yaml`/README/USAGE_kr, `tag_b_size_m`
+0.090.
+
+**Pass 2 — full refactor: the package now runs inside
+`mobile_manipulator.launch` and owns no hardware.** Deleted: the whole
+`nav/` tree (+`robot_nav.yaml`) — base nav goes through `mobile_node` via
+`MobileClient` (`base_interface.py`); `tcp_pose.py` (the second Fairino RPC
+connection) — arm moves go through `arm_node`'s `/arm/move_cart` with
+`motion_seq` completion (`arm_interface.py`, duck-type identical, so
+`align_runner` only changed its detection source); the in-package `map.yaml`
+copy — `map_calibrator.yaml` now points at `$(find apriltag_nav)`'s map. The
+three old launch files became ONE `path_tag_locator.launch` (handeye node
+behind `use_handeye_calib`, default false), kept separate from
+`mobile_manipulator.launch` by user decision — run it alongside the main
+stack, which must already be up.
+Tag observations now come from `robot_camera_node`'s detections topics (one
+detector, many consumers) with per-camera size rescaling — pose_t is linear
+in tag size, so odd-sized ref tags can be recovered from the detector's
+configured size by scaling t; `robot.yaml` `robot_camera.tag_size.hand_cam`
+was first set to 0.06, then **same day the user switched the (six) reference
+tags to 90 mm** — hand_cam, `tag_a_size_m` and the handeye tag are all 0.09
+now, scale factor 1; `reference_tags.yaml` still holds example poses and
+needs the six real measurements. `handeye_calib_node`
+deliberately keeps grabbing RAW hand-cam frames (calibrateHandEye re-detects
+over archived samples) but reads TCP pose from `/arm/state`.
+
+**Two traps found on the way:**
+- `robot_camera_node` encodes euler as `as_euler('zyx')[::-1]` — scipy
+  LOWERCASE 'zyx' (extrinsic), despite its own docstring saying
+  "ZYX-intrinsic". Reconstructing with `geometry.rpy_deg_to_R` (Rz·Ry·Rx
+  intrinsic, the Fairino TCP convention) is wrong at large angles; the exact
+  inverse is `from_euler('zyx', [yaw, pitch, roll])`. `detections.py`
+  documents this; a 300-random-pose round-trip test pins it.
+- This machine runs **scipy 1.3.3** (no `as_matrix`), while the merged stack
+  assumes ≥ 1.4 — `robot_camera_node`/`arm_transform`/`arm_controller` would
+  AttributeError at runtime here. Flagged as a separate task; `detections.py`
+  uses an `as_dcm` fallback so this package works on both.
+
+**Lift compensation (same day, user request):** `T_ab2mb` is measured with
+the lift at origin, so a raised lift used to shift every chain result by the
+lift height silently — the locate/calibrate twin of the main stack's
+"lift breaks arm_base_z" problem. `chain.compensate_T_ab2mb()` now subtracts
+the live `/lifter/height` (via `lift_listener.py`) from `T_ab2mb`'s t_z in
+both nodes AND in the auto-view-pose bootstrap; the height is logged and
+persisted with each run. If lifter_node is down the listener warns and
+assumes origin (the old behaviour). The main stack's pose-mode IK remains
+deliberately uncompensated — this fixes only path_tag_locator's chain.
+extrinsics.yaml must STAY lift-at-origin (comment added there).
+
+The intended workflow is a FIXED height per session:
+`map_calibrator.yaml lift_height_mm` (null = leave the lift alone) makes
+`run_calibration` position the lift there first — home-then-single-up-stroke
+by default (`lift_home_first: true`), because the driver guide documents
+~1000–1800 counts of encoder error after an up-then-down stroke, so home+up
+is the only reliable route to a known height. The orchestrator then guards
+the session: >5 mm drift from the session-start height logs a loud warning
+(compensation follows the live value, so drift implies the ENCODER is lying
+— re-home and re-run affected entries).
+
+**Per-plate sessions (user requirement):** both plates carry cross tags
+with the SAME ids 0-5, so map calibration runs as TWO sessions —
+`calibration_plan_plate1.yaml` (all 26 B+C work tags) with
+`reference_tags.yaml`, and `calibration_plan_plate2.yaml` (all 25 D+E)
+with `reference_tags_plate2.yaml` (= plate 1 poses + 3.420 m x, the
+row-by-row-verified offset between the two design CSVs). Plan and ref
+file swap TOGETHER — the wrong pairing shifts every result by 3.420 m.
+map_calibrator.yaml defaults to the plate-1 pair; plate 2 goes through
+the service request's `plan_path`/`ref_tags_path` or robot_ui's
+`map_calibration` script (`PLATE = 2`).
+
+All design artifacts come from ONE generator,
+`path_tag_locator/scripts/generate_calibration_artifacts.py` (takes
+`--lift-mm` / `--view-m`; re-run it, don't hand-edit): both plans — each
+entry paired nearest-cross-tag-by-y AND carrying a design
+`arm_view_tcp_mm_deg` (map.yaml stop pose + extrinsics + hand-eye, so
+sessions are deterministic; the entry override beats the bootstrap, and
+run_auto_align still refines) — plus `docs/all_tags_position.csv`
+(78 tags: positions, orientations, ref pairing, stop pose, view TCP,
+ab-frame reach).
+
+⚠️ Two-frame trap, caught by the user: the "2번정반 중심" design CSV's
+origin is NOT 정반 2's geometric centre. D(−1.24)/E(+2.18) are asymmetric
+about that origin; with the 0.45 m lane-to-face rule and the 2.52 m plate
+width, the plate spans world 2.63..5.15 with its centre at **+3.890** —
+0.47 m east of the CSV origin (+3.420). The user confirmed the plate-2
+cross tags are laid about the GEOMETRIC centre, so
+`reference_tags_plate2.yaml` = 정반 1 poses **+3.890** x (an earlier
++3.420 version briefly existed — never calibrate against it).
+
+Reach: RESOLVED — all 51 pairs fit. Two corrections got there. (1) The
+plate-2 frame fix above (D/E mirror B/C, 1.06–1.76 m TCP distance).
+(2) User-pointed: reach is a FLANGE constraint, and the vision_tip tool
+link (set_tool_tcp.py: flange→tip (0, −253, +225.2) mm, ≈339 mm) extends
+the TCP well beyond it — AND the camera yaw about the tag normal is a
+FREE parameter (align converges on xy+tilt, never yaw), so the planner
+sweeps it (5° steps) and keeps the pose whose flange sits closest to the
+arm base; both the hand-eye lever and the tool overhang swing toward the
+base. Result: flange reach 0.86–1.315 m, 0/51 over the 1.40 m FR10
+nominal, worst margin 85 mm. Caveat: Euclidean flange distance is not
+full IK feasibility (wrist config, joint limits) — entries near the
+margin can still fail IK at run time and are skipped per-entry, not
+fatally. Plans carry the chosen cam yaw per entry; the CSV now has
+`reach_tcp_m` + `reach_flange_m`.
+
+**robot_ui integration (same day):** the calibration workflow is drivable
+from the UI. `RosBridge` gained `locate_path_tag` / `run_map_calibration` /
+`handeye_{capture,compute,status}` (blocking — worker-thread rule as ever;
+`path_tag_locator.srv` is lazy-imported so the UI still starts without the
+package built) plus a `calib_progress` signal fed by
+`/map_calibrator/progress`, which MainWindow renders as `[calib] tag N: OK
+x= y=` log lines. Two hot-reloadable operator scripts under `plugins/`:
+`map_calibration.py` (DRY_RUN constant, defaults true) and `locate_tag.py`
+(TAG_B_ID / AUTO_ALIGN / INITIAL_TCP constants). Caveat written into the
+script header: `run_map_calibration` is ONE blocking service call, so the
+Stop button cannot interrupt a live session — STOP ALL fails the current
+entry instead. The calibration nodes stay out of the UI's launch; they must
+be running from `path_tag_locator.launch`, else the bridge methods return a
+clean wait_for_service timeout.
+
+**Verified offline** (33 checks, `verify_ptl_refactor.py`): all imports,
+deleted modules unimportable, config loaders, detector-size invariants vs
+robot.yaml, euler round-trip, chain math vs hand-built ground truth,
+image-less persistence, launch XML with the three nodes, orchestrator
+dry-run construction. `catkin_make` clean. **Nothing ran on hardware** — the
+first live calibration session still needs: arm_node's `move_cart` behaviour
+under the align loop, detections latency vs the old direct grabs, and the
+MobileClient single-commander discipline (no TASK/GOTO mid-session).
 
 ### 2026-08-24 — Zone B is drivable; line1 lift → 300 mm; the scan still is not
 

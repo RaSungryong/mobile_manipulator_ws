@@ -1,22 +1,37 @@
 path_tag_locator:
   topics:
-    hand_cam_image:   "/vision_cam/color/image_raw"
-    hand_cam_info:    "/vision_cam/color/camera_info"
+    # Shared-detector observations (robot_camera_node). This package runs
+    # no detector of its own — one detector, many consumers.
+    hand_cam_detections:  "/hand_cam/tag_detections"
+    front_cam_detections: "/front_cam/tag_detections"
+    # Raw frames: image topics feed best-effort record snapshots only;
+    # image+info pairs additionally serve the standalone verification and
+    # hand-eye tools, which re-detect over raw frames on purpose.
+    hand_cam_image:   "/hand_cam/color/image_raw"
+    hand_cam_info:    "/hand_cam/color/camera_info"
     front_cam_image:  "/front_cam/color/image_raw"
     front_cam_info:   "/front_cam/color/camera_info"
 
   tag:
     family:           "tag36h11"
     tag_a_id:         0       # reference tag (observed by hand-cam)
-    tag_b_id:         105       # default path tag (observed by front-cam)
-    tag_a_size_m:     0.060
-    tag_b_size_m:     0.060
+    tag_b_id:         105     # default path tag (observed by front-cam)
+    tag_a_size_m:     0.090   # ref tags switched to 90 mm (2026-09-01, six tags)
+    tag_b_size_m:     0.090   # new cell's floor tags are 90 mm (2026-08 cell swap)
 
-  robot:
-    use_sdk:          true
-    robot_ip:         "192.168.58.2"
-    fairino_sdk_path: "/home/ku/mobile_manipulator_ws/fairino_sdk/fairino-python-sdk/Linux"
-    tcp_index:        1
+  # Tag sizes the SHARED detector runs with (robot.yaml robot_camera.tag_size).
+  # pose_t scales linearly with tag size, so observations are rescaled from
+  # these to the actual tag.* sizes above. Keep in sync with robot.yaml.
+  detector:
+    hand_cam_tag_size_m:  0.090
+    front_cam_tag_size_m: 0.090
+
+  # arm_node proxy (replaces the old direct-SDK robot: block — this package
+  # opens no Fairino RPC connection; arm_node owns the arm).
+  arm:
+    state_topic:      "/arm/state"
+    move_cart_topic:  "/arm/move_cart"
+    motion_timeout_s: 60.0
 
   hand_eye:
     npz_path:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
@@ -25,11 +40,11 @@ path_tag_locator:
   reference_tag_yaml: "$(find path_tag_locator)/config/reference_tag.yaml"
 
   io:
-    image_wait_timeout: 3.0
+    detection_wait_timeout: 3.0
     # Every call (success or failure) is persisted under this root.
     # The service request can override the path per-call; the
     # ``save_result`` flag in the request is now informational only —
-    # results are always written (raw images + K + transforms + CSV).
+    # results are always written (observations + transforms + CSV).
     default_save_dir:   "~/.ros/path_tag_locator"
 
   # Auto-align parameters used when the LocatePathTag service request has
@@ -41,14 +56,14 @@ path_tag_locator:
     max_iterations:        5       # set to 1 for one-shot
     position_tol_m:        0.005   # convergence: tag x-y offset in cam frame
     angle_tol_deg:         1.0     # convergence: tilt between cam +z and tag +z
-    max_step_m:            0.10    # per-iteration MoveL translation clamp
-    max_step_deg:          15.0    # per-iteration MoveL rotation clamp
+    max_step_m:            0.10    # per-iteration translation clamp
+    max_step_deg:          15.0    # per-iteration rotation clamp
     max_initial_step_m:    0.80    # clamp on the user-supplied initial move
     max_initial_step_deg:  180.0   # clamp on the user-supplied initial move
-    move_vel:              20.0    # Fairino MoveJ vel %
+    move_vel:              20.0    # arm_node move_cart vel
     move_acc:              20.0
-    move_ovl:              100.0
-    move_settle_s:         0.3     # pause after MoveJ before re-detecting
+    move_ovl:              100.0   # kept for signature parity (unused)
+    move_settle_s:         0.3     # pause after a move before re-detecting
 
     # Bootstrap auto-arm-view-pose (map_calibrator only). When true,
     # entries past the first one without an explicit arm_view_tcp_mm_deg

@@ -94,6 +94,18 @@ _MARK = (0, 255, 0)           # tag marker + leader line
 _TEXT = (0, 255, 255)         # BGR yellow — all overlay text
 
 
+def _rot_to_matrix(rot):
+    """scipy compat: >=1.4 spells it as_matrix(), 1.3 only has as_dcm().
+    This machine runs 1.3.3 (the merged stack assumed >=1.4 and crashed
+    at runtime on every call)."""
+    return rot.as_matrix() if hasattr(rot, 'as_matrix') else rot.as_dcm()
+
+
+def _rot_from_matrix(m):
+    return (R.from_matrix(m) if hasattr(R, 'from_matrix')
+            else R.from_dcm(m))
+
+
 def _orientation(pose_R):
     """(roll, pitch, yaw, tilt_from_normal) in degrees from dt_apriltags pose_R.
 
@@ -105,7 +117,8 @@ def _orientation(pose_R):
     if pose_R is None:
         return 0.0, 0.0, 0.0, 0.0
     Rm = np.asarray(pose_R, dtype=float).reshape(3, 3)
-    roll, pitch, yaw = R.from_matrix(Rm).as_euler('zyx', degrees=True)[::-1]
+    roll, pitch, yaw = _rot_from_matrix(Rm).as_euler('zyx',
+                                                     degrees=True)[::-1]
     # Camera looks along +Z; the tag faces the camera when its normal is -Z,
     # so a dead-square tag gives Rm[2, 2] = -1 and tilt 0.
     tilt = np.degrees(np.arccos(np.clip(abs(Rm[2, 2]), -1.0, 1.0)))

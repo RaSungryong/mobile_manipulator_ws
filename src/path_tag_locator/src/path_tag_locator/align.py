@@ -55,15 +55,26 @@ def _target_T_cam2tag(T_cam2tag_now: np.ndarray,
                       target_distance_m: float) -> np.ndarray:
     """Desired pose of the tag in the camera frame after alignment.
 
-    Rotation = identity (camera squarely facing tag).
-    Translation = (0, 0, d) where d = ``target_distance_m`` if > 0, else the
-    current z-component (preserve depth).
+    Rotation: PRESERVE the current spin about the tag normal (z), zero
+    only the tilt. Yaw is invisible to the metrics and ``is_converged``
+    — it is a free parameter the calibration planner deliberately picks
+    to keep the arm FLANGE inside reach (view_pose._target_T_A2hc).
+    Targeting identity here (as this helper originally did) made every
+    correction step servo that yaw back toward zero, swinging the
+    vision_tip overhang out again and defeating the reach optimization.
+
+    Translation = (0, 0, d) where d = ``target_distance_m`` if > 0, else
+    the current z-component (preserve depth).
     """
     if target_distance_m and target_distance_m > 0.0:
         d = float(target_distance_m)
     else:
         d = float(T_cam2tag_now[2, 3])
+    yaw = math.atan2(float(T_cam2tag_now[1, 0]), float(T_cam2tag_now[0, 0]))
+    c, s = math.cos(yaw), math.sin(yaw)
     T = np.eye(4, dtype=np.float64)
+    T[0, 0], T[0, 1] = c, -s
+    T[1, 0], T[1, 1] = s, c
     T[2, 3] = d
     return T
 

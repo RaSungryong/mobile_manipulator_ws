@@ -19,10 +19,17 @@ from .geometry import assert_rigid, rpy_deg_to_R
 
 @dataclass
 class TopicsCfg:
-    hand_cam_image: str
-    hand_cam_info: str
-    front_cam_image: str
-    front_cam_info: str
+    # Shared-detector outputs (robot_camera_node) — the tag observations.
+    hand_cam_detections: str
+    front_cam_detections: str
+    # Raw image/info topics. Images are used ONLY for best-effort record
+    # snapshots in the persistence layer (empty string disables); the
+    # info topics serve the standalone verification / hand-eye tools,
+    # which re-detect over raw frames on purpose.
+    hand_cam_image: str = ""
+    front_cam_image: str = ""
+    hand_cam_info: str = ""
+    front_cam_info: str = ""
 
 
 @dataclass
@@ -35,16 +42,25 @@ class TagCfg:
 
 
 @dataclass
-class RobotCfg:
-    use_sdk: bool
-    robot_ip: str
-    fairino_sdk_path: str
-    tcp_index: int
+class DetectorCfg:
+    """Tag sizes the SHARED detector was configured with (robot.yaml
+    ``robot_camera.tag_size``). pose_t scales linearly with tag size, so
+    observations are rescaled from these to the actual tag sizes above."""
+    hand_cam_tag_size_m: float
+    front_cam_tag_size_m: float
+
+
+@dataclass
+class ArmCfg:
+    """arm_node proxy settings (replaces the old direct-SDK robot: block)."""
+    state_topic: str = "/arm/state"
+    move_cart_topic: str = "/arm/move_cart"
+    motion_timeout_s: float = 60.0
 
 
 @dataclass
 class IOCfg:
-    image_wait_timeout: float
+    detection_wait_timeout: float
     default_save_dir: str
 
 
@@ -76,7 +92,8 @@ class AlignCfg:
 class LocatorCfg:
     topics: TopicsCfg
     tag: TagCfg
-    robot: RobotCfg
+    detector: DetectorCfg
+    arm: ArmCfg
     hand_eye_npz: str
     extrinsics_yaml: str
     reference_tag_yaml: str
@@ -98,7 +115,8 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
     root = d.get("path_tag_locator", d)
     topics = TopicsCfg(**root["topics"])
     tag = TagCfg(**root["tag"])
-    robot = RobotCfg(**root["robot"])
+    detector = DetectorCfg(**root["detector"])
+    arm = ArmCfg(**root.get("arm", {}))
     io = IOCfg(**root["io"])
     align_defaults = dict(
         target_distance_m=0.0,
@@ -121,7 +139,8 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
     return LocatorCfg(
         topics=topics,
         tag=tag,
-        robot=robot,
+        detector=detector,
+        arm=arm,
         hand_eye_npz=_expand(root["hand_eye"]["npz_path"]),
         extrinsics_yaml=_expand(root["extrinsics_yaml"]),
         reference_tag_yaml=_expand(root["reference_tag_yaml"]),

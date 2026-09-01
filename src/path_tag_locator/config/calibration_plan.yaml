@@ -5,7 +5,7 @@
 #      ``path_tag_id`` using map.yaml's edge graph.
 #   2. Arm moves to ``arm_view_tcp_mm_deg`` (or ``defaults.``).
 #   3. Auto-align refines so hand-cam sees ref_tag squarely.
-#   4. Chain computes path_tag world pose; map_updated.yaml is updated.
+#   4. Chain computes path_tag world pose; map_world_<ts>.yaml is updated.
 #
 # Failures (nav timeout / tag undetected / IK / MoveJ) skip the entry,
 # log to the persistence layer, and continue with the next one.
@@ -19,13 +19,19 @@ defaults:
 
 plan:
   # Example seed — replace with your actual plan.
-  # ref_tag_id MUST exist in reference_tags.yaml.
-  - path_tag_id: 101
-    ref_tag_id: 0               # origin tag
-    nav_start_id: 508           # base parks at DOCK before BFS to path tag
-  - path_tag_id: 102
-    ref_tag_id: 0
-  - path_tag_id: 405
-    ref_tag_id: 502
+  # ref_tag_id MUST exist in reference_tags.yaml — since 2026-09-01 that
+  # means CROSS TAGS 0-5 on 정반 1 (west column 0/1/2 at x -0.600 facing
+  # zone B, east column 5/4/3 at x +0.600 facing zone C). Pair each
+  # path tag with the nearest cross tag the arm can view from that stop:
+  #   zone B (x -1.71): y<-0.6 -> 0, |y|<0.6 -> 1, y>0.6 -> 2
+  #   zone C (x 1.71): east column, y<-0.6 -> 5, |y|<0.6 -> 4, y>0.6 -> 3
+  # (zones D/E pair with 정반 2's cross tags — see calibration_plan_plate2.yaml)
+  - path_tag_id: 105            # B, y 0.150
+    ref_tag_id: 1               # west-centre cross tag (-0.6, 0.0)
+    nav_start_id: 500           # base parks at DOCK before BFS to path tag
+  - path_tag_id: 106            # B, y 0.550
+    ref_tag_id: 1
+  - path_tag_id: 117            # C, y 0.250
+    ref_tag_id: 4               # east-centre cross tag (0.6, 0.0)
     # entry-level overrides take precedence over defaults:
     arm_view_tcp_mm_deg: [400.0, 0.0, 300.0, 170.0, 0.0, 0.0]
