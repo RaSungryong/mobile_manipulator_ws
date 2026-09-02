@@ -66,6 +66,54 @@ def wait_for_tag_detection(topic: str, tag_id: int, timeout: float = 3.0):
         sub.unregister()
 
 
+def wait_for_tag_detections(topic: str, tag_id: int, n: int,
+                            timeout: float = 3.0):
+    """Collect up to ``n`` consecutive detections of ``tag_id`` (one per
+    frame) within ``timeout``; returns the list (>= 1 entry, else raises
+    like :func:`wait_for_tag_detection`). Lets the align loop take a
+    median instead of trusting one frame — the tilt of a 70 px tag is
+    noisy (std 0.5 deg, spikes of 3-4 deg measured 2026-09-02)."""
+    n = max(1, int(n))
+    found = []
+    lock = threading.Lock()
+    event = threading.Event()
+
+    def _cb(arr):
+        for det in arr.detections:
+            if int(det.id) == int(tag_id):
+                with lock:
+                    found.append(det)
+                    if len(found) >= n:
+                        event.set()
+                return
+
+    sub = rospy.Subscriber(topic, AprilTagDetectionArray, _cb,
+                           queue_size=1)
+    try:
+        deadline = rospy.Time.now() + rospy.Duration(float(timeout))
+        while not rospy.is_shutdown():
+            if event.wait(0.05):
+                break
+            if rospy.Time.now() >= deadline:
+                break
+        with lock:
+            if not found:
+                raise RuntimeError(
+                    f'tag {tag_id} not detected on {topic} within '
+                    f'{timeout:.1f}s')
+            return list(found)
+    finally:
+        sub.unregister()
+
+
+def median_tilt_detection(dets):
+    """The detection whose ``tilt_from_normal`` is the median of the
+    batch — a robust pick that keeps a REAL frame (no averaging of
+    rotations) while discarding the tilt spikes."""
+    dets = sorted(dets, key=lambda d: float(d.tilt_from_normal))
+    return dets[len(dets) // 2]
+
+
 def detection_to_T_cam2tag(det,
                            actual_size_m: float,
                            detector_size_m: float) -> np.ndarray:

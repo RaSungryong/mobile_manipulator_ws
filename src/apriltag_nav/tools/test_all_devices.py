@@ -92,7 +92,7 @@ USB_VENDORS = {
     'Intel RealSense (side/hand_cam)': '8086',
 }
 
-# All eight are started by mobile_manipulator.launch. robot_camera_node is
+# All nine are started by mobile_manipulator.launch. robot_camera_node is
 # required because navigation consumes its detections — without it /robot_pose
 # never publishes and GOTO cannot work, even though vision-stop stays inert
 # while stop_tag_ids is the empty placeholder.
@@ -105,6 +105,7 @@ EXPECTED_NODES = [
     ('/robot_camera_node',         True),
     ('/lifter_node',               True),
     ('/camera_viewer_node',        False),   # debug aid; absence is not a fault
+    ('/inference_node',            False),   # on-demand Ra for robot_ui; TASK scans score in-process
 ]
 
 EXPECTED_SERVICES = [
@@ -121,6 +122,7 @@ EXPECTED_SERVICES = [
     ('/robot_camera/side_cam/set_enabled',  False),
     ('/robot_camera/hand_cam/set_enabled',  False),
     ('/camera_viewer/set_enabled',          False),
+    ('/inference/predict',                  False),
 ]
 
 

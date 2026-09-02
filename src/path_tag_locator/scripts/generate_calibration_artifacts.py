@@ -211,7 +211,12 @@ def main():
                    over, v["ref"],
                    ", ".join("%.1f" % x for x in v["tcp"])))
             if first:
-                lines.append("    nav_start_id: 500\n")
+                # No nav_start_id: the session starts from wherever the
+                # base is parked, which must be ON this first tag (front_cam
+                # sees it). Earlier plans drove to DOCK 500 first, which
+                # for plate 2 meant a 9 m detour before the first entry.
+                lines.append("    # START HERE — park the base on this tag before "
+                             "calling run_calibration\n")
                 first = False
         out = CFG / ("calibration_plan_plate%d.yaml" % plate)
         out.write_text("".join(lines))

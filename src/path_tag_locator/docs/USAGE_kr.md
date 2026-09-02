@@ -262,6 +262,11 @@ rosservice call /path_tag_locator/locate_path_tag "{
 
 `align_initial_tcp_mm_deg` 단위는 `mm, mm, mm, deg, deg, deg` (FR5 ZYX). hand-cam 이 태그 A 를 볼 수 있는 대략적인 위치만 주면 됨. 응답의 `align_iterations_used`, `align_final_xy_offset_m`, `align_final_tilt_deg` 로 정렬 결과를 확인.
 
+저장되는 `result.yaml`(`~/.ros/path_tag_locator/locate/<날짜>/run_*/`)에는 **카메라 좌표계 기준** 오차가 기록된다
+(2026-09-02). `observations:` 블록에 hand_cam→태그 A, front_cam→태그 B 각각의 `position_m` (x=영상 오른쪽,
+y=영상 아래, z=광축 방향 거리) 와 `rpy_deg` 가 들어가고, `auto_align: true` 였으면 `auto_align.tag_in_cam` (최종)
+과 `auto_align.history` (반복마다) 가 추가된다. 축 정의는 파일 상단 `camera_frame_note` 에 적혀 있다.
+
 정렬 동작 조정: `config/locator.yaml` 의 `align:` 블록 수정:
 - `max_iterations: 1` → one-shot 모드
 - `position_tol_m: 0.005` / `angle_tol_deg: 1.0` → 수렴 임계값
@@ -285,13 +290,23 @@ rosservice call /path_tag_locator/locate_path_tag "{
 | (map.yaml 로컬 복사본 삭제됨) | `$(find apriltag_nav)/config/map.yaml` 이 단일 기준 (map_calibrator.yaml) |
 | `config/map_calibrator.yaml` | 오케스트레이터의 기본 파일 경로들 (service call 시 override 가능). |
 
+**세션 기록 (2026-09-02):** 세션마다 `~/.ros/path_tag_locator/calibrate/<YYYYMMDD_HHMMSS>/` 폴더가
+새로 생기고, **시도(attempt)마다** `entries/001_tag105_attempt1_fail.yaml`, `002_tag105_attempt2_ok.yaml`,
+`003_tag106_attempt1_ok.yaml` … 처럼 실행 순서대로 번호가 붙은 파일이 남는다. 재시도도 새 번호를 받고,
+실패한 시도도 거기까지 진행된 내용(nav, view pose, 정렬 보고, 오류)을 그대로 담는다. 아무것도 덮어쓰지
+않는다. 각 파일에는 카메라 좌표계 기준 관측(`observations`), 자동 정렬 보고(`auto_align.tag_in_cam` /
+`history`), TCP, 리프트 높이, 월드 결과와 4x4 변환이 들어 있고, `session.yaml`(순서 인덱스),
+`entries_log.csv`(한 줄 요약), `map_world.yaml`(세션 결과 사본)이 같은 폴더에 함께 저장된다.
+`dry_run: true` 는 아무것도 기록하지 않는다.
+
 ### 5b. 실행
 
 ```bash
 # 사전 조건:
 # 메인 스택(mobile_manipulator.launch)은 반드시 떠 있어야 함 — 세션 중 TASK/GOTO 금지.
-# - base 는 시작 시점에 map.yaml 의 어떤 tag 를 front-cam 으로 보고 있어야 함
-#   (예: DOCK 500 앞). 첫 번째 nav 의 출발점이 필요.
+# - base 는 시작 시점에 플랜의 첫 tag 위에 세워 두어야 함 (정반 1: 100, 정반 2: 126).
+#   2026-09-02 부터 플랜에 nav_start_id 가 없어 도크 500 을 거치지 않고 그 자리에서 바로 시작함.
+#   front-cam 이 그 tag 를 보고 있어야 첫 이동의 출발 노드가 잡힘
 
 roslaunch path_tag_locator path_tag_locator.launch  # 메인 스택이 먼저 떠 있어야 함
 

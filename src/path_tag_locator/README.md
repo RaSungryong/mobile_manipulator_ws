@@ -212,8 +212,10 @@ that emits a world-frame `map_world_<ts>.yaml`.
 #### Workflow
 
 ```bash
-# Park the base at a known map tag (e.g. DOCK 500) BEFORE launching, so
-# the very first nav has a known starting point.
+# Park the base ON the plate's first plan tag (100 for plate 1, 126 for
+# plate 2) BEFORE launching — the generated plans carry no nav_start_id
+# since 2026-09-02, so the session starts from wherever the base stands
+# and front_cam must see that tag.
 # The MAIN STACK MUST ALREADY BE UP (arm_node / mobile_node /
 # robot_camera_node are the hardware owners). Do not send TASK/GOTO
 # while a session runs.
@@ -369,8 +371,9 @@ rostopic echo -n1 /arm/state/tcp_pose
 # Keep the main stack RUNNING (mobile_node drives the base for the
 # session); just make sure no TASK/GOTO is in flight.
 
-# Park the base in front of nav_start_id (DOCK 500). The first goto needs
-# a tag the front cam can see, otherwise BFS has no starting node.
+# Park the base on the plan's first tag (100 / 126). The first goto needs
+# a tag the front cam can see, otherwise BFS has no starting node. (Add
+# nav_start_id to the first entry only if you want a detour first.)
 
 # Launch:
 roslaunch path_tag_locator path_tag_locator.launch   # main stack must already be up
@@ -397,7 +400,7 @@ rosservice call /map_calibrator/run_calibration "{
 ```
 
 Inside, for that one entry:
-1. base nav: `500 → … → 101` (front-cam keeps the tag in view, decelerates).
+1. base nav: `100 → 101` (front-cam keeps the tag in view, decelerates).
 2. arm `MoveJ` to your `arm_view_tcp_mm_deg`.
 3. `auto_align` (~3–5 iterations) — hand-cam centers ref tag 0:
    ```
@@ -511,7 +514,7 @@ the previous one manually (yq, jq, or hand) when you're done.
 
 | Symptom | Fix |
 |---------|-----|
-| `base nav … failed` on first entry | base isn't in front of `nav_start_id`; front-cam sees no tag |
+| `base nav … failed` on first entry | base isn't on the plan's first tag (100 / 126); front-cam sees no tag |
 | `tag A (id=0) not detected` | jog drifted too far from where you captured `arm_view_tcp_mm_deg`; recapture per Phase 3 |
 | `auto_align: clamped` repeats | per-step throttling — usually fine (next iter continues) |
 | `auto_align` xy stays >5 cm | `T_hc2ee` is inaccurate → redo Phase 1; or relax `align.position_tol_m` |

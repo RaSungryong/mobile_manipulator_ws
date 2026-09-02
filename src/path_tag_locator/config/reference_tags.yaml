@@ -38,8 +38,8 @@ format: "pose"
 #       -> tag's z = world -z (down)
 #       -> rpy_deg = [180, 0, 0]  (flip about x)
 #
-# The examples below assume face-DOWN tags. If yours are face-up,
-# swap rpy to [180, 0, 0] (or [0, 180, 0]).
+# The entries below are face-UP tags (on the plate top, read by hand_cam
+# from above), hence rpy [180, 0, 0].
 
 # ---------------------------------------------------------------------
 # REAL VALUES — the six 90 mm cross tags (십자태그), filled 2026-09-01
@@ -60,11 +60,11 @@ format: "pose"
 # relative-geometry check will expose it on the first session; correct
 # the yaw here if it does.
 #
-# 정반 2 note: its frame ("2번정반 중심 기준" CSV) is this frame shifted
-# by exactly +3.420 m in x (verified row-by-row). If cross tags are ever
-# placed around 정반 2, their world poses here are the values below
-# +3.420 in x — mind the duplicate IDs if both sets are ever physically
-# present at once.
+# 정반 2 note: its cross tags carry the SAME ids 0-5 and live in
+# reference_tags_plate2.yaml = these poses + 3.890 m in x (정반 2's
+# GEOMETRIC centre; the "2번정반 중심 기준" CSV origin is +3.420 and is NOT
+# where those tags are laid — see the 2026-09-01 Work Log). Plan file and
+# ref file swap together; never calibrate plate 2 against this file.
 # ---------------------------------------------------------------------
 reference_tags:
   # West column (x = -0.600), south -> north

@@ -1,108 +1,152 @@
-# Base-Swap Transition Status (handover notes)
+# Handover — current state of the workspace
 
-Written 2026-07-31, branch `real`. Audience: whoever (human or AI assistant)
-picks up this workspace next. The point of this file is the **line between
-what is verified-done and what is still open** after the mobile-base swap
-(old base → Navifra KU Polishing Robot Driver v0.16). Day-to-day operating
-procedures live in `docs/USAGE_kr.md` (Korean, for operators).
+Rewritten 2026-09-02, branch `real`. Audience: whoever (human or AI
+assistant) picks up this workspace next. This is the **checklist**: what is
+verified on hardware, what is still open, and the rules that hold in the
+meantime. The *reasoning* behind every line lives in `CLAUDE.md` (its
+sections and its dated Work Log) — read that when a line here surprises you.
 
----
-
-## 1. Done and verified
-
-| Item | State |
-|------|-------|
-| Simulation removal | All Isaac Sim support deleted; real-robot-only codebase |
-| Architecture | Node-per-device split (4 nodes, same pattern as the Navifra driver); the stale parallel `scripts_ros/` tree deleted |
-| Arm control | Single controller `arm_controller.py` (TOOL_ID=1 vision_tip, q0-seeded IK, 4-DOF transform, Keyence closed loop); the two old variants deleted |
-| Camera | Always-on streaming → on-demand capture service. Closed at rest, pre-opened at scan-point start (latency hidden under arm motion), VISION lamp bracketed with the shutter |
-| New peripherals | E-stop detection (subscriber-thread abort), STATUS lamp from task state, battery warning, full lift API (integration scope: §2-2) |
-| Calibration | Arm mount transform switched to the measured truth (`extrinsics.yaml`: base_z 1.025 m, zero tilt, yaw exactly 180°); USD-derived old values retired |
-| Verification | 105 automated behaviour checks pass (JSON round-trips, e-stop paths, camera lifecycle, transform numerical equivalence, scan sequencing) |
-
-⚠️ **No integrated on-robot drive/scan validation has been performed yet** —
-blocked by the motor repair (§2-1).
+The previous version of this file (2026-07-31) described the state right
+after the base swap. Everything it listed as open has since been either done
+or superseded; it is in git history if you need it.
 
 ---
 
-## 2. Open items (transition checklist)
+## 1. Verified on hardware
 
-### 2-1. Drive motor 2 under repair — blocks drive validation
+| Item | State | Where the evidence is |
+|------|-------|-----------------------|
+| Mobile base | Navifra KU Polishing Robot Driver v0.16, both drive motors active (`~/navifra/param.yaml` `drive_motor_ids: [1, 2]`). Navigation, pure pursuit, the odom S-curve and the 6 cm final approach have all driven on the real robot | Work Log 2026-08-12, 2026-08-14 |
+| front_cam | Rotated −90° about its optical axis; `mobile_controller` ported and confirmed by three arrivals on tag 105 | Work Log 2026-08-13/14 |
+| Lift | `lifter_node` owns it; scale measured (343.2 mm at count 6897, `mm_per_count` 0.04976077, `soft_max_counts` 6900); tasks set it through the CSV `lift_height` column; every task ends with lift origin homing | CLAUDE.md *The base lift* |
+| Arm mount | `arm_base_z` **0.652 m** at lift origin (cell design record), `arm_body_offset_y` −0.100, no tilt, yaw exactly 180° | CLAUDE.md *Transform Parameters* |
+| Base geometry | 0.90 × 0.70 m footprint, wheel radius 0.0825 / separation 0.65 (owned by `param.yaml`), front_cam at (0.55, 0, 0.300) | CLAUDE.md *Drivetrain geometry* |
+| Arm node interfaces | `/arm/state`, `/arm/move_cart`, `/arm/jog_cmd` exercised from `robot_ui` (33 motions), cancel-with-retry confirmed to stop a moving arm | Work Log 2026-08-12 |
+| Wrist camera + Ra | Basler mono8 at the sensor's 5 fps; ONNX inference in-process for scans and via `inference_node` for the UI, bit-identical | Work Log 2026-08-12 |
+| Build | `catkin_make` clean from scratch on the robot PC (2026-09-02) | Work Log 2026-09-02 |
 
-- Symptom: `~/navifra/param.yaml` → `drive_motor_ids: [1]` (only motor 1
-  drives). Straight-line travel and in-place rotation are not achievable in
-  this state (driver guide §6).
-- On repair completion:
-  1. In `~/navifra/param.yaml`: delete the `drive_motor_ids: [1]` line and
-     restore `motor_directions: [-1, 1]` → `sudo systemctl restart navifra-robot`
-  2. Verify straight/rotation per driver guide §4.2
-  3. Re-tune AprilTag navigation / Pure Pursuit on the real vehicle
-     (`robot.yaml`: `look_ahead_base`, `pp_gain_*`, ...)
+---
 
-### 2-2. Lift — API exists, task integration deliberately deferred
+## 2. Open items
 
-- Current code **never commands the lift**. The driver auto-homes it to the
-  bottom limit at launch; it stays there.
-- The system is self-consistent **as long as the lift stays at home** —
-  `arm_base_z` corresponds to that height. Transition rule: do not move the
-  lift manually; doing so silently offsets pose-mode scans (joint mode is
-  unaffected).
-- Activation sequence (order fixed; details in `docs/lift_arm_base_z_analysis.md`):
-  1. [field] choose the scan working height → fill `robot.yaml`
-     `navifra.scan_height_counts`
-  2. [field] recalibrate `arm_base_z` at that height
-     (`tools/collect_calib_data.py` + `tools/calibrate_transform.py`)
-  3. [code] wire `lift_home()` → `lift_goto()` into task start and set
-     `scan_height_guard: "refuse"` (small change, ready to do on request)
+### 2-1. 🛑 Every scan CSV is invalid — the cell was replaced 2026-08-21
 
-### 2-3. arm_base_z re-validation — required before precision pose scans
+- `map.yaml` is the new cell (72 tags, origin at the centre of 정반 1).
+  Every `task/csv/*` still encodes the OLD cell: joint-mode angles were
+  solved for the old arm-over-plate geometry and the old base height
+  (1.025 vs 0.652 — the 373 mm drop exceeds the whole 343 mm lift stroke),
+  pose-mode grids still describe the old workpiece position.
+- `_exec_joint` is a bare `MoveJ` with no reachability or collision check.
+  **Running `scan_joints_line*` on the new cell is a collision path.**
+- Fix: re-solve every joint CSV; regenerate the grid CSVs for the new
+  workpiece. No transform or `lift_height` value rescues the old files.
+- Side effect: `scan_full_joints` is unregistered (line1 300 mm vs line2
+  150 mm) until both CSVs agree.
 
-- Open discrepancy: the 655-point fit gave 0.9541 m vs measured extrinsics
-  1.025 m (71 mm). Either the fit lineage (0428, previously judged
-  untrustworthy) or a different lift height at measurement time.
-- The old "12 mm mean residual" figure belonged to the retired values —
-  **the residual of the current values is unmeasured**. Re-validate with
-  paired joint/pose data at a known lift height.
-- Until then: trust joint-mode scans (`scan_joints_*`); treat pose-mode
-  (`scan_grid_*`, `scan_full_pose`) results as indicative only.
+### 2-2. Tag installation and calibration of the new cell
 
-### 2-4. Base dimensions unmeasured — wall-clearance margin affected
+- As of 2026-08-24 only zone B's 16 tags (100–112, 500, 501, 505) were
+  physically installed. Zone B routes end to end on them; check what has
+  been added since before driving elsewhere.
+- `path_tag_locator` was refactored into the main stack 2026-09-01
+  (`path_tag_locator.launch` runs alongside `mobile_manipulator.launch`,
+  owns no hardware). **Verified offline only — no live calibration session
+  has run yet.** First session needs: `move_cart` under the align loop,
+  detection latency, single-commander discipline (no `TASK`/`GOTO` while
+  it runs).
+- `path_tag_locator/config/reference_tags.yaml` holds the six 90 mm cross
+  tags at their **design-record** poses (±0.600 x, 0/±1.200 y, on the plate
+  top, face up, yaw assumed 0). Not yet checked against the physical tags —
+  `verify_map_world.py`'s relative-geometry check on the first session is
+  what confirms them (a wrong yaw rotates every result about that tag).
+  Plate 2 uses `reference_tags_plate2.yaml` (= plate 1 + 3.890 m x) and its
+  own plan — plan and ref file swap together.
+- `camera_offset` 0.55 (map design value) vs 0.547 (tape measure) is
+  unreconciled. If 547 is right, move the tags, not the key.
+- **`robot_camera_node` must run with `quad_decimate: 1.0` on hand_cam /
+  side_cam** (robot.yaml `robot_camera.quad_decimate`, 2026-09-02) — at the
+  library default 2.0 the 640x480 cameras drop or corrupt small tags.
+  Verified live: align converged in 3 iterations once set.
+- **Calibrated maps so far are biased by the hand-eye translation** —
+  `map_world_20260902_145354_handeye_corrected.yaml` (offline reprocess
+  with a fitted correction) is the best current estimate of the actual
+  tag positions (1–2 cm of plan, tag 131 suspect). Raw `map_world_*.yaml`
+  from before the correction carry a 5–7 cm bias; do not feed them to
+  navigation.
+- **Hand-eye `T_hc2ee.npz` is interim** (2026-09-02): the May-2026 value was
+  180° off about the optical axis and made `auto_align` diverge on the
+  robot; it was spun by 180° as a stop-gap. Re-run `handeye_calib` on this
+  robot (`path_tag_locator.launch use_handeye_calib:=true`, 15–30 captures)
+  before trusting calibrated positions to better than a few cm.
 
-- `robot.yaml` `robot.width: 0.50` is the OLD base. The new base's wheel
-  separation alone is 0.65 m, so width must exceed that → current
-  wall-clearance math is optimistic.
-- Measure length/width/camera offset of the new base, update `robot.yaml`,
-  recompute `wall_dist_*` / `min_wall_clearance`.
+### 2-3. Navigation defects known since 2026-08-12
 
-### 2-5. Safety link enforcement — recommended for production
+- ~~`align_to_tag()` has no timeout~~ — **fixed 2026-09-02**
+  (`align_timeout_s: 20.0`, hop fails on expiry). Same day: align now runs
+  after pivots too. The stop column is unchanged and shared by both
+  directions (`cx + center_x_stop_offset`) — a mirrored reverse line was
+  tried and backed out. Offline-verified only; `mobile_node` must be
+  restarted and the first pivot watched. Also 2026-09-02: hops touching
+  tags 400–499 (zone A lane) run with prediction OFF — Pure Pursuit when
+  the tag is seen, straight command when blind, align at the stop
+  (`predictive_centering.disabled_tag_ranges`). 400→400 hops also skip
+  the in-place align (`align_skip_tag_ranges`); any hop with a 100-/500-
+  series endpoint aligns.
+- **Reverse hops see their target tag only ~3 cm out** (bumper hides the
+  floor behind the lens). Fixed 2026-09-02 with an odom creep zone
+  (`blind_approach_dist` 0.12 m at 0.015 m/s); before it reverse stops
+  overshot by 6–17 mm vs 1–2 mm forward. Offline-verified only.
+- **The base rolls ~0.55 s after a stop command** (5.8 mm at 0.011 m/s,
+  12.6 mm at 0.022). `stop_latency_s: 0.55` fires the stop early by the
+  integral of the last 0.55 s of commands. Re-fit from nav_log
+  (`arrival` − `aligned` fore-aft, ÷ `commanded_speed_at_stop_mps`) after
+  the first live run.
+- A frozen `/odom` deadlocks `execute_pure_pursuit()` at minimum speed with
+  no error. Still unwritten.
 
-- Currently `navifra.require_safety_link: false` (warn-only when the Safety
-  PLC is not confirmed) — a development convenience.
-- Switch to `true` for production: task start is then refused unless the PLC
-  link is confirmed.
+### 2-4. `arm_base_z` does not track the lift
 
-### 2-6. Misc
+- Pose-mode IK is offset by whatever the lift has travelled (up to 343 mm).
+  Joint mode is unaffected. `path_tag_locator` compensates its own chain
+  from `/lifter/height`; the main stack deliberately does not yet.
+  See `docs/lift_arm_base_z_analysis.md`.
 
-- `polishing_env/` (608 MB USD assets) is out of git — **exists only on this
-  PC**. Copy manually if another machine needs it.
-- `src/path_tag_locator.zip`: untracked, presumed manual backup of the
-  sibling source dir — confirm and delete.
-- Korean operator docs: `docs/USAGE_kr.md` (this system),
-  `src/path_tag_locator/docs/USAGE_kr.md` + `TROUBLESHOOTING_kr.md`
-  (tag-calibration tool).
+### 2-5. Config placeholders and guards
+
+- `vision_stop.stop_tag_ids: []` — vision soft-stop inert until filled.
+- `navifra.require_safety_link: false` — warn-only; set `true` for
+  production.
+- `keyence_max_step_mm: 1.0` — bring-up clamp doing real work; read
+  `docs/keyence_scan_chain.md` before raising it.
+- `grid_path_line{1,2}_-5.csv` use `group_id` 4/5, valid in no map.
+
+### 2-6. Documentation debt
+
+- `docs/GUIDE_kr.md` + its PDF are frozen; the correction backlog is the
+  *Deferred* table in `CLAUDE.md`. Do not edit the guide without asking.
+- `tools/*.py` still use bare scipy `as_matrix()`; they only work because a
+  user-site scipy 1.10.1 shadows the system 1.3.3 (see *Coding Conventions*).
 
 ---
 
 ## 3. Interim operating rules
 
-1. **Do not move the lift** (keep the driver's auto-home position).
-2. **Only joint-mode scan data is authoritative** — pose mode is indicative
-   until §2-3 is done.
-3. No driving (GOTO) until motor 2 is back (§2-1).
-4. Emergency: the physical e-stop button (PLC cuts motor power); software
-   `STOP` is secondary. Recovery: `USAGE_kr.md` §4.
-5. All tuning goes in `config/robot.yaml` (manipulator) /
-   `~/navifra/param.yaml` (base) — never hardcode.
+1. **No `scan_joints_*` / `scan_grid_*` / `scan_full_*` on the new cell**
+   (§2-1). `GOTO` within installed tags and `go_home` are fine.
+2. One commander of the base at a time: no `TASK`/`GOTO` during a
+   calibration session; never run `tools/navigate.py`, `tools/vw_drive.py`
+   or `tools/lift_calib_ui.py` while the stack is up (second writers).
+3. `/lifter/*` (ours, guarded) ≠ `/lift/*` (raw driver). Read twice before
+   `rostopic pub`. Absolute lift moves are refused until lift origin homing;
+   `/lift/homed == true` can still need a re-home (command logged, position
+   frozen, no alarm → home again).
+4. Startup never moves the arm or the lift. `move_to_home` is explicit.
+5. Never `apt install ros-noetic-realsense2-camera`; keep
+   `ros-noetic-ddynamic-reconfigure` marked manual.
+6. Emergency stop is the PILZ hardware button; `STOP` is secondary.
+7. All tuning in `config/robot.yaml` (manipulator) / `~/navifra/param.yaml`
+   (base); a `~param` in `mobile_manipulator.launch` overrides `robot.yaml`
+   (`soft_max_counts` is one — change both).
 
 ---
 
@@ -110,10 +154,15 @@ blocked by the motor repair (§2-1).
 
 | Where | What |
 |-------|------|
-| branch `real` | the whole transition effort (remote: `origin/real`) |
-| `CLAUDE.md` | technical summary — architecture, frames, camera/arm policies |
-| `README.md` | detailed technical documentation |
-| `docs/USAGE_kr.md` | operator guide (Korean) |
-| `docs/lift_arm_base_z_analysis.md` | lift-vs-transform analysis + calibration method |
-| `~/navifra/` | base driver (interface guide PDF, `param.yaml` field tuning) |
-| `src/path_tag_locator/config/extrinsics.yaml` | measured truth for the arm mount transform |
+| branch `real` (remote `origin/real`) | the whole real-robot effort |
+| `CLAUDE.md` | architecture, frames, policies, dated Work Log — the source of reasoning |
+| `README.md` | technical documentation (loses to `CLAUDE.md` + `robot.yaml` on any conflict) |
+| `docs/GUIDE_kr.md` / `mobile_manipulator_guide_kr.pdf` | Korean operator guide — frozen, see the Deferred table |
+| `docs/keyence_scan_chain.md` | Keyence standoff loop record |
+| `docs/lift_arm_base_z_analysis.md` | lift-vs-transform analysis |
+| `docs/architecture_slides_kr.md` | presentation material |
+| `docs/all_tags_position.csv` | generated design positions for all 78 tags |
+| `src/path_tag_locator/docs/{USAGE_kr,TROUBLESHOOTING_kr,CALIBRATION_GUIDE_kr}.md` | tag-calibration tool docs |
+| `src/path_tag_locator/config/extrinsics.yaml` | measured truth for `T_ab2mb` / `T_mb2fc` (lift at origin) |
+| cell design record ("the parent directory's CLAUDE.md" in `CLAUDE.md`) | tag layout, Z datum, mounts. **Not in this checkout's parent** — on the robot PC it is `~/mobile_manipulator_ws_20260824/CLAUDE.md`, next to `make_plate_frame_csvs.py` / `tags_plate{1,2}_frame.csv` |
+| `~/navifra/` | base driver install, interface guide PDF, `param.yaml` field tuning |

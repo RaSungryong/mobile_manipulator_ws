@@ -540,9 +540,14 @@ class ArmController:
     #     mixing the two is how the deleted scripts_ros/ tree got its TCP wrong.
     #   * self.busy is refused, not queued. A jog arriving mid-scan would move
     #     the arm out from under the scan point that is being captured.
-    #   * MoveCart, not MoveJ. The operator is watching Cartesian axes; solving
-    #     IK and driving joints can swing the elbow through a different arc for
-    #     the same endpoint.
+    #   * MoveL, not MoveJ (and not MoveCart — switched 2026-09-02). The
+    #     operator is watching Cartesian axes, and the calibration align loop
+    #     applies small camera-frame corrections: a straight-line TCP path is
+    #     what both expect. MoveCart interpolates in JOINT space to the same
+    #     endpoint, so the TCP can arc away from the straight line, and it lets
+    #     the controller pick a configuration (config=-1); MoveL keeps the
+    #     path linear. Trade-off: a straight path through a singularity or a
+    #     joint limit is refused where MoveCart would have gone round it.
 
     def get_tcp_pose(self):
         """Current TCP pose [x,y,z mm, rx,ry,rz deg], or None if the read fails.
@@ -570,10 +575,24 @@ class ArmController:
             rospy.logwarn_throttle(5.0, f"[Arm REAL] Joint read failed: {e}")
             return None
 
-    def move_cart(self, pose, vel=30.0, acc=50.0):
+    def move_cart(self, pose, vel=30.0, acc=50.0, linear=True):
         """Absolute Cartesian move to [x,y,z mm, rx,ry,rz deg].
 
         Returns (ok, message). Blocks until the SDK call returns.
+
+        ``linear=True`` -> MoveL (straight TCP path), the default since
+        2026-09-02. ``linear=False`` -> MoveCart (joint-interpolated to the
+        same endpoint). Measured the same day on the robot: MoveL crawls
+        when the path reorients the wrist — a 300 mm / 20 deg-yaw view move
+        took 5-6 s in one arm configuration and 22-34 s in another, and two
+        800 mm / 40-90 deg moves hit the SDK's 60 s RPC timeout — where
+        MoveCart to the same pose takes a few seconds. So big repositioning
+        moves (the calibration view pose) ask for linear=False and only the
+        small camera-frame correction steps stay linear.
+
+        The result strings deliberately keep the "move_cart" wording because
+        ArmInterface attributes completions by that substring in
+        /arm/state.result_message.
         """
         if len(pose) != 6:
             return False, "move_cart needs 6 values [x y z rx ry rz]"
@@ -582,22 +601,54 @@ class ArmController:
 
         self.busy = True
         self.cancel_requested = False
+        kind = "MoveL" if linear else "MoveCart"
         try:
             target = [float(v) for v in pose]
-            rospy.loginfo(f"[Arm REAL] MoveCart → {[round(v, 2) for v in target]} "
+            rospy.loginfo(f"[Arm REAL] {kind} → {[round(v, 2) for v in target]} "
                           f"(vel={vel}, acc={acc})")
-            ret = self.robot.MoveCart(target, TOOL_ID, 0, float(vel), float(acc))
+            if linear:
+                ret = self.robot.MoveL(target, TOOL_ID, 0,
+                                       vel=float(vel), acc=float(acc))
+            else:
+                ret = self.robot.MoveCart(target, TOOL_ID, 0,
+                                          float(vel), float(acc))
             if ret != 0:
-                rospy.logerr(f"[Arm REAL] MoveCart failed: {ret}")
-                return False, f"MoveCart error {ret}"
+                rospy.logerr(f"[Arm REAL] {kind} failed: {ret}")
+                return False, f"move_cart failed: {kind} error {ret}"
             if self.cancel_requested:
                 return False, "cancelled"
             return True, "move_cart ok"
         except Exception as e:
-            rospy.logerr(f"[Arm REAL] MoveCart exception: {e}")
-            return False, f"exception: {e}"
+            rospy.logerr(f"[Arm REAL] {kind} exception: {e}")
+            if 'timed out' in str(e).lower():
+                # The RPC gave up but the CONTROLLER is still executing the
+                # move. Returning now lets the next command be sent into a
+                # moving arm (seen 2026-09-02: a 0 mm "move" then took 14 s
+                # because it queued behind the unfinished one). Hold the
+                # busy flag until the controller reports the motion done.
+                self._wait_motion_done(120.0)
+            return False, f"move_cart exception: {e}"
         finally:
             self.busy = False
+
+    def _wait_motion_done(self, timeout_s):
+        """Poll GetRobotMotionDone until the controller is idle (or timeout).
+        Used after an RPC timeout, when the SDK has lost track of a move
+        that is still running."""
+        t0 = rospy.Time.now()
+        while (rospy.Time.now() - t0).to_sec() < timeout_s:
+            if self.cancel_requested:
+                return
+            try:
+                ret, done = self.robot.GetRobotMotionDone()
+                if ret == 0 and int(done) == 1:
+                    rospy.logwarn("[Arm REAL] controller reports motion done "
+                                  f"after {(rospy.Time.now() - t0).to_sec():.1f}s")
+                    return
+            except Exception:
+                pass
+            rospy.sleep(0.2)
+        rospy.logerr(f"[Arm REAL] motion still not done after {timeout_s:.0f}s")
 
     # Axis order matches the Fairino TCP pose vector, which is also the order the
     # UI's six fields are laid out in. Keep them in step.

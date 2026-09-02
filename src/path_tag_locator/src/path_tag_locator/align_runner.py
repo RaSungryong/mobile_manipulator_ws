@@ -32,13 +32,25 @@ from .align import (
     compute_target_ee_pose,
     is_converged,
 )
-from .detections import detection_to_T_cam2tag, wait_for_tag_detection
+from .detections import (detection_to_T_cam2tag, wait_for_tag_detection,
+                         wait_for_tag_detections, median_tilt_detection)
 from .geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 
 
 def _fmt_pose(p):
     return ("[x={:.2f}mm y={:.2f}mm z={:.2f}mm "
             "rx={:.2f}deg ry={:.2f}deg rz={:.2f}deg]").format(*p)
+
+
+class AutoAlignError(RuntimeError):
+    """run_auto_align failed part-way. ``report`` carries what the loop
+    had measured up to the failure (same keys as the success dict, with
+    ``error`` added) so the session record keeps the iteration history —
+    the numbers that diagnose a diverging loop."""
+
+    def __init__(self, message, report):
+        super().__init__(message)
+        self.report = report
 
 
 def run_auto_align(*,
@@ -55,7 +67,14 @@ def run_auto_align(*,
     """Drive the hand camera squarely onto tag A. Returns a report dict::
 
         {"iterations": int, "xy_offset_m": float, "tilt_deg": float,
-         "final_tcp": list[float]}
+         "final_tcp": list[float],
+         "tag_in_cam": dict,          # final observation, CAMERA frame
+         "history": list[dict]}       # one tag_in_cam dict per iteration
+
+    ``tag_in_cam`` / ``history`` carry the full camera-frame error
+    (position_m x/y/z + rpy_deg of the tag in the hand-cam optical frame,
+    see ``align.CAM_FRAME_NOTE``); ``xy_offset_m`` / ``tilt_deg`` are the
+    scalars derived from it.
 
     Raises ``RuntimeError`` if the arm interface is missing, the initial
     pose argument is invalid, or tag A is not detected during the
@@ -83,24 +102,44 @@ def run_auto_align(*,
                 step.delta_t_norm_m, step.delta_rot_deg)
         step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
         rospy.loginfo("auto_align: initial MoveJ -> %s", _fmt_pose(step_pose))
-        tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s)
+        # Big repositioning move: joint-interpolated. A straight-line MoveL
+        # here crawled (22-34 s, two 60 s timeouts) on 2026-09-02.
+        tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s,
+                                  linear=False)
 
     last_metrics = None
+    history = []
     iters = 0
+
+    def _fail(msg):
+        report = {
+            "iterations": iters,
+            "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
+            "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
+            "final_tcp": None,
+            "tag_in_cam": last_metrics.as_report() if last_metrics else None,
+            "history": history,
+            "error": msg,
+        }
+        return AutoAlignError(msg, report)
+
     for i in range(int(align_cfg.max_iterations)):
         iters = i + 1
         try:
-            det = wait_for_tag_detection(
-                hand_cam_detections_topic, int(tag_a_id),
+            n_samples = int(getattr(align_cfg, 'samples_per_iteration', 1))
+            dets = wait_for_tag_detections(
+                hand_cam_detections_topic, int(tag_a_id), n_samples,
                 timeout=detection_wait_timeout_s)
+            det = median_tilt_detection(dets)
         except RuntimeError as e:
-            raise RuntimeError(
+            raise _fail(
                 f"auto_align: tag A (id={tag_a_id}) not detected at "
                 f"iteration {iters} — adjust initial pose ({e})")
         T_cam2tag = detection_to_T_cam2tag(
             det, float(tag_a_size_m), float(hand_cam_detector_size_m))
         metrics = alignment_metrics(T_cam2tag)
         last_metrics = metrics
+        history.append(dict(iteration=iters, **metrics.as_report()))
         rospy.loginfo(
             "auto_align iter %d/%d: xy=%.4f m, tilt=%.3f deg, z=%.3f m",
             iters, align_cfg.max_iterations,
@@ -123,7 +162,12 @@ def run_auto_align(*,
                 "auto_align: step %d clamped (Δt=%.3f m, Δrot=%.2f deg)",
                 iters, step.delta_t_norm_m, step.delta_rot_deg)
         step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
-        tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s)
+        try:
+            # Small camera-frame correction: keep the TCP path straight.
+            tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s,
+                                      linear=True)
+        except Exception as e:
+            raise _fail(f"auto_align: step {iters} move failed: {e}")
 
     final_tcp = tcp_client.get_tcp_pose()
     return {
@@ -131,4 +175,6 @@ def run_auto_align(*,
         "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
         "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
         "final_tcp": final_tcp,
+        "tag_in_cam": last_metrics.as_report() if last_metrics else None,
+        "history": history,
     }

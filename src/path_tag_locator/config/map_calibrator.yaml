@@ -18,10 +18,14 @@ map_calibrator:
   map_out_path:   ""
 
   # Fixed lift height for the whole calibration session (mm above origin).
-  # null = don't touch the lift. The chain compensates by LIVE height either
+  # -1 = don't touch the lift. The chain compensates by LIVE height either
   # way; setting this just makes the session move the lift there first and
   # guard against drift.
-  lift_height_mm: null
+  # ⚠️ Not YAML null: this file is loaded with <rosparam command="load">,
+  # and the parameter server cannot store None ("cannot marshal None
+  # unless allow_none is enabled" kills the whole roslaunch). Any negative
+  # value, or omitting the key, means the same as -1.
+  lift_height_mm: -1
   # Home (descend to the lower limit switch, re-zeroing the encoder) before
   # moving to lift_height_mm. The driver guide documents ~1000-1800 counts
   # of error after an up-then-down stroke — a single home+up stroke is the

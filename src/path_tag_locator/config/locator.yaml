@@ -64,6 +64,11 @@ path_tag_locator:
     move_acc:              20.0
     move_ovl:              100.0   # kept for signature parity (unused)
     move_settle_s:         0.3     # pause after a move before re-detecting
+    # Frames collected per iteration; the median-tilt one is used. The
+    # tilt of a 70 px tag jitters (std 0.5 deg, spikes to 3-4 deg), and with
+    # angle_tol_deg 1.0 a single-frame loop chased that noise for the full
+    # max_iterations on most entries (2026-09-02 session). 5 frames ~0.2 s.
+    samples_per_iteration: 5
 
     # Bootstrap auto-arm-view-pose (map_calibrator only). When true,
     # entries past the first one without an explicit arm_view_tcp_mm_deg

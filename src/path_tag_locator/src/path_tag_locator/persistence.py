@@ -13,7 +13,13 @@ Locate run layout:
         result.npz              T_B_world, T_A2B, T_A_world, T_hc2ee,
                                 T_ab2mb, T_mb2fc, tcp_pose_mm_deg,
                                 K_hc, K_fc, plus tag IDs and sizes
-        result.yaml             human-readable summary
+        result.yaml             human-readable summary. ``observations``
+                                holds the CAMERA-frame error of each tag
+                                seen (hand_cam -> tag A, front_cam -> tag B:
+                                position_m x/y/z + rpy_deg, see
+                                align.CAM_FRAME_NOTE); ``auto_align`` adds
+                                the final hand_cam -> tag A error and the
+                                per-iteration history when auto_align ran.
         request.yaml            full service request echo
 
     <root>/locate/locate_log.csv     append-only run index
@@ -37,6 +43,8 @@ import cv2
 import numpy as np
 import yaml
 
+from .align import CAM_FRAME_NOTE
+
 
 # ----------------------------------------------------------------------
 def _now_str():
@@ -45,6 +53,20 @@ def _now_str():
 
 def _expand(p):
     return Path(os.path.expandvars(os.path.expanduser(str(p))))
+
+
+def _plain(obj):
+    """Recursively coerce numpy scalars / arrays / tuples into plain
+    python so yaml.safe_dump accepts nested report dicts."""
+    if isinstance(obj, dict):
+        return {str(k): _plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, np.ndarray)):
+        return [_plain(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating, float)):
+        return float(obj)
+    return obj
 
 
 # ----------------------------------------------------------------------
@@ -73,6 +95,7 @@ def save_locate_run(*,
                     request_echo: Optional[dict] = None,
                     success: bool = True,
                     message: str = "ok",
+                    observations: Optional[dict] = None,
                     auto_align_report: Optional[dict] = None) -> Path:
     """Persist a single locate call. Always called; never throws on disk
     error (caller logs)."""
@@ -126,10 +149,12 @@ def save_locate_run(*,
         "T_B_world_position_m": [float(v) for v in position_m],
         "T_B_world_rpy_deg": [float(v) for v in rpy_deg],
     }
+    if observations is not None or auto_align_report is not None:
+        summary["camera_frame_note"] = CAM_FRAME_NOTE
+    if observations is not None:
+        summary["observations"] = _plain(observations)
     if auto_align_report is not None:
-        summary["auto_align"] = {k: (float(v) if isinstance(v, (int, float))
-                                     else v)
-                                 for k, v in auto_align_report.items()}
+        summary["auto_align"] = _plain(auto_align_report)
     with open(run_dir / "result.yaml", "w") as fh:
         yaml.safe_dump(summary, fh, default_flow_style=False, sort_keys=False)
 

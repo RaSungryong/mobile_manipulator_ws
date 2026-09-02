@@ -268,13 +268,18 @@ class ArmControllerNode:
             return
         vel = float(req.get('vel', self._default_vel))
         acc = float(req.get('acc', self._default_acc))
-        self._start_worker(self._run_move_cart, (pose, vel, acc), 'move_cart')
+        # "linear": true (default) = MoveL straight TCP path; false = MoveCart
+        # joint-interpolated — see ArmController.move_cart for when each.
+        linear = bool(req.get('linear', True))
+        self._start_worker(self._run_move_cart, (pose, vel, acc, linear),
+                           'move_cart')
 
-    def _run_move_cart(self, pose, vel, acc):
+    def _run_move_cart(self, pose, vel, acc, linear=True):
         with self._exec_lock:
             self._publish_status('busy')
             try:
-                ok, message = self.arm.move_cart(pose, vel=vel, acc=acc)
+                ok, message = self.arm.move_cart(pose, vel=vel, acc=acc,
+                                                 linear=linear)
                 self._bump(ok, message)
             except Exception as e:
                 rospy.logerr(f"[ArmNode] move_cart failed: {e}")

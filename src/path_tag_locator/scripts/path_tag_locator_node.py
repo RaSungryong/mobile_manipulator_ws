@@ -21,6 +21,7 @@ import rospkg
 from geometry_msgs.msg import Pose, PoseStamped
 
 from path_tag_locator.align_runner import run_auto_align
+from path_tag_locator.align import tag_in_cam_report
 from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
 from path_tag_locator.constants import (
@@ -158,6 +159,7 @@ class PathTagLocatorNode:
             align_xy = 0.0
             align_tilt = 0.0
             align_final_tcp = [0.0] * 6
+            align_result = None
             if bool(req.auto_align):
                 align_result = self._auto_align(req.align_initial_tcp_mm_deg)
                 align_iters = align_result["iterations"]
@@ -254,12 +256,26 @@ class PathTagLocatorNode:
                     request_echo=request_echo,
                     success=True,
                     message="ok",
+                    # Camera-frame error of BOTH observations the result is
+                    # computed from (recorded whether or not auto_align ran).
+                    observations={
+                        "hand_cam_to_tag_a": dict(
+                            tag_id=int(self.cfg.tag.tag_a_id),
+                            **tag_in_cam_report(T_hc2A)),
+                        "front_cam_to_tag_b": dict(
+                            tag_id=int(tag_b_id),
+                            **tag_in_cam_report(T_fc2B)),
+                    },
                     auto_align_report={
                         "iterations": int(align_iters),
                         "xy_offset_m": float(align_xy),
                         "tilt_deg": float(align_tilt),
                         "final_tcp_mm_deg": [float(v) for v in align_final_tcp],
-                    } if bool(req.auto_align) else None,
+                        # Final hand_cam -> tag A error in the CAMERA frame,
+                        # plus the same per iteration.
+                        "tag_in_cam": align_result.get("tag_in_cam"),
+                        "history": align_result.get("history", []),
+                    } if align_result is not None else None,
                 )
                 rospy.loginfo("path_tag_locator: saved run to %s", run_dir)
             except Exception as save_err:

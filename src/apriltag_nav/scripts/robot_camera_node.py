@@ -42,6 +42,8 @@ Serves (one per camera, always advertised — even while that camera is off):
 Config (robot.yaml `robot_camera:` block; falls back to `robot:` block when
 null so every camera shares the existing navigation tag settings by default):
   tag_family
+  quad_decimate: {front_cam, side_cam, hand_cam}  -- dt_apriltags detector
+                 decimation, PER CAMERA (missing = 1.0 = full resolution).
   tag_size:      {front_cam, side_cam, hand_cam}  -- metres, PER CAMERA. The
                  cell has 90 mm floor tags and 30 mm tags on the 정반 step, and
                  dt_apriltags scales pose_t by this, so one global value would
@@ -133,12 +135,19 @@ class _CameraTagWorker:
     """
 
     def __init__(self, name, image_topic, info_topic, detections_topic,
-                 tag_family, tag_size, bridge, driver_service, enabled):
+                 tag_family, tag_size, bridge, driver_service, enabled,
+                 quad_decimate=1.0):
         self.name = name
         self.image_topic = image_topic
         self.info_topic = info_topic
         self.tag_family = tag_family
         self.tag_size = tag_size
+        # dt_apriltags' default is 2.0 (detect on a half-resolution image).
+        # On a 640x480 camera that turns a 90 mm tag at 0.8 m (69 px) into
+        # ~35 px: no detection, or a decoded tag with corrupted corners and a
+        # 20-30 deg bogus tilt (measured 2026-09-02 on hand_cam — that fed
+        # the calibration align loop). Per camera from robot.yaml.
+        self.quad_decimate = float(quad_decimate)
         self.bridge = bridge
         self.driver_service = driver_service
 
@@ -190,7 +199,10 @@ class _CameraTagWorker:
         """Attach or detach this camera's subscribers. Never touches the driver."""
         if enable:
             if self.detector is None:
-                self.detector = Detector(families=self.tag_family)
+                self.detector = Detector(families=self.tag_family,
+                                         quad_decimate=self.quad_decimate)
+                rospy.loginfo(f"[RobotCamera] {self.name}: detector "
+                              f"quad_decimate={self.quad_decimate}")
             # Re-read the intrinsics: a driver restarted at a different
             # resolution publishes a different K, and reusing the stale one
             # would silently skew every tag pose.
@@ -344,6 +356,7 @@ class RobotCameraNode:
 
         tag_family = cam_cfg.get('tag_family') or robot_cfg['tag_family']
         tag_size_cfg = cam_cfg.get('tag_size') or {}
+        decimate_cfg = cam_cfg.get('quad_decimate') or {}
         enabled_cfg = cam_cfg.get('enabled') or {}
         driver_cfg = cam_cfg.get('driver_toggle') or {}
 
@@ -368,7 +381,8 @@ class RobotCameraNode:
                 # rosrun and is normally absent.
                 rospy.get_param(f'~driver_{name}', True)
                 and rospy.get_param(f'~enable_{name}',
-                                    enabled_cfg.get(name, True)))
+                                    enabled_cfg.get(name, True)),
+                quad_decimate=decimate_cfg.get(name, 1.0))
 
         active = [n for n, w in self.workers.items() if w.enabled]
         if not active:

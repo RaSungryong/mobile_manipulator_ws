@@ -106,6 +106,15 @@ class MobileNode:
 
         rospy.Subscriber('/mobile/goto_tag', Int32, self._cb_goto_tag,
                          queue_size=1)
+        # Tag-offset records: every TASK / GOTO command opens a NEW yaml
+        # (mobile_controller.begin_nav_session) so records are never
+        # overwritten. /task_state tells us whether a task_executor task is
+        # driving; a bare /mobile/goto_tag outside any task gets its own file.
+        self._task_active = False
+        rospy.Subscriber('/task_command', String, self._cb_task_command,
+                         queue_size=10)
+        rospy.Subscriber('/task_state', String, self._cb_task_state,
+                         queue_size=1)
 
         rospy.on_shutdown(self._on_shutdown)
 
@@ -160,11 +169,27 @@ class MobileNode:
         threading.Thread(target=self._do_goto, args=(tag_id,),
                          daemon=True).start()
 
+    def _cb_task_command(self, msg):
+        cmd = msg.data.strip()
+        head = cmd.split()[0].upper() if cmd.split() else ''
+        if head in ('TASK', 'GOTO'):
+            self.mobile.begin_nav_session(cmd)
+
+    def _cb_task_state(self, msg):
+        try:
+            self._task_active = json.loads(msg.data).get('task') is not None
+        except Exception:
+            pass
+
     def _do_goto(self, tag_id):
         if not self._begin(f'goto tag {tag_id}'):
             self._finish(tag_id, False, "busy")
             self._publish_state()
             return
+        if not self._task_active:
+            # Not part of a task_executor command (e.g. a calibration
+            # session or a direct publish): give this drive its own file.
+            self.mobile.begin_nav_session(f"goto_{tag_id}")
         try:
             ok = self.mobile.move_to_tag(tag_id)
             msg = (f"arrived at tag {tag_id}" if ok

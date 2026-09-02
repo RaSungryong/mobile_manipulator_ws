@@ -97,7 +97,10 @@ class MapCalibratorNode:
             root.get("map_in_path", ""))
         self.map_out_default = _resolve_ros_path(
             root.get("map_out_path", ""))
-        self.lift_height_mm = root.get("lift_height_mm", None)
+        # Negative or absent = leave the lift alone. (YAML null cannot go
+        # through the parameter server, so -1 is the config's "unset".)
+        lh = root.get("lift_height_mm", None)
+        self.lift_height_mm = None if lh is None or float(lh) < 0 else float(lh)
         self.lift_home_first = bool(root.get("lift_home_first", True))
 
         # --- one-time loads: hand-eye + extrinsics + device proxies.
@@ -123,7 +126,7 @@ class MapCalibratorNode:
         # T_ab2mb is lift-at-origin; the chain compensates by live height.
         self.lift = LiftHeightListener()
         # Lift COMMANDING (session-start positioning) goes through the
-        # main stack's LiftClient; lazy so a null lift_height_mm config
+        # main stack's LiftClient; lazy so an unset (-1) lift_height_mm config
         # never touches the lift at all.
         self._lift_client = None
 
@@ -157,7 +160,7 @@ class MapCalibratorNode:
         """Move the lift to the configured fixed height (home first by
         default — counts drift after up-then-down strokes; a single
         home+up stroke reaches a known height reliably). No-op when
-        lift_height_mm is null."""
+        lift_height_mm is unset (negative / absent)."""
         if self.lift_height_mm is None:
             return
         from apriltag_nav.lift_client import LiftClient
@@ -261,7 +264,8 @@ class MapCalibratorNode:
             resp.success = (report.num_failed == 0)
             resp.message = (
                 f"succeeded={report.num_succeeded}, failed={report.num_failed}; "
-                f"out={report.output_yaml_path}")
+                f"out={report.output_yaml_path}"
+                + (f"; session={report.session_dir}" if report.session_dir else ""))
             resp.num_succeeded = report.num_succeeded
             resp.num_failed = report.num_failed
             resp.output_yaml_path = report.output_yaml_path

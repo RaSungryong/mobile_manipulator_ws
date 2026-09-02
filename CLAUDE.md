@@ -15,10 +15,10 @@ at `~/navifra`, systemd unit `navifra-robot`). It owns `/cmd_vel` + `/odom` plus
 the lift / lighting / battery / Safety-PLC peripherals. Field tuning lives in
 `~/navifra/param.yaml`, not in this workspace.
 
-**Read `docs/HANDOVER.md` before substantive work** — it holds the base-swap
-transition state: what is verified vs still open (motor-2 repair, lift
-integration, arm_base_z re-validation, base dimensions) and the interim
-operating rules.
+**Read `docs/HANDOVER.md` before substantive work** — it is the short
+current-state summary (rewritten 2026-09-02): what is verified on hardware,
+what is still open, and the interim operating rules. This file holds the
+detail and the reasoning; HANDOVER.md holds the checklist.
 
 ## Tech Stack
 
@@ -69,7 +69,7 @@ operating rules.
 
 ```bash
 catkin_make && source devel/setup.bash
-roslaunch apriltag_nav mobile_manipulator.launch   # starts all eight nodes
+roslaunch apriltag_nav mobile_manipulator.launch   # starts all nine nodes
 ```
 
 The Navifra systemd service already runs `roscore` — do not start one.
@@ -89,6 +89,9 @@ TASK <name>                # per-line: scan_joints_line{1,2}, scan_grid_line{1,2
                            #    at 150, and it concatenates the two. See the
                            #    `lift_height` section.
 GOTO <tag_id>              # Navigate to AprilTag
+                           # Every TASK / GOTO opens a NEW camera-centre-vs-tag
+                           # record: ~/.ros/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
+                           # (Work Log 2026-09-02) — never overwritten
 TEST_POSE x y z [rx ry rz] # Test pose control (debug)
 STOP / STATE               # Emergency stop / query state
 EXEC <code> / EVAL <expr>  # Debug execution
@@ -180,7 +183,8 @@ Switch via the import in `scripts/arm_node.py`:
 Package layout (inside `src/apriltag_nav/`):
 
 ```
-scripts/            ROS node entry points only — 8 files, one per device
+scripts/            ROS node entry points only — 9 files, one per device
+                    (plus inference_node, which owns a model, not a device)
 src/apriltag_nav/   importable python package (installed by catkin_python_setup)
                     import as `from apriltag_nav.map_manager import MapManager`
 tools/              standalone one-off scripts (calibration, validation, debug)
@@ -205,9 +209,13 @@ owner node per device, other nodes reach it over topics/services.
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
 | `lifter_node.py` | manipulator base lift (**sole writer** of `/lift/*`) | `/lifter/height_cmd`, `/lifter/{home,stop,reset,goto_scan_height}` (srv), `/lifter/state` |
 | `camera_viewer_node.py` | RViz debug window (owns no device) | `/camera_viewer/set_enabled` (srv) |
+| `inference_node.py` | the resident ONNX Ra model(s) — on-demand prediction for one frame (owns no device) | `/inference/predict` (srv, `robot_msgs/PredictRa`) |
 
-`mobile_manipulator.launch` starts all eight. Seven are required;
-`camera_viewer_node` is the only optional one (a debug aid that owns no device).
+`mobile_manipulator.launch` starts all nine. Seven are required; the two
+optional ones own no device: `camera_viewer_node` (a debug aid) and
+`inference_node` (the TASK scan path scores frames in-process through
+`inference_interface.py`, so only `robot_ui`'s on-demand Ra needs the node —
+both paths share `RaPredictor` and return bit-identical values).
 
 The calibration nodes (`path_tag_locator` + `map_calibrator`, plus
 `handeye_calib` behind `use_handeye_calib:=false`) live in a SEPARATE
@@ -300,19 +308,24 @@ together with that day's on-robot verification of the front_cam rotation port �
 the first defect is the one that will show up *during* that verification, since
 every drive ends with the tag at or past the frame edge.
 
-⚠️ **`align_to_tag()` has no timeout.** When the target tag is not in
-`detected_tags` it calls `stop()`, sleeps and `continue`s — forever. The only
-exit is `stop_requested`. It runs immediately after `execute_pure_pursuit()`
-returns, and the pure-pursuit stop condition is *the tag crossing the image
-centre*, so arrival routinely leaves the tag at the frame edge or just outside
-it. That is not an edge case, it is the normal end of every move.
-`MobileClient.move_timeout_s` is 600 s, so the symptom is ten minutes of
-nothing. **`center_x_stop_offset` (currently +50 px)** is what decides how much
-tag is left in frame; **more positive** stops earlier and leaves more margin.
-(It was `center_y_stop_offset: -50` until the 2026-08-13 camera rotation — same
-physical stopping point, opposite sign, because the fore/aft image axis flipped
-from the row axis to the column axis. Measured: the stop lands at body
-x = 0.567 m either way.)
+✅ **`align_to_tag()` is bounded since 2026-09-02** — `align_timeout_s`
+(20 s, `<= 0` disables) fails the hop with a logged reason (tag not visible /
+not converging). Before that, a target tag absent from `detected_tags` made it
+`stop()`, sleep and `continue` forever, with `MobileClient.move_timeout_s`
+(600 s) as the only exit. It now runs after **every** hop — forward, backward
+**and pivot** (`_align_after_arrival`; the pivot squares up to its EXIT tag,
+e.g. 505 after 501→505). **`center_x_stop_offset` (currently +50 px)** is what
+decides how much tag is left in frame; **more positive** stops earlier and
+leaves more margin. **It is 0 since 2026-09-02** (user: the tag centre must
+reach the target centre), so the target column is the optical axis itself.
+**One target column serves both directions** — reverse stops at the same
+column, approached from the other side (user decision 2026-09-02; a
+direction-mirrored variant was tried and backed out the same day). Expect the
+measured 6–8 mm post-trigger roll to leave the tag ~15–20 px past the
+crosshair; raising the offset to ≈ +18 would pre-compensate it. (It was `center_y_stop_offset: -50` until the 2026-08-13 camera
+rotation — same physical stopping point, opposite sign, because the fore/aft
+image axis flipped from the row axis to the column axis. Measured: the stop
+lands at body x = 0.567 m either way.)
 
 ⚠️ **A frozen `/odom` deadlocks `execute_pure_pursuit()` at minimum speed.**
 `traveled_dist` comes from odom, and the S-curve reads it: `traveled == 0`
@@ -1072,14 +1085,22 @@ both directions, and `tag_edge_angle_deg` reading 0 for a square tag.
 - **Config:** all tunable params in `config/robot.yaml`, not hardcoded
 - **scipy:** write COMPAT calls —
   `rot.as_matrix() if hasattr(rot, 'as_matrix') else rot.as_dcm()` (same
-  for `from_matrix`/`from_dcm`). The earlier ">= 1.4 only, old scipy
-  cannot even import" claim is empirically FALSE on this robot PC: it
-  runs scipy **1.3.3** with numpy 1.23.5 and imports fine (the
-  `np.typeDict` failure does not hit `scipy.spatial.transform`), so bare
-  `as_matrix()` crashes at runtime here — it silently emptied every
-  `/…/tag_detections` array until 2026-09-01 (found in review; three
-  files patched: `robot_camera_node.py`, `arm_transform.py`,
-  `arm_controller.py`).
+  for `from_matrix`/`from_dcm`). **Two scipys live on the robot PC**
+  (checked 2026-09-02): the Ubuntu system package is **1.3.3** (no
+  `as_matrix`), and a user-site **1.10.1** under
+  `~/.local/lib/python3.8/site-packages` (installed 2026-08-05) shadows it
+  for the default `python3`, which is what roslaunch and every node run.
+  So bare `as_matrix()` works today *only* because of that user-site
+  install — `python3 -s`, a different user, a `PYTHONNOUSERSITE` env, or a
+  `pip uninstall --user` all drop back to 1.3.3 and it crashes at runtime.
+  That is the failure the 2026-09-01 review found (an empty
+  `/…/tag_detections` array on every frame) and patched in
+  `robot_camera_node.py`, `arm_transform.py`, `arm_controller.py`; the
+  earlier Work Log claim that "this machine runs 1.3.3" was made against the
+  system interpreter, not the default one. Runtime code stays compat.
+  `tools/*.py` still hold bare calls, and `tools/arm_controller_sdk.py` is a
+  controller variant `arm_node` can be pointed at — make it compat before
+  switching to it.
 
 ---
 
@@ -1125,6 +1146,444 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-02 — Workspace check on the robot PC; four doc/repo drifts fixed
+
+First session in this checkout (`mobile_manipulator_ws_20260902`, host
+`abc-desktop`, the robot PC — `~/navifra` present, `navifra-robot` active).
+Read-only against the robot: `rosnode list` showed only the driver's nodes,
+`/safety/estop` false, battery 66.5 %. **No motion command was sent.**
+
+**Checked and found sound:** git clean and level with `origin/real`; every
+Python file byte-compiles; all `scripts/` entry points executable; every
+`config/*.yaml` and `*.launch` parses; `catkin_make` from scratch exits 0
+with zero errors (realsense2_camera, orbbec_camera, robot_msgs, robot_ui all
+built); apt state right (`ros-noetic-ddynamic-reconfigure` marked manual,
+apt `realsense2_camera` absent); the real `MapManager` routes `500→105` as
+`[500, 501, 505, 112 … 106, 105]` and the real `TaskManager` registers the
+same six tasks at the same lift heights the sections above describe, with
+`scan_full_joints` refused for the documented `[150, 300]` disagreement.
+
+**Fixed, on the user's instruction:**
+
+- **`docs/HANDOVER.md` rewritten.** It dated from 2026-07-31 and this file
+  told every reader to start there — yet it still said 4 nodes,
+  `arm_base_z` 1.025, "the code never commands the lift", `width 0.50`,
+  motor 2 under repair, and pointed at `docs/USAGE_kr.md`, deleted
+  2026-08-07. Every one of those had been reversed by later work. It is now a
+  current-state checklist (verified-on-hardware / open / interim rules /
+  document map) that defers to this file for reasoning.
+- **The scipy convention corrected** — see Coding Conventions. The
+  2026-09-01 finding was real but its premise was half right: the *system*
+  scipy is 1.3.3, the *default* one is a user-site 1.10.1. Compat stays
+  mandatory for exactly that reason.
+- **`src/path_tag_locator.zip` removed from git.** A May-2026 pre-refactor
+  copy (still containing the deleted `nav/` tree and `tcp_pose.py`),
+  committed 2026-07-30; HANDOVER had it listed as "untracked, confirm and
+  delete". Unpacking it over the live package would have resurrected both
+  deleted modules.
+- **`inference_node` added to the node table** (nine nodes, not eight —
+  it has been in the launch since 2026-08-12) and to
+  `tools/test_all_devices.py` as optional, with `/inference/predict`.
+
+Not touched: `docs/GUIDE_kr.md` (standing rule). Correction to the
+2026-09-01 entry below: `reference_tags.yaml` does NOT still hold example
+poses — the six cross tags were filled from the design record in that same
+commit (the user pointed this out). What is still open is verifying those
+design poses against the physical tags on the first live session. Two
+stale comments in that file (an "examples below" line, and a plate-2 note
+still quoting the retracted +3.420 m offset) were fixed.
+
+**Lane hops 400→400 skip the in-place align; any hop touching a 100-/500-
+series tag aligns (user request, same day).** `robot.align_skip_tag_ranges:
+[[400, 499]]`; `_align_after_arrival(target, start)` returns without
+`align_to_tag` only when BOTH endpoints are in a range. So 400→401 …
+410→411 are stop-and-go on Pure Pursuit alone, while 501→400, 405→502,
+503→406, 411→504, every corridor hop and every pivot still align. The base
+still STOPS on each lane tag (arrival detection is per hop); a true
+drive-through would be a route-level change and was not asked for.
+Offline (65 checks): six real edges checked both ways. Not driven on the
+robot.
+
+**"전진도 자꾸 지나쳐서 멈춰" — the stop now leads by the base's roll
+(same day).** Quantified from every hop after the 16:27 restart, using
+`arrival` (trigger instant) vs `aligned` (base at rest; align itself took
+0.0 s on most hops so it is pure roll): **forward rolled 5.8 mm median
+(0.7–9.0, 23 hops) at a 0.011 m/s command, reverse 12.6 mm (17 hops) at
+0.022 m/s** — the same ~0.55 s of continued motion either way, i.e. the
+base executes commands with a transport delay. New `stop_latency_s: 0.55`:
+`_publish_vel` keeps a command history and `_pending_roll_m()` integrates
+the last 0.55 s of it (exact for a pure delay; falls back to
+|cmd| × latency without history); the stop fires that far early along the
+direction of travel, and `center_x_stop_tolerance` becomes a floor under
+that lead (`fire_px = max(tol, lead)`), so the base ends ON the target
+column instead of `tol` short. The final-approach envelope aims at the
+same `fire_px`. Every `arrival` record now carries
+`commanded_speed_at_stop_mps`, `stop_lead_px`, `stop_lead_mm` so the
+latency can be re-fitted from `(arrival − aligned) / speed`. Verified
+offline (57 checks) against a plant with a 0.55 s transport delay: forward
+and reverse end within 0.0 mm of the tag (without the lead: 4.3 mm past,
+matching the robot), the realistic reverse case — tag hidden beyond 2.5 cm
+plus the delay — ends +1.2 mm (without creep zone + lead: +13.5 mm,
+matching the robot's 6–17). Not driven on the robot.
+
+**"자꾸 태그를 조금 지나쳐서 멈춰" — root-caused to REVERSE hops, fixed
+with an odom creep zone (same day).** The day's records after the 16:27
+restart (offset 0, tol 4) show arrivals dead on the crosshair in both
+directions (±4 px), but the `aligned` record — taken after the base has
+physically stopped — sits **+6…17 mm past the tag on reverse hops** and
+only 1–2 mm on forward ones. The mobile_node log explains it: reversing,
+the target tag is first detected when it is **~3 cm from the lens** (the
+lens is 100 mm ahead of the bumper, so the bumper hides the floor behind
+it; the docs already note "the bumper appears on the LEFT of the image"),
+the final approach latches at 2.5–2.9 cm from 0.030–0.037 m/s and the stop
+fires at 0.020–0.024 m/s. Forward sees the tag 26 cm out and stops at
+0.010. Odom remaining distance was within 3 mm of the tag stop on those
+0.40 m hops, so new `blind_approach_dist: 0.12` / `blind_approach_speed:
+0.015` cap the command inside the last 12 cm of ODOM distance regardless
+of visibility; the tag-based final approach then only has to go
+0.015 → 0.010 over the last few cm. Applied after the backup `min_speed`
+branch and before the final-approach override. Costs ~8 s per hop. The
+1 m pivot-exit hop (507→137) showed ~6 cm of odom error, hence the 12 cm
+margin. Offline (49 checks): a reverse hop whose tag is hidden beyond
+2.5 cm now enters the final approach at 0.015 m/s instead of 0.033 (the
+sim reproduces the robot's entry speed without the zone), stops from
+≤0.012, survives a +6 cm odom over-estimate; forward unchanged. Not
+driven on the robot.
+
+**Pure Pursuit on a visible tag runs at 1/3 speed (user request, same
+day: "너무 빨라").** New `robot.tag_visible_speed_factor: 0.333`, applied
+in `execute_pure_pursuit` to the profile speed whenever the target tag is in
+`detected_tags` — so at `max_linear_speed` 0.1 the visual approach closes
+at ~0.033 m/s while blind driving keeps the full profile, and the 6 cm final
+approach now latches from that lower entry speed (gentler solved
+deceleration). Applied before the final-approach override, which still
+wins. Offline (42 checks): a 0.80 m hop reaches 0.1 blind, never exceeds
+0.0333 once the tag is seen, cruises at 0.033, arrives; factor 1.0 restores
+the old behaviour. Not driven on the robot.
+
+**`center_x_stop_offset` 50 → 0 (user request, same day: "태그 중심이
+목표 중심점에 와야 정지").** The stop target column is now the optical axis
+/ overlay crosshair, for both directions. Config only; the 4 px tolerance
+and the 6–8 mm post-trigger roll noted below still apply, so the tag will
+sit a little past the crosshair at rest. Offline: forward stops at cx+3.8,
+reverse at cx−3.8 (sim, 36 checks). Not driven on the robot.
+
+**Align and stop-centring tightened, from the day's hardware record (user
+request, same day: "얼라인 기준하고 태그 정중앙 정렬 기준을 더 빡세게").**
+`align_threshold_deg` 0.5 → **0.2**, `center_x_stop_tolerance` 10 → **4 px**,
+plus a new `align_min_angular_speed: 0.01` rad/s floor inside
+`align_to_tag`. The numbers came from the 15:33 `GOTO 400` run (194 aligns
+in the mobile_node log): finals were median 0.24°, and every align that took
+~2 s ended at 0.43–0.49° — the loop was exiting on first contact with 0.5,
+not converging, so 0.2 is reachable. The floor exists because the P term at
+0.2° is 0.0028 rad/s, which a skid base likely cannot execute; 0.01 is above
+the 0.0063 rad/s the base was observed still turning at, and one 10 Hz tick
+at the floor is 0.057°, inside the band. `approach_yaw_tolerance_deg` is set
+explicitly (0.5) so the approach slowdown is unaffected. ⚠️ Found while
+reading the same records: arrivals land at **+40…46 px**, not the +54…60 the
+trigger fires at — the base rolls **6–8 mm past the trigger line** before it
+actually stops. Tolerance therefore buys ≤2.4 mm; centring the tag exactly on
+the target column means raising `center_x_stop_offset` by ~18 px, which was
+NOT done (user's call). Also seen: the `aligned` record's fore-aft offset is
+20–80 px larger than the `arrival` one on most tags — the in-place rotation
+translates the lens, so align is not free of position error either. Verified
+offline (35 checks total): converges to <0.2° from 3° and from 0.4°, no
+non-zero command below the floor, floor 0 restores the pure P term, forward
+trigger within 4 px + one tick of the target. Not driven on the robot.
+
+**Zone A lane (tags 400–499) drives WITHOUT prediction (user request,
+same day).** `predictive_centering.disabled_tag_ranges: [[400, 499]]` (+
+`disabled_tag_ids`) in robot.yaml; `_make_prediction_segment` returns None
+when EITHER endpoint of the hop matches, so 501→400 and 405→502 are excluded
+along with 400→401…410→411. With no segment the existing code already does
+exactly the three things asked for: tag visible → plain Pure Pursuit (no
+approach-heading blend, no ApproachBalance slowdown), tag not visible →
+`omega = 0`, a straight-line command at profile speed, stop line →
+`align_to_tag`. Zone B–E hops keep map_world / map.yaml prediction.
+Verified offline (9 checks added to `t_stop_align.py`, 30 total): the
+segment is None for the three hop kinds and present for 505→112; a
+0.50 m 400→401 drive with a 30 mm lateral offset commands omega exactly 0
+on all 78 blind ticks, arrives, and still aligns. Not driven on the robot.
+
+**Every hop — pivots included — now ends with an in-place align, and the
+reverse stop line stays on the existing target column (user request, same
+day).** Changes in `mobile_controller`, verified offline against the real
+class (21 checks, stubbed rospy + unicycle plant + simulated front_cam,
+scratch `t_stop_align.py`); **not driven on the robot**, needs `mobile_node`
+restarted. (1) Stop line: a direction-mirrored variant
+(`cx ± center_x_stop_offset`, reverse stopping with the tag 24 mm short of
+the lens on the image-LEFT side) was implemented first and **backed out
+within the hour** on the user's instruction that reverse must stop at the
+previously established target centre. So `target_x = cx + offset` for both
+directions, as before: forward brings the tag to that column from the right
+(first trigger ~698 px), reverse from the left (~678 px), same physical spot
+over the tag to within the 10 px tolerance. No behaviour change on this
+point. (2) `go_to_next_tag`'s pivot branch used to return straight from the
+odometry-only `execute_pivot`; it now goes through the same
+`_align_after_arrival(target_id)` tail as move hops, squaring up to the
+exit tag (501→505 pivots then aligns on 505; sim: 90° pivot + 3° tag error
+converged to −0.48°). (3) `align_timeout_s: 20.0` — the 2026-08-12 open
+defect — because a pivot can land with the exit tag out of frame, and an
+unbounded wait there would now hang every corridor entry. Timeout → `stop()`,
+`logerr` with reason, hop returns False (the task fails, which is what the
+600 s client timeout did anyway, ten minutes later).
+
+**First launch of `path_tag_locator.launch` on the robot died at parameter
+load** — the user ran it and hit `cannot marshal None unless allow_none is
+enabled`. Cause: `map_calibrator.yaml` had `lift_height_mm: null`, and that
+file goes through `<rosparam command="load">`, whose XML-RPC transport has
+no encoding for None; roslaunch aborts before starting any node. (The
+`null`s in `robot.yaml` are harmless only because nothing loads that file
+with rosparam — the nodes read it as a file.) Fix: the key is now **−1**,
+`map_calibrator_node` treats negative/absent as "leave the lift alone", and
+the yaml says why it must not be `null`. Verified by marshalling all three
+package configs through `xmlrpc.client.dumps` offline and by a real
+`rosparam load` of the file into a scratch namespace on the live master
+(then deleted). The launch itself still has not run to completion on the
+robot — the main stack was not up at the time.
+
+**Are the calibration results usable? Not as produced — but the archived
+observations let the bias be removed offline, and the corrected map is
+now the best estimate of the ACTUAL tag positions.** Two plate-2 sessions
+(14:24 → `map_world_20260902_142402.yaml`, 14:53 → `…_145354.yaml`)
+agree with each other to 2–3 mm mean / 7–8 mm sd in xy (z: 27 mm sd) —
+the measurement is repeatable. Against `map.yaml` they are biased: zone D
+dy +65 mm, zone E dy −49 mm (sign flips with robot heading ⇒ an offset
+fixed in the arm frame), dx cycling with the plan's 3-tag camera-yaw
+pattern, adjacent spacing 359–464 mm on a 400 mm grid (6/40 edges over
+3 cm). The user's point stands — map.yaml is the PLAN and calibration
+exists to find where the tags really are — so the question was whether
+that deviation is placement or chain bias. Test without design
+coordinates: recompute the chain from the 22 archived `result.npz` with
+a 4-parameter hand-eye correction (camera-frame translation + yaw)
+fitted only to "400 mm spacing + straight corridor". Result: dt =
+(+101, −3, +24) mm, yaw +1.55°; physical rms 26 → 11 mm; and the
+positions then sit +5±3 / +9±3 mm (zone E) and +18±10 / +8±13 mm
+(zone D) from the plan — the plan was never asked for, so this is the
+tags actually being close to it. Chain bias, not placement. Outputs:
+`map_world_20260902_145354_handeye_corrected.yaml` (with
+`deviation_from_design_mm` per tag; 4/40 edges still over 3 cm, all
+touching tag 131, the one entry whose align wobbled), the corrected
+hand-eye applied to `T_hc2ee.npz` (spun-only file kept), plans
+regenerated (seeds moved with the camera offset), comparison CSV
+`compare_map_world_142402_vs_145354_vs_map.csv`. Caveat: a 4-parameter
+fit from one session is an estimate; `handeye_calib` on this robot is
+still the real fix. Until then, `predictive_centering.map_world_path:
+"latest"` makes mobile_node steer blind segments from whichever
+map_world is newest — the biased 14:53 file by timestamp — consider
+`use_map_world: false` or pointing it at the corrected file.
+
+**Full plate-2 session ran (25 entries, 21 ok, 17 min) — and the align
+got SLOWER as it went. Cause: MoveL, i.e. the change requested an hour
+earlier; fixed by splitting move types.** Per-move durations from the
+arm_node log, same kind of move: the ~300 mm / 20°-yaw initial view move
+took **5–6 s** for tags 128–137 and **22–34 s** for 138–145; small
+correction steps 0.4–2.2 s early vs 2–9 s late; two 740–800 mm / 40–90°
+moves hit the SDK's **60 s RPC timeout**, and after such a timeout the
+controller keeps executing while the SDK has returned — a 0 mm "move"
+then took 14 s queued behind it. A straight-line Cartesian move that
+reorients the wrist is joint-speed-limited near the wrist singularity,
+and zone E's mirrored seeds put the arm there; MoveCart (joint
+interpolation) to the same pose does not care. So `move_cart` now takes
+`linear` (JSON key on `/arm/move_cart`, default true = MoveL as the
+user asked for the UI): the calibration's **initial view-pose move and
+the align_required=false move send `linear=false` (MoveCart)**, the
+small correction steps stay MoveL. Also: on an RPC "timed out" the
+controller now polls `GetRobotMotionDone` (≤120 s) before releasing
+`busy`, so the next command cannot be sent into a moving arm.
+
+Second time sink in the same session: **most entries ran all 5 align
+iterations** with xy already at 1–5 mm because the tilt jitters around
+the 1.0° tolerance (std 0.5°, spikes to 3–4°, one 34° first frame). New
+`align.samples_per_iteration: 5` — `wait_for_tag_detections` collects
+5 frames (~0.2 s) and the **median-tilt frame** is used (a real frame,
+no rotation averaging). Verified offline (8 checks: MoveL/MoveCart
+dispatch by flag, timeout → motion-done wait → failure reported, median
+pick ignores the spike, config loads, payload carries `linear`). Needs
+arm_node restarted (main stack) to honour `linear`; until then every
+move is still MoveL.
+
+**Live test of the align fix — a SECOND root cause found and fixed:
+`quad_decimate`. Converged on the robot.** First live attempt with the
+spun hand-eye, from the plan's seed for tag 129 (robot standing on 129,
+front_cam centred within 15 mm): iter 1 read xy 56 mm but **tilt 32.6°**
+at z 0.68 m, the 15°-clamped step then pushed xy to 171 mm and the tag was
+lost. A flat tag under a vertical camera cannot tilt 32°, so the detection
+was wrong, not the geometry. Re-parked at the seed, hand_cam then
+detected NOTHING in 150 frames; the saved frame shows the tag dead centre.
+Offline on that frame with the live intrinsics: dt_apriltags
+`quad_decimate` 1.0 → id 0, z 0.796, **tilt 2.74°**; 1.5 → tilt 20.7°;
+2.0 (the library default, and what `robot_camera_node` used) → no
+detection. The 69 px tag halves to ~35 px under decimation and the border
+merges with the plate seams/glare. `robot_camera_node` now takes
+`robot_camera.quad_decimate.<cam>` from robot.yaml (front_cam 2.0 —
+unchanged, its 30 Hz/109 ms numbers were measured there; side_cam and
+hand_cam 1.0). Restarted only that node (`rosnode kill` + `rosrun`; the
+launch's `~driver_*` params persist on the master) — hand_cam then saw
+tag 0 in 95/95 frames, z 0.797, tilt 1.75 ± 0.5°. **Second align run from
+the same seed: xy 62 → 3.1 → 3.4 mm, tilt 3.0 → 2.6 → 0.59°, converged
+in 3 iterations, full locate succeeded** (tag 129 came out 16 / 67 / 36 mm
+from its design offset in x / y / z relative to the ref tag — the
+cm-level residual expected from the May hand-eye translation). MoveL was
+in the loop for every step. So the morning's divergence had two
+independent causes stacked: the 180° hand-eye (direction) and
+decimation-corrupted tilt (magnitude); both had to go.
+
+**`move_cart` now drives `MoveL`, not `MoveCart` (user request, same
+day).** `ArmController.move_cart` — the path behind `/arm/move_cart`, so
+both the UI's absolute/jog moves and the calibration align steps — used
+`MoveCart`, which interpolates in JOINT space to a Cartesian endpoint and
+lets the controller choose the configuration; the TCP can arc off the
+straight line on the way. `MoveL(target, TOOL_ID, 0, vel=, acc=)` keeps
+the TCP path linear, which is what a camera-frame correction of ≤100 mm
+assumes. Trade-off recorded at the call site: a straight path through a
+singularity or joint limit is refused (error) where MoveCart would have
+gone round it. Result strings keep the `move_cart` wording on purpose —
+`ArmInterface` attributes completions by that substring. The Keyence
+standoff loop already used MoveL; this was checked against the SDK's
+actual signature (`MoveL(desc_pos, tool, user, joint_pos=…, vel=20.0,
+acc=0.0, …)`). Not run on hardware yet. Note: this was NOT the cause of
+the align divergence — see the next entry — but it removes one source of
+path uncertainty from the loop.
+
+**`auto_align` diverged on the real robot — hand-eye was 180° off (found
+and patched, same day).** First live calibration attempt (plate 2, tags
+126–150): every entry failed. The per-iteration log is the tell — xy offset
+66 → 131 → 258 mm and tilt 5.1 → 8.5 → 17.1°, doubling each step in three
+separate runs, until the clamped step became unreachable (Fairino 112) and
+the entry timed out. Diagnosis, all read-only against the robot: (1) the
+euler encode/decode round trip is exact (1e-15), so the detector path is
+not it; (2) the live hand-cam observation at the arm home pose puts ref tag
+0 at z = −0.584 m in the arm frame with the hand-eye as loaded — the plate
+top is at −0.572 — so the hand-eye's z / direction is right; (3) the same
+observation lands on the map position (arm-frame y = +1.01 m) only if the
+hand-eye is spun 180° about the optical axis (+0.995 m; as loaded +0.778;
+EE-spun +0.621); (4) simulating the real align functions with exactly that
+mounting error reproduces the log (65 → 116 → 183 mm, 5 → 10 → 20°), while
+a transposed detector rotation does not. So the May-2026 `T_hc2ee.npz`
+describes a mount rotated 180° about the optical axis from today's.
+**Interim fix:** `T_hc2ee.npz` := `Rz(180°) @ old` (old kept as
+`T_hc2ee_2026-05-27_old_mount.npz`); plans regenerated — the seed TCPs
+came out numerically identical (the planner's free camera-yaw sweep
+absorbs the spin), only the annotated cam yaw moved by 180°. Offline, the
+loop now converges in one step from every seed with a 65 mm base-stop
+error. **The translation is still May's** — a proper `handeye_calib`
+session on this robot is the real fix (HANDOVER §2-2).
+
+Also fixed: `ArmInterface.move_cart` attributed a refused move as a
+foreign motion — arm_node reports success as `move_cart ok` but a refusal
+as `MoveCart error 112`, and the check was a case-sensitive
+`'move_cart' in message` — so every unreachable align pose cost the full
+60 s timeout instead of failing at once. Now matches both spellings.
+
+Not verified on hardware yet: the corrected hand-eye has not driven an
+align loop. Note the align-history is lost when `run_auto_align` raises
+mid-loop (the session record shows `auto_align: null` for those attempts)
+— the iteration numbers above came from rosout, not the record.
+
+**Drive rule made unconditional (user request, same day): tag visible →
+Pure Pursuit; tag not visible → predictive drive on map geometry; tag
+reaches the stop line → stop, then ALWAYS align.** (Exception added later
+the same day: hops touching tags 400–499 skip the predictive part and drive
+straight when blind — see the entry above.) Two gates in
+`mobile_controller` made this conditional. (1) `_prediction_xy` returned
+nothing for a tag missing from `map_world` whenever a map_world file
+existed and `fallback_to_map_yaml` was false (it was) — so with one
+calibrated endpoint the segment was `None` and the blind part of the hop
+had NO steering at all; map.yaml is now always the fallback (calibrated
+positions still win when both endpoints have them), and the only `None`
+left is a tag in neither file. (2) `go_to_next_tag` skipped
+`align_to_tag` after arrival when `post_move_align_enabled` was false or
+the tag's centre-row error exceeded `post_move_align_y_tolerance_px`;
+both branches and both keys are gone — every `move` hop now ends
+stop → `align_to_tag`, no exceptions (the only remaining skip is a
+temporary-missing VIRTUAL tag, which has nothing to align to). Verified
+offline (7 checks on the real methods with the real map: map.yaml when
+nothing / one endpoint is calibrated, map_world when both are, align
+called after every successful move even with a 140 px row error, none
+after a failed move, pivot untouched). `fallback_to_map_yaml` is kept in
+robot.yaml but no longer read. Not driven on the robot.
+
+**Calibration starts at each plate's first tag, not the dock (user
+request, same day).** Both generated plans carried `nav_start_id: 500` on
+their first entry, so a session first drove to DOCK 500 and then to the
+plate's first tag — for plate 2 that is a 9 m detour through zone A and
+the 507 pivot before the first measurement. The generator
+(`generate_calibration_artifacts.py`) no longer emits it; both plans were
+regenerated (only that line changed — verified by diff) and now start
+from wherever the base is parked, which must be ON tag **100** (plate 1)
+or **126** (plate 2) with front_cam seeing it, since `move_to_tag` takes
+its start node from the visible / last-known tag. README updated at all
+four places that said "park at DOCK 500".
+
+**Per-command navigation record (user request, same day: "a new file
+per task command, never overwritten").** `mobile_controller` used to
+write ONE `~/.ros/path_tag_locator/tag_alignment_results.yaml`, keyed by
+tag — so every arrival at tag 105 overwrote the last one, every task
+shared the file, and with no `map_world_*.yaml` present (i.e. today) it
+recorded nothing at all and just warned. Replaced by
+`begin_nav_session(label)` + `_record_tag_offset(tag, stage)`: each
+`TASK …` / `GOTO n` on `/task_command` opens a new
+`~/.ros/apriltag_nav/nav_log/<YYYYMMDD>/<YYYYMMDD_HHMMSS>_<cmd>.yaml`
+(`mobile_node` subscribes to `/task_command` for exactly this; a
+`/mobile/goto_tag` published outside a task_executor task — a calibration
+session, a direct publish — gets its own `goto_<tag>` file, decided from
+`/task_state`), and every arrival appends a record: `arrival` when the
+pure-pursuit stop fires (new — previously nothing was recorded there)
+and `aligned` after `align_to_tag`. Each record carries the camera-frame
+error (`image_offset_px`, `tag_pose_m` fore-aft/lateral/depth,
+`camera_center_offset_from_tag_mm`, px→mm through depth/fx, the tag-edge
+yaw error, odom travel) and, only when a map_world exists, the old
+world-frame `calibrated_reference` block. Config key
+`alignment_result_dir` replaces `alignment_result_path`. Same-second
+collisions get a numeric suffix. Verified offline (14 checks on the real
+controller methods: per-command files, append order, old file untouched
+by the next command, suffixing, GOTO/goto labels, disabled → nothing,
+no-map_world → recorded anyway, map_world → reference rotated by the
+tag's yaw). Not yet driven on the robot.
+
+**Camera-frame error recording (user request, same day).** `result.yaml`
+from `locate_path_tag` used to record the alignment error as two scalars
+(`xy_offset_m`, `tilt_deg`), and nothing at all about where the tag sat
+in the image when `auto_align` was off. It now records the error **in the
+camera optical frame** — `position_m` (x = image right, y = image down,
+z = range along the optical axis) and `rpy_deg` of the tag in that frame
+— under `observations:` for BOTH observations the result is built from
+(hand_cam → tag A, front_cam → tag B, recorded on every successful call),
+and under `auto_align.tag_in_cam` (final) + `auto_align.history` (one per
+iteration) when auto_align ran. The axis definition is written once at the
+top of the file as `camera_frame_note`. `AlignMetrics` gained the raw
+`t_cam_m` / `rpy_cam_deg` it always derived the scalars from (defaults
+keep old constructors valid); `is_converged` and the service response are
+unchanged, so no `.srv` rebuild. `persistence._plain()` coerces numpy in
+nested reports. Verified offline (10 checks: rounding, square-on tag reads
+rpy `[0, 0, spin]` with tilt 0, the note appears exactly once, numpy
+coerced, a call without observations writes the old file shape).
+`map_calibrator` no longer drops them — see the next paragraph.
+
+**Append-only calibration session record (user request: "record
+everything, overwrite nothing, number it 1, 2, 3 in order").** Before,
+a session left only `map_world_<ts>.yaml` (per-tag upsert, so a retry
+overwrote its predecessor and the align report was discarded), the
+timestamped `locate/` run dirs, and a `CalibReport` that never reached
+disk. New `calibration/session_log.py` (`SessionRecorder`) writes
+`<save_dir>/calibrate/<YYYYMMDD_HHMMSS>/` per session with one file PER
+ATTEMPT under `entries/`, named `NNN_tag<id>_attempt<n>_<ok|fail>.yaml`
+in execution order — a retry is a new number, a failed attempt keeps
+everything up to the failure (`_run_one` now fills a `rec` dict
+progressively), a missing-ref entry is recorded without motion — plus
+`session.yaml` (ordered index, rewritten atomically after every attempt),
+`entries_log.csv` and a `map_world.yaml` copy. Each entry carries nav
+state, view pose + source, the full auto-align report (camera-frame
+`tag_in_cam` + per-iteration history), both camera-frame observations,
+TCP, lift height, the world result and the 4x4 transforms, and a pointer
+to its `locate/` run dir. The user's `map_out_path` keeps its old
+semantics; the session copy is the one guaranteed to survive. Dry runs
+record nothing. Progress messages gained a `seq` field (robot_ui ignores
+unknown keys). Verified offline (20 checks, orchestrator driven end to
+end against fakes: retry numbering, failed-attempt contents, second
+session in a new dir with the first untouched, dry run silent).
 
 ### 2026-09-01 — full review of the day's work: 12 findings fixed, 2 of them serious
 
@@ -1229,7 +1688,8 @@ deliberately uncompensated — this fixes only path_tag_locator's chain.
 extrinsics.yaml must STAY lift-at-origin (comment added there).
 
 The intended workflow is a FIXED height per session:
-`map_calibrator.yaml lift_height_mm` (null = leave the lift alone) makes
+`map_calibrator.yaml lift_height_mm` (**−1** = leave the lift alone; it was
+`null` until 2026-09-02, which roslaunch cannot load — see that entry) makes
 `run_calibration` position the lift there first — home-then-single-up-stroke
 by default (`lift_home_first: true`), because the driver guide documents
 ~1000–1800 counts of encoder error after an up-then-down stroke, so home+up

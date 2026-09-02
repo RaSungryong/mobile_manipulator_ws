@@ -127,7 +127,7 @@ class ArmInterface:
     # ------------------------------------------------------------------
     def move_j_to_pose(self, target_pose_mm_deg,
                        vel=None, acc=None, ovl=None,
-                       settle_s: float = 0.2):
+                       settle_s: float = 0.2, linear: bool = True):
         """Command an absolute Cartesian TCP move through arm_node and
         block until it completes.
 
@@ -157,6 +157,10 @@ class ArmInterface:
             'pose': [float(v) for v in target_pose_mm_deg],
             'vel': float(self.default_vel if vel is None else vel),
             'acc': float(self.default_acc if acc is None else acc),
+            # False = joint-interpolated MoveCart: use for big repositioning
+            # moves; MoveL crawls (or times out) when the wrist has to
+            # reorient along a straight path — measured 2026-09-02.
+            'linear': bool(linear),
         }
         rospy.loginfo('[ArmInterface] move_cart -> %s',
                       ['%.2f' % v for v in payload['pose']])
@@ -179,7 +183,13 @@ class ArmInterface:
                 # after we published) advances the baseline and keeps
                 # waiting for OUR result instead of mis-reporting the
                 # scan's success as our completion.
-                if 'move_cart' not in st.result_message:
+                # arm_node reports success as "move_cart ok" and a refusal
+                # as "move_cart failed: MoveL error <code>" (it was a bare
+                # "MoveCart error <code>" until 2026-09-02, which this
+                # case-sensitive check missed, costing the full 60 s
+                # timeout per refused pose). Normalise before matching.
+                msg = (st.result_message or '').lower().replace('_', '')
+                if 'movecart' not in msg:
                     seq0 = st.motion_seq
                     continue
                 if not st.result_success:

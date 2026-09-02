@@ -20,11 +20,37 @@ import numpy as np
 from .geometry import invert_T, rot2rpy_deg
 
 
+# What the recorded camera-frame numbers mean. persistence.py writes it
+# ONCE at the top of result.yaml (``camera_frame_note``) so the file
+# explains itself without repeating it per entry.
+CAM_FRAME_NOTE = (
+    "camera optical frame: +x = image right, +y = image down, +z = optical "
+    "axis into the scene. position_m = tag centre relative to the camera "
+    "centre (x, y are the lateral error from the optical axis, z the "
+    "range); rpy_deg = tag orientation in that frame, ZYX intrinsic. "
+    "Square-on tag: position [0, 0, z], rpy [0, 0, spin]."
+)
+
+
 @dataclass
 class AlignMetrics:
     xy_offset_m: float        # sqrt(tx^2 + ty^2) of tag in cam frame
     z_distance_m: float       # tz of tag in cam frame
     tilt_deg: float           # angle between cam +z and tag +z
+    # Full camera-frame observation the scalars above are derived from.
+    t_cam_m: Tuple[float, float, float] = (0.0, 0.0, 0.0)      # (tx, ty, tz)
+    rpy_cam_deg: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # tag in cam, ZYX
+
+    def as_report(self) -> dict:
+        """Camera-frame error as a plain dict for yaml / json (see
+        CAM_FRAME_NOTE for the axes). Rounded to 1 um / 1e-6 deg."""
+        return {
+            "position_m": [round(float(v), 6) for v in self.t_cam_m],
+            "rpy_deg": [round(float(v), 6) for v in self.rpy_cam_deg],
+            "xy_offset_m": round(float(self.xy_offset_m), 6),
+            "z_distance_m": round(float(self.z_distance_m), 6),
+            "tilt_deg": round(float(self.tilt_deg), 6),
+        }
 
 
 @dataclass
@@ -44,11 +70,19 @@ def alignment_metrics(T_cam2tag: np.ndarray) -> AlignMetrics:
     # tilt = angle between (0,0,1) and tag_z_in_cam
     c = float(np.clip(tag_z_in_cam[2] / max(np.linalg.norm(tag_z_in_cam), 1e-12), -1.0, 1.0))
     tilt_deg = math.degrees(math.acos(c))
+    rx, ry, rz = rot2rpy_deg(T_cam2tag[:3, :3])
     return AlignMetrics(
         xy_offset_m=float(math.hypot(float(t[0]), float(t[1]))),
         z_distance_m=float(t[2]),
         tilt_deg=float(tilt_deg),
+        t_cam_m=(float(t[0]), float(t[1]), float(t[2])),
+        rpy_cam_deg=(float(rx), float(ry), float(rz)),
     )
+
+
+def tag_in_cam_report(T_cam2tag: np.ndarray) -> dict:
+    """Camera-frame error of one tag observation, ready for result.yaml."""
+    return alignment_metrics(T_cam2tag).as_report()
 
 
 def _target_T_cam2tag(T_cam2tag_now: np.ndarray,

@@ -27,14 +27,15 @@ import numpy as np
 import rospy
 from std_msgs.msg import Int32, String
 
-from ..align import clamp_step
-from ..align_runner import run_auto_align
+from ..align import clamp_step, tag_in_cam_report
+from ..align_runner import run_auto_align, AutoAlignError
 from ..geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 from ..chain import compensate_T_ab2mb, compute_T_A2B, compute_T_B_world
 from ..detections import detection_to_T_cam2tag, wait_for_tag_detection
 from ..geometry import rot2rpy_deg
 from ..persistence import save_locate_failure, save_locate_run
 from ..ros_image import grab_image
+from .session_log import SessionRecorder
 from .map_io import (
     atomic_write,
     load_map,
@@ -93,6 +94,7 @@ class CalibReport:
     num_failed: int
     output_yaml_path: str
     entries: List[Dict[str, Any]] = field(default_factory=list)
+    session_dir: str = ""           # append-only per-attempt record
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +158,9 @@ class CalibrationOrchestrator:
         self._anchor: Optional[BaseAnchor] = None
         # Session-start lift height (set in run(); drift-guard baseline).
         self._session_lift_m: Optional[float] = None
+        # Append-only per-attempt record (session_log.SessionRecorder);
+        # None during dry runs, which write nothing by design.
+        self._session: Optional[SessionRecorder] = None
 
         rospy.loginfo(
             "[Calibrator] loaded %d ref tags (origin=%s), %d plan entries; "
@@ -310,6 +315,27 @@ class CalibrationOrchestrator:
             rospy.loginfo("[Calibrator] session lift height: %.1f mm",
                           self._session_lift_m * 1000.0)
 
+        # Every attempt of every entry gets its own numbered file, in
+        # execution order, under <save_dir>/calibrate/<ts>/ — retries and
+        # failures included. Nothing there is ever overwritten.
+        self._session = None
+        if not self.cfg.dry_run:
+            try:
+                self._session = SessionRecorder(self.cfg.save_dir, meta={
+                    "plan_yaml": str(self.cfg.plan_yaml),
+                    "ref_tags_yaml": str(self.cfg.ref_tags_yaml),
+                    "map_in_path": str(self.cfg.map_in_path),
+                    "map_out_path": str(self.cfg.map_out_path),
+                    "session_lift_m": self._session_lift_m,
+                    "num_plan_entries": len(self.plan.entries),
+                    "dry_run": False,
+                })
+                report.session_dir = str(self._session.dir)
+                rospy.loginfo("[Calibrator] session record -> %s",
+                              self._session.dir)
+            except Exception as e:
+                rospy.logwarn("[Calibrator] session record disabled: %s", e)
+
         for entry in self.plan.entries:
             if self._cancel_check is not None and self._cancel_check():
                 rospy.logwarn('[Calibrator] session cancelled before '
@@ -317,6 +343,8 @@ class CalibrationOrchestrator:
                               entry.path_tag_id)
                 self._publish_progress({'tag': entry.path_tag_id,
                                         'status': 'cancelled'})
+                if self._session is not None:
+                    self._session.mark_cancelled(entry.path_tag_id)
                 break
             self._publish_target(entry.path_tag_id)
             resolved = self.plan.resolved(entry)
@@ -324,13 +352,14 @@ class CalibrationOrchestrator:
             if ref is None:
                 msg = (f"ref_tag_id {entry.ref_tag_id} not in "
                        f"reference_tags.yaml")
+                seq = self._record(entry, resolved, 1, "fail", {}, error=msg)
                 report.entries.append({
                     "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
-                    "status": "fail", "error": msg})
+                    "status": "fail", "error": msg, "seq": seq})
                 report.num_failed += 1
                 self._publish_progress({
                     "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
-                    "status": "fail", "error": msg})
+                    "status": "fail", "error": msg, "seq": seq})
                 if not self.cfg.dry_run:
                     save_locate_failure(
                         root_dir=self.cfg.save_dir,
@@ -358,11 +387,18 @@ class CalibrationOrchestrator:
                 # N retries AFTER the first failed attempt. Re-runs the
                 # whole entry including nav + align.
                 attempts = 1 + max(0, int(resolved.get("retry_count", 0)))
+                seq = None
                 for attempt in range(1, attempts + 1):
+                    # `rec` is filled progressively by _run_one so a failed
+                    # attempt still records everything up to the failure.
+                    rec: Dict[str, Any] = {}
                     try:
-                        self._run_one(entry, resolved, ref)
+                        self._run_one(entry, resolved, ref, rec)
+                        seq = self._record(entry, resolved, attempt, "ok", rec)
                         break
                     except Exception as e:
+                        seq = self._record(entry, resolved, attempt, "fail",
+                                           rec, error=str(e))
                         if attempt >= attempts:
                             raise
                         rospy.logwarn(
@@ -374,11 +410,13 @@ class CalibrationOrchestrator:
                 pos_x, pos_y, pos_z = world_entry["position_m"]
                 report.entries.append({
                     "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
-                    "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z})
+                    "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z,
+                    "seq": seq})
                 report.num_succeeded += 1
                 self._publish_progress({
                     "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
-                    "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z})
+                    "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z,
+                    "seq": seq})
             except Exception as e:
                 rospy.logerr("[Calibrator] entry tag=%d failed: %s",
                              entry.path_tag_id, e)
@@ -410,11 +448,49 @@ class CalibrationOrchestrator:
                 "(succeeded=%d, failed=%d)",
                 self.cfg.map_out_path,
                 report.num_succeeded, report.num_failed)
+        if self._session is not None:
+            try:
+                self._session.finish(report.num_succeeded, report.num_failed,
+                                     str(self.cfg.map_out_path),
+                                     world_data=self.world_data)
+            except Exception as e:
+                rospy.logwarn("[Calibrator] session record finish failed: %s", e)
         return report
 
     # ------------------------------------------------------------------
-    def _run_one(self, entry: PlanEntry, resolved: dict, ref: RefTag):
-        """Process a single plan entry; raises on any failure."""
+    def _record(self, entry: PlanEntry, resolved: dict, attempt: int,
+                status: str, rec: dict, error: Optional[str] = None):
+        """Write one attempt to the session record. Never raises; returns
+        the sequence number or None (dry run / recorder unavailable)."""
+        if self._session is None:
+            return None
+        payload = {
+            "path_tag_id": int(entry.path_tag_id),
+            "ref_tag_id": int(entry.ref_tag_id),
+            "attempt": int(attempt),
+            "status": status,
+            "error": error,
+            "plan_entry": dict(resolved),
+        }
+        payload.update(rec)
+        try:
+            return self._session.record(payload)
+        except Exception as e:
+            rospy.logwarn("[Calibrator] session record write failed: %s", e)
+            return None
+
+    # ------------------------------------------------------------------
+    def _run_one(self, entry: PlanEntry, resolved: dict, ref: RefTag,
+                 rec: Optional[dict] = None):
+        """Process a single plan entry; raises on any failure.
+
+        ``rec`` (if given) is filled step by step with everything worth
+        keeping — nav, view pose, the auto-align report, the camera-frame
+        observations, the chain result — so the session record of a
+        FAILED attempt still shows how far it got.
+        """
+        if rec is None:
+            rec = {}
 
         # 1. Navigate base through mobile_node. If nav_start_id is
         # supplied, go there first so the controller has a known starting
@@ -428,6 +504,11 @@ class CalibrationOrchestrator:
         if not ok:
             raise RuntimeError(
                 f"base nav to path_tag_id={entry.path_tag_id} failed")
+        rec["nav"] = {
+            "nav_start_id": resolved.get("nav_start_id"),
+            "arrived_tag_id": int(entry.path_tag_id),
+            "base_theta_deg": float(np.degrees(self.base.current_theta)),
+        }
 
         # 2. Resolve arm viewing pose. Order of precedence:
         #    (a) explicit override in this entry (plan.yaml)
@@ -435,20 +516,28 @@ class CalibrationOrchestrator:
         #    (c) defaults.arm_view_tcp_mm_deg
         #    Raises if none of the above are present.
         view_tcp, view_source = self._resolve_view_tcp(entry, resolved, ref)
+        rec["view_tcp_mm_deg"] = [float(v) for v in view_tcp]
+        rec["view_tcp_source"] = view_source
 
         align_required = bool(resolved.get("align_required", True))
+        rec["align_required"] = align_required
+        rec["auto_align"] = None
         if align_required:
-            run_auto_align(
-                align_cfg=self.cfg.align_cfg,
-                tcp_client=self.tcp_client,
-                T_hc2ee=self.T_hc2ee,
-                tag_a_id=entry.ref_tag_id,
-                tag_a_size_m=self._resolve_ref_size(ref),
-                hand_cam_detections_topic=self.cfg.hand_cam_detections_topic,
-                hand_cam_detector_size_m=self.cfg.hand_cam_detector_size_m,
-                detection_wait_timeout_s=self.cfg.detection_wait_timeout_s,
-                initial_tcp_mm_deg=view_tcp,
-            )
+            try:
+                rec["auto_align"] = run_auto_align(
+                    align_cfg=self.cfg.align_cfg,
+                    tcp_client=self.tcp_client,
+                    T_hc2ee=self.T_hc2ee,
+                    tag_a_id=entry.ref_tag_id,
+                    tag_a_size_m=self._resolve_ref_size(ref),
+                    hand_cam_detections_topic=self.cfg.hand_cam_detections_topic,
+                    hand_cam_detector_size_m=self.cfg.hand_cam_detector_size_m,
+                    detection_wait_timeout_s=self.cfg.detection_wait_timeout_s,
+                    initial_tcp_mm_deg=view_tcp,
+                )
+            except AutoAlignError as e:
+                rec["auto_align"] = e.report     # keep the partial history
+                raise
         else:
             # align_required=false skips run_auto_align — which is also
             # where the initial-step CLAMP lives. Apply the same clamp
@@ -466,7 +555,7 @@ class CalibrationOrchestrator:
                     "Δrot=%.2f deg)", step.delta_t_norm_m,
                     step.delta_rot_deg)
             self.tcp_client.move_j_to_pose(
-                matrix_m_to_pose_fr5(step.T_ab2ee_step))
+                matrix_m_to_pose_fr5(step.T_ab2ee_step), linear=False)
 
         # 3. Capture fresh observations from the shared detector and run
         # the chain.
@@ -483,8 +572,19 @@ class CalibrationOrchestrator:
             det_b, self.cfg.tag_b_size_m,
             self.cfg.front_cam_detector_size_m)
         tcp_pose = self.tcp_client.get_tcp_pose()
+        # Camera-frame error of both observations (see align.CAM_FRAME_NOTE).
+        observations = {
+            "hand_cam_to_tag_a": dict(tag_id=int(entry.ref_tag_id),
+                                      **tag_in_cam_report(T_hc2A)),
+            "front_cam_to_tag_b": dict(tag_id=int(entry.path_tag_id),
+                                       **tag_in_cam_report(T_fc2B)),
+        }
+        rec["observations"] = observations
+        rec["tcp_pose_mm_deg"] = [float(v) for v in tcp_pose]
 
         lift_height_m = self._lift_height_m()
+        rec["lift_height_m"] = float(lift_height_m)
+        rec["session_lift_m"] = self._session_lift_m
         if lift_height_m:
             rospy.loginfo("[Calibrator] compensating chain for lift "
                           "height %.1f mm", lift_height_m * 1000.0)
@@ -509,10 +609,17 @@ class CalibrationOrchestrator:
         T_B_world = compute_T_B_world(ref.T_world, T_A2B)
         pos_m = T_B_world[:3, 3]
         rpy_deg = rot2rpy_deg(T_B_world[:3, :3])
+        rec["result_world"] = {
+            "position_m": [float(v) for v in pos_m],
+            "rpy_deg": [float(v) for v in rpy_deg],
+            "ref_tag_id": int(entry.ref_tag_id),
+        }
+        rec["T_A2B_row_major"] = [float(v) for v in T_A2B.flatten()]
+        rec["T_B_world_row_major"] = [float(v) for v in T_B_world.flatten()]
 
         # 4. Persist the full 6-DOF result (observations + transforms +
         # CSV; raw-frame snapshots are best-effort extras).
-        save_locate_run(
+        run_dir = save_locate_run(
             root_dir=self.cfg.save_dir,
             tag_b_id=entry.path_tag_id,
             image_hc=self._snapshot(self.cfg.hand_cam_image_topic),
@@ -539,7 +646,10 @@ class CalibrationOrchestrator:
             }},
             success=True,
             message="ok",
+            observations=observations,
+            auto_align_report=rec["auto_align"],
         )
+        rec["locate_run_dir"] = str(run_dir)
 
         # 4.5 Update the bootstrap anchor for the next entry. This uses
         # T_fc2B captured during the chain (front-cam saw the path tag
@@ -569,3 +679,8 @@ class CalibrationOrchestrator:
             name=map_meta.get("name"),
         )
         atomic_write(self.world_data, self.cfg.map_out_path)
+        if self._session is not None:
+            try:
+                self._session.write_map_copy(self.world_data)
+            except Exception as e:
+                rospy.logwarn("[Calibrator] session map copy failed: %s", e)

@@ -61,6 +61,29 @@ robot:
   # radius, x9 gear), which is the floor the 2026-08-12 hardware drive ran at
   # with the base moving normally.
   final_approach_speed: 0.010
+  # Speed multiplier applied to the profile speed from the moment the target
+  # tag is detected until the stop (the visual Pure Pursuit phase). User
+  # request 2026-09-02 ("태그가 발견된 후 퓨어퍼슛할 때 1/3로"): at
+  # max_linear_speed 0.1 the robot closes on the tag at ~0.033 m/s instead
+  # of 0.1. Blind driving (prediction or straight) keeps the full profile;
+  # the 6 cm final approach still takes over at the end and now starts from
+  # this lower speed, so its solved deceleration is gentler too. 1.0 = off.
+  tag_visible_speed_factor: 0.333
+  # Odom-based creep zone: inside the last `blind_approach_dist` m of the
+  # map edge length (by odometry), the command is capped at
+  # `blind_approach_speed`, tag visible or not. Added 2026-09-02 for the
+  # "stops past the tag" complaint: in REVERSE the target tag is hidden
+  # behind the front bumper (the lens is 100 mm ahead of it) until ~3 cm
+  # from the lens, so the tag-based final approach latched at 2.5-2.9 cm
+  # from 0.030-0.037 m/s and the stop fired at 0.020-0.024 m/s -> 6-17 mm of
+  # roll (forward: tag seen 26 cm out, stop at 0.010 m/s, 1-2 mm). Odom
+  # remaining was within 3 mm of the tag stop on those hops, so it can carry
+  # the pre-slowdown. 0.12 m leaves margin for the ~6 cm odom error seen on
+  # the 1 m pivot-exit hop. Cost: ~8 s per hop at 0.015 m/s. Forward is
+  # already this slow by then (final approach entries were 0.010-0.015).
+  # 0 disables.
+  blind_approach_dist: 0.12
+  blind_approach_speed: 0.015
 
   # FINAL APPROACH (mobile_controller.execute_pure_pursuit).
   # Distance before the tag reaches the stop point at which the robot drops to
@@ -136,7 +159,7 @@ robot:
   # navigation does not require front_cam detection or final align_to_tag() for
   # them. Remove the IDs or set enabled=false once the physical tags are placed.
   temporary_missing_tags:
-    enabled: true
+    enabled: false
     tag_ids: [506, 507, 508]
     odom_arrival_ratio: 0.98
 
@@ -148,13 +171,23 @@ robot:
   predictive_centering:
     enabled: true
     # "latest" means newest ~/.ros/path_tag_locator/map_world_*.yaml from the
-    # calibration pipeline. If absent, the controller uses the package
-    # map.yaml geometry for predictive steering. If a map_world file exists
-    # but either endpoint is missing, fallback_to_map_yaml controls whether
-    # map.yaml may be used for that incomplete segment.
+    # calibration pipeline. Blind (tag-not-visible) steering ALWAYS has a line
+    # to follow: the calibrated map_world segment when both endpoints are in
+    # it, otherwise the map.yaml geometry (2026-09-02; before this, a present
+    # map_world file with a missing endpoint disabled prediction for that
+    # segment because fallback_to_map_yaml was false).
     use_map_world: true
-    fallback_to_map_yaml: false
+    fallback_to_map_yaml: true     # no longer read; map.yaml is always the fallback
     map_world_path: "latest"
+    # Hops that touch any tag in these ranges / ids run WITHOUT prediction
+    # (user request 2026-09-02): tag visible -> plain Pure Pursuit, tag not
+    # visible -> straight-line command (no map/odom steering), stop line ->
+    # in-place align_to_tag. The approach-heading blend and ApproachBalance
+    # slowdown are off for them too. A hop is excluded when EITHER its start
+    # or its target tag matches, so 501->400 and 405->502 count as well.
+    # 400-499 is the zone A transit lane (400-411 today).
+    disabled_tag_ranges: [[400, 499]]
+    disabled_tag_ids: []
     # Blind steering uses the same base Pure Pursuit tuning as visible-tag
     # steering, but caps lookahead by segment length so short pivot-exit moves
     # react before the large skid base runs out of distance.
@@ -177,20 +210,47 @@ robot:
     approach_yaw_tolerance_deg: 0.5
     approach_slow_window_px: 180.0
     approach_error_slow_speed: 0.010
-    # Keep the old post-move align_to_tag() by default. Set false only when
-    # calibrated predictive approach is active and should replace the large
-    # in-place yaw trim that can break front-camera y-centering on this base.
-    post_move_align_enabled: true
-    post_move_align_y_tolerance_px: 20.0
-    # After align_to_tag() completes, save the final camera-centre residual in
-    # a separate YAML. The latest map_world_*.yaml is only read as the reference
-    # tag position; the calibration YAML itself is not modified.
+    # (post_move_align_enabled / post_move_align_y_tolerance_px removed
+    # 2026-09-02: every hop now ends with stop -> align_to_tag, no exceptions.)
+    # Camera-centre-vs-tag records while driving. Every TASK / GOTO command
+    # opens a NEW yaml under this directory (<YYYYMMDD>/<YYYYMMDD_HHMMSS>_<cmd>.yaml)
+    # and every arrival ('arrival' = pure-pursuit stop, 'aligned' = after the
+    # yaw trim) is appended to it — nothing is ever overwritten (2026-09-02;
+    # before this, one tag_alignment_results.yaml was overwritten per tag and
+    # nothing was recorded at all without a map_world file). The camera-frame
+    # numbers are always recorded; the latest map_world_*.yaml, when present,
+    # only adds a world-frame reference and is never modified.
     record_alignment_result: true
-    alignment_result_path: "~/.ros/path_tag_locator/tag_alignment_results.yaml"
+    alignment_result_dir: "~/.ros/apriltag_nav/nav_log"
 
-  # Alignment Tuning
+  # Alignment Tuning — align_to_tag() runs after EVERY hop (forward,
+  # backward AND pivot, 2026-09-02): base stops, then rotates in place until
+  # the tag edge reads square. Yaw only; it never translates.
   align_gain: 0.8           # Proportional gain for alignment rotation
-  align_threshold_deg: 0.5  # Alignment complete when angle < this (degrees)
+  # Tightened 0.5 -> 0.2 on 2026-09-02 (user: "더 빡세게"). Basis: 194 real
+  # aligns that day ended at median 0.24 deg, and every one that took ~2 s
+  # stopped at 0.43-0.49 — i.e. the loop was exiting the moment it crossed
+  # 0.5, not converging. 0.2 deg is ~1.9 mm of lens travel over the 0.55 m
+  # camera offset. Watch align duration and the 20 s timeout after this.
+  align_threshold_deg: 0.2  # Alignment complete when angle < this (degrees)
+  # Floor on the commanded |angular| during align (rad/s). The P term alone
+  # gives 0.8 * 0.2 deg = 0.0028 rad/s near the new threshold, which the
+  # skid base may not execute at all; the base was OBSERVED still turning at
+  # 0.0063 rad/s (0.45 deg * 0.8) on 2026-09-02, so 0.01 is at a speed known
+  # to move it. One 10 Hz tick at the floor is 0.057 deg — well inside the
+  # 0.2 deg band. 0 disables the floor.
+  align_min_angular_speed: 0.01
+  # Give up (hop FAILS) if not squared up within this many seconds — covers a
+  # tag that is out of frame after an odometry-only pivot or an arrival at
+  # the frame edge. Before 2026-09-02 the loop waited forever. <= 0 disables.
+  align_timeout_s: 20.0
+  # No in-place align on hops whose start AND target are both inside one of
+  # these ranges (user request 2026-09-02): 400->401 ... 410->411 on the
+  # zone A lane are Pure Pursuit only — the base stops on the tag and the
+  # next hop starts at once. A hop with a 100- or 500-series tag at EITHER
+  # end (501->400, 405->502, 503->406, 411->504, every corridor hop) still
+  # aligns. Pivots always align (their endpoints are 50x).
+  align_skip_tag_ranges: [[400, 499]]
 
   # Pivot Tuning
   pivot_gain: 1.5           # Proportional gain for pivot rotation
@@ -213,8 +273,44 @@ robot:
   # 0 = image centre.
   # Positive = stops 'earlier' (tag still ahead, toward the right of frame).
   # Negative = stops 'later'  (robot has driven further over the tag).
-  center_x_stop_offset: 50.0
-  center_x_stop_tolerance: 10.0
+  #
+  # ONE target column for BOTH directions (user decision 2026-09-02): the
+  # tag stops at cx + offset whether the robot arrives forward (tag enters
+  # from image-right and stops just short of that column) or in reverse (tag
+  # enters from image-left and stops just short of it from the other side).
+  # Same physical spot over the tag either way, to within the tolerance.
+  # A direction-mirrored variant (cx - offset in reverse) was tried and
+  # backed out the same day. At ~0.30 m depth and fx ~750 px, 50 px ≈ 20 mm.
+  #
+  # 50 -> 0 on 2026-09-02 (user: "태그 중심이 목표 중심점에 와야 정지"): the
+  # target column IS the optical axis (the overlay crosshair) now. The +50
+  # used to leave margin so the tag stayed in frame for align_to_tag; at 0
+  # the tag sits dead centre, which is the best place for it. ⚠️ Expect the
+  # tag to land ~15-20 px PAST the crosshair (image-left when driving
+  # forward, image-right in reverse) — that is the measured 6-8 mm roll
+  # after the trigger, not this key. Raise this (≈ +18) to pre-compensate.
+  center_x_stop_offset: 0.0
+  # Tightened 10 -> 4 px on 2026-09-02 (user request). The trigger now fires
+  # 4 px (~1.6 mm) before the target column instead of 10 (~4 mm). ⚠️ The
+  # bigger error is AFTER the trigger: on 2026-09-02 arrivals recorded the
+  # tag at +40..46 px, i.e. the base rolled ~15-20 px (6-8 mm) past the
+  # trigger line at 0.010 m/s before it actually stopped. If the goal is the
+  # tag exactly on the target column, that overshoot is what to compensate
+  # (raise center_x_stop_offset by ~18 px), not this tolerance.
+  center_x_stop_tolerance: 4.0
+  # Stop-roll compensation (2026-09-02, "자꾸 태그를 지나쳐서 멈춰"). After the
+  # stop command the base keeps rolling for about this long: measured from
+  # arrival-vs-aligned records, forward rolled 5.8 mm (median, 23 hops) at
+  # a 0.011 m/s command and reverse 12.6 mm (17 hops) at 0.022 m/s — i.e.
+  # ~0.55 s either way. Modelled as a transport delay: the commands of the
+  # last `stop_latency_s` have not been executed yet, so their integral is
+  # the distance still to come, and the stop fires that far early along the
+  # direction of travel so the base ENDS on the target column (the column
+  # itself is unchanged; center_x_stop_tolerance is only a floor under this
+  # lead). Fit it from nav_log: each arrival record carries
+  # commanded_speed_at_stop_mps and stop_lead_mm, and the actual roll is
+  # (arrival fore-aft - aligned fore-aft); roll/speed = latency. 0 disables.
+  stop_latency_s: 0.55
 
   # Delays (seconds)
   stop_sleep_duration: 1.0
@@ -435,6 +531,20 @@ robot_camera:
     front_cam: 0.09
     side_cam:  0.03
     hand_cam:  0.09
+
+  # dt_apriltags quad_decimate, PER CAMERA. The library default is 2.0
+  # (detect on a half-resolution image, then refine). Fine for front_cam —
+  # 1280x720, the 90 mm floor tag is ~180 px at 0.3 m, and the 30 Hz /
+  # 109 ms figures in CLAUDE.md were measured at 2.0 — but on the 640x480
+  # RealSense cameras it broke the calibration align on 2026-09-02:
+  # hand_cam's 69 px ref tag at 0.8 m became ~35 px, giving no detection or
+  # corrupted corners with a 20-30 deg bogus tilt (offline on a saved frame:
+  # 1.0 -> tilt 2.7 deg, 1.5 -> 20.7 deg, 2.0 -> nothing). side_cam's 30 mm
+  # tags are smaller still. 1.0 = full resolution.
+  quad_decimate:
+    front_cam: 2.0
+    side_cam:  1.0
+    hand_cam:  1.0
 
   # Per-camera on/off for the detectors, and the persistent default for each
   # camera. This controls robot_camera_node only; the driver that publishes
