@@ -29,6 +29,39 @@ or superseded; it is in git history if you need it.
 
 ## 2. Open items
 
+### 2-0. ▶ NEXT ON-ROBOT SESSION — do these first (written 2026-09-03, dev side)
+
+The user asked to be reminded of this when back on the robot. Commit
+`9b2be76` (dev machine, sim-verified) changed the calibration workflow;
+pull + `catkin_make` before anything below.
+
+1. **정반 2 mass "tag not detected" — root-cause with the new survey
+   tool before re-running anything.** Suspect: physical cross tags laid
+   by the "2번정반 중심" CSV origin (+3.420) while config assumes the
+   plate's geometric centre (+3.890) — a 0.47 m offset. Procedure: park
+   at a D-corridor stop, arm to that entry's plan seed pose, robot_ui →
+   Scripts → `find_cross_tags` → RUN (sweeps ±0.6 m, reports sightings;
+   sim-blind-tested to 1 mm on a manufactured 0.47 m offset).
+   - sighting at ≈±470 mm → shift `reference_tags_plate2.yaml` x by
+     −0.470 and re-run `generate_calibration_artifacts.py`
+   - sighting at ≈0 → placement fine; investigate lighting/occlusion
+   - nothing → tags not installed/covered
+2. **⚠️ View height is now 0.5 m** (was 0.8; error-budget optimization,
+   plans regenerated): half-FOV ≈ 0.35 m, so a 0.47 m placement error
+   now sees NOTHING at the seed (at 0.8 m it was border-visible — which
+   is exactly why 정반 2 "mostly" failed rather than always). The
+   survey is mandatory before the next plate-2 session.
+3. Other 9b2be76 changes that alter on-robot behaviour: arm HOMES
+   before every base move of a session (`arm.home_before_nav`); final
+   chain observations are now 5-frame means; align move failures
+   degrade instead of failing the entry when the ref tag is visible
+   (results marked `degraded` — check those residuals); robot_ui has a
+   Calibration tab (plate selector, dry-run, cancel, online lamp).
+4. First good session: extract the REAL hand-cam yaw noise from the
+   session archive `history` and feed it to
+   `path_tag_locator/scripts/error_budget.py` (assumed 0.2° today; the
+   xy budget is dominated by yaw × the A→B lever).
+
 ### 2-1. 🛑 Every scan CSV is invalid — the cell was replaced 2026-08-21
 
 - `map.yaml` is the new cell (72 tags, origin at the centre of 정반 1).
