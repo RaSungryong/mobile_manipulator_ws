@@ -44,7 +44,7 @@ from sensor_msgs.msg import BatteryState, Image
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger, SetBool
 
-from robot_msgs.msg import ArmState
+from robot_msgs.msg import AprilTagDetectionArray, ArmState
 from robot_msgs.srv import CaptureImages, PredictRa
 
 
@@ -159,6 +159,16 @@ class RosBridge(QObject):
         # consumer would look like a live session.
         self._sub('/map_calibrator/progress', String,
                   self._cb_calib_progress, queue_size=64)
+        # Latest tag detections per camera, for scripts that need to ask
+        # "what does the hand cam see right now" (e.g. the cross-tag
+        # survey). Snapshot store only — no signal, poll via
+        # latest_detections().
+        self._det_lock = threading.Lock()
+        self._det_latest = {}
+        for cam, topic in (('hand_cam', '/hand_cam/tag_detections'),
+                           ('front_cam', '/front_cam/tag_detections')):
+            self._sub(topic, AprilTagDetectionArray, self._cb_detections,
+                      callback_args=cam, queue_size=1)
 
     def _sub(self, topic, msg_type, callback, **kwargs):
         sub = rospy.Subscriber(topic, msg_type, callback, **kwargs)
@@ -440,6 +450,43 @@ class RosBridge(QObject):
     # ⚠️ A calibration session drives the base through /mobile/goto_tag —
     # do not send TASK/GOTO while one is running.
 
+    def _cb_detections(self, msg, cam):
+        if not self._alive:
+            return
+        with self._det_lock:
+            self._det_latest[cam] = msg
+
+    def latest_detections(self, cam='hand_cam', max_age_s=1.0):
+        """Fresh detections of one camera as a list of dicts (id,
+        pose_x/y/z, center, yaw); [] if none/stale."""
+        with self._det_lock:
+            msg = self._det_latest.get(cam)
+        if msg is None:
+            return []
+        if (rospy.Time.now() - msg.header.stamp).to_sec() > max_age_s:
+            return []
+        return [{'id': d.id, 'pose_x': d.pose_x, 'pose_y': d.pose_y,
+                 'pose_z': d.pose_z, 'center_x': d.center_x,
+                 'center_y': d.center_y, 'yaw': d.yaw}
+                for d in msg.detections]
+
+    def calib_nodes_online(self):
+        """Fast master-registry check (no service call): are the
+        path_tag_locator nodes up? They are NOT part of the main launch —
+        `roslaunch path_tag_locator path_tag_locator.launch` runs them.
+        Cheap enough for a periodic UI poll."""
+        try:
+            import rosgraph
+            master = rosgraph.Master('/robot_ui')
+            master.lookupService('/map_calibrator/run_calibration')
+            return True
+        except Exception:
+            return False
+
+    _CALIB_HINT = (' — is `roslaunch path_tag_locator '
+                   'path_tag_locator.launch` running? (not part of the '
+                   'main launch)')
+
     def locate_path_tag(self, tag_b_id=-1, auto_align=False,
                         initial_tcp=None):
         """One LocatePathTag call. BLOCKS (unbounded, like every ROS1
@@ -466,7 +513,8 @@ class RosBridge(QObject):
                                                 for v in initial_tcp]
             resp = proxy(req)
         except Exception as e:
-            return {'success': False, 'message': f'locate failed: {e}'}
+            return {'success': False,
+                    'message': f'locate failed: {e}{self._CALIB_HINT}'}
         return {
             'success': bool(resp.success),
             'message': resp.message,
@@ -503,7 +551,8 @@ class RosBridge(QObject):
             req.ref_tags_path = str(ref_tags_path)
             resp = proxy(req)
         except Exception as e:
-            return False, f'run_calibration failed: {e}', {}
+            return (False,
+                    f'run_calibration failed: {e}{self._CALIB_HINT}', {})
         return bool(resp.success), resp.message, {
             'num_succeeded': int(resp.num_succeeded),
             'num_failed': int(resp.num_failed),

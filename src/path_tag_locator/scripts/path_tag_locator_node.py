@@ -31,7 +31,8 @@ from path_tag_locator.constants import (
 )
 from path_tag_locator.detections import (
     detection_to_T_cam2tag,
-    wait_for_tag_detection,
+    mean_detection,
+    wait_for_tag_detections,
 )
 from path_tag_locator.geometry import (
     assert_rigid,
@@ -171,15 +172,20 @@ class PathTagLocatorNode:
 
             # Tag observations from the shared detector, rescaled from the
             # detector's per-camera tag size to the actual tag sizes.
-            det_a = wait_for_tag_detection(
+            # Averaged over samples_per_iteration frames — the in-plane
+            # yaw noise of this observation, times the A->B lever, is
+            # the dominant path-tag position error (error_budget.py).
+            n_samp = max(1, int(getattr(self.cfg.align,
+                                        'samples_per_iteration', 1)))
+            det_a = mean_detection(wait_for_tag_detections(
                 self.cfg.topics.hand_cam_detections,
-                int(self.cfg.tag.tag_a_id), timeout=timeout)
+                int(self.cfg.tag.tag_a_id), n_samp, timeout=timeout))
             T_hc2A = detection_to_T_cam2tag(
                 det_a, float(self.cfg.tag.tag_a_size_m),
                 float(self.cfg.detector.hand_cam_tag_size_m))
-            det_b = wait_for_tag_detection(
+            det_b = mean_detection(wait_for_tag_detections(
                 self.cfg.topics.front_cam_detections,
-                tag_b_id, timeout=timeout)
+                tag_b_id, n_samp, timeout=timeout))
             T_fc2B = detection_to_T_cam2tag(
                 det_b, float(self.cfg.tag.tag_b_size_m),
                 float(self.cfg.detector.front_cam_tag_size_m))

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>robot_sim</name>
+  <version>0.1.0</version>
+  <description>
+    Kinematic simulator for the mobile manipulator. Emulates ONLY the
+    hardware-owner boundary (base drive + odom, front/hand camera tag
+    detections, arm move_cart protocol, lifter) so the REAL navigation
+    and calibration nodes (mobile_node, path_tag_locator) run unmodified
+    against it. No physics engine — unicycle kinematics + a pinhole
+    camera over map.yaml / reference_tags ground truth.
+  </description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>robot_msgs</exec_depend>
+  <exec_depend>apriltag_nav</exec_depend>
+  <exec_depend>path_tag_locator</exec_depend>
+</package>

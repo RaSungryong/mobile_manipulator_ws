@@ -31,7 +31,8 @@ from ..align import clamp_step, tag_in_cam_report
 from ..align_runner import run_auto_align, AutoAlignError
 from ..geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 from ..chain import compensate_T_ab2mb, compute_T_A2B, compute_T_B_world
-from ..detections import detection_to_T_cam2tag, wait_for_tag_detection
+from ..detections import (detection_to_T_cam2tag, mean_detection,
+                          wait_for_tag_detections)
 from ..geometry import rot2rpy_deg
 from ..persistence import save_locate_failure, save_locate_run
 from ..ros_image import grab_image
@@ -86,6 +87,9 @@ class OrchestratorCfg:
     tag_family: str = "tag36h11"
     # Behavior
     dry_run: bool = False
+    # Tuck the arm home before every base move (user rule 2026-09-03:
+    # never drive/pivot with the arm extended at a view pose).
+    home_before_nav: bool = True
 
 
 @dataclass
@@ -408,15 +412,23 @@ class CalibrationOrchestrator:
 
                 world_entry = self.world_data["tags"][entry.path_tag_id]
                 pos_x, pos_y, pos_z = world_entry["position_m"]
-                report.entries.append({
+                degraded = (rec.get("auto_align") or {}).get("degraded") \
+                    if isinstance(rec.get("auto_align"), dict) else None
+                if degraded:
+                    rospy.logwarn(
+                        "[Calibrator] tag=%d OK but DEGRADED (%s) — "
+                        "verify this entry's residual in "
+                        "verify_map_world.py before trusting it",
+                        entry.path_tag_id, degraded)
+                entry_result = {
                     "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
                     "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z,
-                    "seq": seq})
+                    "seq": seq}
+                if degraded:
+                    entry_result["degraded"] = degraded
+                report.entries.append(entry_result)
                 report.num_succeeded += 1
-                self._publish_progress({
-                    "tag": entry.path_tag_id, "ref": entry.ref_tag_id,
-                    "status": "ok", "x": pos_x, "y": pos_y, "z": pos_z,
-                    "seq": seq})
+                self._publish_progress(dict(entry_result))
             except Exception as e:
                 rospy.logerr("[Calibrator] entry tag=%d failed: %s",
                              entry.path_tag_id, e)
@@ -492,6 +504,19 @@ class CalibrationOrchestrator:
         if rec is None:
             rec = {}
 
+        # 0. Tuck the arm to its home pose BEFORE the base moves: routes
+        # include pivots and reverse corridor entries, and driving them
+        # with the arm extended at the previous entry's view pose is a
+        # collision risk. Synchronous — nav starts only once the arm is
+        # home. Failure fails the entry (an arm that will not home is
+        # not an arm to drive around with).
+        if self.cfg.home_before_nav and hasattr(self.tcp_client,
+                                                'move_home'):
+            ok, msg = self.tcp_client.move_home()
+            if not ok:
+                raise RuntimeError(f"arm home before nav failed: {msg}")
+            rec["arm_homed_before_nav"] = True
+
         # 1. Navigate base through mobile_node. If nav_start_id is
         # supplied, go there first so the controller has a known starting
         # tag for path finding to path_tag_id.
@@ -558,16 +583,23 @@ class CalibrationOrchestrator:
                 matrix_m_to_pose_fr5(step.T_ab2ee_step), linear=False)
 
         # 3. Capture fresh observations from the shared detector and run
-        # the chain.
-        det_a = wait_for_tag_detection(
+        # the chain. AVERAGED over samples_per_iteration frames: this is
+        # the measurement the result is computed from, and the error
+        # budget shows its in-plane yaw noise (x the A->B lever) is the
+        # dominant path-tag position error — averaging divides it by
+        # ~sqrt(n). (The align loop uses the median pick; here the mean
+        # is right: one synthetic low-noise observation.)
+        n_samp = max(1, int(getattr(self.cfg.align_cfg,
+                                    'samples_per_iteration', 1)))
+        det_a = mean_detection(wait_for_tag_detections(
             self.cfg.hand_cam_detections_topic, int(entry.ref_tag_id),
-            timeout=self.cfg.detection_wait_timeout_s)
+            n_samp, timeout=self.cfg.detection_wait_timeout_s))
         T_hc2A = detection_to_T_cam2tag(
             det_a, self._resolve_ref_size(ref),
             self.cfg.hand_cam_detector_size_m)
-        det_b = wait_for_tag_detection(
+        det_b = mean_detection(wait_for_tag_detections(
             self.cfg.front_cam_detections_topic, int(entry.path_tag_id),
-            timeout=self.cfg.detection_wait_timeout_s)
+            n_samp, timeout=self.cfg.detection_wait_timeout_s))
         T_fc2B = detection_to_T_cam2tag(
             det_b, self.cfg.tag_b_size_m,
             self.cfg.front_cam_detector_size_m)

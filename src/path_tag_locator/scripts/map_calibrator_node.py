@@ -117,6 +117,7 @@ class MapCalibratorNode:
         self.tcp_client = ArmInterface(
             state_topic=self.locator_cfg.arm.state_topic,
             move_cart_topic=self.locator_cfg.arm.move_cart_topic,
+            home_service=self.locator_cfg.arm.home_service,
             default_vel=self.locator_cfg.align.move_vel,
             default_acc=self.locator_cfg.align.move_acc,
             default_ovl=self.locator_cfg.align.move_ovl,
@@ -245,6 +246,8 @@ class MapCalibratorNode:
                 front_cam_image_topic=self.locator_cfg.topics.front_cam_image,
                 tag_family=self.locator_cfg.tag.family,
                 dry_run=bool(req.dry_run),
+                home_before_nav=bool(
+                    self.locator_cfg.arm.home_before_nav),
             )
 
             orch = CalibrationOrchestrator(

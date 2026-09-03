@@ -1,0 +1,42 @@
+<launch>
+  <!--
+    Kinematic sim + the REAL navigation node.
+
+        roslaunch robot_sim sim.launch
+
+    ⚠️ DEV MACHINE ONLY. sim_node publishes the same topic names as the
+    real drivers; on the robot PC it would fight them.
+
+    For calibration testing, additionally run (unchanged):
+
+        roslaunch path_tag_locator path_tag_locator.launch
+
+    Drive:      rostopic pub -1 /mobile/goto_tag std_msgs/Int32 "data: 501"
+    Truth:      rostopic echo /robot_sim/ground_truth
+    Locate:     rosservice call /path_tag_locator/locate_path_tag ...
+    Calibrate:  rosservice call /map_calibrator/run_calibration ...
+  -->
+  <arg name="start_x"         default="-1.9123"/>
+  <arg name="start_y"         default="3.02"/>
+  <arg name="start_theta_deg" default="0.0"/>
+  <arg name="noise_px"        default="0.0"/>
+  <arg name="noise_t_m"       default="0.0"/>
+  <arg name="viz"             default="true"/>
+
+  <node name="robot_sim" pkg="robot_sim" type="sim_node.py" output="screen">
+    <param name="start_x"         value="$(arg start_x)"/>
+    <param name="start_y"         value="$(arg start_y)"/>
+    <param name="start_theta_deg" value="$(arg start_theta_deg)"/>
+    <param name="noise_px"        value="$(arg noise_px)"/>
+    <param name="noise_t_m"       value="$(arg noise_t_m)"/>
+  </node>
+
+  <node if="$(arg viz)" name="sim_viz" pkg="robot_sim"
+        type="viz_node.py" output="screen"/>
+
+  <!-- The REAL drive node, unmodified — the code under test. -->
+  <node name="mobile_node" pkg="apriltag_nav" type="mobile_node.py"
+        output="screen">
+    <param name="state_rate_hz" value="5.0"/>
+  </node>
+</launch>

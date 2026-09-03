@@ -31,7 +31,11 @@ path_tag_locator:
   arm:
     state_topic:      "/arm/state"
     move_cart_topic:  "/arm/move_cart"
+    home_service:     "/arm/move_home"
     motion_timeout_s: 60.0
+    # Tuck the arm to its home pose before every base move of a
+    # calibration session — never drive/pivot with the arm extended.
+    home_before_nav:  true
 
   hand_eye:
     npz_path:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
@@ -75,5 +79,16 @@ path_tag_locator:
     # get one auto-computed from the previous anchor + map.yaml relative
     # offsets + odom Δθ. The first entry still needs a manually-supplied
     # arm_view_tcp_mm_deg (in defaults or per entry).
+    # Move failed mid-align but the ref tag is still visible -> compute
+    # the chain from the last REACHABLE pose and mark the result
+    # "degraded" (accuracy caveat) instead of failing the entry. Mostly
+    # for the reach-marginal entries flagged in the generated plans.
+    continue_on_move_failure: true
+
     auto_view_pose:        true
-    auto_view_distance_m:  0.80    # hand-cam height above the ref tag (m)
+    auto_view_distance_m:  0.50    # hand-cam height above the ref tag (m)
+                                   # 0.80 -> 0.50 (2026-09-03): tag pixel
+                                   # size +80%, so angular (yaw) noise and
+                                   # depth noise drop ~x0.55/x0.39 — yaw
+                                   # x lever dominates the path-tag error
+                                   # budget (error_budget.py)

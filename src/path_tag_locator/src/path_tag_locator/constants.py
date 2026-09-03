@@ -55,7 +55,11 @@ class ArmCfg:
     """arm_node proxy settings (replaces the old direct-SDK robot: block)."""
     state_topic: str = "/arm/state"
     move_cart_topic: str = "/arm/move_cart"
+    home_service: str = "/arm/move_home"
     motion_timeout_s: float = 60.0
+    # Home the arm BEFORE every base move in a calibration session, so
+    # the base never drives/pivots with the arm extended at a view pose.
+    home_before_nav: bool = True
 
 
 @dataclass
@@ -86,6 +90,10 @@ class AlignCfg:
     # calibration_plan.yaml always wins.
     auto_view_pose: bool = True
     auto_view_distance_m: float = 0.20
+    # When an align arm move fails (IK/reach/timeout) but the ref tag is
+    # still observable, keep the last reachable pose and let the chain
+    # run (result marked "degraded") instead of failing the entry.
+    continue_on_move_failure: bool = True
     # Detections collected per align iteration; the median-tilt frame is
     # used. 1 = trust a single frame (pre-2026-09-02 behaviour).
     samples_per_iteration: int = 5
@@ -136,6 +144,7 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
         move_settle_s=0.3,
         auto_view_pose=True,
         auto_view_distance_m=0.20,
+        continue_on_move_failure=True,
         samples_per_iteration=5,
     )
     align_defaults.update(root.get("align", {}))

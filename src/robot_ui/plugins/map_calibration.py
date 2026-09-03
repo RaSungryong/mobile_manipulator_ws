@@ -3,6 +3,10 @@
 """
 Operator script: run a tag-map calibration session through map_calibrator.
 
+NOTE: the Calibration TAB in the main window now does the same with
+buttons (plate selector, dry-run toggle, live counts, cancel) — this
+script remains as the automation/scripting variant.
+
 Prerequisites (this script checks none of them for you):
   1. `roslaunch path_tag_locator path_tag_locator.launch` is running
      alongside the main stack (the calibration nodes are NOT part of

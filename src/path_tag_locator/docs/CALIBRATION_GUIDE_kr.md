@@ -23,9 +23,9 @@
 
 계획에는 태그별로 참조 태그 배정과 **팔 관측 좌표**(설계값 시드)가
 들어 있습니다. 손 카메라가 기준(anchor)이라 카메라는 항상 참조 태그
-법선 위 0.8 m에 있고, 표기된 cam yaw는 플랜지가 팔 베이스에 가장
+법선 위 0.5 m에 있고(2026-09-03 오차 예산에 따라 0.8→0.5), 표기된 cam yaw는 플랜지가 팔 베이스에 가장
 가깝도록(도달거리 최적) 선택된 자유 회전입니다. 51/51 태그 모두
-플랜지 기준 1.4 m 이내(0.86–1.32 m).
+플랜지 기준 1.4 m 이내(0.67–1.20 m).
 
 ## 0. 준비 (1회)
 
@@ -59,7 +59,11 @@ roslaunch path_tag_locator path_tag_locator.launch
 
 ## 2. 세션 실행 (robot_ui 권장)
 
-robot_ui → **Scripts** 탭 → `map_calibration`:
+robot_ui → **Calibration** 탭(권장): 정반 선택 + dry run 체크 +
+START/Cancel 버튼, 진행 카운트(ok/fail/degraded)와 마지막 항목이
+실시간 표시. 단일 태그 locate 도 같은 탭에서 가능.
+
+스크립트 방식(자동화용) — **Scripts** 탭 → `map_calibration`:
 
 1. 처음엔 `DRY_RUN = True`, `PLATE = 1` 그대로 RUN —
    계획/참조/맵 파싱만, 로봇 무동작. 로그에 `[calib] tag N: dry_run`.
@@ -93,6 +97,14 @@ rosservice call /map_calibrator/cancel_calibration   # 현재 항목까지 마�
 개별 항목 실패(IK/미검출/nav)는 스킵하고 세션은 계속됩니다.
 동시 세션은 잠금으로 거부됩니다.
 
+**도달 한계 완충(2026-09-03)**: 정렬 이동이 IK/도달 문제로 실패해도
+참조 태그가 현재 자세에서 보이면 항목을 실패시키지 않고 **마지막
+도달 가능한 자세에서 체인을 계산**합니다(`align.continue_on_move_failure`,
+기본 on). 결과에는 `degraded` 표시가 붙으며(robot_ui 로그 "(DEGRADED)"),
+해당 항목은 `verify_map_world.py` 잔차를 확인한 뒤 신뢰하세요 —
+체인은 정면 뷰를 요구하지 않지만(6-DOF 관측), 기울어진 뷰는 실제
+카메라에서 검출 정확도가 떨어집니다.
+
 ## 3. 단일 태그 측위 (디버그/재확인)
 
 Scripts의 `locate_tag`(`TAG_B_ID`/`AUTO_ALIGN` 상수 편집), 또는:
@@ -110,11 +122,19 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
   (월드 = map.yaml 좌표계, x/y 직접 비교 가능)
 - 호출별 아카이브: `~/.ros/path_tag_locator/locate/`
   (관측 행렬, TCP, 리프트 높이, 스냅샷)
+- 오차 예산: `python3 scripts/error_budget.py --entry N` — 모든 오차원을
+  경로 태그 **위치 + yaw** 오차로 환산(최적화 설정 기준 sig_xy ≈ 1.1 mm,
+  sig_yaw ≈ 0.07° 예상). yaw 는 front-cam 회전이 1:1로 기여(위치와 반대)
 - 검증: `rosrun path_tag_locator verify_map_world.py`
   — 상대 기하 5 cm 초과 항목 표시
 - **첫 세션 건강 체크**: 바닥 태그 z ≈ **−0.080** 이어야 정상.
   전체가 회전되어 보이면 참조 태그 yaw 가정(0°)부터 의심 →
   `reference_tags.yaml` yaw 수정 후 재실행.
+
+**팔 홈 복귀(2026-09-03)**: 세션의 모든 베이스 이동(피벗/후진 포함)
+전에 팔을 자동으로 홈 포즈로 복귀시킨 뒤 주행합니다
+(`arm.home_before_nav`, 기본 on; 동기 — 홈 도착 후 출발). 관측 자세로
+팔을 뻗은 채 주행하는 충돌 위험 제거. 수동 홈: `rosservice call /arm/move_home`.
 
 ## 5. 철칙 3가지
 
@@ -136,5 +156,5 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
 설정/계획을 바꿨으면 손으로 고치지 말고 생성기를 다시 돌리세요:
 
 ```bash
-rosrun path_tag_locator generate_calibration_artifacts.py [--lift-mm N] [--view-m 0.8]
+rosrun path_tag_locator generate_calibration_artifacts.py [--lift-mm N] [--view-m 0.5]
 ```

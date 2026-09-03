@@ -114,6 +114,34 @@ def median_tilt_detection(dets):
     return dets[len(dets) // 2]
 
 
+def mean_detection(dets):
+    """Average a batch of detections of the SAME tag into one synthetic
+    detection: translation and pixel fields arithmetically, angles via
+    their sin/cos means (roll sits near ±180 for face-up tags, where an
+    arithmetic mean wraps catastrophically).
+
+    Averaging divides every noise component — including the in-plane
+    yaw, which the error budget shows dominates the path-tag position
+    error through the A->B lever — by ~sqrt(n). Median-by-tilt (above)
+    only rejects spikes; use THIS for the final chain observation, the
+    median for align-loop convergence checks.
+    """
+    if len(dets) == 1:
+        return dets[0]
+    out = type(dets[0])()
+    out.id = dets[0].id
+    for f in ('center_x', 'center_y', 'pose_x', 'pose_y', 'pose_z',
+              'tilt_from_normal'):
+        setattr(out, f, float(np.mean([getattr(d, f) for d in dets])))
+    for f in ('roll', 'pitch', 'yaw'):
+        ang = np.radians([float(getattr(d, f)) for d in dets])
+        setattr(out, f, float(np.degrees(
+            np.arctan2(np.mean(np.sin(ang)), np.mean(np.cos(ang))))))
+    out.corners = [float(v) for v in
+                   np.mean([np.asarray(d.corners) for d in dets], axis=0)]
+    return out
+
+
 def detection_to_T_cam2tag(det,
                            actual_size_m: float,
                            detector_size_m: float) -> np.ndarray:

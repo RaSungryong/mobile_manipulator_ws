@@ -30,6 +30,7 @@ import threading
 
 import rospy
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 from robot_msgs.msg import ArmState
 
@@ -40,6 +41,7 @@ class ArmInterface:
     def __init__(self,
                  state_topic='/arm/state',
                  move_cart_topic='/arm/move_cart',
+                 home_service='/arm/move_home',
                  default_vel=20.0,
                  default_acc=20.0,
                  default_ovl=100.0,
@@ -56,6 +58,7 @@ class ArmInterface:
         self._lock = threading.Lock()
         self._state = None
 
+        self._home_service = home_service
         self._pub_move = rospy.Publisher(move_cart_topic, String,
                                          queue_size=1)
         rospy.Subscriber(state_topic, ArmState, self._cb_state,
@@ -123,6 +126,18 @@ class ArmInterface:
     def get_joints(self):
         """Return current joint angles (deg) as a list."""
         return [float(v) for v in self._wait_state('get_joints').joints]
+
+    # ------------------------------------------------------------------
+    def move_home(self, timeout_s=90.0):
+        """Synchronous arm-home via arm_node's Trigger service (the ARM
+        home pose — not the lift's origin homing). Returns (ok, msg)."""
+        try:
+            rospy.wait_for_service(self._home_service,
+                                   timeout=min(5.0, timeout_s))
+            resp = rospy.ServiceProxy(self._home_service, Trigger)()
+            return bool(resp.success), resp.message
+        except Exception as e:
+            return False, f'{self._home_service} failed: {e}'
 
     # ------------------------------------------------------------------
     def move_j_to_pose(self, target_pose_mm_deg,

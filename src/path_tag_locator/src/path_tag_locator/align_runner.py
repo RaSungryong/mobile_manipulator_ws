@@ -89,6 +89,11 @@ def run_auto_align(*,
             "auto_align: initial_tcp_mm_deg must be 6 floats; "
             "got all zeros (set explicit pose)")
 
+    # Set when an arm move fails but the tag is still observable: the
+    # loop stops refining and the caller computes the chain from the
+    # LAST REACHABLE pose (accuracy caveat rides in the report).
+    degraded = None
+
     if not skip_initial_move:
         cur_tcp = tcp_client.get_tcp_pose()
         T_cur = pose_fr5_to_matrix_m(cur_tcp)
@@ -104,8 +109,21 @@ def run_auto_align(*,
         rospy.loginfo("auto_align: initial MoveJ -> %s", _fmt_pose(step_pose))
         # Big repositioning move: joint-interpolated. A straight-line MoveL
         # here crawled (22-34 s, two 60 s timeouts) on 2026-09-02.
-        tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s,
-                                  linear=False)
+        try:
+            tcp_client.move_j_to_pose(step_pose,
+                                      settle_s=align_cfg.move_settle_s,
+                                      linear=False)
+        except Exception as e:
+            if not getattr(align_cfg, 'continue_on_move_failure', True):
+                raise
+            # Reach-marginal entries (planner comments flag them) can fail
+            # IK on the ideal view pose. The chain does NOT require a
+            # square view — T_hc2A is a full 6-DOF observation — so if
+            # the tag turns out to be visible from wherever the arm
+            # actually is, degrade instead of failing the entry. The
+            # detection attempt below is the arbiter: no tag -> _fail.
+            degraded = f"initial move failed, using current pose: {e}"
+            rospy.logwarn("auto_align: %s", degraded)
 
     last_metrics = None
     history = []
@@ -119,6 +137,7 @@ def run_auto_align(*,
             "final_tcp": None,
             "tag_in_cam": last_metrics.as_report() if last_metrics else None,
             "history": history,
+            "degraded": degraded,
             "error": msg,
         }
         return AutoAlignError(msg, report)
@@ -167,7 +186,17 @@ def run_auto_align(*,
             tcp_client.move_j_to_pose(step_pose, settle_s=align_cfg.move_settle_s,
                                       linear=True)
         except Exception as e:
-            raise _fail(f"auto_align: step {iters} move failed: {e}")
+            if not getattr(align_cfg, 'continue_on_move_failure', True):
+                raise _fail(f"auto_align: step {iters} move failed: {e}")
+            # The tag IS visible (we just measured it) — keep the last
+            # reachable pose and let the chain run from here instead of
+            # failing the whole entry. Typical trigger: reach-marginal
+            # entries whose ideal square-view pose the IK cannot serve.
+            degraded = (f"step {iters} move failed, continuing with "
+                        f"last reachable pose: {e}")
+            rospy.logwarn("auto_align: %s (xy=%.4f m, tilt=%.2f deg)",
+                          degraded, metrics.xy_offset_m, metrics.tilt_deg)
+            break
 
     final_tcp = tcp_client.get_tcp_pose()
     return {
@@ -177,4 +206,5 @@ def run_auto_align(*,
         "final_tcp": final_tcp,
         "tag_in_cam": last_metrics.as_report() if last_metrics else None,
         "history": history,
+        "degraded": degraded,
     }

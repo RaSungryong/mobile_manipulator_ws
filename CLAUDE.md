@@ -1147,6 +1147,110 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-03 — robot_sim: the real nav + calibration stacks close the loop off-robot
+
+New package `robot_sim` (dev machine only — it publishes the real driver
+topic names). One node simulates ONLY the hardware-owner boundary:
+unicycle base with a first-order velocity lag matched to the measured
+0.55 s stop roll, pinhole cameras over map.yaml floor tags + both
+plates' cross tags (exact robot_camera_node euler encoding, detector
+tag-size rescale, all-corners-visible gating), the arm's motion_seq
+protocol with the literal "move_cart ok" attribution string, the lifter,
+`/safety/estop`. `mobile_node` and the whole path_tag_locator pipeline
+run UNMODIFIED against it.
+
+Zero-noise baseline (test_nav.py / test_calibration.py, rerunnable):
+single hop 0.1 mm/0.00°; pivot + reverse corridor entry + 8 hops in
+80 s at 0.2 mm/0.00°; full calibration of tags 105 and 106 (real
+orchestrator → auto-align at 0.8 m → chain) at **0.00–0.03 mm** with
+z = −0.080 exactly. Sim forward model and chain inverse are independent
+code paths, so this validates both.
+
+**Reach-degradation (user request, sim-verified):** an align move that
+fails on IK/reach no longer fails the entry when the ref tag is still
+observable — the chain runs from the LAST REACHABLE pose
+(`align.continue_on_move_failure`, default on; the chain needs a 6-DOF
+observation, not a square view). The result carries a `degraded` marker
+through progress / session records / robot_ui ("(DEGRADED)") — verify
+those entries' residuals before trusting them, since an oblique view
+degrades real-camera detection accuracy. E2E-tested in the sim with an
+over-reach seed (sim got an `~arm_reach_mm` IK-rejection model for
+this): initial move rejected → degraded → chain exact to 0.00 mm.
+Building the test also caught a sim-only deadlock (bump inside the
+non-reentrant state lock on the rejection path).
+
+**Error budget in the deliverable metric (scripts/error_budget.py,
+user request):** Monte-Carlo through the real chain, everything expressed
+as PATH-TAG world-position error (entry 105 geometry, 1.12 m A->B lever,
+0.5 px / 0.5 deg tilt / 0.2 deg yaw / Fairino-repeatability defaults):
+sigma_xy 4.0 mm (P95 7.8), sigma_z 10.8 mm. Decomposition: **xy is
+dominated by the hand-cam observation's IN-PLANE YAW times the A->B
+lever** (19.6 mm per deg; tilt hardly touches xy — it leaks into z via
+the 0.8 m view height, and z also carries the ~8 mm depth-from-size
+noise). front-cam rotation contributes 0.00 mm to B position (last
+chain factor). Systematics: every extrinsic/hand-eye mm -> 1 mm; every
+0.1 deg of hand-eye or REF-TAG yaw -> ~2 mm — the reference_tags.yaml
+yaw-0 assumption is a 19 mm/deg lever and must be checked against the
+first session's relative-geometry residuals. Mitigations, quantified:
+yaw noise shrinks with tag pixel size (closer view) and with per-frame
+medians; at 0.05 deg yaw the budget drops to sigma_xy 1.5 mm / P95 2.7.
+
+**Budget-driven optimization (same day):** three changes, all aimed at
+the dominant yaw-x-lever term. (1) View height 0.8 -> 0.5 m
+(locator.yaml auto_view_distance_m; plans regenerated) — tag pixels
++80%, angular noise ~x0.55, depth noise ~x0.39, AND flange reach
+improved to 0.67-1.20 m (camera lower = closer to the base). (2) The
+FINAL chain observations are now the mean of samples_per_iteration
+frames (detections.mean_detection — sin/cos-safe angle averaging since
+roll sits near ±180; the align loop keeps the median pick, which only
+rejects spikes). Before this, the one measurement the result is
+computed from was a single frame while only the align loop was
+multi-frame. (3) Expected budget at the new settings: **sigma_xy
+1.1 mm / P95 2.2 / sigma_z 2.3** (was 4.0/7.8/10.8). Sim E2E
+re-verified at 0.00-0.08 mm with the new plans and averaging path.
+
+**robot_ui Calibration tab (user request):** map calibration moved from
+edit-a-plugin-constant to a proper panel — plate selector (plan+ref
+files switch together), dry-run toggle, START/Cancel, live ok/fail/
+degraded counts and last-entry line fed by calib_progress, plus a
+single-tag locate row. Session runs on the CallWorker pool; START is
+disabled while one runs. Offscreen-tested against the sim: a real
+dry-run session streamed all 26 per-tag lines through the actual button
+path. The Scripts-tab plugin remains as the automation variant. First field
+use immediately hit "timeout waiting for service" — the calibration
+nodes were not running (they are NOT in the main launch). Follow-up: a
+3 s master-registry poll drives a red "nodes: OFFLINE — run: roslaunch
+path_tag_locator path_tag_locator.launch" line on the panel, START
+refuses instantly with the same instruction, and the bridge's
+locate/run error strings carry the hint too.
+
+**Home-before-nav (user rule):** every base move in a calibration
+session is now preceded by a synchronous arm home
+(ArmInterface.move_home -> /arm/move_home; `arm.home_before_nav`,
+default on) — routes include pivots and reverse corridor entries, and
+driving them with the arm extended at the previous view pose was a
+collision risk. A failed home fails the entry. Sim E2E re-verified
+(0.02 mm), `arm_homed_before_nav` recorded per attempt.
+
+**Yaw is a deliverable too (user correction):** error_budget.py now
+reports B's laid-yaw error alongside position. The structure INVERTS
+for yaw: front-cam rotation — exactly 0.00 mm on position — enters yaw
+1:1 and matches the hand-cam contribution (~0.05 deg each at optimized
+settings; combined sigma 0.073 deg / P95 0.14, was 0.28/0.55 baseline).
+Front-cam quality is therefore NOT dispensable when yaw matters; the
+frame averaging is what carries it. Hand-eye yaw and the
+reference_tags.yaml yaw assumption are exact 1:1 biases on EVERY
+calibrated yaw — a constant offset over all tags in the output is the
+fingerprint of a wrong ref/hand-eye yaw.
+
+Two convention traps the sim caught (regression value, documented in its
+README): the corner ORDER is the alignment convention — corner0→corner1
+must image at raw +90° when aligned; the +x ordering made the 09-02
+heading-correction term servo the robot ~6° off and push the tag's
+corners past the frame edge (reproducing the real 2026-08-14 "align
+waits forever" failure). And an angular lag that is too slow does the
+same through arrival heading error.
+
 ### 2026-09-02 — Workspace check on the robot PC; four doc/repo drifts fixed
 
 First session in this checkout (`mobile_manipulator_ws_20260902`, host

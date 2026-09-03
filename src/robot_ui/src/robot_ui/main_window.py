@@ -272,6 +272,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_collect_tab(save_dir), 'Collect')
         tabs.addTab(self._build_arm_tab(), 'Arm')
         tabs.addTab(self._build_task_tab(), 'Task')
+        tabs.addTab(self._build_calibration_tab(), 'Calibration')
         tabs.addTab(self._build_plugin_tab(), 'Scripts')
 
         panel = QWidget()
@@ -563,6 +564,182 @@ class MainWindow(QMainWindow):
         return tab
 
     # ---------- Scripts tab ----------
+    def _build_calibration_tab(self):
+        """Tag-map calibration panel — drives path_tag_locator's nodes.
+
+        Needs `roslaunch path_tag_locator path_tag_locator.launch`
+        running alongside the main stack; without it every button lands
+        in a clean wait_for_service timeout. Plan + reference files are
+        switched TOGETHER by the plate selector (same ids on both
+        plates — a mixed pair shifts every result by metres).
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        box = QGroupBox('Map calibration session')
+        form = QVBoxLayout(box)
+        note = QLabel(
+            'Session drives the base via /mobile/goto_tag — send no '
+            'TASK/GOTO while it runs. Always dry-run a new plan first.')
+        note.setWordWrap(True)
+        note.setStyleSheet('color:#888;')
+        form.addWidget(note)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel('Plate:'))
+        self.combo_calib_plate = QComboBox()
+        self.combo_calib_plate.addItems(
+            ['정반 1  (zones B+C, 26 tags)',
+             '정반 2  (zones D+E, 25 tags)'])
+        row.addWidget(self.combo_calib_plate, 1)
+        self.chk_calib_dry = QCheckBox('dry run')
+        self.chk_calib_dry.setChecked(True)
+        row.addWidget(self.chk_calib_dry)
+        form.addLayout(row)
+
+        self.lbl_calib_nodes = QLabel('nodes: checking…')
+        form.addWidget(self.lbl_calib_nodes)
+
+        row = QHBoxLayout()
+        self.btn_calib_start = QPushButton('START SESSION')
+        self.btn_calib_start.clicked.connect(self._on_calib_start)
+        row.addWidget(self.btn_calib_start)
+        btn_cancel = QPushButton('Cancel (after current tag)')
+        btn_cancel.clicked.connect(
+            lambda: self._run(self.bridge.cancel_map_calibration,
+                              label='calib-cancel'))
+        row.addWidget(btn_cancel)
+        form.addLayout(row)
+
+        self.lbl_calib_state = QLabel('idle')
+        self.lbl_calib_state.setStyleSheet('font-weight:bold;')
+        form.addWidget(self.lbl_calib_state)
+        self.lbl_calib_counts = QLabel('ok 0   fail 0   degraded 0')
+        form.addWidget(self.lbl_calib_counts)
+        self.lbl_calib_last = QLabel('—')
+        self.lbl_calib_last.setWordWrap(True)
+        self.lbl_calib_last.setStyleSheet('color:#888;')
+        form.addWidget(self.lbl_calib_last)
+        layout.addWidget(box)
+
+        loc_box = QGroupBox('Single tag locate (debug)')
+        loc_layout = QVBoxLayout(loc_box)
+        lnote = QLabel(
+            'Base parked on the target floor tag, hand cam already '
+            'viewing a cross tag (drive the arm from the Arm tab or a '
+            'plan seed first).')
+        lnote.setWordWrap(True)
+        lnote.setStyleSheet('color:#888;')
+        loc_layout.addWidget(lnote)
+        row = QHBoxLayout()
+        row.addWidget(QLabel('tag id:'))
+        self.spin_locate_tag = QSpinBox()
+        self.spin_locate_tag.setRange(100, 150)
+        self.spin_locate_tag.setValue(105)
+        row.addWidget(self.spin_locate_tag)
+        btn_loc = QPushButton('Locate')
+        btn_loc.clicked.connect(self._on_calib_locate)
+        row.addWidget(btn_loc)
+        row.addStretch(1)
+        loc_layout.addLayout(row)
+        layout.addWidget(loc_box)
+        layout.addStretch(1)
+
+        self._calib_running = False
+        self._calib_counts = {'ok': 0, 'fail': 0, 'degraded': 0}
+        self._calib_online = False
+        # Periodic master-registry poll (cheap XML-RPC lookup, no service
+        # call) so the operator sees "nodes offline" BEFORE pressing
+        # START instead of a generic timeout 6 s after.
+        self._calib_node_timer = QTimer(self)
+        self._calib_node_timer.timeout.connect(self._poll_calib_nodes)
+        self._calib_node_timer.start(3000)
+        self._poll_calib_nodes()
+        return tab
+
+    def _poll_calib_nodes(self):
+        online = self.bridge.calib_nodes_online()
+        if online == self._calib_online and 'checking' not in \
+                self.lbl_calib_nodes.text():
+            return
+        self._calib_online = online
+        if online:
+            self.lbl_calib_nodes.setText('nodes: ONLINE')
+            self.lbl_calib_nodes.setStyleSheet('color:#2e7d32;')
+        else:
+            self.lbl_calib_nodes.setText(
+                'nodes: OFFLINE — run:  roslaunch path_tag_locator '
+                'path_tag_locator.launch')
+            self.lbl_calib_nodes.setStyleSheet(
+                'color:#b02020; font-weight:bold;')
+
+    def _calib_paths(self):
+        plate = 1 + self.combo_calib_plate.currentIndex()
+        base = '$(find path_tag_locator)/config/'
+        if plate == 1:
+            return (base + 'calibration_plan_plate1.yaml',
+                    base + 'reference_tags.yaml')
+        return (base + 'calibration_plan_plate2.yaml',
+                base + 'reference_tags_plate2.yaml')
+
+    def _on_calib_start(self):
+        if self._calib_running:
+            self.append_log('[calib] a session is already running')
+            return
+        if not self.bridge.calib_nodes_online():
+            self.append_log(
+                '[calib] calibration nodes are NOT running — start them '
+                'first:  roslaunch path_tag_locator path_tag_locator.launch')
+            self._poll_calib_nodes()
+            return
+        plan_path, ref_path = self._calib_paths()
+        dry = self.chk_calib_dry.isChecked()
+        self._calib_running = True
+        self._calib_counts = {'ok': 0, 'fail': 0, 'degraded': 0}
+        self._refresh_calib_labels()
+        self.btn_calib_start.setEnabled(False)
+        self.lbl_calib_state.setText(
+            ('DRY RUN' if dry else 'RUNNING') + '  ' +
+            self.combo_calib_plate.currentText())
+        self.append_log('[calib] session start (%s, dry=%s)'
+                        % (self.combo_calib_plate.currentText(), dry))
+
+        def _done(result):
+            self._calib_running = False
+            self.btn_calib_start.setEnabled(True)
+            ok, message, report = result
+            self.lbl_calib_state.setText(
+                ('finished OK' if ok else 'finished with FAILURES')
+                + '  —  ' + message.split(';')[0])
+            if report.get('output_yaml_path'):
+                self.append_log('[calib] output: %s'
+                                % report['output_yaml_path'])
+
+        self._run(self.bridge.run_map_calibration,
+                  dry_run=dry, plan_path=plan_path, ref_tags_path=ref_path,
+                  label='calibration', on_done=_done)
+
+    def _on_calib_locate(self):
+        tag = int(self.spin_locate_tag.value())
+
+        def _done(result):
+            if result.get('success'):
+                x, y, z = result['position_m']
+                self.append_log('[locate] tag %d: (%.4f, %.4f, %.4f) m'
+                                % (tag, x, y, z))
+            else:
+                self.append_log('[locate] tag %d FAILED: %s'
+                                % (tag, result.get('message')))
+
+        self._run(self.bridge.locate_path_tag, tag_b_id=tag,
+                  label='locate', on_done=_done)
+
+    def _refresh_calib_labels(self):
+        c = self._calib_counts
+        self.lbl_calib_counts.setText(
+            'ok %d   fail %d   degraded %d'
+            % (c['ok'], c['fail'], c['degraded']))
+
     def _build_plugin_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -635,14 +812,28 @@ class MainWindow(QMainWindow):
         status = entry.get('status', '?')
         tag = entry.get('tag', '?')
         if status == 'ok':
+            degraded = bool(entry.get('degraded'))
+            note = ' (DEGRADED)' if degraded else ''
             self.append_log(
-                f"[calib] tag {tag}: OK  x={entry.get('x', 0):.3f} "
+                f"[calib] tag {tag}: OK{note}  x={entry.get('x', 0):.3f} "
                 f"y={entry.get('y', 0):.3f}")
+            self._calib_counts['ok'] += 1
+            if degraded:
+                self._calib_counts['degraded'] += 1
+            self.lbl_calib_last.setText(
+                'tag %s: OK%s  (%.3f, %.3f, %.3f)'
+                % (tag, note, entry.get('x', 0), entry.get('y', 0),
+                   entry.get('z', 0)))
         elif status == 'fail':
             self.append_log(
                 f"[calib] tag {tag}: FAIL — {entry.get('error', '')}")
+            self._calib_counts['fail'] += 1
+            self.lbl_calib_last.setText(
+                'tag %s: FAIL — %s' % (tag, entry.get('error', '')[:120]))
         else:
             self.append_log(f'[calib] tag {tag}: {status}')
+            self.lbl_calib_last.setText('tag %s: %s' % (tag, status))
+        self._refresh_calib_labels()
 
     def _on_arm_state(self, state):
         if state['pose_valid']:
