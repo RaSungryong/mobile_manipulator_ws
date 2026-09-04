@@ -166,8 +166,9 @@ pull + `catkin_make` before anything below.
   base-referenced lateral the steering sign flips in REVERSE (fixed the
   same day; a reverse hop that drifts sideways while the tag is in view
   would be the symptom of getting this wrong). Then, to make forward
-  behave like reverse: `center_x_stop_offset` 300 px (forward stops with
-  the tag ~12 cm ahead of the lens so the next launch sees it),
+  behave like reverse: `center_x_stop_offset` was raised to 300 px and
+  **reverted to 0 the same evening** (user: keep the forward stop on the
+  crosshair),
   `stop_offset_skip_tag_ranges` (500-series stop on the crosshair both
   ways), `/robot_pose` gained the fore-aft term, the heading hold covers
   the whole hop, and the reverse predictive-centering sign was fixed.

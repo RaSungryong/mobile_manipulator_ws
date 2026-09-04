@@ -1186,6 +1186,29 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-04 — Forward stop column back to the crosshair (user request); what still covers the forward launch
+
+`center_x_stop_offset` 300 → **0** on the user's instruction ("전진 태그
+목표점을 원래 위치로"): the far forward column cost ~12 cm of stop
+position on every forward tag, and the crosshair was preferred. Kept
+from the same afternoon: reverse +400, the 500-series crosshair rule in
+both directions, the `/robot_pose` fore-aft term (0 at the crosshair, so
+no change for forward), the whole-hop heading hold, and the signed
+reverse curvature term.
+
+Forward vs reverse after the revert, stated plainly: at a
+forward-after-forward launch the start tag leaves the frame after ~3 cm
+(bumper occlusion), so that launch is held on odom yaw anchored to the
+tag's last frames plus the backlash feed-forward; a forward-after-reverse
+launch (start tag at +400) and every reverse launch keep the tag ~19 cm.
+A reverse hop INTO a 500-series tag (112→505, 137→507) sees its target
+only from ~3 cm out — the pre-2026-09-02 reverse geometry — and relies
+on the odom creep zone (0.015 m/s inside the last 15 cm) and the roll
+lead; today's records show those arrivals within a few px. Nothing else
+in the loop is direction-dependent beyond the items listed in the
+difference table above. All suites pass with the revert (60 / 18 / 7 /
+11 / 15 / 10 / 10 / 7). Not driven; `mobile_node` restart required.
+
 ### 2026-09-04 — Forward made like reverse: far forward column, /robot_pose fore-aft term, whole-hop heading hold, reverse-prediction sign
 
 User: "후진은 너무 잘되니 후진을 기준으로 전진을 수정". Forward-only

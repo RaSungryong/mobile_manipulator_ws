@@ -430,21 +430,15 @@ robot:
   # tag to land ~15-20 px PAST the crosshair (image-left when driving
   # forward, image-right in reverse) — that is the measured 6-8 mm roll
   # after the trigger, not this key. Raise this (≈ +18) to pre-compensate.
-  # 0 -> 300 on 2026-09-04 (user: "후진은 너무 잘되니 후진을 기준으로 전진을
-  # 수정"). What makes reverse good is that the tag is left 16 cm AHEAD of
-  # the lens at the stop, so on the NEXT launch the start tag stays in view
-  # for ~19 cm and the heading is held on the tag (a wheel-play twist the
-  # encoders cannot see is still corrected). Forward stopped on the
-  # crosshair, lost the start tag after 3 cm, and arrived on the zone A
-  # lane yawed -0.6..-1.7 deg. +300 px = the tag ~12 cm ahead of the lens:
-  # start tag visible ~15 cm at launch, and the target — which appears
-  # ~25 cm out going forward — is still in view for ~13 cm of approach
-  # (400 would leave only 9 cm). ⚠️ Every forward stop is now ~12 cm SHORT
-  # of the design pose (lens over the tag); /robot_pose carries the
-  # fore-aft term (robot_pose_use_fore_aft) so the reported pose and the
-  # pose-mode arm transform stay right. 500-series targets keep 0 —
-  # stop_offset_skip_tag_ranges below.
-  center_x_stop_offset: 300.0
+  # 300 -> 0 again on 2026-09-04 evening (user: "전진 태그 목표점을 원래
+  # 위치로"). A far forward column (+300, tried for a few hours the same
+  # day) kept the start tag in view at the next launch like reverse does,
+  # but moved every forward stop ~12 cm short of the design pose; the user
+  # chose the crosshair. Forward therefore loses its start tag ~3 cm into
+  # a launch (the bumper hides the floor behind the lens) — the odom
+  # heading hold, anchored to that tag's last frame, and the backlash
+  # feed-forward are what cover the forward launch. Reverse keeps +400.
+  center_x_stop_offset: 0.0
   # REVERSE-ONLY stop column (2026-09-04, user request: "후진할 때만 목표
   # 태그 위치를 화면 기준으로 최대한 오른쪽에"). Same units and sign as
   # center_x_stop_offset — px from the calibrated cx, positive = image-right

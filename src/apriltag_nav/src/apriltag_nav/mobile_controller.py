@@ -1471,10 +1471,10 @@ class MobileController:
 
     def _stop_offset_px(self, direction, target_id):
         """The stop column (px from the calibrated cx) for this hop.
-        Forward: center_x_stop_offset (+300 since 2026-09-04 — the tag is
-        left AHEAD of the lens so the next launch still sees it, the
-        condition that made reverse work well). Reverse:
-        center_x_stop_offset_reverse (+400). A target in
+        Forward: center_x_stop_offset (0 = the crosshair; a far forward
+        column was tried on 2026-09-04 and reverted the same day at the
+        user's request). Reverse: center_x_stop_offset_reverse (+400, the
+        tag left ahead of the lens). A target in
         stop_offset_skip_tag_ranges (the 500-series dock / pivot tags)
         stops on the crosshair (offset 0) in BOTH directions: a pivot
         turns about the base centre and needs the base on the designed
