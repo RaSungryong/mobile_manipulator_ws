@@ -179,19 +179,13 @@
         <param name="driver_hand_cam"  value="$(arg use_hand_cam)"/>
     </node>
 
-    <!-- Camera viewer — debug only, opens RViz with all three camera images.
-         Starts CLOSED: bringing the stack up must not throw a GUI on screen,
-         and on a headless boot there may be no display at all. Open and close
-         it while everything else keeps running:
-           rosservice call /camera_viewer/set_enabled "data: true"
-           rosservice call /camera_viewer/set_enabled "data: false"
-         Being a node here is what bounds its lifetime — roslaunch shuts it
-         down with the rest, and it kills its RViz child on the way out, so no
-         window is left behind. Set auto_start true only for a debug session
-         that should come up with the window already open. -->
-    <node name="camera_viewer_node" pkg="apriltag_nav" type="camera_viewer_node.py" output="screen">
-        <param name="auto_start" value="true"/>
-    </node>
+    <!-- Camera viewer (RViz) — REMOVED from the launch 2026-09-04. The
+         operator UI (robot_ui) now shows all three tag cameras with the
+         detector overlay, per-camera on/off and click-to-enlarge, so the
+         stack no longer opens an RViz window. The node still exists for a
+         debug session without the UI:
+           rosrun apriltag_nav camera_viewer_node.py _auto_start:=true
+         (it kills its RViz child on Ctrl-C). -->
 
     <!-- Inference — on-demand Ra prediction over ONNX.
          OPTIONAL. Nothing in the scan path needs it: the scan pipeline runs

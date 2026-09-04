@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+⚠️ Since 2026-09-04 the SAME distance / angle moves are available with the
+stack UP, from robot_ui's Mobile tab (or /mobile/move_cmd): the motion logic
+below was ported into MobileController.drive_distance / pivot_angle and runs
+inside mobile_node, the sole /cmd_vel publisher. Use this tool only when the
+stack is down. Keep the two in step if the profile changes.
+
 Manual (v, w) drive tool — bring-up and debugging only.
 
 Drives the base by publishing geometry_msgs/Twist directly, with odometry

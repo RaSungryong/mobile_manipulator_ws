@@ -12,7 +12,7 @@ offset. The offset where a tag appears IS the config-vs-physical
 placement error.
 
 Interpretation for 정반 2:
-  found near offset 0        -> tags ARE at +3.890 (geometric centre);
+  found near offset 0        -> tags ARE at +3.900 (geometric centre);
                                 look for another cause
   found near offset -0.47 m  -> tags were laid by the "2번정반 중심"
                                 CSV origin (+3.420): fix

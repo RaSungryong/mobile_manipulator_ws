@@ -2,12 +2,15 @@
 #
 # WORLD FRAME is still the 정반 1 centre frame (= map.yaml frame).
 # The tags are laid out ±600/±1200 mm about 정반 2's GEOMETRIC centre
-# (user-confirmed 2026-09-01), which sits at world x = +3.890 — NOT at the
+# (user-confirmed 2026-09-01), which sits at world x = +3.900 — NOT at the
 # "2번정반 중심" CSV origin (+3.420). Derivation: D(-1.24)/E(+2.18) in that
 # CSV are asymmetric about its origin; with the 0.45 m lane-to-plate-face
-# rule and the 2.52 m plate width the plate spans 2.63..5.15, centre 3.89,
-# and the D/E lanes mirror B/C exactly. So these poses are the 정반 1
-# values + 3.890 in x. z = 0 is the plate top; face-up -> rpy [180, 0, 0];
+# rule and the 2.52 m plate width the design put the plate at 2.63..5.15,
+# centre 3.89; the USER MEASURED 3.90 m between the plate centres on
+# 2026-09-04, so the plate spans 2.64..5.16. The D/E FLOOR lanes in
+# map.yaml were left at 2.18 / 5.6 (those tags were not re-laid); only
+# these cross-tag poses follow the plate. So these poses are the 정반 1
+# values + 3.900 in x. z = 0 is the plate top; face-up -> rpy [180, 0, 0];
 # yaw assumed 0 (same caveat as reference_tags.yaml).
 #
 # ⚠️ SAME IDs 0-5 EXIST ON BOTH PLATES. A calibration session must load
@@ -19,20 +22,20 @@ format: "pose"
 
 reference_tags:
   - id: 0
-    position_m: [3.290, -1.200, 0.000]
+    position_m: [3.300, -1.200, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 1
-    position_m: [3.290, 0.000, 0.000]
+    position_m: [3.300, 0.000, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 2
-    position_m: [3.290, 1.200, 0.000]
+    position_m: [3.300, 1.200, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 3
-    position_m: [4.490, 1.200, 0.000]
+    position_m: [4.500, 1.200, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 4
-    position_m: [4.490, 0.000, 0.000]
+    position_m: [4.500, 0.000, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 5
-    position_m: [4.490, -1.200, 0.000]
+    position_m: [4.500, -1.200, 0.000]
     rpy_deg:    [180.0, 0.0, 0.0]

@@ -104,7 +104,7 @@ EXPECTED_NODES = [
     ('/keyence_dlen1_node',        True),
     ('/robot_camera_node',         True),
     ('/lifter_node',               True),
-    ('/camera_viewer_node',        False),   # debug aid; absence is not a fault
+    ('/camera_viewer_node',        False),   # not in the launch since 2026-09-04 (robot_ui replaces it); rosrun on demand
     ('/inference_node',            False),   # on-demand Ra for robot_ui; TASK scans score in-process
 ]
 

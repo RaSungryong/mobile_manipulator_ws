@@ -28,6 +28,16 @@ Interface
 ---------
   /mobile/goto_tag  (Int32)   start driving to a tag. Returns immediately;
                               watch /mobile/state for the outcome.
+  /mobile/move_cmd  (String)  JSON manual relative move, odometry-closed,
+                              no tag involved (robot_ui's Mobile tab):
+                                {"type": "move",  "distance_m": 0.3,  "speed": 0.05}
+                                {"type": "pivot", "angle_deg": 90.0,  "speed": 0.2}
+                              negative distance = reverse, positive angle =
+                              CCW. `speed` optional (capped at robot.yaml
+                              max). Refused while any move is in flight and
+                              while the EMERGENCY latch is set (clear_stop
+                              first). Completion: `seq` advances and
+                              `result` carries {"what": ..., "tag": null}.
   /mobile/stop      (Trigger) EMERGENCY stop — zero velocity, latch
                               emergency_stop. Mirrors STOP.
   /mobile/cancel    (Trigger) preempt stop — zero velocity, no emergency latch.
@@ -106,11 +116,19 @@ class MobileNode:
 
         rospy.Subscriber('/mobile/goto_tag', Int32, self._cb_goto_tag,
                          queue_size=1)
-        # Tag-offset records: every TASK / GOTO command opens a NEW yaml
-        # (mobile_controller.begin_nav_session) so records are never
-        # overwritten. /task_state tells us whether a task_executor task is
-        # driving; a bare /mobile/goto_tag outside any task gets its own file.
+        rospy.Subscriber('/mobile/move_cmd', String, self._cb_move_cmd,
+                         queue_size=1)
+        # Tag-offset records: every TASK / GOTO command gets exactly ONE
+        # yaml (mobile_controller.begin_nav_session; created at the first
+        # arrival, so a command that never arrives anywhere leaves none).
+        # /task_state tells us whether a task_executor task is driving; a
+        # bare /mobile/goto_tag outside any task gets its own file.
+        # `_cmd_session_pending` closes the race between /task_command and
+        # the task's FIRST goto_tag: the executor publishes /task_state
+        # before it drives, but if that message has not reached us yet the
+        # first hop must still NOT open a second `goto_<n>` file.
         self._task_active = False
+        self._cmd_session_pending = False
         rospy.Subscriber('/task_command', String, self._cb_task_command,
                          queue_size=10)
         rospy.Subscriber('/task_state', String, self._cb_task_state,
@@ -151,9 +169,11 @@ class MobileNode:
         self._motion_lock.release()
         self._publish_state()
 
-    def _finish(self, tag_id, ok, message):
+    def _finish(self, tag_id, ok, message, what=None):
         self._seq += 1
-        self._result = {'seq': self._seq, 'tag': int(tag_id),
+        self._result = {'seq': self._seq,
+                        'tag': None if tag_id is None else int(tag_id),
+                        'what': what,
                         'ok': bool(ok), 'message': str(message)}
 
     # ==========================================================
@@ -169,11 +189,60 @@ class MobileNode:
         threading.Thread(target=self._do_goto, args=(tag_id,),
                          daemon=True).start()
 
+    def _cb_move_cmd(self, msg):
+        try:
+            req = json.loads(msg.data)
+            kind = str(req.get('type', '')).lower()
+            speed = req.get('speed')
+            speed = None if speed in (None, '', 0) else float(speed)
+            if kind == 'move':
+                amount = float(req['distance_m'])
+                what = f"manual move {amount:+.3f} m"
+            elif kind == 'pivot':
+                amount = float(req['angle_deg'])
+                what = f"manual pivot {amount:+.1f} deg"
+            else:
+                raise ValueError(f"unknown type {kind!r}")
+        except Exception as e:
+            rospy.logwarn(f"[Mobile] bad move_cmd {msg.data!r}: {e}")
+            self._finish(None, False, f"bad move_cmd: {e}", what='manual')
+            self._publish_state()
+            return
+        if self._busy_what is not None:
+            rospy.logwarn(f"[Mobile] {what} refused — {self._busy_what}")
+            self._finish(None, False, f"busy: {self._busy_what}", what=what)
+            self._publish_state()
+            return
+        threading.Thread(target=self._do_manual,
+                         args=(kind, amount, speed, what), daemon=True).start()
+
+    def _do_manual(self, kind, amount, speed, what):
+        if not self._begin(what):
+            self._finish(None, False, "busy", what=what)
+            self._publish_state()
+            return
+        try:
+            if kind == 'move':
+                ok, message = self.mobile.drive_distance(amount, speed)
+            else:
+                ok, message = self.mobile.pivot_angle(amount, speed)
+            self._finish(None, ok, message, what=what)
+        except Exception as e:
+            rospy.logerr(f"[Mobile] {what} raised: {e}")
+            try:
+                self.mobile.stop()
+            except Exception:
+                pass
+            self._finish(None, False, f"exception: {e}", what=what)
+        finally:
+            self._end()
+
     def _cb_task_command(self, msg):
         cmd = msg.data.strip()
         head = cmd.split()[0].upper() if cmd.split() else ''
         if head in ('TASK', 'GOTO'):
             self.mobile.begin_nav_session(cmd)
+            self._cmd_session_pending = True
 
     def _cb_task_state(self, msg):
         try:
@@ -186,7 +255,11 @@ class MobileNode:
             self._finish(tag_id, False, "busy")
             self._publish_state()
             return
-        if not self._task_active:
+        if self._cmd_session_pending:
+            # First goto of a TASK / GOTO command: its record was opened by
+            # /task_command; keep appending there.
+            self._cmd_session_pending = False
+        elif not self._task_active:
             # Not part of a task_executor command (e.g. a calibration
             # session or a direct publish): give this drive its own file.
             self.mobile.begin_nav_session(f"goto_{tag_id}")

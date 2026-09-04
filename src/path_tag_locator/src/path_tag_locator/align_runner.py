@@ -53,6 +53,51 @@ class AutoAlignError(RuntimeError):
         self.report = report
 
 
+def approach_pose(tcp_client, target_tcp_mm_deg, align_cfg, what="initial"):
+    """Move the arm to ``target_tcp_mm_deg`` in up to
+    ``align_cfg.max_initial_steps`` clamped MoveJ steps of
+    ``max_initial_step_m`` / ``max_initial_step_deg`` each.
+
+    Returns ``(steps_taken, reached)``. ``reached`` is False when the
+    target was still beyond the clamp after the last allowed step — the
+    arm is then short of the seed and the caller should expect the tag
+    to be out of view. Move exceptions propagate to the caller.
+
+    Why chunked: the clamp exists so a bad seed cannot become one
+    unbounded jump. It used to be applied ONCE, which silently turned
+    "seed 1.15 m from the home pose" into "stop 0.35 m short of it" —
+    the 2026-09-04 plate-1 session lost 6 of 26 entries exactly that way
+    (log: "initial move clamped (Δt=0.800 m)" then "tag A not detected").
+    """
+    max_steps = max(1, int(getattr(align_cfg, "max_initial_steps", 1)))
+    T_tgt = pose_fr5_to_matrix_m([float(v) for v in target_tcp_mm_deg])
+    for k in range(1, max_steps + 1):
+        T_cur = pose_fr5_to_matrix_m(tcp_client.get_tcp_pose())
+        step = clamp_step(T_cur, T_tgt,
+                          max_step_m=align_cfg.max_initial_step_m,
+                          max_step_deg=align_cfg.max_initial_step_deg)
+        step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
+        if step.clamped:
+            rospy.logwarn(
+                "auto_align: %s move clamped (Δt=%.3f m, Δrot=%.2f deg) — "
+                "step %d/%d", what, step.delta_t_norm_m, step.delta_rot_deg,
+                k, max_steps)
+        rospy.loginfo("auto_align: %s MoveJ %d/%d -> %s", what, k, max_steps,
+                      _fmt_pose(step_pose))
+        # Big repositioning move: joint-interpolated. A straight-line MoveL
+        # here crawled (22-34 s, two 60 s timeouts) on 2026-09-02.
+        tcp_client.move_j_to_pose(step_pose,
+                                  settle_s=align_cfg.move_settle_s,
+                                  linear=False)
+        if not step.clamped:
+            return k, True
+    rospy.logwarn(
+        "auto_align: %s move still clamped after %d steps — arm is short of "
+        "the target; raise align.max_initial_steps or max_initial_step_m",
+        what, max_steps)
+    return max_steps, False
+
+
 def run_auto_align(*,
                    align_cfg,
                    tcp_client,
@@ -95,24 +140,8 @@ def run_auto_align(*,
     degraded = None
 
     if not skip_initial_move:
-        cur_tcp = tcp_client.get_tcp_pose()
-        T_cur = pose_fr5_to_matrix_m(cur_tcp)
-        T_init = pose_fr5_to_matrix_m(initial)
-        step = clamp_step(T_cur, T_init,
-                          max_step_m=align_cfg.max_initial_step_m,
-                          max_step_deg=align_cfg.max_initial_step_deg)
-        if step.clamped:
-            rospy.logwarn(
-                "auto_align: initial move clamped (Δt=%.3f m, Δrot=%.2f deg)",
-                step.delta_t_norm_m, step.delta_rot_deg)
-        step_pose = matrix_m_to_pose_fr5(step.T_ab2ee_step)
-        rospy.loginfo("auto_align: initial MoveJ -> %s", _fmt_pose(step_pose))
-        # Big repositioning move: joint-interpolated. A straight-line MoveL
-        # here crawled (22-34 s, two 60 s timeouts) on 2026-09-02.
         try:
-            tcp_client.move_j_to_pose(step_pose,
-                                      settle_s=align_cfg.move_settle_s,
-                                      linear=False)
+            approach_pose(tcp_client, initial, align_cfg, what="initial")
         except Exception as e:
             if not getattr(align_cfg, 'continue_on_move_failure', True):
                 raise

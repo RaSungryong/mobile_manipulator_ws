@@ -89,9 +89,10 @@ TASK <name>                # per-line: scan_joints_line{1,2}, scan_grid_line{1,2
                            #    at 150, and it concatenates the two. See the
                            #    `lift_height` section.
 GOTO <tag_id>              # Navigate to AprilTag
-                           # Every TASK / GOTO opens a NEW camera-centre-vs-tag
+                           # Every TASK / GOTO gets exactly ONE camera-centre-vs-tag
                            # record: ~/.ros/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
-                           # (Work Log 2026-09-02) — never overwritten
+                           # (Work Log 2026-09-02/04) — never overwritten, created
+                           # at the first arrival (no file if nothing arrived)
 TEST_POSE x y z [rx ry rz] # Test pose control (debug)
 STOP / STATE               # Emergency stop / query state
 EXEC <code> / EVAL <expr>  # Debug execution
@@ -157,10 +158,13 @@ swap.
 
 Two facts from the previous warning that are still load-bearing:
 
-- `/robot_pose` is derived **only** from the map tag coordinate plus
-  `lateral` plus `camera_offset` (`mobile_controller.calculate_robot_pose`).
-  There is **no body-width term anywhere in the pipeline**, so changing the
-  chassis does not move where the robot stops. `wall_dist_*` is documentation.
+- `/robot_pose` is derived from the map tag coordinate plus `lateral`
+  plus `camera_offset` **plus, since 2026-09-04, the tag's fore-aft
+  distance ahead of the lens** (`mobile_controller.calculate_robot_pose`,
+  `robot_pose_use_fore_aft`) — needed because the base now stops with the
+  tag 12–16 cm ahead of the lens. There is still **no body-width term
+  anywhere in the pipeline**, so changing the chassis does not move where
+  the robot stops. `wall_dist_*` is documentation.
 - Joint mode reads no transform at all: the CSV rows are absolute joint angles
   fed straight to `MoveJ`.
 
@@ -202,17 +206,18 @@ owner node per device, other nodes reach it over topics/services.
 | Node | Owns | Interface |
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
-| `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
+| `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
 | `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv) |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
 | `lifter_node.py` | manipulator base lift (**sole writer** of `/lift/*`) | `/lifter/height_cmd`, `/lifter/{home,stop,reset,goto_scan_height}` (srv), `/lifter/state` |
-| `camera_viewer_node.py` | RViz debug window (owns no device) | `/camera_viewer/set_enabled` (srv) |
+| `camera_viewer_node.py` | RViz debug window (owns no device). **Not in the launch since 2026-09-04** — `rosrun` it for a UI-less debug session | `/camera_viewer/set_enabled` (srv) |
 | `inference_node.py` | the resident ONNX Ra model(s) — on-demand prediction for one frame (owns no device) | `/inference/predict` (srv, `robot_msgs/PredictRa`) |
 
-`mobile_manipulator.launch` starts all nine. Seven are required; the two
-optional ones own no device: `camera_viewer_node` (a debug aid) and
+`mobile_manipulator.launch` starts eight of them (the RViz
+`camera_viewer_node` was dropped from it 2026-09-04 — robot_ui shows the
+cameras now). Seven are required; the optional one owns no device:
 `inference_node` (the TASK scan path scores frames in-process through
 `inference_interface.py`, so only `robot_ui`'s on-demand Ra needs the node —
 both paths share `RaPredictor` and return bit-identical values).
@@ -310,7 +315,14 @@ every drive ends with the tag at or past the frame edge.
 
 ✅ **`align_to_tag()` is bounded since 2026-09-02** — `align_timeout_s`
 (20 s, `<= 0` disables) fails the hop with a logged reason (tag not visible /
-not converging). Before that, a target tag absent from `detected_tags` made it
+not converging). **Since 2026-09-04 it leads the stop by the rotation still pending
+from the base's 0.55 s command delay, settles, and re-measures at rest
+(up to `align_max_passes`)** — the skid-steer "turns a bit further than
+the error" twist. **Also since 2026-09-04 it runs after EVERY hop with no
+per-tag exception** (user rule: "어떤 상황이든 정지해서 얼라인은 필수") —
+the 2026-09-02 `align_skip_tag_ranges` (400→400 lane hops) is retired and
+ignored with a warning; the only remaining skip is a temporarily-missing
+VIRTUAL tag (`temporary_missing_tags`, off), which has nothing to align to. Before that, a target tag absent from `detected_tags` made it
 `stop()`, sleep and `continue` forever, with `MobileClient.move_timeout_s`
 (600 s) as the only exit. It now runs after **every** hop — forward, backward
 **and pivot** (`_align_after_arrival`; the pivot squares up to its EXIT tag,
@@ -318,11 +330,27 @@ e.g. 505 after 501→505). **`center_x_stop_offset` (currently +50 px)** is what
 decides how much tag is left in frame; **more positive** stops earlier and
 leaves more margin. **It is 0 since 2026-09-02** (user: the tag centre must
 reach the target centre), so the target column is the optical axis itself.
-**One target column serves both directions** — reverse stops at the same
-column, approached from the other side (user decision 2026-09-02; a
-direction-mirrored variant was tried and backed out the same day). Expect the
-measured 6–8 mm post-trigger roll to leave the tag ~15–20 px past the
-crosshair; raising the offset to ≈ +18 would pre-compensate it. (It was `center_y_stop_offset: -50` until the 2026-08-13 camera
+**The target column depends on the direction since 2026-09-04**: forward
+hops stop the tag on `cx + center_x_stop_offset` (0 = the crosshair);
+reverse hops stop it on `cx + center_x_stop_offset_reverse` (**+400 px**,
+the far RIGHT of the frame = the tag ~162 mm AHEAD of the lens — user
+request, "후진할 때만 화면 기준 최대한 오른쪽") — **unless the TARGET tag is
+in `center_x_stop_offset_reverse_skip_tag_ranges` (`[[500, 599]]`)**: a
+reverse hop into a dock / pivot tag stops on the forward column, i.e. the
+designed stop pose, because a pivot turns about the base centre and needs
+the base ON that pose (user rule, same day). Removing that key restores
+the 2026-09-02 one-column rule (reverse stops on the forward column from
+the other side; a cx − offset mirror to the LEFT was tried and backed out
+that day — the opposite side of this one). `robot_camera_node` draws both
+columns on `/front_cam/tag_overlay` (cyan `FWD stop`, magenta `REV stop`,
+from the same two keys). Because a reverse arrival leaves the lens 162 mm
+short of the tag and `/robot_pose` has no fore-aft term, `go_to_next_tag`
+corrects the next hop's odom distance (`_odom_distance_for_hop`: edge ±
+(where the lens rests vs the start tag − where the stop column puts it),
+read live from the start tag when visible) — without it a reverse hop ran
+its last 0.16 m on the end-of-profile crawl and tripped the 30 s watchdog.
+Expect the measured 6–8 mm post-trigger roll to leave the tag ~15–20 px past
+either column; raising the offset by ≈ +18 would pre-compensate it. (It was `center_y_stop_offset: -50` until the 2026-08-13 camera
 rotation — same physical stopping point, opposite sign, because the fore/aft
 image axis flipped from the row axis to the column axis. Measured: the stop
 lands at body x = 0.567 m either way.)
@@ -480,10 +508,20 @@ between the tag's surface normal and the optical axis — is the number for
 that: 0 = dead square, and it is invariant to spinning the tag in its own
 plane (verified: 45° in-plane rotation still gives tilt 0).
 
-### Looking at the cameras — `camera_viewer_node`
+### Looking at the cameras — robot_ui, or `camera_viewer_node`
 
-Debug aid, separate from `robot_camera_node` so the detection path has no GUI
-in it. It owns no device and publishes nothing; it only starts and stops RViz
+**Since 2026-09-04 the operator UI is the camera viewer.** Its left pane
+shows the Basler plus all three tag cameras; each tag camera defaults to
+`robot_camera_node`'s `/<cam>/tag_overlay` (crosshair, tag ID, px + bearing
+offset, rpy) with a `tags` box to fall back to the raw stream, an `on` box
+that calls `/robot_camera/<cam>/set_enabled`, and a `tags: 105, 106` readout
+from `/<cam>/tag_detections`. A single click on any thumbnail makes it the
+main (large) view; double-click still maximises. The launch therefore no
+longer opens RViz.
+
+`camera_viewer_node` remains as a UI-less fallback
+(`rosrun apriltag_nav camera_viewer_node.py _auto_start:=true`). Debug aid,
+separate from `robot_camera_node` so the detection path has no GUI in it. It owns no device and publishes nothing; it only starts and stops RViz
 against `config/robot_cameras.rviz` (Image displays for all three cameras).
 
 ```bash
@@ -495,9 +533,10 @@ It starts **closed** — bringing the stack up must not throw a window on
 screen, and a headless boot may have no display at all. `~auto_start` true
 overrides that for a debug session.
 
-It is a node in `mobile_manipulator.launch` specifically to bound its
-lifetime: roslaunch shuts it down with everything else, and its
-`rospy.on_shutdown` kills the RViz child. RViz is spawned with
+When it was in `mobile_manipulator.launch` (until 2026-09-04) that was
+specifically to bound its lifetime: roslaunch shut it down with everything
+else, and its `rospy.on_shutdown` kills the RViz child (still true under
+`rosrun` + Ctrl-C). RViz is spawned with
 `start_new_session=True` and signalled by process **group** — roslaunch
 signals its own nodes, not their grandchildren, and RViz's helpers would
 otherwise survive holding the X window.
@@ -1147,6 +1186,675 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-04 — Forward made like reverse: far forward column, /robot_pose fore-aft term, whole-hop heading hold, reverse-prediction sign
+
+User: "후진은 너무 잘되니 후진을 기준으로 전진을 수정". Forward-only
+look at the records first: the forward arrival yaw is bad on the ZONE A
+LANE (−0.6 … −1.7°, map prediction off there so the blind part drove with
+omega = 0) and fine in zone C (−0.15 … −0.28°); reverse was fine on both.
+What reverse has that forward lacked: the tag is left 16 cm AHEAD of the
+lens at the stop, so the next launch keeps the start tag in view ~19 cm
+and the heading is held on the TAG (a wheel-play twist the encoders never
+see is still corrected). Forward stopped on the crosshair and lost its
+start tag after 3 cm.
+
+Changes:
+- **`center_x_stop_offset` 0 → 300 px** (tag ~12 cm ahead of the lens at
+  a forward stop): start tag visible ~15 cm at the next launch; the
+  target, which appears ~25 cm out going forward, still gives ~13 cm of
+  tag-visible approach (400 would leave 9). Sim: start-tag-in-view ticks
+  at launch 50 → 96 (2.5 → 4.7 s at 0.02 m/s). ⚠️ Every forward stop is
+  now ~12 cm short of the design pose.
+- **`stop_offset_skip_tag_ranges: [[500, 599]]`** replaces the reverse-
+  only key (alias kept): those targets stop on the CROSSHAIR (offset 0) in
+  both directions — a pivot needs the base on the designed pose.
+- **`/robot_pose` fore-aft term** (`robot_pose_use_fore_aft`): the pose
+  used to assume the lens over the tag (map tag + lateral + camera
+  offset); it now subtracts the tag's fore-aft distance along the zone
+  heading, so the reported pose and the pose-mode arm transform are right
+  whatever column the base stopped on. Verified per zone (A/B/C) against
+  hand-computed world positions.
+- **Heading hold over the whole hop** (`launch_yaw_hold_dist` 0.15 → 10):
+  odom yaw against the tag-anchored reference for the entire blind part —
+  not map prediction, so it stays on for the lane. Sim gain was modest
+  (0.22 → 0.15° with a 2 % slow wheel) but it is what covers the lane.
+- **Reverse predictive-centering sign** (`_predictive_centering_omega`):
+  `|speed| × curvature` → `speed × curvature`. Same reason as the base-
+  referenced lateral: the base's lateral motion is v·sin(yaw), so the
+  curvature term flips in reverse. Sim (zone C reverse, map prediction
+  on, a 3 % slow left wheel as the in-hop disturbance — prediction reads a
+  START heading error as a rotated corridor, since it assumes the hop
+  starts squared up, which the mandatory align guarantees): lateral when
+  the tag appears 2.0 → 1.0 mm, yaw −0.61 → −0.16°; modest, because the
+  heading term dominates the blind part either way.
+- **Median needs three samples**: with two, numpy's median is their mean
+  and a spike leaks in at half strength — `_tag_view` now filters only
+  from three frames on and uses the newest frame unfiltered below that.
+
+Suites after all of it: 60 / 18 / 7 / 11 / 15 / 10 / 7 / 10 pass
+(`t_fwd.py` is the new one). Not driven; `mobile_node` + `robot_camera_node` restart required. First
+forward run to watch: the tag must rest on the FWD line (+300) with the
+whole tag in frame, and the following launch should show
+`[LaunchYawHold] … (tag N)` for several seconds instead of `(odom)`.
+
+### 2026-09-04 — Are the FWD / REV lines where the base actually stops? Yes — and the overlay's crosshair was 2 px off them
+
+User asked to verify that the forward and reverse target tag positions
+are exactly on the lines drawn on the screen. Two things checked.
+
+**Reference.** `mobile_controller` stops on `camera_params[2] + offset`
+and `robot_camera_node` draws the FWD / REV lines at `camera_params[2] +
+offset` — both `K[2]` from the same CameraInfo (638.2 on front_cam). The
+crosshair and the per-tag `off` text, however, were measured from the
+frame's geometric centre `w//2` = 640, so a tag resting exactly on the
+REV line read `off +398` and the FWD line sat 2 px beside the crosshair.
+Fixed: the crosshair, the columns and every printed offset now use the
+calibrated principal point (fallback w/2, h/2 without CameraInfo).
+
+**Result, from today's 130 arrival→aligned pairs** (at-rest tag column
+minus the target line): forward n=65 mean **+1.35 px** (sd 4.9, −7.8 …
++12.8), reverse n=65 mean **−3.0 px** (sd 3.8, −11.0 … +3.8); at the stop
+TRIGGER the tag is +13.0 / −13.2 px from the line, i.e. the 0.55 s roll
+lead is right to a pixel in both directions. 1 px ≈ 0.4 mm at this
+depth, so the base rests within ~0.5 mm (mean) / 2 mm (sd) of the line
+either way. `robot_camera_node` restart required for the overlay change.
+
+### 2026-09-04 — Four deterministic accuracy changes: state-feedback steering, predicted heading, median measurement, camera-latency compensation
+
+User asked for accuracy improvements that are LOGIC, not learning
+("학습이 아닌 로직이 필요"), and chose these four. All in
+`mobile_controller`, all constants in `robot.yaml`, all off-switchable.
+
+1. **`steer_mode: state_feedback`** (was Pure Pursuit) while the target
+   tag is in view: `omega = −(v·sf_lateral_gain)·e_y − sf_heading_gain·e_θ`
+   with `e_y` the base-referenced lateral (m) and `e_θ` the PREDICTED
+   heading (below). The lateral gain scales with speed as PP did
+   (32 = 2/0.25², the PP curvature at L 0.25); the heading gain (0.6)
+   does not, which is what gives it authority in the 0.01–0.03 m/s last
+   25 cm where PP's `omega ∝ speed` had none. Closed loop `wn = v√k_y`,
+   `ζ = k_θ/(2v√k_y)` = 1.6 at 0.033 m/s, 0.53 at 0.1 m/s; below
+   `sf_min_speed_for_gain` (0.02) the lateral gain is held. The
+   prediction-segment heading term and the launch hold's target-tag term
+   are folded into it (no double-adding). `'pure_pursuit'` restores the
+   old law.
+2. **Predicted heading everywhere.** The pending rotation from the last
+   `stop_latency_s` of angular commands (`_pending_yaw_rad`, already used
+   by the align stop) is now added to the heading error the steering law
+   and the launch hold act on — the Smith-predictor idea with the known
+   0.55 s delay, no learning.
+3. **Median measurement.** `detections_callback` keeps a per-tag history;
+   `_tag_view()` returns the median of the last `stop_measure_frames` (3)
+   detections (column, row, pose, edge angle). Every steering/stop/final-
+   approach/record decision uses that view, so one bad frame cannot fire
+   the stop (sim: a spike frame claiming the tag at the column fired the
+   old single-frame stop 8 cm early; the median ignored it).
+4. **Camera-latency compensation.** Detections carry the IMAGE stamp;
+   `_tag_view` extrapolates the fore-aft column by the executed speed
+   (odom twist, else the command from `stop_latency_s` ago) × frame age
+   (capped 0.3 s). Arrival records carry `tag_age_s` / `latency_comp_px` /
+   `steer_mode`. Sim with a 0.11 s image delay: forward stop 1.7 → 0.5 mm
+   from the tag, reverse column error unchanged-or-better within 2 mm.
+
+**Reverse steering sign, found while listing forward/reverse differences
+for the user (same day):** the base-referenced lateral error obeys
+`e_y' = v·sin θ`, so its steering sign must flip with the direction of
+travel — reversing, the base centre moves the other way for the same yaw,
+like a car backing up. The lens-referenced error never needed this (the
+lens sits 0.55 m ahead of the pivot and that lever moved it toward the
+tag under a CW turn whichever way the base rolled), so switching to
+`pp_lateral_reference: base` earlier today silently made the REVERSE
+lateral loop positive feedback; the short reverse test hops passed on the
+heading term alone. Fixed: the lateral term is multiplied by
+`move_dir_sign` when base-referenced (both steering laws). New check: a
+1.0 m reverse hop from 30 mm off now shrinks the base lateral while the
+tag is in view (30 → 26 mm state feedback / 24.5 mm PP, yaw +1.9 / +4.2°
+toward the line, no divergence).
+
+`t_sf.py` (10 checks, wheel-level plant, 0.55 s command delay, detections
+through `_store_detections` with image latency): state feedback vs PP
+from 30 / 60 mm off — arrival yaw −2.38 → −1.66° / −4.73 → −3.32°, zero
+omega sign flips, base lateral unchanged; latency and median cases as
+above. All earlier suites pass (59 / 18 / 7 / 11 / 15). The base-lateral
+numbers restate the geometric limit: a 0.5 m hop with the tag visible for
+its last 25 cm cannot centre the BASE from 30 mm off — the arrival yaw is
+the base pointing at the line; the following align swings the lens onto
+the tag (pp_lateral_reference: base) and the next hop continues the
+convergence. Not driven on the robot; `mobile_node` restart required.
+
+### 2026-09-04 — "여전히 얼라인이 과하게 돌아": it was the lens swinging, not the yaw — PP now steers the base centre
+
+First robot run with the lead+settle align (`GOTO 120` 14:33:56, 16 s
+after the `mobile_node` restart, and `GOTO 400` 14:30 — the records now
+carry `align_passes`, i.e. the 'aligned' record is taken AT REST after
+the settle). **Every aligned yaw at rest is inside the band**: −0.08,
++0.11, −0.05, +0.17, −0.02, −0.06, +0.07, −0.17 … (band 0.2°), 1–3
+passes. Fore-aft at rest is within ±1 mm on both columns (forward −0.5 …
++2.6 px around cx; reverse 399.4 … 401.5 around +400), and the arrival
+records sit 13 px SHORT of the column with a 13.6–14.1 px lead, i.e. the
+0.55 s roll model is right to a pixel at 0.010 m/s.
+
+**What the operator sees as over-rotation is the LATERAL jump during the
+align.** Tag 404: arrival lateral +3.6 px (1.5 mm), yaw −1.66° → after
+the align +48 px (19.5 mm). The align rotates about the base centre and
+the lens is 0.55 m ahead of it: 0.55 × sin(1.83°) = 17.6 mm, matches.
+Forward runs then show a steady −11 … −20 mm lateral bias at rest, and
+the next hop arrives yawed −0.9 … −1.7° because Pure Pursuit homes the
+LENS back onto the line at an angle — a cycle: align swings the lens
+out, PP steers it back in at a yaw, align swings it out again.
+
+**Fix: `pp_lateral_reference: base`** — PP steers on
+`lateral − camera_offset × sin(yaw_error)`, the BASE CENTRE's offset
+from the line, so the align lands the lens ON the tag instead of off it.
+Sign verified against the records (predicted 17.4 mm for tag 404,
+measured 19.5 incl. the residual). `'lens'` restores the old behaviour.
+
+**Pulse align (`align_mode: pulse`) added but NOT made the default.**
+Written as the delay-immune alternative (measure at rest → one burst of
+a computed duration → stop, settle, re-measure → learn achieved/commanded
+into a gain kept across hops); on a plant with 0.55 s delay + stiction +
+1.6× release lurch + 1.3× gain it converges from ±3 / 1 / −0.5 / 0.35 / 8°
+to within the band (`t_pulse.py`, 15 checks) but takes 4.5–9.5 s and 1–2
+reversals where the continuous loop takes 1.6–5 s and lands ±0.05 … 0.2°
+on the same plant — and the continuous loop is the one the robot has now
+shown working. Switch to pulse only if continuous misbehaves on the
+robot. `launch_peak_yaw_err_deg` is now SIGNED so the backlash
+feed-forward can be fitted from it.
+
+Suites: 59 / 18 / 7 / 11 / 15 all pass; `mobile_node` restart required.
+
+### 2026-09-04 — Backlash feed-forward at launch; Pure Pursuit steering limits raised
+
+Two more user requests the same afternoon. (1) "얼라인 때 후진을 줬던 바퀴가
+출발 때 약간 반응이 늦다": the in-place align turns one wheel backward; on
+the next hop that wheel has to REVERSE and sits idle through its gear play
+while the other wheel already rolls, so the base twists toward the late
+wheel by play / track (0.7° per 8 mm on the 0.65 m track) — and a
+motor-side encoder never sees it, so the odom-referenced launch hold from
+the entry below would faithfully hold the TWISTED heading. (2) "퓨어퍼슛
+조향 각도 제한이 너무 작다".
+
+**Backlash feed-forward.** `align_to_tag` records the sign of its last
+non-zero turn (`_last_align_turn_sign`). The twist direction follows from
+it: a CCW align backs the left wheel → forward hop: left is late → CCW
+twist; reverse hop: the RIGHT wheel is the one reversing → v_L = −v,
+v_R = 0 → also CCW. So for the first `launch_backlash_ff_s` (0.3 s) of
+every hop `omega += −sign × launch_backlash_ff_omega` (0.02 rad/s, ≈0.34°
+of pre-rotation), on top of the hold. The magnitude is a guess to be
+fitted on the robot: every arrival record now carries
+`launch_peak_yaw_err_deg` (tag-measured while the start tag is in view),
+`launch_ff_applied` and `last_align_turn_sign` — raise the value while the
+peak keeps the align's sign, lower it once it flips. 0 disables.
+
+**Launch hold re-anchored to the START tag.** The first version used
+`heading_error_deg`, which exists only while the TARGET tag is in view —
+never at launch. It now reads the start tag's edge angle (in view for the
+first ~3 cm forward, longer in reverse), else the target's, else odom yaw
+against a reference that is re-anchored to the tag whenever one is seen
+(`launch_theta_ref = theta − edge_angle`), so an encoder-invisible twist
+is still held after the tag has left the frame.
+
+**PP limits.** `move_max_angular_speed` 0.12 → **0.25** rad/s (= the pivot
+cap) and `look_ahead_base` 0.4 → **0.25** m: PP's path curvature is
+2·lateral/L², so with L = 0.4 a lateral error decayed over ~0.4 m — a whole
+corridor hop — and the tag was never centred before the stop; 0.25 gives
+2.6× the steering. ⚠️ What the sim made explicit: the lens is 0.55 m ahead
+of the base centre, so PP homes the LENS onto the tag; a 30 mm base
+offset is reported as 9 mm camera lateral once the base has yawed −2°,
+and the following in-place align swings the lens 0.55 × sin(2°) ≈ 19 mm
+back out. Centring the BASE on the lane within one 0.4 m hop is not
+something this PP can do; the corridor prediction (blind heading) is what
+does that over several hops.
+
+Verified offline (`t_backlash.py`, 11 checks; wheel-level plant with
+8 mm of play per wheel taken up on every direction reversal, MOTOR-side
+odom, 0.55 s delay; align from ∓1.5° then a hop): uncorrected mean |yaw|
+0.38° / 4.5 mm lateral → hold only 0.08° / 0.3 mm → hold + ff 0.05° /
+0.2 mm (4 % of uncorrected); reverse hop after a CW align 0.63° → 0.03°;
+with NO play the ff is a 0.34° perturbation the hold removes (0.05°,
+0.2 mm); arrival record carries the three new fields. PP: from 30 / 60 mm
+off, camera lateral at the stop 15.7 → 9.0 / 31.5 → 18.4 mm (old → new
+L), max |omega| 0.043 — the new cap never binds in the sim — and zero
+omega sign flips with the 0.55 s delay. Earlier suites (59 / 18 / 7)
+unchanged. Not driven; `mobile_node` restart required.
+
+### 2026-09-04 — Launch yaw hold: the base no longer sets off twisted after an align
+
+User: "제자리 얼라인 후에 직진을 하면 한쪽 바퀴가 살짝 늦게 도는지 약간 요가
+기울면서 출발하는 경향". Cause on the software side: Pure Pursuit's
+steering is `omega = |speed| × curvature × gain` — proportional to the
+speed (≈0 at launch) and to the LATERAL offset only, so a yaw twist from a
+late wheel is invisible to it until it has grown into a lateral error;
+the heading term that exists is only added on hops with a calibrated
+prediction segment. New `launch_yaw_hold_dist: 0.15` / `launch_yaw_gain:
+1.0` (`robot:`): inside the first 15 cm of every move hop an extra
+`omega = −gain × yaw_error` holds the heading the align established.
+`yaw_error` is the tag's edge angle while the tag is in view (only ~3 cm
+going forward — the bumper hides the floor behind the lens — longer in
+reverse) and otherwise odom yaw minus the yaw at the hop start; a late
+wheel IS a wheel-speed differential, so the encoders see it. Same sign
+convention as `align_to_tag` (edge angle moves with the base yaw,
+positive removed by turning CW), direction-independent, not double-added
+when the calibrated-segment branch already used the tag heading. 0
+disables.
+
+Verified offline (`t_launch.py`, 7 checks: 2-D unicycle with a 0.55 s
+command delay and a late LEFT wheel modelled as +0.05 rad/s for the first
+0.6 s of motion, tag corners rotate with yaw). Forward 0.5 m hop: mean
+|yaw| while moving 1.21° → **0.18°**, lateral excursion 13.0 → **0.7 mm**;
+reverse 1.67° → 0.14°, 19.7 → 0.7 mm; a clean launch is untouched
+(0.000°); the following align still ends at −0.02°. The PEAK twist
+(1.7°) is unchanged in the sim — the correction cannot arrive before the
+0.55 s delay, so what the hold buys is a fast recovery instead of a
+lateral drift. Not driven on the robot; `mobile_node` restart required.
+If the twist is pure slip (no encoder differential) the odom term cannot
+see it and only the tag term (3 cm forward) helps — then look at the
+wheel drives, not here.
+
+### 2026-09-04 — Skid-steer align overshoot: lead the stop, settle, re-measure; deceleration zones lengthened
+
+User: "로봇이 스키드 조향인 점을 인지하고, 제자리 얼라인할 때 오차보다 좀
+더 회전해서 얼라인이 틀어지는 문제를 해결, 감속 모드를 살짝 더 길게".
+
+**The mechanism, from the numbers already in this file.** The base
+executes commands ~`stop_latency_s` (0.55 s) late — measured on the
+linear stop on 2026-09-02 — and an in-place turn is no different. The
+align loop commanded at least the 0.01 rad/s floor until the raw edge
+angle read inside the 0.2° band and then sent zero; the base then turned
+another 0.55 × 0.01 rad = **0.32°**, i.e. it always parked OUTSIDE the band
+on the far side (the "twist"). Skid steer adds a lurch on release, so the
+real figure is larger than the pure-delay 0.32°.
+
+**Fix, in `align_to_tag`:** (1) the command history now carries the signed
+angular command too, and `_pending_yaw_rad()` integrates the last
+`stop_latency_s` of it — the angular twin of `_pending_roll_m()`; the stop
+fires when the PREDICTED settled angle (`angle + pending`; the edge angle
+moves WITH the base yaw, since the loop removes a positive angle by
+turning CW) is within `align_lead_target_ratio` × band (0.05°) or would
+cross zero — aiming at zero, not the band edge, which a first version did
+and parked at +0.17°. (2) zero command for `stop_latency_s +
+align_settle_s` (0.85 s), then the tag is re-read AT REST. (3) inside the
+band → done; otherwise another pass, up to `align_max_passes` (3), after
+which the residual is accepted with a warning and
+`align_residual_accepted: true` in the record. Only a measurement taken
+at rest is ever reported as "aligned"; records carry `align_passes`.
+
+Two bugs found by the yaw plant on the way: the predicted-angle sign was
+first written as `angle − pending` (diverged to −85°); and
+`_integrate_pending` extended the FIRST in-window sample back to the
+window start, which after ONE tick of command claimed a whole
+`rate × latency` was pending and stopped the align after a single 0.057°
+step (−0.35° → −0.29 → −0.24, three passes to reach −0.18). It now holds
+the last sample published BEFORE the window, exact for the delay model.
+`_pending_roll_m` shares the integrator; at the drive's stop the history
+is dense so its value is unchanged (59-check drive suite identical).
+
+**Deceleration zones "살짝 더 길게":** `final_approach_dist` 0.06 → **0.08**
+m and `blind_approach_dist` 0.12 → **0.15** m. Config only; the solved
+deceleration and the creep zone follow.
+
+Verified offline (`t_align.py`, 18 checks, yaw plant with a 0.55 s
+transport delay, edge angle = +yaw): old rule ends at −0.32° from a +3°
+start; new rule ends at +0.05 / −0.05 / +0.06 / −0.006 / +0.05 / +0.16°
+from +3 / −3 / +0.4 / −0.35 / +1.5 / +8°, one pass each, 3–4.5 s; a plant
+with 0.9 s lag against the 0.55 s config recovers by extra passes;
+already-square = one settle; the integrator reads 0.055 rad for 0.55 s of
+0.1 rad/s and leaves the linear roll at 0. The large-error residual
+(+0.16° from 8°) is the 10 Hz tick — the executed angle moves up to 0.6°
+per tick at the 0.12 rad/s clamp. Not driven on the robot; `mobile_node`
+restart required. If the robot still twists, `stop_latency_s` for the
+turn may differ from the drive's — fit it from `(arrival yaw − aligned
+yaw)` in the nav_log records.
+
+### 2026-09-04 — Calibration + nav_log yaml wiped; one record file per command, created lazily
+
+User request: delete every yaml the calibration code produced, delete
+every tag-accuracy yaml from driving, and make the tag-accuracy record
+"one yaml per TASK / GOTO command".
+
+**Deleted (user's explicit instruction), yaml only:** 940 files under
+`~/.ros/path_tag_locator` — 428 `calibrate/<ts>/entries/*.yaml`, 11
+`session.yaml`, 9 session `map_world.yaml` copies, the 9 top-level
+`map_world_20260902_*.yaml` + the `_handeye_corrected` one, and every
+`locate/<ts>/run_*/request|result.yaml`; plus all 32
+`~/.ros/apriltag_nav/nav_log/<day>/*.yaml` (2026-09-02 and 09-04).
+Empty directories were removed. **Kept:** the non-yaml artifacts — 56
+`result.npz`, 112 png, 13 csv (incl. `compare_map_world_…csv`) — the
+npz are what the 2026-09-02 offline hand-eye re-fit was computed from.
+Consequence: `predictive_centering.map_world_path: "latest"` now finds
+nothing, so blind steering uses map.yaml everywhere and records carry
+`calibrated_reference: null` — the documented fallback, not an error.
+
+**Why one command sometimes had two files:** the design was already one
+file per command, but `begin_nav_session` wrote the file immediately, so
+a GOTO that failed before any arrival (tag not visible, preempt) and was
+re-issued left a `records: []` twin — 7 of the 32 deleted files were
+such empties (e.g. `110106_GOTO_503` empty, `110110_GOTO_503` real).
+Now the file is **created at the first record**; a command that never
+arrives anywhere leaves nothing (the failure is in rosout). The
+same-second suffix rule is re-checked at that first write. Second fix,
+in `mobile_node`: the task's FIRST `goto_tag` could race the latched
+`/task_state` and open a second `goto_<n>` file next to the TASK file —
+`_cmd_session_pending` (set by `/task_command`, cleared by the first
+goto) now keeps that hop in the command's file regardless of timing.
+
+Verified offline (12 checks: no file without an arrival; re-issued
+GOTO → one file; TASK with two tag arrivals → one file; next command →
+new file, old untouched; bare record → `goto_<tag>`; same-second twins
+suffixed; mobile_node: TASK → first goto before `/task_state` reuses the
+session, second hop too, a bare goto outside a task gets its own) plus
+the 59-check suite. Not run on the robot; `mobile_node` restart needed.
+
+### 2026-09-04 — Stop-then-align on EVERY hop; the 400-lane skip is retired
+
+User rule: "모든 주행에서 태그 검출해서 퓨어퍼슛한 다음 정지 얼라인 —
+어떤 상황이든 정지해서 얼라인은 필수". The drive rule (tag visible →
+Pure Pursuit, stop line → stop → align) already held everywhere except
+the one exception added on 2026-09-02, `align_skip_tag_ranges: [[400,
+499]]`, which let 400→401 … 410→411 lane hops end without the in-place
+align. That exception is gone: `_align_after_arrival` no longer consults
+any tag range, the key was removed from robot.yaml, and a stale copy is
+ignored with a `logwarn` so a config merge cannot quietly bring the skip
+back. Pivots already aligned to their exit tag; manual `drive_distance` /
+`pivot_angle` have no target tag and are unchanged. The only skip left is
+a temporarily-missing VIRTUAL tag (`temporary_missing_tags.enabled:
+false`) — nothing physical to align to. Cost: each 400-lane hop now
+spends the align time (typically < 1 s when the tag is already square;
+up to `align_timeout_s` 20 s and a FAILED hop if the tag is out of view
+at rest — that is the intended behaviour, not a regression).
+
+Verified offline (7 checks on the real controller against the corridor
+plant: 400→401→402→502 all forward, `align_to_tag` called after each of
+the three hops; a stale key produces the warning and still aligns;
+robot.yaml no longer carries the key) plus the earlier 59-check suite
+unchanged. Not driven on the robot; `mobile_node` restart required.
+
+### 2026-09-04 — Five pivot tags re-laid and tape-measured; 정반 spacing 3.89 → 3.90 m
+
+The user physically moved **503, 505, 506, 507, 508** and measured each
+against its neighbouring WORK tag, which stayed put; every other tag keeps
+its design value (user instruction, same message: "나머지 태그들은 기존값
+유지"). A first pass that also shifted the D/E lanes and 504 by the new
+plate spacing was backed out for that reason. Only the measured axis of
+each moved tag changed:
+
+| pair | measured | map before | map after |
+|---|---|---|---|
+| 111 ↔ 505 | 1.03 | 1.02 | 505 y 3.57 → **3.58** |
+| 113 ↔ 506 | 0.64 | 0.62 | 506 y 2.47 → **2.49** |
+| 137 ↔ 507 | 1.04 | 1.02 | 507 y 3.57 → **3.59** |
+| 138 ↔ 508 | 0.62 | 0.62 | 508 unchanged (5.6, 2.47) |
+| 502 ↔ 503 | 0.50 | 0.47 | 503 x 2.73 → **2.76** |
+
+Consequences worth knowing: 503's stop pose is now x 2.21, 3 cm east of
+the zone D lane (2.18) where 507 still sits, so the 503→507 pivot lands
+front_cam ~3 cm beside 507 — align + Pure Pursuit absorb it. The exit tags
+are no longer exactly 0.55 from the y 3.02 lane (505/507 0.56/0.57 north,
+506 0.53 south), which only changes those hops' odom distances
+(505→112 0.63, 506→113 0.64, 507→137 1.04 — from the real `MapManager`).
+All four `500→…` routes and the return route are unchanged; 72 tags /
+142 edges. The old map is in git, not in a .bak.
+
+**Plate spacing 3.90 m** (user: "정반 사이 거리 390 cm", design 3.89):
+applied to `reference_tags_plate2.yaml` (cross tags ON 정반 2: x 3.290 →
+**3.300**, 4.490 → **4.500**), the generator comment, `robot_sim`'s plate
+outline, `CALIBRATION_GUIDE_kr.md`, `find_cross_tags.py`, HANDOVER — and
+NOT to the D/E floor lanes, per the instruction above. Plans regenerated:
+`calibration_plan_plate2.yaml` seeds moved +10 mm along the arm-frame
+axis that maps to world x (e.g. tag 126 `931.3 → 941.3`), plate 1 plan
+byte-identical, `docs/all_tags_position.csv` regenerated, reach still
+0/51 over 1.40 m. ⚠️ A plate-2 calibration session run before today
+against the +3.890 refs is offset 10 mm in x from one run now — the two
+archived 09-02 map_world files carry the old assumption.
+
+Verified offline only: map parses, the five measured distances reproduce
+exactly, routes/hop lengths via the real `MapManager`. Not driven.
+`mobile_node` must be restarted to load the new map; the calibration
+nodes reload the refs per session.
+
+### 2026-09-04 — Reverse hops stop the tag at the far right of the frame; both columns drawn on the overlay
+
+User request: "후진할 때 전진과 동일한 태그 목표 위치를 쓰고 있는데, 후진할
+때만 화면 기준으로 최대한 오른쪽에 목표를 두고, 그 목표도 화면에서 보이게".
+New `robot.center_x_stop_offset_reverse: 400.0` (px from the calibrated
+cx, same sign convention as `center_x_stop_offset`; absent/null = the old
+shared column). `execute_pure_pursuit` picks the column by
+`move_dir_sign`; forward is untouched. **How far right is possible:** with
+cx ≈ 638 of 1280 px, fx ≈ 750 and the 90 mm tag ~222 px wide at the 0.30 m
+camera height, the tag centre must stay under ~1100 px for the detector
+(whole tag + a bit of quiet zone in frame), i.e. offset ≤ ~460; 400 leaves
+~50 mm of margin for the roll and lateral error. The numbers come from
+today's nav_log (13.1 px ↔ 5.31 mm at depth 0.3036 m).
+
+**Overlay:** `draw_overlay` takes `stop_columns={'FWD': px, 'REV': px}`
+(front_cam only, read in the node from the same two `robot:` keys) and
+draws a dashed vertical line per column at the CALIBRATED cx + offset —
+the column the stop test actually uses, ~2 px off the geometric crosshair
+— with a `FWD stop +0px` / `REV stop +400px` label at the bottom; equal
+offsets collapse to one line with both labels. robot_ui shows it
+unchanged.
+
+**The consequence that needed code, found by the offline plant:** a
+reverse arrival now rests the lens ~162 mm short of the tag, `/robot_pose`
+carries no fore-aft term, and the map edge is stop-pose-to-stop-pose — so
+the NEXT hop's odom distance is wrong by that much (longer forward, and
+0.16 m longer for a reverse hop that follows a forward arrival). The first
+sim run of a bare 0.40 m reverse hop ended on the "near target, tag not
+visible → min_speed" crawl × the 1/3 tag-visible factor = 0.0067 m/s and
+hit the 30 s watchdog. `go_to_next_tag` now plans
+`edge + dir × (fore_prev − fore_target)`: `fore_prev` = the tag's fore-aft
+distance from the lens at the start (read LIVE from the start tag when in
+view — with the far-right column it is — else remembered from the last
+arrival/align; manual moves reset it), `fore_target` = offset × depth / fx
+for the hop's direction. Arrival records gained `direction`,
+`stop_offset_px`, `stop_target_x_px`, `tag_offset_from_target_px`, so the
+roll fit still works against the right column.
+
+**Same day, user rule: "500번대 태그가 목표 명령이면 기존 목표 태그 위치에
+멈춰야 해".** New `center_x_stop_offset_reverse_skip_tag_ranges: [[500,
+599]]` — matched on the TARGET tag only; a reverse hop into 500–599 uses
+the forward column (`_stop_offset_px`), and the odom-distance correction
+follows (a reverse arrival on 112 then reverse to 505 plans 0.40 − 0.162 =
+0.238 m, since the lens starts 162 mm short of 112 and ends ON 505). The
+overlay's REV label carries the note `(tags 500-599: FWD)`. Reason the
+500-series are the exception: they are the dock and the corridor pivot
+tags, and a pivot about the base centre needs the base on the designed
+pose, not 162 mm short of it.
+
+Verified offline only (`t_overlay.py` 7 checks, incl. the label note;
+`t_rev_stop.py` 59 checks — the 39 below plus: reverse→505/500 = forward
+column, reverse→111 = reverse column, forward→505 unchanged, a 6-hop
+505→112→111→112→505→112→505 corridor landing every hop on its column with
+the planned distances 0.56/0.40/0.56/0.40/0.56/0.56 m, reverse 112→505
+landing +0.9 px of cx, malformed range entries skipped. Original suite: both lines at the right
+columns, none on side_cam, shared-column collapse, off-frame safe;
+`t_rev_stop.py` 39 checks on the real controller against a 0.55 s
+transport-delay plant + simulated front_cam with bumper occlusion and
+frame-edge visibility: forward lands +1 px of cx, reverse +399 px with the
+whole tag in frame and the lens 161.6 mm short, key absent/null → shared
+column, forward ignores the reverse key, +450 still in frame, 1.0 m reverse
+same column; a 5-hop corridor through `go_to_next_tag` F,F,R,R,F lands
+every hop on its column with planned odom distances 0.40 / 0.40 / 0.56 /
+0.40 / 0.56 m and every hop + align under 16 s). Not driven on the robot;
+`mobile_node` and `robot_camera_node` must be restarted. ⚠️ The test's
+first run wrote its sim records into the REAL `~/.ros/apriltag_nav/nav_log`
+(the dir key sits under `robot.predictive_centering`, not `robot:`); the
+twelve 13:38–13:41 `GOTO_401`/`DIAG` files were deleted, the 10:15–11:37
+robot records are untouched.
+
+### 2026-09-04 — Plate-1 calibration: 6/26 entries lost to the initial-move clamp; fixed three ways
+
+First live plate-1 session with the 2026-09-03 workflow
+(`calibrate/20260904_153218`): 20 ok, 6 failed — 100, 111, 112, 113,
+124, 125, every one with "tag A not detected at iteration 1", and every
+retry failing identically. The 20 successes calibrated to within
+5–15 mm of design (x ≈ −1.71 / +1.70, 0.4 m pitch, z −0.05…−0.09).
+
+**Root cause, from the map_calibrator log: the initial view move was
+clamped to one 0.80 m step.** Since 2026-09-03 the arm HOMES before
+every base move, so every seed is approached from the home TCP
+(≈ (−160, 700, 774) mm — z alone is 0.71 m above the seeds' z 60).
+Seeds within 0.8 m of home (x −668…+377) were reached or nearly so;
+the six at x −1052 / +734 / +1109 are 1.15–1.17 m away, the single
+clamped step left the arm 0.35 m short with the camera still 0.28 m
+high, and the tag was out of view. The seeds themselves are fine — the
+successes converged 8–43 mm from them. A side effect worth knowing:
+entries whose step was clamped but still saw the tag (101, 104, 107,
+110, …) aligned at **z ≈ 135 mm instead of 60**, because the align
+loop keeps whatever depth the initial move ended at
+(`target_distance_m 0`) — they measured from 0.63 m, not 0.55.
+
+**Fix 1 — the initial move is chunked** (`align_runner.approach_pose`,
+`align.max_initial_steps: 4`): up to N clamped steps of
+`max_initial_step_m` until the target is reached; still bounded, still
+logs every clamp, and says so if it ends short. Used by both
+`run_auto_align` and the `align_required: false` path. Offline: the
+real tag-111 seed from the home pose is reached in 2 steps (first step
+exactly 0.8 m); `max_initial_steps: 1` reproduces the 0.354 m short
+stop from the log.
+
+**Fix 2 — a retry after "tag not seen from the seed" re-estimates the
+seed instead of re-sending it** (user: "초기자세로 안되면 다른 태그로부터
+초기자세 추정"). `CalibrationOrchestrator._retry_view_tcp`, one
+strategy per retry, first available wins: (1) plan seed + median
+(aligned − seed) of the session's successes, same ref tag first
+(`_seed_corrections`, learned from every entry that succeeded from its
+plan seed; recorded per entry as `seed_delta_mm`); (2) the existing
+anchor bootstrap (last chain's base pose + map.yaml offsets + odom
+heading), which the per-entry override had always pre-empted; (3) plan
+seed with the camera raised `retry_raise_m` 0.25 m (half-FOV 0.35 →
+0.53 m) when nothing has succeeded yet. Only a seed failure
+(`is_seed_failure`: "not detected at iteration 1" / "initial move")
+switches seeds; a nav or chain failure retries the same pose. The
+record's `view_tcp_source` names the strategy. `retry_count: 1` gives
+one alternative; raise it to reach the later ones.
+
+**Fix 3 — the plate-1 plan seeds are now the session's data**
+(`scripts/update_plan_seeds_from_session.py <session_dir> <plan> --apply`).
+Successful entries get their converged x, y; failed ones get design x, y
++ the same-ref median (−15…−28, −24…+1 mm); **z and orientation stay
+design** on purpose, because the recorded z carries the 80 mm clamp
+artefact above. Text-level edit: comments survive, each line says where
+its seed came from, a header names the session; the generator resets
+it. Plate 2 is untouched (no data). Verified offline (31 checks: chunked
+approach incl. exception propagation, strategy order / pooling /
+attempt indexing / anchor failure fall-through / raise disabled, script
+on the real session dir — xy-only corrections, z kept, comments and
+header idempotent). Not yet run on the robot.
+
+### 2026-09-04 — RViz out of the launch; robot_ui becomes the camera viewer
+
+User request, same day: stop the main launch opening RViz for the camera
+images / front_cam tag view; instead show tag detection for the three
+non-Basler cameras in robot_ui with a per-camera use/not-use tick, and let a
+click on any of the four camera panes make it the big one.
+
+- **`camera_viewer_node` removed from `mobile_manipulator.launch`** (the
+  2026-09-03 pull had it at `auto_start: true`, so every bring-up threw an
+  RViz window). The script stays for `rosrun`; `test_all_devices.py` keeps
+  it as optional. Eight nodes in the launch now, seven required.
+- **Camera panel rebuilt as one main slot + a strip of "cells"** (view +
+  its control row). A single **click** on a thumbnail moves that cell into
+  the main slot and the previous main cell back down; cells are re-parented
+  between layouts, not re-created, so frames, the Basler ROI and checkbox
+  state survive a swap. Double-click keeps its maximise meaning.
+  `ImageView` gained a `clicked` signal — press/release within 6 px — and a
+  plain click **no longer clears the Basler ROI** (it used to count as a
+  degenerate drag), otherwise selecting the Basler thumbnail would wipe the
+  operator's crop.
+- **Tag detection in the UI comes from `robot_camera_node`, not a second
+  detector.** Each tag camera subscribes to `/<cam>/tag_overlay` by default
+  (the node renders it only while subscribed, so an unticked box costs
+  nothing); the `tags` box swaps that subscription for the raw stream
+  (`RosBridge.set_stream_source`, one subscription per camera either way),
+  the `on` box is the existing `set_enabled` (detector + vendor stream),
+  and a `tags: …` label lists the IDs of the latest detection frame
+  (`RosBridge.tag_ids`, side_cam detections now subscribed too; ages out
+  after 1.5 s without a frame). The Collect tab's duplicate "Tag cameras"
+  on/off box was removed.
+
+Verified offline only: UI offscreen (40 checks — initial layout, click
+swaps incl. no-op on the main view, Live tab raised, ROI + frame kept, a
+real drag still sets an ROI, checkbox → bridge arguments, tag label incl.
+age-out, image routing) and bridge (21 — overlay default, raw/overlay swap
+drops the old subscription, idempotent, unknown camera refused, `tag_ids`
+from a real `AprilTagDetectionArray`, cv_bridge frame routed by name).
+Launch XML parses. Not run on hardware; needs the UI restarted and the
+stack relaunched (to drop RViz).
+
+### 2026-09-04 — robot_ui Mobile tab: drive a distance / pivot an angle, through mobile_node
+
+User request: "robot ui 에 모바일 로봇 직진 거리하고 회전 각도 제어 할수있게
+추가". The UI gets a **Mobile** tab (Task and Calibration sit either side of
+it) with a distance spinbox (m, 1 mm resolution, Forward / Reverse), an angle
+spinbox (deg, Turn left = CCW / Turn right = CW), a speed spinbox for each,
+**Stop base** (preempt cancel) and **Clear stop latch**, plus a `BASE …`
+chip in the status bar fed by `/mobile/state`.
+
+**The UI does not publish `/cmd_vel`.** That was the one design constraint:
+`mobile_node` is the sole publisher and `tools/vw_drive.py` — which already
+does exactly this kind of odometry-closed move — is a second publisher that
+refuses to start while the stack is up. So the tool's motion logic was
+**ported into `MobileController`** as `drive_distance(m, speed)` and
+`pivot_angle(deg, speed)` (both return `(ok, message)`), and `mobile_node`
+exposes them on a new `/mobile/move_cmd` JSON topic
+(`{"type":"move","distance_m":0.3,"speed":0.05}` /
+`{"type":"pivot","angle_deg":90}`), completed through the same `seq` /
+`result` handshake as `goto_tag` (`result.tag` is `null`, `result.what`
+names the move). The busy guard is shared: a manual move is refused while a
+GOTO / TASK / calibration hop is driving and vice versa. `RosBridge` gained
+`mobile_drive` / `mobile_pivot` (blocking, `seq`-keyed, with the same
+ack-then-complete phases as `MobileClient`), `mobile_cancel`,
+`mobile_clear_stop`. `vw_drive.py` itself is unchanged and still the
+stack-down bring-up tool.
+
+What was kept from the tool, and why: the trapezoid
+`v = min(top, sqrt(2·a·remaining))` with hand-off to a constant-accel
+ramp-out when the commanded speed's stopping distance equals what is left
+(the 2026-08-14 judder fix), the 2.5 s odom-stall abort, the shortfall
+check that catches a base that never moved, and the stale-/no-odom refusal.
+Two things are new:
+
+- **The hand-off leads by the base's transport delay.** Simulated against a
+  plant with the robot's measured `stop_latency_s` 0.55 s, the plain
+  trapezoid overshot by +21 mm at 0.05 m/s, +48 mm at 0.1 m/s and +4° on a
+  90° pivot — the same roll the tag stop compensates. The braking distance
+  now includes `|cmd| × stop_latency_s`, which is exact for a pure delay, and
+  the move **settles for `stop_latency_s` after the ramp-out** before
+  verifying and returning, so `mobile_node` reports completion only once
+  the base is physically at rest. With the lead in place all delayed cases
+  land within 1 mm / 0.1°. The cost of a mis-measured latency is stated in
+  the test: with the lead on but a delay-free plant the move ends 27 mm
+  short and is reported as such, not as success.
+- **Stop-latch rule follows the calibration `BaseInterface`:** an EMERGENCY
+  latch (STOP ALL, `/mobile/stop`) refuses the move and needs an explicit
+  Clear; a leftover preempt latch is cleared by the new command.
+
+Limits and tuning live in a new `robot.yaml` `robot.manual_move:` block
+(tolerances, stall grace, `max_distance_m` 5, `max_angle_deg` 360, default
+speeds); requested speeds are capped by `max_linear_speed` /
+`max_angular_speed`.
+
+Also fixed on the way: `MainWindow._run` gained `on_error` — the mobile
+buttons must re-enable when the bridge call *raises*, but every existing
+`on_done` consumer unpacks its result and would not survive a `None`, so a
+separate hook was the safe change. And `RosBridge` reads `/mobile/state`
+through its own callback now: a first version looked the cached dict up by
+bound signal, and PyQt hands out a fresh bound-signal object on every
+attribute access, so the lookup always missed.
+
+**Verified offline only, nothing on hardware:** controller (62 checks,
+real `MobileController` + real `robot.yaml`, stubbed rospy with a fake clock,
+unicycle plant with optional transport delay / frozen odom — forward,
+reverse, triangle profile, ±90/270/30° pivots, speed caps, preempt abort,
+stall abort, emergency refusal, stale odom, limits, the 0.55 s delayed
+cases), `mobile_node` dispatch (16: JSON parse, busy refusal both ways,
+seq/result shape, goto unchanged), bridge (12: ack / completion / timeouts /
+stale-seq), and the window offscreen against a fake bridge (21: button →
+call arguments and signs, in-flight disable/re-enable on both success and
+exception, stop/clear/STOP ALL wiring, chip states). `catkin_make` not
+needed — Python only, no message change; `mobile_node` and the UI must be
+restarted to pick it up.
+
 ### 2026-09-03 — robot_sim: the real nav + calibration stacks close the loop off-robot
 
 New package `robot_sim` (dev machine only — it publishes the real driver
@@ -1299,7 +2007,8 @@ stale comments in that file (an "examples below" line, and a plate-2 note
 still quoting the retracted +3.420 m offset) were fixed.
 
 **Lane hops 400→400 skip the in-place align; any hop touching a 100-/500-
-series tag aligns (user request, same day).** `robot.align_skip_tag_ranges:
+series tag aligns (user request, same day). ⚠️ SUPERSEDED 2026-09-04 —
+every hop aligns, the key is ignored.** `robot.align_skip_tag_ranges:
 [[400, 499]]`; `_align_after_arrival(target, start)` returns without
 `align_to_tag` only when BOTH endpoints are in a range. So 400→401 …
 410→411 are stop-and-go on Pure Pursuit alone, while 501→400, 405→502,

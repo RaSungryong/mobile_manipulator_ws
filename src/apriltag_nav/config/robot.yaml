@@ -29,10 +29,10 @@ robot:
   # Movement limits
   max_linear_speed: 0.1    # Maximum linear velocity (m/s)
   max_angular_speed: 0.25   # Maximum angular velocity (rad/s), pivot turn only
-  # Non-pivot steering cap. The skid base is wide and tag spacing is short, so
-  # move segments should make modest heading corrections instead of aggressive
-  # angular commands. Pivot turns still use max_angular_speed above.
-  move_max_angular_speed: 0.12
+  # Non-pivot steering cap. 0.12 -> 0.25 on 2026-09-04 (user: the steering
+  # limit was too small for Pure Pursuit to work). Pivot turns use
+  # max_angular_speed above; align has its own cap below.
+  move_max_angular_speed: 0.25
   align_max_angular_speed: 0.12
   slow_factor: 0.3          # Speed multiplier for docking/precision
 
@@ -82,7 +82,7 @@ robot:
   # the 1 m pivot-exit hop. Cost: ~8 s per hop at 0.015 m/s. Forward is
   # already this slow by then (final approach entries were 0.010-0.015).
   # 0 disables.
-  blind_approach_dist: 0.12
+  blind_approach_dist: 0.15      # 0.12 -> 0.15 on 2026-09-04 (user: 감속 구간 살짝 더 길게)
   blind_approach_speed: 0.015
 
   # FINAL APPROACH (mobile_controller.execute_pure_pursuit).
@@ -111,7 +111,46 @@ robot:
   # 0.05 m/s needs only 0.020 and the normal ramp is used instead. Shortening
   # this distance raises the required deceleration quadratically in the entry
   # speed — 0.03 m at 0.1 m/s would demand 0.165 m/s^2.
-  final_approach_dist: 0.06
+  final_approach_dist: 0.08      # 0.06 -> 0.08 on 2026-09-04 (user: 감속 구간 살짝 더 길게)
+  # Launch yaw hold (2026-09-04, user: "제자리 얼라인 후 직진하면 한쪽
+  # 바퀴가 살짝 늦게 도는지 요가 기울면서 출발"). Pure Pursuit's omega is
+  # |speed| x curvature x gain — ~0 at launch and blind to yaw — so a wheel
+  # that starts late twists the base and nothing corrects it until the
+  # twist has become a lateral offset. Inside the first launch_yaw_hold_dist
+  # m of every move hop an extra omega = -launch_yaw_gain x yaw_error holds
+  # the heading the align established: yaw_error is the tag's edge angle
+  # while the tag is in view (only ~3 cm forward — the bumper hides the
+  # floor behind the lens — longer in reverse), else odom yaw minus the yaw
+  # at the hop start (the encoders DO see a late wheel: it is a wheel-speed
+  # differential, not slip). Gain 1.0 rad/s per rad: a 1 deg twist asks
+  # 0.017 rad/s, well inside move_max_angular_speed. 0 disables.
+  # 0.15 -> 10.0 on 2026-09-04 (user: forward is worse than reverse). The
+  # records showed the forward yaw error at arrival on the zone A lane
+  # (-0.6 .. -1.7 deg, blind part driven with omega = 0 because map
+  # prediction is off there) was 3-6x the zone C value (-0.15 .. -0.28,
+  # prediction on); in reverse the start tag stays in view ~19 cm so the
+  # tag-anchored hold covered most of the blind part anyway. Holding the
+  # heading for the WHOLE hop (odom yaw against the reference the last
+  # seen tag anchored) is not map prediction — it is driving straight
+  # properly — so it stays on for the lane hops too.
+  launch_yaw_hold_dist: 10.0
+  launch_yaw_gain: 1.0
+  # Backlash feed-forward (2026-09-04, user: "얼라인 때 후진을 줬던 바퀴가
+  # 출발 때 반응이 늦다"). The wheel that was backing during the align has
+  # to reverse on the next hop and sits idle through its gear play while
+  # the other wheel rolls: the base twists toward the late wheel by
+  # play / track (0.65 m) — 0.7 deg per 8 mm of play — and a motor-side
+  # encoder does not see it. The direction is known from the align's last
+  # turn (CCW align -> twist CCW, on forward AND reverse hops), so for the
+  # first launch_backlash_ff_s of every hop omega gets
+  # -sign(last align turn) x launch_backlash_ff_omega on top of the hold.
+  # 0.02 rad/s x 0.3 s = 0.34 deg of pre-rotation. Fit it from nav_log:
+  # every arrival record carries launch_peak_yaw_err_deg (tag-measured
+  # while the start tag is in view) and last_align_turn_sign — raise the
+  # value while the (signed) peak keeps the sign of the align turn, lower
+  # it once it flips. 0 disables.
+  launch_backlash_ff_omega: 0.02
+  launch_backlash_ff_s: 0.3
 
   # Velocity ramping (for smooth start/stop)
   # Set to 0 to disable ramping
@@ -150,7 +189,45 @@ robot:
   min_wall_clearance: 0.10
 
   # Pure Pursuit Tuning
-  look_ahead_base: 0.4
+  # Pure Pursuit look-ahead. 0.4 -> 0.25 on 2026-09-04: the curvature PP
+  # commands is 2*lateral/L^2, so with L = 0.4 a lateral error decayed over
+  # ~0.4 m — the whole length of a corridor hop — and the tag was never
+  # centred before the stop. 0.25 gives 2.6x the steering for the same
+  # error; sim-checked against the 0.55 s command delay for oscillation.
+  # (tag['z'] is the ~0.30 m camera height, so max(dist, L) = L always.)
+  look_ahead_base: 0.25
+  # Which point Pure Pursuit puts on the lane line (2026-09-04): 'base' =
+  # the base centre, using lateral - camera_offset*sin(yaw error); 'lens' =
+  # the old behaviour (the camera itself). The lens is 0.55 m ahead of the
+  # point the align rotates about, so with 'lens' every align swung the
+  # lens 0.55*sin(yaw) sideways — robot records 14:33: arrival lateral
+  # +1.5 mm / yaw -1.66 deg -> +19.5 mm after the align, and a steady
+  # -13 mm lateral bias at rest on forward runs. With 'base' the align
+  # lands the lens ON the tag instead.
+  pp_lateral_reference: base
+  # ---- steering law while the target tag is in view (2026-09-04) ----
+  # state_feedback: omega = -(v * sf_lateral_gain) * e_y - sf_heading_gain *
+  # e_theta, e_y = base-referenced lateral (m), e_theta = PREDICTED heading
+  # error (current edge angle + the rotation still pending from the last
+  # stop_latency_s of commands). The lateral gain scales with speed like
+  # Pure Pursuit did (32 = 2 / 0.25^2, i.e. the PP curvature at L 0.25);
+  # the heading term does not, which is what gives it authority in the
+  # 0.01-0.03 m/s last 25 cm where PP (omega ~ speed) had none. Closed
+  # loop: wn = v*sqrt(k_y), zeta = k_theta/(2 v sqrt(k_y)) = 1.6 at
+  # 0.033 m/s, 0.53 at 0.1 m/s. Below sf_min_speed_for_gain the lateral
+  # gain is held at that speed so creeping still steers. 'pure_pursuit'
+  # restores the old point tracker.
+  steer_mode: state_feedback
+  sf_lateral_gain: 32.0
+  sf_heading_gain: 0.6
+  sf_min_speed_for_gain: 0.02
+  # Measurement conditioning (2026-09-04): every steering/stop/align decision
+  # uses the MEDIAN of the last stop_measure_frames detections of the tag
+  # (one bad frame cannot fire the stop) extrapolated to now along the
+  # fore-aft axis by the executed speed x frame age — the detector's frame
+  # is ~0.1 s old, 3-4 mm at 0.033 m/s. Records carry age_s / comp_px.
+  stop_measure_frames: 3
+  camera_latency_compensation: true
   pp_gain_forward: 1.0
   pp_gain_backward: 0.8
 
@@ -244,18 +321,82 @@ robot:
   # tag that is out of frame after an odometry-only pivot or an arrival at
   # the frame edge. Before 2026-09-02 the loop waited forever. <= 0 disables.
   align_timeout_s: 20.0
-  # No in-place align on hops whose start AND target are both inside one of
-  # these ranges (user request 2026-09-02): 400->401 ... 410->411 on the
-  # zone A lane are Pure Pursuit only — the base stops on the tag and the
-  # next hop starts at once. A hop with a 100- or 500-series tag at EITHER
-  # end (501->400, 405->502, 503->406, 411->504, every corridor hop) still
-  # aligns. Pivots always align (their endpoints are 50x).
-  align_skip_tag_ranges: [[400, 499]]
+  # Skid-steer overshoot (2026-09-04, user: "제자리 얼라인할 때 오차보다 좀 더
+  # 회전해서 틀어진다"). The base executes an in-place turn with the same
+  # ~stop_latency_s transport delay as the drive, so at the 0.01 rad/s floor
+  # alone it turns another 0.55 s * 0.01 = 0.32 deg AFTER the loop sees the
+  # error inside the 0.2 deg band — i.e. it always ended outside it, on the
+  # far side. align_to_tag now (1) stops when the PREDICTED settled angle
+  # (error minus the rotation still pending from the last stop_latency_s of
+  # commands) is inside the band, (2) waits stop_latency_s + align_settle_s
+  # with zero command, (3) re-measures at rest and, if still outside the
+  # band, corrects again — up to align_max_passes. Only a measurement taken
+  # at rest counts. If the tag still reads off after the last pass the hop
+  # is accepted with a warning and `align_residual_accepted` in the record.
+  align_settle_s: 0.3
+  align_max_passes: 3
+  # ---- align_mode: continuous (default) | pulse ----
+  # 'continuous' = the P loop with the delay lead + settle + re-measure
+  # above. Robot records 14:33 on 2026-09-04 (first run with it): every
+  # aligned yaw AT REST within +-0.19 deg, 1-3 passes. What looked like
+  # over-rotation was the lens swinging sideways during the align — see
+  # pp_lateral_reference. 'pulse' is the alternative for a base that
+  # sticks and lurches: it never decides while moving — measure at rest
+  # (median of align_measure_frames), command ONE burst of
+  # align_pulse_omega for the DURATION that rotates align_pulse_fraction of
+  # the error, stop, settle (stop_latency_s + align_settle_s), re-measure;
+  # the achieved/commanded ratio is learned into a gain (kept across hops)
+  # so a base that lurches 1.5x is corrected on the next pulse. A delay
+  # shifts a burst in time but cannot lengthen it. The 0.8 fraction
+  # prefers a second pulse in the SAME direction over an overshoot, which
+  # would reverse a wheel (backlash). Offline it was SLOWER than continuous
+  # (5-8 s vs 2 s) and reversed more on a lurching plant, so it is not the
+  # default; switch to it only if the continuous loop misbehaves on the
+  # robot.
+  align_mode: continuous
+  align_pulse_omega: 0.05        # rad/s of a burst — well above stiction
+  align_pulse_fraction: 0.8
+  align_pulse_min_s: 0.1         # shortest burst (one 10 Hz tick); smaller errors lower omega
+  align_max_pulses: 5
+  align_measure_frames: 5        # median over this many frames at rest
+  # The stop aims the predicted settled angle at this fraction of the band
+  # (0.25 * 0.2 = 0.05 deg), not at the band edge — one 10 Hz tick at the
+  # 0.01 rad/s floor is 0.057 deg of pending rotation, so finer is noise.
+  align_lead_target_ratio: 0.25
+  # ⚠️ EVERY hop ends with stop -> align_to_tag, no per-tag exception (user
+  # rule 2026-09-04: "어떤 상황이든 정지해서 얼라인은 필수"). The
+  # `align_skip_tag_ranges: [[400, 499]]` key from 2026-09-02 (400->401 …
+  # 410->411 lane hops were Pure Pursuit only) is retired: mobile_controller
+  # ignores it with a warning if it is ever put back. A tag out of view at
+  # rest now fails the hop on align_timeout_s instead of being waved on.
 
   # Pivot Tuning
   pivot_gain: 1.5           # Proportional gain for pivot rotation
   pivot_slowdown_deg: 10.0  # Start slowing down when error < this (degrees)
   pivot_threshold_deg: 1.0  # Pivot complete when error < this (degrees)
+
+  # Manual relative moves — robot_ui's Mobile tab, via /mobile/move_cmd on
+  # mobile_node (MobileController.drive_distance / pivot_angle). Ported from
+  # tools/vw_drive.py so the UI does NOT become a second /cmd_vel publisher.
+  # Odometry-closed trapezoid: v = min(top, sqrt(2*a*remaining)) with the
+  # linear_accel / angular_accel above, hand-off to a constant-accel ramp-out
+  # when the commanded speed's stopping distance equals what is left. No tag
+  # is involved and nothing here touches navigation.
+  manual_move:
+    arrive_tol_m: 0.003          # loop hands off to the ramp-out here
+    pivot_tol_deg: 1.0           # same for pivots (default: pivot_threshold_deg)
+    stall_grace_s: 2.5           # commanding motion this long with no odom
+                                 # change aborts (frozen /odom = dead drive)
+    stall_eps_m: 0.005           # odom movement below this does not count
+    stall_eps_deg: 0.5
+    odom_stale_s: 1.0            # no /odom for this long = driver not talking
+    ramp_out_max_s: 5.0          # bound on the ramp-out
+    shortfall_frac: 0.05         # ending this far short of target = failure
+    max_distance_m: 5.0          # a single manual move is refused above this
+    max_angle_deg: 360.0
+    default_linear_speed: 0.05   # used when the request carries no speed;
+    default_angular_speed: 0.2   # 0 = the max_*_speed above. Always capped
+                                 # by max_linear_speed / max_angular_speed.
 
   # S-Curve Settings (for smooth velocity profile)
   s_curve_accel_ratio: 0.3  # First 30% of distance: accelerate
@@ -289,7 +430,67 @@ robot:
   # tag to land ~15-20 px PAST the crosshair (image-left when driving
   # forward, image-right in reverse) — that is the measured 6-8 mm roll
   # after the trigger, not this key. Raise this (≈ +18) to pre-compensate.
-  center_x_stop_offset: 0.0
+  # 0 -> 300 on 2026-09-04 (user: "후진은 너무 잘되니 후진을 기준으로 전진을
+  # 수정"). What makes reverse good is that the tag is left 16 cm AHEAD of
+  # the lens at the stop, so on the NEXT launch the start tag stays in view
+  # for ~19 cm and the heading is held on the tag (a wheel-play twist the
+  # encoders cannot see is still corrected). Forward stopped on the
+  # crosshair, lost the start tag after 3 cm, and arrived on the zone A
+  # lane yawed -0.6..-1.7 deg. +300 px = the tag ~12 cm ahead of the lens:
+  # start tag visible ~15 cm at launch, and the target — which appears
+  # ~25 cm out going forward — is still in view for ~13 cm of approach
+  # (400 would leave only 9 cm). ⚠️ Every forward stop is now ~12 cm SHORT
+  # of the design pose (lens over the tag); /robot_pose carries the
+  # fore-aft term (robot_pose_use_fore_aft) so the reported pose and the
+  # pose-mode arm transform stay right. 500-series targets keep 0 —
+  # stop_offset_skip_tag_ranges below.
+  center_x_stop_offset: 300.0
+  # REVERSE-ONLY stop column (2026-09-04, user request: "후진할 때만 목표
+  # 태그 위치를 화면 기준으로 최대한 오른쪽에"). Same units and sign as
+  # center_x_stop_offset — px from the calibrated cx, positive = image-right
+  # = AHEAD of the lens — but read only when the hop drives backward. In
+  # reverse the tag enters from image-left (it emerges from behind the
+  # bumper ~3 cm behind the lens) and travels right; the stop fires when it
+  # reaches this column, so the base backs up until the tag sits this far
+  # ahead of the lens. Forward hops are unaffected and keep using
+  # center_x_stop_offset. Remove the key (or set null) to restore one shared
+  # column for both directions.
+  #
+  # How far right is "as far as possible": front_cam is 1280 px wide with
+  # cx ≈ 638, i.e. ~640 px of frame to the right of the crosshair. A 90 mm
+  # tag at the 0.30 m camera height is ~222 px wide (fx ≈ 750), and the
+  # detector needs the whole tag plus roughly one bit (~28 px) of quiet zone
+  # in frame, so the tag CENTRE must stay under ~1100 px → offset ≤ ~460.
+  # 400 keeps ~50 mm of margin for the post-trigger roll, a not-yet-aligned
+  # tag and lateral error. Raise toward 460 only after checking the overlay
+  # shows the whole tag at rest. 400 px ≈ 162 mm at this depth.
+  #
+  # ⚠️ Consequence: a reverse arrival now stops ~162 mm further along the
+  # reverse direction than a forward arrival at the same tag, and
+  # /robot_pose has no fore-aft term (it is map tag + lateral + camera
+  # offset), so the next hop's odom distance is off by that much — longer
+  # if it drives forward, shorter if it reverses again. Arrival is still
+  # decided by the tag, so the hop still ends on the tag; only the speed
+  # profile / blind-approach zone see the error. Both columns are drawn on
+  # /front_cam/tag_overlay (FWD / REV labels) from these two keys.
+  center_x_stop_offset_reverse: 400.0
+  # Target tags that keep the FORWARD column even on a reverse hop (user
+  # rule 2026-09-04: "500번대 태그가 목표 명령이면 기존 목표 태그 위치에
+  # 멈춰야 해"). The 500-series are the dock and the corridor pivot tags —
+  # a pivot turns about the base centre, so the base has to be ON the tag's
+  # designed stop pose, not 162 mm short of it. Same [[lo, hi], ...] shape
+  # as align_skip_tag_ranges; matched on the TARGET tag only.
+  # (was center_x_stop_offset_reverse_skip_tag_ranges — still read as an
+  # alias; since 2026-09-04 it applies to BOTH directions and the column
+  # for these targets is the crosshair, offset 0.)
+  stop_offset_skip_tag_ranges: [[500, 599]]
+  # /robot_pose fore-aft term (2026-09-04). Until now the pose assumed the
+  # lens sat over the tag (map tag + lateral + camera_offset only); with the
+  # far stop columns the lens rests 12-16 cm short of the tag, so the tag's
+  # fore-aft distance (tag x, + ahead of the lens) is now subtracted along
+  # the zone heading. Applies to every consumer of /robot_pose (pose-mode
+  # arm transform, UI). false restores the old lens-over-tag assumption.
+  robot_pose_use_fore_aft: true
   # Tightened 10 -> 4 px on 2026-09-02 (user request). The trigger now fires
   # 4 px (~1.6 mm) before the target column instead of 10 (~4 mm). ⚠️ The
   # bigger error is AFTER the trigger: on 2026-09-02 arrivals recorded the

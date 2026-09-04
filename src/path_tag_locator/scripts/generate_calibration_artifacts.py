@@ -237,7 +237,7 @@ def main():
         for r in sorted(src["reference_tags"], key=lambda r: r["id"]):
             if plate == 2:
                 continue          # same ids; list the 정반 1 set only,
-                                  # 정반 2 = +3890 mm x (plate geometric
+                                  # 정반 2 = +3900 mm x (plate geometric
                                   # centre; see yaml header)
             x, y, z = r["position_m"]
             roll, pitch, yaw = r["rpy_deg"]

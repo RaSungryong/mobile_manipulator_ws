@@ -28,7 +28,7 @@ import rospy
 from std_msgs.msg import Int32, String
 
 from ..align import clamp_step, tag_in_cam_report
-from ..align_runner import run_auto_align, AutoAlignError
+from ..align_runner import run_auto_align, AutoAlignError, approach_pose
 from ..geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 from ..chain import compensate_T_ab2mb, compute_T_A2B, compute_T_B_world
 from ..detections import (detection_to_T_cam2tag, mean_detection,
@@ -160,6 +160,12 @@ class CalibrationOrchestrator:
         # successful chain; used to estimate arm_view_tcp_mm_deg for
         # subsequent entries that don't supply one explicitly.
         self._anchor: Optional[BaseAnchor] = None
+        # Seed corrections learned in THIS session: for every successful
+        # entry that started from a plan seed, (aligned TCP - seed) in the
+        # arm frame, keyed by ref tag. A retry after "tag not seen from the
+        # seed" applies the median to the failing entry's seed — i.e. the
+        # initial pose is estimated from the tags already measured.
+        self._seed_corrections: Dict[int, List[np.ndarray]] = {}
         # Session-start lift height (set in run(); drift-guard baseline).
         self._session_lift_m: Optional[float] = None
         # Append-only per-attempt record (session_log.SessionRecorder);
@@ -218,15 +224,130 @@ class CalibrationOrchestrator:
         return (ref.size_m if ref.size_m is not None
                 else self.cfg.tag_a_size_m_default)
 
+    @staticmethod
+    def is_seed_failure(error) -> bool:
+        """Did an attempt fail because the ref tag was not seen from the
+        initial (seed) pose? Those are the failures a different seed can
+        fix; a nav or chain failure is retried with the same seed."""
+        text = str(error or "")
+        return ("not detected at iteration 1" in text
+                or "initial move" in text)
+
+    def _seed_correction(self, ref_tag_id: int):
+        """Median (aligned TCP - seed) translation, mm, from this
+        session's successes — same ref tag first, any ref as fallback.
+        (None, 0, False) until at least one entry succeeded from a plan seed."""
+        same = self._seed_corrections.get(int(ref_tag_id)) or []
+        pool = same if same else [d for ds in self._seed_corrections.values()
+                                  for d in ds]
+        if not pool:
+            return None, 0, bool(same)
+        return np.median(np.array(pool), axis=0), len(pool), bool(same)
+
+    def _anchor_view_tcp(self, entry: PlanEntry, ref: RefTag):
+        """Bootstrap estimate from the last successful entry's anchor
+        (base pose in world from the chain) + map.yaml offsets + odom
+        heading; None when no anchor / no base / disabled."""
+        if not (bool(getattr(self.cfg.align_cfg, "auto_view_pose", False))
+                and self._anchor is not None and self.base is not None):
+            return None
+        map_xy_now = self._lookup_path_map_xy(entry.path_tag_id)
+        theta_now = float(self.base.current_theta)
+        T_world2mb_estimate = propagate_world_mb(
+            self._anchor, map_xy_now, theta_now)
+        tcp = compute_view_tcp(
+            T_A_world=ref.T_world,
+            T_world2mb=T_world2mb_estimate,
+            T_ab2mb=compensate_T_ab2mb(self.T_ab2mb,
+                                       self._lift_height_m()),
+            T_hc2ee=self.T_hc2ee,
+            view_distance_m=float(
+                self.cfg.align_cfg.auto_view_distance_m),
+        )
+        rospy.loginfo(
+            "[Calibrator] anchor view_tcp for tag=%d (ref=%d) -> %s "
+            "(Δmap=[%.3f,%.3f], Δtheta=%.2fdeg from anchor tag=%d)",
+            entry.path_tag_id, entry.ref_tag_id,
+            ["%.2f" % v for v in tcp],
+            map_xy_now[0] - self._anchor.path_map_xy[0],
+            map_xy_now[1] - self._anchor.path_map_xy[1],
+            np.degrees(theta_now - self._anchor.odom_theta),
+            self._anchor.path_tag_id)
+        return [float(v) for v in tcp]
+
+    def _retry_view_tcp(self, entry: PlanEntry, resolved: dict,
+                        ref: RefTag, attempt: int):
+        """Seed for a RETRY after the ref tag was not seen from the seed.
+
+        Re-sending the identical pose (what happened on 2026-09-04: every
+        attempt 2 failed exactly like attempt 1) is pointless, so the
+        initial pose is re-estimated from what the session already
+        knows, in this order, one strategy per retry:
+
+          1. plan seed + median (aligned - seed) of the entries that
+             already succeeded (same ref tag first) — the base stops with
+             a repeatable offset, so the tags already measured say where
+             this one's seed really is;
+          2. anchor bootstrap: base pose from the last successful chain +
+             map.yaml offsets + odom heading (compute_view_tcp);
+          3. the plan seed with the camera raised `retry_raise_m` — a
+             wider field of view when nothing has succeeded yet.
+
+        Returns (tcp, source) or None to keep the attempt-1 pose.
+        """
+        seed = ([float(v) for v in entry.arm_view_tcp_mm_deg]
+                if entry.arm_view_tcp_mm_deg is not None
+                else resolved.get("arm_view_tcp_mm_deg"))
+        candidates = []
+        corr, n, same = self._seed_correction(entry.ref_tag_id)
+        if seed is not None and corr is not None:
+            tcp = list(seed)
+            for i in range(3):
+                tcp[i] = float(seed[i] + corr[i])
+            candidates.append((tcp, "entry-override+session-correction"
+                               f"(ref {'same' if same else 'any'}, n={n}, "
+                               f"Δ=[{corr[0]:+.1f},{corr[1]:+.1f},{corr[2]:+.1f}] mm)"))
+        try:
+            tcp = self._anchor_view_tcp(entry, ref)
+        except Exception as e:
+            rospy.logwarn("[Calibrator] anchor view_tcp failed (%s)", e)
+            tcp = None
+        if tcp is not None:
+            candidates.append((tcp, "anchor-bootstrap"))
+        raise_m = float(getattr(self.cfg.align_cfg, "retry_raise_m", 0.0))
+        if seed is not None and raise_m > 0:
+            tcp = list(seed)
+            tcp[2] = float(seed[2] + raise_m * 1000.0)
+            candidates.append((tcp, f"entry-override+raised({raise_m:.2f} m)"))
+        if not candidates:
+            return None
+        idx = min(max(0, int(attempt) - 2), len(candidates) - 1)
+        return candidates[idx]
+
     def _resolve_view_tcp(self, entry: PlanEntry, resolved: dict,
-                          ref: RefTag):
+                          ref: RefTag, attempt: int = 1,
+                          seed_failed: bool = False):
         """Return (view_tcp_mm_deg, source_str).
 
-        Source order:
+        Source order (attempt 1, or a retry after a non-seed failure):
             1. Per-entry override (entry.arm_view_tcp_mm_deg)
             2. Bootstrap auto-estimate (if anchor available + auto_view_pose)
             3. Defaults from calibration_plan.yaml
+        A retry after "tag not seen from the seed" goes through
+        _retry_view_tcp instead (session correction -> anchor -> raised).
         """
+        if attempt >= 2 and seed_failed:
+            alt = self._retry_view_tcp(entry, resolved, ref, attempt)
+            if alt is not None:
+                rospy.logwarn(
+                    "[Calibrator] tag=%d retry %d: seed re-estimated (%s)",
+                    entry.path_tag_id, attempt, alt[1])
+                return alt
+            rospy.logwarn(
+                "[Calibrator] tag=%d retry %d: no alternative seed "
+                "available, re-using the attempt-1 pose",
+                entry.path_tag_id, attempt)
+
         # 1. Per-entry override beats everything.
         if entry.arm_view_tcp_mm_deg is not None:
             return [float(v) for v in entry.arm_view_tcp_mm_deg], "entry-override"
@@ -392,17 +513,21 @@ class CalibrationOrchestrator:
                 # whole entry including nav + align.
                 attempts = 1 + max(0, int(resolved.get("retry_count", 0)))
                 seq = None
+                seed_failed = False
                 for attempt in range(1, attempts + 1):
                     # `rec` is filled progressively by _run_one so a failed
                     # attempt still records everything up to the failure.
                     rec: Dict[str, Any] = {}
                     try:
-                        self._run_one(entry, resolved, ref, rec)
+                        self._run_one(entry, resolved, ref, rec,
+                                      attempt=attempt,
+                                      seed_failed=seed_failed)
                         seq = self._record(entry, resolved, attempt, "ok", rec)
                         break
                     except Exception as e:
                         seq = self._record(entry, resolved, attempt, "fail",
                                            rec, error=str(e))
+                        seed_failed = self.is_seed_failure(e)
                         if attempt >= attempts:
                             raise
                         rospy.logwarn(
@@ -493,7 +618,8 @@ class CalibrationOrchestrator:
 
     # ------------------------------------------------------------------
     def _run_one(self, entry: PlanEntry, resolved: dict, ref: RefTag,
-                 rec: Optional[dict] = None):
+                 rec: Optional[dict] = None, attempt: int = 1,
+                 seed_failed: bool = False):
         """Process a single plan entry; raises on any failure.
 
         ``rec`` (if given) is filled step by step with everything worth
@@ -540,9 +666,11 @@ class CalibrationOrchestrator:
         #    (b) bootstrap estimate from previous anchor (if available)
         #    (c) defaults.arm_view_tcp_mm_deg
         #    Raises if none of the above are present.
-        view_tcp, view_source = self._resolve_view_tcp(entry, resolved, ref)
+        view_tcp, view_source = self._resolve_view_tcp(
+            entry, resolved, ref, attempt=attempt, seed_failed=seed_failed)
         rec["view_tcp_mm_deg"] = [float(v) for v in view_tcp]
         rec["view_tcp_source"] = view_source
+        rec["attempt"] = int(attempt)
 
         align_required = bool(resolved.get("align_required", True))
         rec["align_required"] = align_required
@@ -565,22 +693,12 @@ class CalibrationOrchestrator:
                 raise
         else:
             # align_required=false skips run_auto_align — which is also
-            # where the initial-step CLAMP lives. Apply the same clamp
-            # here so a bad per-entry pose or a wild bootstrap estimate
-            # cannot go to the arm as one unbounded MoveJ.
-            T_cur = pose_fr5_to_matrix_m(self.tcp_client.get_tcp_pose())
-            T_tgt = pose_fr5_to_matrix_m(view_tcp)
-            step = clamp_step(
-                T_cur, T_tgt,
-                max_step_m=self.cfg.align_cfg.max_initial_step_m,
-                max_step_deg=self.cfg.align_cfg.max_initial_step_deg)
-            if step.clamped:
-                rospy.logwarn(
-                    "[Calibrator] view move clamped (Δt=%.3f m, "
-                    "Δrot=%.2f deg)", step.delta_t_norm_m,
-                    step.delta_rot_deg)
-            self.tcp_client.move_j_to_pose(
-                matrix_m_to_pose_fr5(step.T_ab2ee_step), linear=False)
+            # where the initial-step CLAMP lives. Use the same chunked,
+            # clamped approach so a bad per-entry pose or a wild
+            # bootstrap estimate cannot go to the arm as one unbounded
+            # MoveJ, while a seed farther than one step is still reached.
+            approach_pose(self.tcp_client, view_tcp, self.cfg.align_cfg,
+                          what="view")
 
         # 3. Capture fresh observations from the shared detector and run
         # the chain. AVERAGED over samples_per_iteration frames: this is
@@ -604,6 +722,19 @@ class CalibrationOrchestrator:
             det_b, self.cfg.tag_b_size_m,
             self.cfg.front_cam_detector_size_m)
         tcp_pose = self.tcp_client.get_tcp_pose()
+        # Remember how far the aligned pose sits from the plan seed, so a
+        # later entry whose seed misses its tag can be re-seeded from the
+        # tags already measured (see _retry_view_tcp). Only entries that
+        # started from the plan seed itself contribute; raised or
+        # corrected retries would double-count.
+        if (entry.arm_view_tcp_mm_deg is not None
+                and view_source == "entry-override"
+                and (rec.get("auto_align") or {}).get("final_tcp")):
+            delta = (np.array(tcp_pose[:3], dtype=float)
+                     - np.array(entry.arm_view_tcp_mm_deg[:3], dtype=float))
+            self._seed_corrections.setdefault(
+                int(entry.ref_tag_id), []).append(delta)
+            rec["seed_delta_mm"] = [float(v) for v in delta]
         # Camera-frame error of both observations (see align.CAM_FRAME_NOTE).
         observations = {
             "hand_cam_to_tag_a": dict(tag_id=int(entry.ref_tag_id),

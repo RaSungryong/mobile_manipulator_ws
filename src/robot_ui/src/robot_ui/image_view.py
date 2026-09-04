@@ -28,6 +28,7 @@ class ImageView(QLabel):
 
     roi_changed = pyqtSignal(object)  # QRect in image coords, or None
     double_clicked = pyqtSignal(str)  # this view's title
+    clicked = pyqtSignal(str)         # plain left click (no drag), title
 
     def __init__(self, title='', roi_enabled=False, roi_config=None,
                  parent=None):
@@ -48,6 +49,7 @@ class ImageView(QLabel):
         self._roi = None              # QRect in image coords
         self._drag_start = None
         self._drag_now = None
+        self._press_pos = None        # for the click-vs-drag decision
         self._centre_box = 0          # side length in image px, 0 = off
 
         if roi_config:
@@ -169,6 +171,8 @@ class ImageView(QLabel):
 
     # ---------- mouse ----------
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.pos()
         if not self._roi_enabled:
             return
         if event.button() == Qt.LeftButton:
@@ -202,9 +206,22 @@ class ImageView(QLabel):
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if not self._roi_enabled or self._drag_start is None:
-            return
         if event.button() != Qt.LeftButton:
+            return
+        # A press and release within a few px is a CLICK — the window uses it
+        # to make this view the main one. It must not also be read as a
+        # degenerate ROI drag that clears the stored region, or selecting the
+        # Basler thumbnail would wipe the operator's crop.
+        is_click = (self._press_pos is not None
+                    and (event.pos() - self._press_pos).manhattanLength() < 6)
+        self._press_pos = None
+        if is_click:
+            self._drag_start = None
+            self._drag_now = None
+            self.update()
+            self.clicked.emit(self._title)
+            return
+        if not self._roi_enabled or self._drag_start is None:
             return
         start = self._to_image(self._drag_start)
         end = self._to_image(event.pos())

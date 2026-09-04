@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import rospy
 import math
+import collections
 import glob
 import os
 import re
@@ -81,6 +82,23 @@ class MobileController:
         self.current_theta = 0.0
         self.odom_x = 0.0
         self.odom_y = 0.0
+        self.odom_stamp = None          # rospy.Time of the last /odom
+        self.odom_v = None              # signed forward speed from /odom twist
+        self._tag_hist = {}             # tag id -> deque of recent detections
+        self.stop_measure_frames = max(1, int(
+            self.cfg['robot'].get('stop_measure_frames', 3)))
+        self.camera_latency_compensation = bool(
+            self.cfg['robot'].get('camera_latency_compensation', True))
+        # Steering law while the target tag is in view (2026-09-04):
+        # 'state_feedback' = omega = -(v * k_y) * e_y - k_theta * e_theta on
+        # the BASE-referenced lateral and the PREDICTED heading (current +
+        # rotation still pending from the command delay); 'pure_pursuit' =
+        # the old point tracker (omega ~ speed * curvature, blind to yaw).
+        self.steer_mode = str(self.cfg['robot'].get('steer_mode', 'state_feedback')).lower()
+        self.sf_lateral_gain = float(self.cfg['robot'].get('sf_lateral_gain', 32.0))
+        self.sf_heading_gain = float(self.cfg['robot'].get('sf_heading_gain', 0.6))
+        self.sf_min_speed_for_gain = float(
+            self.cfg['robot'].get('sf_min_speed_for_gain', 0.02))
         self.camera_params = None
         self.image_center_x_fallback = 0.0
         self.image_center_y_fallback = 0.0
@@ -126,7 +144,7 @@ class MobileController:
         # of travel, so the base ENDS on the target column. 0 disables.
         self.stop_latency_s = max(0.0, float(
             self.cfg['robot'].get('stop_latency_s', 0.0)))
-        self._vel_hist = []      # (t, |linear cmd|) for _pending_roll_m
+        self._vel_hist = []      # (t, |linear cmd|, angular cmd) for _pending_roll_m / _pending_yaw_rad
         # Odom-based creep before the stop, independent of tag visibility.
         # In REVERSE the target tag is hidden behind the front bumper until
         # it is ~3 cm from the lens (measured 2026-09-02), so the tag-based
@@ -136,14 +154,109 @@ class MobileController:
             self.cfg['robot'].get('blind_approach_dist', 0.0))
         self.blind_approach_speed = float(
             self.cfg['robot'].get('blind_approach_speed', 0.015))
+        # Stop target column, px from the calibrated cx. Forward hops stop
+        # the tag on `center_x_stop_offset` (0 = the optical axis). Reverse
+        # hops stop it on `center_x_stop_offset_reverse` when that key is
+        # present (user request 2026-09-04: in reverse the tag must end as
+        # far RIGHT in the image as possible = as far AHEAD of the lens as
+        # the FOV allows); absent/null falls back to the forward column, the
+        # 2026-09-02 one-column behaviour. robot_camera_node draws both
+        # columns on /front_cam/tag_overlay from the same keys.
+        self.center_x_stop_offset = float(
+            self.cfg['robot'].get('center_x_stop_offset', 0.0) or 0.0)
+        rev = self.cfg['robot'].get('center_x_stop_offset_reverse', None)
+        self.center_x_stop_offset_reverse = (
+            float(rev) if rev is not None else self.center_x_stop_offset)
+        # Target tags for which a REVERSE hop still stops on the FORWARD
+        # column (user rule 2026-09-04: "500번대 태그가 목표면 기존 목표
+        # 위치에 정지"). Same [[lo, hi], ...] shape as align_skip_tag_ranges.
+        self.reverse_stop_fwd_column_ranges = []
+        # 2026-09-04: the exception now applies to BOTH directions (forward
+        # got a far column too), so the key is `stop_offset_skip_tag_ranges`;
+        # the old reverse-only name is read as an alias.
+        for rng in (self.cfg['robot'].get('stop_offset_skip_tag_ranges',
+                    self.cfg['robot'].get(
+                        'center_x_stop_offset_reverse_skip_tag_ranges', [])) or []):
+            try:
+                lo, hi = int(rng[0]), int(rng[1])
+            except (TypeError, ValueError, IndexError):
+                rospy.logwarn("[Navigation] bad "
+                              "center_x_stop_offset_reverse_skip_tag_ranges "
+                              "entry %r", rng)
+                continue
+            self.reverse_stop_fwd_column_ranges.append((min(lo, hi), max(lo, hi)))
+        # Where the lens came to rest relative to the LAST tag it stopped on:
+        # fore-aft metres, + = tag ahead of the lens (tag['x']). With a
+        # reverse column of +400 px the lens rests ~0.16 m short of the tag
+        # after a reverse hop, and the map edge length — measured stop pose
+        # to stop pose — is then wrong by that much for the NEXT hop's odom
+        # profile (see _odom_distance_for_hop). Updated at every arrival /
+        # align; reset by the manual moves, which leave it unknown.
+        self._arrival_fore_m = 0.0
+        self._last_tag_depth_m = None
         # Profile speed multiplier while the target tag is visible (Pure
         # Pursuit phase). 1.0 = no change. See robot.yaml.
         self.tag_visible_speed_factor = max(0.0, min(1.0, float(
             self.cfg['robot'].get('tag_visible_speed_factor', 1.0))))
+        # Manual relative moves (drive_distance / pivot_angle) — odometry-
+        # closed, no tag involved. See robot.yaml `manual_move:`.
+        mm_cfg = self.cfg['robot'].get('manual_move', {}) or {}
+        self.manual_arrive_tol_m = float(mm_cfg.get('arrive_tol_m', 0.003))
+        self.manual_pivot_tol_rad = math.radians(float(
+            mm_cfg.get('pivot_tol_deg',
+                       self.cfg['robot'].get('pivot_threshold_deg', 1.0))))
+        self.manual_stall_grace_s = float(mm_cfg.get('stall_grace_s', 2.5))
+        self.manual_stall_eps_m = float(mm_cfg.get('stall_eps_m', 0.005))
+        self.manual_stall_eps_rad = math.radians(float(
+            mm_cfg.get('stall_eps_deg', 0.5)))
+        self.manual_odom_stale_s = float(mm_cfg.get('odom_stale_s', 1.0))
+        self.manual_ramp_out_max_s = float(mm_cfg.get('ramp_out_max_s', 5.0))
+        self.manual_shortfall_frac = float(mm_cfg.get('shortfall_frac', 0.05))
+        self.manual_max_distance_m = float(mm_cfg.get('max_distance_m', 5.0))
+        self.manual_max_angle_deg = float(mm_cfg.get('max_angle_deg', 360.0))
+        self.manual_default_linear = float(
+            mm_cfg.get('default_linear_speed', 0.0)) or self.max_linear
+        self.manual_default_angular = float(
+            mm_cfg.get('default_angular_speed', 0.0)) or self.max_angular
+
         # Final approach: distance to the stop point at which we drop to
         # final_approach_speed and latch there until the stop condition fires.
         self.final_approach_dist = float(
             self.cfg['robot'].get('final_approach_dist', 0.06))
+        # Launch yaw hold (2026-09-04, user: after the in-place align the
+        # base sets off with a slight yaw — one wheel starts late). Pure
+        # Pursuit's omega is |speed| x curvature, i.e. ~0 at launch and
+        # blind to yaw, so a launch yaw error is only corrected once it has
+        # become a lateral error. Inside the first `launch_yaw_hold_dist` m
+        # of a hop the heading is held: to the tag's edge angle while the
+        # tag is in view, else to the odom yaw at the hop start (the
+        # encoders see a late wheel as a differential). 0 disables.
+        self.launch_yaw_hold_dist = float(
+            self.cfg['robot'].get('launch_yaw_hold_dist', 0.0))
+        self.launch_yaw_gain = float(
+            self.cfg['robot'].get('launch_yaw_gain', 1.0))
+        # Backlash feed-forward (2026-09-04, user: "얼라인 때 후진을 줬던
+        # 바퀴가 출발 때 약간 반응이 늦다"). An in-place align turns one
+        # wheel backward; on the next hop that wheel has to REVERSE, so it
+        # sits idle through its gear play while the other wheel already
+        # rolls — the base twists toward the late wheel, by play / track
+        # (0.7 deg per 8 mm of play on the 0.65 m track), and a motor-side
+        # encoder never sees it. The twist direction is known from the
+        # align's last turn (CCW align -> left wheel was backing -> twist
+        # is CCW on a forward hop, and ALSO CCW on a reverse hop, where the
+        # right wheel is the one reversing), so the launch pre-rotates the
+        # other way: omega_ff = -sign(last align turn) x ff_omega for ff_s.
+        self.launch_backlash_ff_omega = float(
+            self.cfg['robot'].get('launch_backlash_ff_omega', 0.0))
+        self.launch_backlash_ff_s = float(
+            self.cfg['robot'].get('launch_backlash_ff_s', 0.3))
+        self._last_align_turn_sign = 0       # +1 CCW, -1 CW, 0 unknown
+        self.camera_offset = float(self.cfg['robot'].get('camera_offset', 0.55))
+        self.robot_pose_use_fore_aft = bool(
+            self.cfg['robot'].get('robot_pose_use_fore_aft', True))
+        self.pp_lateral_reference = str(
+            self.cfg['robot'].get('pp_lateral_reference', 'base')).lower()
+        self._align_pulse_gain = 1.0         # achieved / commanded rotation, learned
         # Latch state, all set by _latch_final_approach.
         self._final_approach = False
         self._fa_v0 = 0.0       # speed on entering the zone
@@ -182,14 +295,13 @@ class MobileController:
         # the in-place align (user request 2026-09-02: 400->400 lane hops
         # are Pure Pursuit only; any hop with a 100- or 500-series endpoint
         # still aligns). Ranges only — a pivot never qualifies.
-        self.align_skip_ranges = []
-        for rng in (self.cfg['robot'].get('align_skip_tag_ranges', []) or []):
-            try:
-                lo, hi = int(rng[0]), int(rng[1])
-            except (TypeError, ValueError, IndexError):
-                rospy.logwarn("[Align] bad align_skip_tag_ranges entry %r", rng)
-                continue
-            self.align_skip_ranges.append((min(lo, hi), max(lo, hi)))
+        # ⚠️ There is deliberately NO per-tag align skip any more (user rule
+        # 2026-09-04: "어떤 상황이든 정지해서 얼라인은 필수"). The
+        # `align_skip_tag_ranges` key that let 400→400 lane hops skip the
+        # in-place align (2026-09-02) is ignored if present.
+        if self.cfg['robot'].get('align_skip_tag_ranges'):
+            rospy.logwarn("[Align] robot.align_skip_tag_ranges is no longer "
+                          "honoured — every hop ends with align_to_tag")
         self.pred_lookahead = float(
             pred_cfg.get('lookahead_m', self.cfg['robot']['look_ahead_base']))
         self.pred_min_lookahead = float(
@@ -440,7 +552,13 @@ class MobileController:
         heading_error = math.atan2(math.sin(heading_error),
                                    math.cos(heading_error))
 
-        omega = abs(speed) * curvature * gain + self.pred_heading_gain * heading_error
+        # SIGNED speed (2026-09-04): this steers the BASE toward the lane
+        # line, and the base's lateral motion is v*sin(yaw) — reversing, the
+        # same yaw rate moves it the other way (a car backing up), so the
+        # curvature term flips with the direction of travel. |speed| here
+        # made the reverse blind lateral loop positive feedback; the heading
+        # term hid it (a few mm of offset persisted instead of growing).
+        omega = speed * curvature * gain + self.pred_heading_gain * heading_error
         return float(np.clip(omega, -self.move_max_angular,
                              self.move_max_angular))
 
@@ -501,11 +619,15 @@ class MobileController:
         return label.strip('_') or 'cmd'
 
     def begin_nav_session(self, label):
-        """Open a NEW record file for one task command (TASK ... / GOTO n).
+        """Start a NEW record for one task command (TASK ... / GOTO n).
 
-        Every tag-offset record taken until the next call lands in this
-        file. Files never collide: <dir>/<YYYYMMDD>/<YYYYMMDD_HHMMSS>_<label>.yaml
-        with a numeric suffix if the second is already taken.
+        Every tag-offset record taken until the next call lands in ONE
+        file: <dir>/<YYYYMMDD>/<YYYYMMDD_HHMMSS>_<label>.yaml (numeric
+        suffix if that second is taken). The file is created on the FIRST
+        record, not here (2026-09-04, user: one yaml per command): a
+        command that is preempted, refused or fails before any arrival
+        leaves no empty file behind — before this, every re-issued GOTO
+        left a `records: []` twin next to the real one.
         """
         if not self.record_alignment_result:
             return None
@@ -527,9 +649,8 @@ class MobileController:
             }
             self._nav_session_path = path
             self._nav_seq = 0
-            self._atomic_write_yaml(self._nav_session, path)
-            rospy.loginfo("[AlignmentRecord] new record file for '%s': %s",
-                          label, path)
+            rospy.loginfo("[AlignmentRecord] record for '%s' -> %s "
+                          "(written at the first arrival)", label, path)
             return path
         except Exception as e:
             rospy.logwarn("[AlignmentRecord] could not open record file: %s", e)
@@ -636,6 +757,17 @@ class MobileController:
             rec['calibrated_reference'] = ref
 
             self._nav_session['records'].append(rec)
+            if len(self._nav_session['records']) == 1:
+                # First record creates the file. Another process cannot
+                # have taken the name (one mobile_node), but a session that
+                # was begun long ago could collide with a later one of the
+                # same second — re-check, same suffix rule as begin.
+                path = self._nav_session_path
+                n = 1
+                while os.path.exists(path):
+                    n += 1
+                    path = self._nav_session_path[:-5] + f"_{n}.yaml"
+                self._nav_session_path = path
             self._atomic_write_yaml(self._nav_session, self._nav_session_path)
             rospy.loginfo(
                 "[AlignmentRecord] #%d %s tag %s: camera centre %.1f mm from tag "
@@ -659,6 +791,11 @@ class MobileController:
         # Extract position
         self.odom_x = msg.pose.pose.position.x
         self.odom_y = msg.pose.pose.position.y
+        self.odom_stamp = rospy.Time.now()
+        try:
+            self.odom_v = float(msg.twist.twist.linear.x)
+        except Exception:
+            self.odom_v = None
         # Extract orientation
         q = msg.pose.pose.orientation
         euler = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
@@ -673,6 +810,10 @@ class MobileController:
             # control thread would see a transiently empty/partial dict
             # while the callback rebuilds it in-place.
             new_tags = {}
+            try:
+                stamp = float(msg.header.stamp.to_sec()) or float(rospy.Time.now().to_sec())
+            except Exception:
+                stamp = float(rospy.Time.now().to_sec())
             for det in msg.detections:
                 # front_cam was rotated -90 deg about its optical axis on
                 # 2026-08-13, so in the frame the detector reports in:
@@ -689,7 +830,7 @@ class MobileController:
                     'center_x': det.center_x,
                     'center_y': det.center_y
                 }
-            self.detected_tags = new_tags
+            self._store_detections(new_tags, stamp)
             self.image_center_x_fallback = msg.image_width / 2.0
             self.image_center_y_fallback = msg.image_height / 2.0
 
@@ -703,6 +844,83 @@ class MobileController:
         except Exception as e:
             rospy.logerr(f"Detection processing error: {e}")
 
+
+    def _store_detections(self, new_tags, stamp):
+        """Publish `new_tags` as the current detections and append each
+        to a short per-tag history (for the median filter). `stamp` is the
+        source IMAGE time, kept per tag for latency compensation."""
+        for tid, t in new_tags.items():
+            t['stamp'] = float(stamp)
+            t['edge_deg'] = tag_edge_angle_deg(t['corners'])
+            hist = self._tag_hist.get(tid)
+            if hist is None or hist.maxlen != self.stop_measure_frames:
+                hist = collections.deque(maxlen=self.stop_measure_frames)
+                self._tag_hist[tid] = hist
+            hist.append(t)
+        self.detected_tags = new_tags
+
+    def _executed_linear_vel(self):
+        """Signed forward speed the base is executing NOW: odom twist when
+        fresh, else the command sent stop_latency_s ago (transport-delay
+        model), else the current ramped command."""
+        now = rospy.Time.now().to_sec()
+        if (self.odom_v is not None and self.odom_stamp is not None
+                and now - self.odom_stamp.to_sec() < 0.3):
+            return float(self.odom_v)
+        if self._vel_hist:
+            t_exec = now - self.stop_latency_s
+            v = None
+            for h in self._vel_hist:
+                if h[0] <= t_exec:
+                    v = h[3]
+                else:
+                    break
+            if v is not None:
+                return float(v)
+        return float(self.current_linear_vel)
+
+    def _tag_view(self, tag_id):
+        """The measurement the control loop should act on for `tag_id`:
+        the MEDIAN of the last stop_measure_frames detections (one bad
+        frame cannot fire the stop or the align), extrapolated to NOW along
+        the fore-aft axis by the executed speed x the frame's age
+        (camera_latency_compensation — the detector's frame is ~0.1 s old,
+        i.e. 3-4 mm at 0.033 m/s). Returns None if the tag is not in the
+        current frame. Keys as detected_tags plus 'age_s' and 'comp_px'."""
+        cur = self.detected_tags.get(tag_id)
+        if cur is None:
+            return None
+        hist = self._tag_hist.get(tag_id)
+        now = rospy.Time.now().to_sec()
+        if hist and len(hist) >= 3:
+            recent = [h for h in hist if now - h['stamp'] <= 0.35]
+            # A median needs an odd count of at least 3 to reject one bad
+            # sample; with two, numpy's median is their MEAN and a spike
+            # leaks in at half strength — so below 3 the newest frame is
+            # used unfiltered.
+            if len(recent) >= 3:
+                view = dict(cur)
+                for k in ('center_x', 'center_y', 'x', 'y', 'z', 'edge_deg'):
+                    view[k] = float(np.median([h[k] for h in recent if k in h]))
+                view['corners'] = cur['corners']
+            else:
+                view = dict(cur)
+        else:
+            view = dict(cur)
+        view['age_s'] = 0.0
+        view['comp_px'] = 0.0
+        if (self.camera_latency_compensation and self.camera_params is not None
+                and view.get('stamp') is not None):
+            age = min(max(now - view['stamp'], 0.0), 0.3)
+            fx = self.camera_params[0]
+            depth = view.get('z') or 0.30
+            if age > 0.0 and fx > 0 and depth > 0:
+                d_fore = -self._executed_linear_vel() * age   # robot moved on
+                view['x'] = view['x'] + d_fore
+                view['comp_px'] = d_fore * fx / depth
+                view['center_x'] = view['center_x'] + view['comp_px']
+                view['age_s'] = age
+        return view
 
     def vision_stop_callback(self, msg):
         """front_cam only: soft-stop when a configured tag is centered.
@@ -775,7 +993,7 @@ class MobileController:
         # commanded ~stop_latency_s ago, so the distance it will STILL travel
         # after a stop is the integral of the commands sent in that window.
         now = rospy.Time.now().to_sec()
-        self._vel_hist.append((now, abs(float(linear))))
+        self._vel_hist.append((now, abs(float(linear)), float(angular), float(linear)))
         cutoff = now - max(self.stop_latency_s, 0.0) - 1.0
         while self._vel_hist and self._vel_hist[0][0] < cutoff:
             self._vel_hist.pop(0)
@@ -788,18 +1006,47 @@ class MobileController:
         lat = self.stop_latency_s
         if lat <= 0:
             return 0.0
+        return self._integrate_pending(1, abs(self.current_linear_vel))
+
+    def _pending_yaw_rad(self):
+        """Signed rotation (rad, + = CCW) the base will still make after a
+        stop command NOW — the angular twin of _pending_roll_m, same
+        transport-delay model. Skid steer makes this matter more than for
+        the drive: an in-place turn is executed with the same ~0.55 s lag,
+        so a P loop that stops the moment the error is inside the band ends
+        up `pending` further round — measured as the align 'twisting' past
+        the tag (user, 2026-09-04)."""
+        return self._integrate_pending(2, self.current_angular_vel)
+
+    def _integrate_pending(self, col, fallback_rate):
+        """Integral of column `col` of the command history over the last
+        stop_latency_s. Exact under the delay model: each sample holds
+        until the next one; the value in force at the START of the window
+        is the last sample published before it (not the first one inside
+        it — that guess inflated the estimate at the start of a motion to
+        a whole `rate * latency` after ONE tick, which made align stop
+        after a single 0.057 deg step, 2026-09-04). No history at all ->
+        `fallback_rate * latency`."""
+        lat = self.stop_latency_s
+        if lat <= 0:
+            return 0.0
         now = rospy.Time.now().to_sec()
-        hist = [(t, v) for t, v in self._vel_hist if t >= now - lat]
-        if len(hist) < 2:
-            return abs(self.current_linear_vel) * lat
-        dist = 0.0
-        # Each sample holds until the next one; the last holds to `now`.
+        t_win = now - lat
+        if not self._vel_hist:
+            return fallback_rate * lat
+        prev = None
+        hist = []
+        for h in self._vel_hist:
+            if h[0] < t_win:
+                prev = (h[0], h[col])
+            else:
+                hist.append((h[0], h[col]))
+        total = 0.0
+        if prev is not None:
+            total += prev[1] * ((hist[0][0] if hist else now) - t_win)
         for (t0, v0), (t1, _) in zip(hist, hist[1:] + [(now, 0.0)]):
-            dist += v0 * max(0.0, t1 - t0)
-        # The window may start before the oldest sample; extend the first.
-        if hist[0][0] > now - lat:
-            dist += hist[0][1] * (hist[0][0] - (now - lat))
-        return dist
+            total += v0 * max(0.0, t1 - t0)
+        return total
 
     def send_vel(self, linear, angular, linear_accel=None):
         """
@@ -857,6 +1104,169 @@ class MobileController:
         return best_id
 
     def align_to_tag(self, tag_id):
+        """Square up to the tag (yaw only). Dispatches on robot.align_mode:
+        'continuous' (default: the P loop with a delay lead, settle and
+        re-measure below) or 'pulse' — see _align_to_tag_pulse."""
+        mode = str(self.cfg['robot'].get('align_mode', 'continuous')).lower()
+        if mode == 'pulse':
+            return self._align_to_tag_pulse(tag_id)
+        return self._align_to_tag_continuous(tag_id)
+
+    def _measure_tag_angle_at_rest(self, tag_id, frames, rate):
+        """Median edge angle over `frames` consecutive detections (rejects a
+        single bad frame). Returns (angle_deg, tag_dict) or (None, None)
+        if the tag is not seen for the whole window."""
+        vals = []
+        last = None
+        misses = 0
+        while len(vals) < frames and not rospy.is_shutdown():
+            if self.stop_requested:
+                return None, None
+            if tag_id in self.detected_tags:
+                last = dict(self.detected_tags[tag_id])
+                vals.append(tag_edge_angle_deg(last['corners']))
+                misses = 0
+            else:
+                misses += 1
+                if misses > frames * 3:
+                    return None, None
+            rate.sleep()
+        return float(np.median(vals)), last
+
+    def _align_to_tag_pulse(self, tag_id):
+        """Pulse alignment for a skid-steer base with a command delay,
+        stiction and a release lurch (2026-09-04, user: the continuous
+        loop still over-rotated on the robot).
+
+        Every decision is taken with the base AT REST on a multi-frame
+        median of the tag's edge angle:
+          1. measure error e (deg); |e| < band -> done.
+          2. command ONE pulse: omega = align_pulse_omega (well above
+             stiction) for t = |rot| / omega, where rot = e *
+             align_pulse_fraction / gain_est. The rotation is set by the
+             pulse DURATION, so a transport delay only shifts it in time
+             — it cannot add to it, unlike the continuous loop where the
+             last 0.55 s of commands keep turning the base.
+          3. stop, wait stop_latency_s + align_settle_s, re-measure.
+          4. gain_est := achieved / commanded (smoothed, clamped) — a base
+             that lurches 1.5x the command is corrected on the next pulse
+             and remembered for the next hop (self._align_pulse_gain).
+        The pulse aims at align_pulse_fraction (0.8) of the error on
+        purpose: a small undershoot costs one more pulse in the SAME
+        direction; an overshoot costs a reversal, which unloads a wheel
+        (backlash) and is what the launch feed-forward then has to fight.
+        """
+        rospy.loginfo(f"Aligning to tag {tag_id} (pulse mode)...")
+        rate = rospy.Rate(10)
+        cfg = self.cfg['robot']
+        band = float(cfg.get('align_threshold_deg', 0.5))
+        timeout = float(cfg.get('align_timeout_s', 20.0))
+        settle_s = self.stop_latency_s + float(cfg.get('align_settle_s', 0.3))
+        max_pulses = max(1, int(cfg.get('align_max_pulses', 5)))
+        frac = float(cfg.get('align_pulse_fraction', 0.8))
+        omega_max = min(float(cfg.get('align_pulse_omega', 0.05)),
+                        self.align_max_angular)
+        omega_min = min(float(cfg.get('align_min_angular_speed', 0.01)), omega_max)
+        min_pulse_s = float(cfg.get('align_pulse_min_s', 0.3))
+        frames = max(1, int(cfg.get('align_measure_frames', 5)))
+        gain = float(np.clip(self._align_pulse_gain, 0.3, 3.0))
+        start = rospy.Time.now()
+        pulses = 0
+        history = []
+
+        def timed_out():
+            return timeout > 0 and (rospy.Time.now() - start).to_sec() > timeout
+
+        while not rospy.is_shutdown():
+            if self.stop_requested:
+                rospy.logwarn("[Robot] align_to_tag interrupted")
+                self.stop()
+                return False
+            if timed_out():
+                self.stop()
+                rospy.logerr(f"[Robot] align_to_tag({tag_id}) TIMEOUT after "
+                             f"{timeout:.0f}s ({pulses} pulses, "
+                             + ("tag visible" if tag_id in self.detected_tags
+                                else "tag not visible") + ")")
+                return False
+            err, tag = self._measure_tag_angle_at_rest(tag_id, frames, rate)
+            if err is None:
+                if self.stop_requested:
+                    self.stop()
+                    return False
+                rospy.logwarn_throttle(
+                    2.0, f"[Robot] align_to_tag: tag {tag_id} not visible, waiting")
+                continue
+            if abs(err) < band or pulses >= max_pulses:
+                self._arrival_fore_m = float(tag.get('x', 0.0))
+                self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                self._align_pulse_gain = gain
+                extra = {'align_passes': pulses, 'align_mode': 'pulse',
+                         'align_pulse_gain': round(gain, 3),
+                         'align_pulse_history': history}
+                if abs(err) < band:
+                    rospy.loginfo(f"Alignment Complete. Final Angle: {err:+.2f} "
+                                  f"(at rest, {pulses} pulses, gain {gain:.2f})")
+                else:
+                    extra['align_residual_accepted'] = True
+                    rospy.logwarn(f"[Robot] align_to_tag({tag_id}): {err:+.2f} deg "
+                                  f"left after {pulses} pulses — accepting")
+                self._record_tag_offset(tag_id, tag, 'aligned',
+                                        yaw_error_deg=err, extra=extra)
+                return True
+            # ---- one pulse ----
+            # The loop's sign convention: a positive edge angle is removed by
+            # turning CW (negative omega); the edge angle moves with the yaw.
+            rot_deg = -err * frac / gain          # rotation to command
+            dur = abs(math.radians(rot_deg)) / omega_max
+            omega = omega_max
+            if dur < min_pulse_s:
+                # too short to execute as a burst at full omega: stretch it
+                # to the minimum duration at a lower omega, but never below
+                # the speed the base is known to move at
+                omega = max(omega_min, abs(math.radians(rot_deg)) / min_pulse_s)
+                dur = abs(math.radians(rot_deg)) / omega
+            omega = math.copysign(omega, rot_deg)
+            self._last_align_turn_sign = 1 if omega > 0 else -1
+            rospy.loginfo(f"[Robot] align pulse {pulses + 1}: error {err:+.2f} deg, "
+                          f"rotate {rot_deg:+.2f} deg = {omega:+.3f} rad/s x {dur:.2f}s "
+                          f"(gain {gain:.2f})")
+            t_end = rospy.Time.now() + rospy.Duration(dur)
+            while rospy.Time.now() < t_end and not rospy.is_shutdown():
+                if self.stop_requested or timed_out():
+                    self.stop()
+                    return False
+                self._publish_vel(0.0, omega)   # unramped: the burst IS the plan
+                rate.sleep()
+            self.stop()
+            pulses += 1
+            t_settle = rospy.Time.now() + rospy.Duration(settle_s)
+            while rospy.Time.now() < t_settle and not rospy.is_shutdown():
+                if self.stop_requested:
+                    self.stop()
+                    return False
+                rate.sleep()
+            err2, _ = self._measure_tag_angle_at_rest(tag_id, frames, rate)
+            if err2 is not None:
+                achieved = err2 - err          # edge angle moves with yaw
+                history.append({'error_before': round(err, 3),
+                                'commanded_deg': round(rot_deg, 3),
+                                'achieved_deg': round(achieved, 3),
+                                'omega': round(omega, 4), 'duration_s': round(dur, 3)})
+                if abs(rot_deg) >= 0.15:
+                    ratio = achieved / rot_deg
+                    if 0.2 < ratio < 5.0:
+                        gain = float(np.clip(0.5 * gain + 0.5 * gain * ratio, 0.3, 3.0))
+                    else:
+                        rospy.logwarn(f"[Robot] align pulse: commanded {rot_deg:+.2f} "
+                                      f"deg, tag moved {achieved:+.2f} — ignored for gain")
+                rospy.loginfo(f"[Robot] align pulse {pulses}: tag moved {achieved:+.2f} deg "
+                              f"for {rot_deg:+.2f} commanded -> gain {gain:.2f}, "
+                              f"error now {err2:+.2f}")
+        self.stop()
+        return False
+
+    def _align_to_tag_continuous(self, tag_id):
         """Rotate in place until the tag's edge reads square (yaw only).
 
         Runs after EVERY hop — forward, backward and pivot — once the base
@@ -877,6 +1287,22 @@ class MobileController:
         align_min_angular = min(
             float(self.cfg['robot'].get('align_min_angular_speed', 0.0)),
             self.align_max_angular)
+        # Skid-steer overshoot handling (2026-09-04). The base keeps turning
+        # for ~stop_latency_s after the command drops (same transport delay
+        # as the linear stop), so (1) the stop fires when the PREDICTED
+        # settled angle — current error minus the rotation still pending —
+        # is inside the band, not when the raw error is; (2) the loop then
+        # waits stop_latency_s + align_settle_s with zero command and
+        # re-measures the tag at rest; (3) if the settled error is still
+        # outside the band it runs another pass, up to align_max_passes.
+        # Only a measurement taken AT REST counts as aligned.
+        settle_s = self.stop_latency_s + float(
+            self.cfg['robot'].get('align_settle_s', 0.3))
+        max_passes = max(1, int(self.cfg['robot'].get('align_max_passes', 3)))
+        lead_target = align_threshold * float(
+            self.cfg['robot'].get('align_lead_target_ratio', 0.25))
+        passes = 0
+        settle_until = None      # rospy.Time while settling, else None
         start_time = rospy.Time.now()
 
         while not rospy.is_shutdown():
@@ -908,13 +1334,66 @@ class MobileController:
 
             angle_deg = tag_edge_angle_deg(self.detected_tags[tag_id]['corners'])
 
-            if abs(angle_deg) < align_threshold:
-                tag = dict(self.detected_tags[tag_id])
+            if settle_until is not None:
+                # Command is zero; let the delayed rotation play out before
+                # judging the result.
+                if rospy.Time.now() < settle_until:
+                    rate.sleep()
+                    continue
+                settle_until = None
+                if abs(angle_deg) < align_threshold:
+                    tag = dict(self.detected_tags[tag_id])
+                    # Base at rest now — the best estimate of where the
+                    # lens sits relative to this tag for the next hop.
+                    self._arrival_fore_m = float(tag.get('x', 0.0))
+                    self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                    rospy.loginfo(f"Alignment Complete. Final Angle: "
+                                  f"{angle_deg:.2f} (pass {passes})")
+                    self._record_tag_offset(tag_id, tag, 'aligned',
+                                            yaw_error_deg=angle_deg,
+                                            extra={'align_passes': passes})
+                    return True
+                if passes >= max_passes:
+                    tag = dict(self.detected_tags[tag_id])
+                    self._arrival_fore_m = float(tag.get('x', 0.0))
+                    self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                    rospy.logwarn(
+                        f"[Robot] align_to_tag({tag_id}): {angle_deg:+.2f} deg "
+                        f"left after {passes} passes (band {align_threshold}) "
+                        "— accepting; check stop_latency_s / align_settle_s")
+                    self._record_tag_offset(tag_id, tag, 'aligned',
+                                            yaw_error_deg=angle_deg,
+                                            extra={'align_passes': passes,
+                                                   'align_residual_accepted': True})
+                    return True
+                rospy.loginfo(f"[Robot] align pass {passes} settled at "
+                              f"{angle_deg:+.2f} deg, correcting again")
+                # fall through: start the next pass from this measurement
+
+            # Rotation still to come from the commands of the last
+            # stop_latency_s. The loop below commands omega = -angle*gain,
+            # i.e. a positive edge angle is removed by turning CW (negative
+            # omega): the edge angle moves WITH the base's yaw, so the angle
+            # the base will SETTLE at if we stop now is angle + pending.
+            pending_deg = math.degrees(self._pending_yaw_rad())
+            predicted_deg = angle_deg + pending_deg
+            crossing = (angle_deg != 0.0 and
+                        math.copysign(1.0, predicted_deg) != math.copysign(1.0, angle_deg))
+            # Aim the settled angle at ZERO, not at the band edge: stopping
+            # as soon as the prediction is inside the band leaves the base
+            # parked at ~threshold on the near side. At the 0.01 rad/s floor
+            # one 10 Hz tick is 0.057 deg of pending rotation, so a quarter
+            # of the 0.2 deg band (0.05) is as fine as the loop can aim.
+            if abs(predicted_deg) <= lead_target or crossing:
                 self.stop()
-                rospy.loginfo(f"Alignment Complete. Final Angle: {angle_deg:.2f}")
-                self._record_tag_offset(tag_id, tag, 'aligned',
-                                        yaw_error_deg=angle_deg)
-                return True
+                passes += 1
+                settle_until = rospy.Time.now() + rospy.Duration(settle_s)
+                rospy.loginfo(
+                    f"[Robot] align stop: error {angle_deg:+.2f} deg, "
+                    f"pending {pending_deg:+.2f} -> predicted {predicted_deg:+.2f}; "
+                    f"settling {settle_s:.2f}s")
+                rate.sleep()
+                continue
 
             angular_vel = -math.radians(angle_deg) * align_gain
             if align_min_angular > 0 and abs(angular_vel) < align_min_angular:
@@ -922,6 +1401,8 @@ class MobileController:
             angular_vel = np.clip(angular_vel, -self.align_max_angular,
                                   self.align_max_angular)
 
+            if angular_vel != 0.0:
+                self._last_align_turn_sign = 1 if angular_vel > 0 else -1
             self.send_vel(0, angular_vel)
             rate.sleep()
 
@@ -952,15 +1433,20 @@ class MobileController:
         # Mirroring get_robot_pose_from_tag logic
         tag_x = tag_info['x'] if tag_info else 0.0
         tag_y = tag_info['y'] if tag_info else 0.0
-        
+        # Fore-aft term (2026-09-04): the lens is no longer assumed to sit
+        # over the tag — with the far stop columns it rests 12-16 cm short
+        # of it. tag['x'] is the tag's distance AHEAD of the lens, so the
+        # camera is that far behind the tag along the zone heading.
+        fore = float(tag.get('x', 0.0)) if self.robot_pose_use_fore_aft else 0.0
+
         if zone == 'A' or zone == 'DOCK':
-            robot_x, robot_y = tag_x, tag_y + lateral
+            robot_x, robot_y = tag_x - fore, tag_y + lateral
             heading = align_angle_deg
         elif zone in ['B', 'D']:
-            robot_x, robot_y = tag_x - lateral, tag_y
+            robot_x, robot_y = tag_x - lateral, tag_y - fore
             heading = 90 + align_angle_deg
         elif zone in ['C', 'E']:
-            robot_x, robot_y = tag_x + lateral, tag_y
+            robot_x, robot_y = tag_x + lateral, tag_y + fore
             heading = -90 + align_angle_deg
         else:
             robot_x, robot_y, heading = tag_x, tag_y, 0.0
@@ -982,6 +1468,74 @@ class MobileController:
             final_x, final_y = manip_cam_x, manip_cam_y
 
         return final_x, final_y, heading
+
+    def _stop_offset_px(self, direction, target_id):
+        """The stop column (px from the calibrated cx) for this hop.
+        Forward: center_x_stop_offset (+300 since 2026-09-04 — the tag is
+        left AHEAD of the lens so the next launch still sees it, the
+        condition that made reverse work well). Reverse:
+        center_x_stop_offset_reverse (+400). A target in
+        stop_offset_skip_tag_ranges (the 500-series dock / pivot tags)
+        stops on the crosshair (offset 0) in BOTH directions: a pivot
+        turns about the base centre and needs the base on the designed
+        stop pose."""
+        try:
+            t = int(target_id)
+        except (TypeError, ValueError):
+            t = None
+        if t is not None and any(lo <= t <= hi
+                                 for lo, hi in self.reverse_stop_fwd_column_ranges):
+            return 0.0
+        if 'backward' not in direction:
+            return self.center_x_stop_offset
+        return self.center_x_stop_offset_reverse
+
+    def _stop_target_fore_m(self, direction, target_id=None):
+        """Fore-aft distance (m, + = tag ahead of the lens) the tag sits
+        at when the stop column for this hop is reached: offset px on the
+        tag plane = px * depth / fx. 0 when fx or a depth is not known yet."""
+        off = self._stop_offset_px(direction, target_id)
+        if off == 0.0 or self.camera_params is None or self.camera_params[0] <= 0:
+            return 0.0
+        depth = self._last_tag_depth_m if self._last_tag_depth_m else 0.30
+        return off * depth / self.camera_params[0]
+
+    def _odom_distance_for_hop(self, edge_dist, direction, start_id=None,
+                               target_id=None):
+        """Odom distance the profile should plan for on this hop.
+
+        The map edge length is stop pose to stop pose (lens over the tag).
+        The lens is actually `fore_prev` short of / past the start tag, and
+        the stop column puts it `fore_target` short of the target tag, so
+        the real travel is  edge + dir * (fore_prev - fore_target)  with
+        dir = +1 forward / -1 reverse. With one shared column at 0 both
+        terms vanish and this returns `edge_dist` unchanged. Without it a
+        reverse hop to a +400 px column ran the last 0.16 m on the
+        end-of-profile crawl and tripped the watchdog (offline plant,
+        2026-09-04). `fore_prev` is read LIVE from the start tag when it is
+        in view (it usually is — that is what the far-right column buys),
+        else from the last arrival."""
+        sign = -1.0 if 'backward' in direction else 1.0
+        if start_id is not None and start_id in self.detected_tags:
+            fore_prev = float(self.detected_tags[start_id].get('x', 0.0))
+            src = 'live'
+        else:
+            fore_prev = float(self._arrival_fore_m)
+            src = 'remembered'
+        fore_target = self._stop_target_fore_m(direction, target_id)
+        corr = sign * (fore_prev - fore_target)
+        dist = edge_dist + corr
+        if abs(corr) > 0.005:
+            rospy.loginfo(
+                "[Navigation] odom distance %.3f m = edge %.3f %+.3f "
+                "(start tag %s fore %+.3f %s, stop column fore %+.3f)",
+                dist, edge_dist, corr, start_id, fore_prev, src, fore_target)
+        if dist < 0.05:
+            rospy.logwarn(
+                "[Navigation] corrected odom distance %.3f m is below 0.05 m "
+                "(edge %.3f, corr %+.3f) — clamping", dist, edge_dist, corr)
+            dist = 0.05
+        return dist
 
     def go_to_next_tag(self, target_id, known_start_id=None):
 
@@ -1042,7 +1596,8 @@ class MobileController:
 
             dx = target_info['x'] - start_info['x']
             dy = target_info['y'] - start_info['y']
-            total_distance = math.hypot(dx, dy)
+            total_distance = self._odom_distance_for_hop(
+                math.hypot(dx, dy), direction, current_id, target_id)
 
             ok = self.execute_pure_pursuit(
                 target_id=target_id,
@@ -1064,30 +1619,20 @@ class MobileController:
             rospy.logerr(f"Unknown edge type: {action_type}")
             return False
 
-    def _in_align_skip_range(self, tag_id):
-        if tag_id is None:
-            return False
-        t = int(tag_id)
-        return any(lo <= t <= hi for lo, hi in self.align_skip_ranges)
-
     def _align_after_arrival(self, target_id, start_id=None):
-        """The one tail every hop ends with: base already stopped, now
-        rotate in place until the target tag reads square. Forward, backward
-        and pivot hops all come through here (2026-09-02). Two skips: a
-        temporarily-missing VIRTUAL tag (nothing to align to), and a hop
-        whose BOTH endpoints are in `align_skip_tag_ranges` (the 400-series
-        lane: Pure Pursuit only, no in-place align between lane tags; the
-        moment a 100-/500-series tag is either endpoint, align runs)."""
+        """The one tail EVERY hop ends with: base already stopped, now
+        rotate in place until the target tag reads square. Forward,
+        backward and pivot hops all come through here, with no per-tag
+        exception (user rule 2026-09-04: stop-then-align is mandatory on
+        every drive; the 400-lane skip from 2026-09-02 is gone). A hop
+        whose tag is not in view at rest fails here on `align_timeout_s`
+        rather than being waved through. The ONLY remaining skip is a
+        temporarily-missing VIRTUAL tag (`temporary_missing_tags`, off by
+        default): there is physically nothing to align to."""
         if self._is_temp_missing_tag(target_id):
             rospy.logwarn(
                 "[TemporaryMissingTag] skip align_to_tag(%s); tag is temporarily virtual",
                 target_id)
-            return True
-        if (self._in_align_skip_range(start_id) and
-                self._in_align_skip_range(target_id)):
-            rospy.loginfo(
-                "[Align] %s -> %s: both in align_skip_tag_ranges, no in-place align",
-                start_id, target_id)
             return True
         return self.align_to_tag(target_id)
 
@@ -1195,6 +1740,262 @@ class MobileController:
             rate.sleep()
 
 
+    # ==========================================================
+    # MANUAL RELATIVE MOVES — odometry-closed, no tag involved
+    # ==========================================================
+    # Ported from tools/vw_drive.py (2026-08-14) so the UI can drive the base
+    # a given distance / angle THROUGH mobile_node instead of running a second
+    # /cmd_vel publisher. The profile is the trapezoid that tool settled on
+    # after the arrival judder: v = min(v_top, sqrt(2*a*remaining)) — a
+    # braking curve that is self-consistent with a constant-accel ramp-out,
+    # so the loop hands off when the COMMANDED speed's stopping distance
+    # equals what is left and _manual_ramp_to_zero coasts the rest. No phase
+    # ratios, no speed floor. Both methods return (ok, message).
+
+    @staticmethod
+    def _manual_envelope(remaining, top, accel):
+        """Fastest speed from which a constant-`accel` ramp still stops on
+        target: sqrt(2*a*remaining), clipped to `top`. The min produces the
+        whole accel / cruise / brake trapezoid, and a triangle on a move too
+        short to reach `top`."""
+        return min(top, math.sqrt(max(0.0, 2.0 * accel * remaining)))
+
+    @staticmethod
+    def _manual_timeout_s(target, top, accel):
+        """Generous bound on a trapezoid's duration. Bounds a hang, not a spec."""
+        return 3.0 * (target / max(top, 1e-6) + top / max(accel, 1e-6)) + 5.0
+
+    def _manual_blocked(self):
+        """Reason the base must not be commanded right now, or None."""
+        if self.stop_requested:
+            return "stop requested"
+        if self.odom_stamp is None:
+            return "no /odom received yet"
+        age = (rospy.Time.now() - self.odom_stamp).to_sec()
+        if age > self.manual_odom_stale_s:
+            return f"/odom is stale by {age:.1f}s — is the navifra driver up?"
+        return None
+
+    def _manual_begin(self, what):
+        """Common entry: refuse under an EMERGENCY latch (a deliberate
+        clear_stop is required, same rule as the calibration BaseInterface),
+        clear a leftover preempt latch, and check odom is alive."""
+        if self.emergency_stop:
+            return (f"{what} refused — emergency stop is latched; "
+                    "clear_stop first")
+        # A preempt latch left by a previous cancel/task switch is not a
+        # reason to refuse a fresh, explicit manual command.
+        self.stop_requested = False
+        self._final_approach = False
+        # A manual move ends wherever it ends — the lens-vs-last-tag rest
+        # position is no longer known.
+        self._arrival_fore_m = 0.0
+        reason = self._manual_blocked()
+        if reason:
+            return f"{what} refused — {reason}"
+        return None
+
+    def _manual_ramp_to_zero(self):
+        """Bring the commanded velocity to zero at the accel limit, then
+        stop(). NOT stop() alone — that is a step from the current command
+        to zero, and the step is exactly the jolt the profile avoids."""
+        rate = rospy.Rate(20)
+        for _ in range(int(20 * self.manual_ramp_out_max_s)):
+            if rospy.is_shutdown() or self.stop_requested:
+                break
+            if (abs(self.current_linear_vel) < 1e-3
+                    and abs(self.current_angular_vel) < 1e-3):
+                break
+            self.send_vel(0.0, 0.0)
+            rate.sleep()
+        self.stop()
+
+    def _manual_run_loop(self, progress, target, tol, eps, timeout_s,
+                         command, braking, what):
+        """Drive until braking now would land on target, then ramp out.
+
+        `progress()` is the odom-measured amount done so far (m or rad),
+        `command(remaining)` gives (v, w), `braking()` the distance the
+        CURRENTLY COMMANDED velocity needs to reach zero at the accel limit
+        PLUS the transport-delay lead (`stop_latency_s`, the same measured
+        delay the tag stop compensates): under a pure delay the base still
+        executes the last `stop_latency_s` of commands after the hand-off,
+        so `|cmd| * latency` is added to the braking distance. Without it
+        the base overshoots by exactly that (sim: +21 mm at 0.05 m/s,
+        +48 mm at 0.1 m/s, +4 deg on a 90 deg pivot, at 0.55 s).
+        Returns (ok, reason).
+        """
+        rate = rospy.Rate(20)
+        deadline = rospy.Time.now() + rospy.Duration(timeout_s)
+        stall_ref = progress()
+        stall_since = rospy.Time.now()
+
+        while not rospy.is_shutdown():
+            reason = self._manual_blocked()
+            if reason:
+                rospy.logerr(f"[Manual] {what} aborted — {reason}")
+                self.stop()
+                return False, f"{what} aborted — {reason}"
+
+            done = progress()
+            remaining = target - done
+            # Leave when braking now lands on target, or on the tolerance —
+            # never by waiting for the envelope to reach zero, which would
+            # creep at a speed the drive may not execute and trip the stall
+            # check.
+            if remaining <= max(tol, braking()):
+                break
+
+            now = rospy.Time.now()
+            if now > deadline:
+                rospy.logerr(f"[Manual] {what} timed out at {done:.3f} of "
+                             f"{target:.3f}")
+                self.stop()
+                return False, f"{what} timed out at {done:.3f} of {target:.3f}"
+
+            # Stall check: commanding a base that is not moving is the
+            # 2026-08-12 failure mode (frozen /odom, MOTOR_FEEDBACK_TIMEOUT).
+            if abs(done - stall_ref) > eps:
+                stall_ref = done
+                stall_since = now
+            elif (now - stall_since).to_sec() > self.manual_stall_grace_s:
+                msg = (f"{what} aborted — /odom has not advanced in "
+                       f"{self.manual_stall_grace_s:.1f}s while commanding "
+                       "motion (check /motor/error, /motor/alarm)")
+                rospy.logerr(f"[Manual] {msg}")
+                self.stop()
+                return False, msg
+
+            v, w = command(remaining)
+            self.send_vel(v, w)
+            rate.sleep()
+
+        self._manual_ramp_to_zero()
+        # The base executes the last `stop_latency_s` of commands AFTER the
+        # ramp-out has been published, so it is still coasting when this
+        # returns unless we wait it out. Waiting also makes the arrival
+        # verification below honest and means mobile_node reports
+        # completion only once the base is physically at rest.
+        if self.stop_latency_s > 0:
+            rospy.sleep(rospy.Duration(self.stop_latency_s + 0.1))
+        if self.stop_requested:
+            return False, f"{what} aborted — stop requested during ramp-out"
+        return True, "ok"
+
+    def _manual_arrived(self, shortfall, target, floor_tol):
+        """The stall check alone is not enough: on a base that is not moving
+        the commanded speed keeps climbing until its stopping distance covers
+        the whole move, which on a short move happens before the stall
+        grace. Caught live on vw_drive: `forward 0.05` reported success
+        having travelled 0.000 m."""
+        return shortfall <= max(self.manual_shortfall_frac * target, floor_tol)
+
+    def drive_distance(self, distance_m, speed=None):
+        """Drive `distance_m` along body X (negative = reverse), closed on
+        odometry. Returns (ok, message)."""
+        distance_m = float(distance_m)
+        target = abs(distance_m)
+        what = f"drive {distance_m:+.3f} m"
+        if target > self.manual_max_distance_m:
+            return False, (f"{what} refused — over manual_move.max_distance_m "
+                           f"({self.manual_max_distance_m:.2f} m)")
+        why = self._manual_begin(what)
+        if why:
+            rospy.logwarn(f"[Manual] {why}")
+            return False, why
+        if target < self.manual_arrive_tol_m:
+            return True, f"{what}: below arrival tolerance, nothing to do"
+
+        sign = 1.0 if distance_m > 0 else -1.0
+        v_top = min(abs(float(speed)) if speed else self.manual_default_linear,
+                    self.max_linear)
+        accel = self.linear_accel
+        start = (self.odom_x, self.odom_y)
+
+        def travelled():
+            return math.hypot(self.odom_x - start[0], self.odom_y - start[1])
+
+        rospy.loginfo(f"[Manual] {what} at up to {v_top:.3f} m/s")
+        ok, reason = self._manual_run_loop(
+            progress=travelled, target=target, tol=self.manual_arrive_tol_m,
+            eps=self.manual_stall_eps_m,
+            timeout_s=self._manual_timeout_s(target, v_top, accel),
+            command=lambda rem: (
+                sign * self._manual_envelope(rem, v_top, accel), 0.0),
+            braking=lambda: (self.current_linear_vel ** 2 / (2.0 * accel)
+                             + abs(self.current_linear_vel) * self.stop_latency_s),
+            what=what)
+        if not ok:
+            return False, reason
+        short = target - travelled()
+        if not self._manual_arrived(short, target, 3 * self.manual_arrive_tol_m):
+            msg = (f"{what} ended {short * 1000:.0f} mm short — the base did "
+                   "not follow the command (check /motor/error, /motor/alarm, "
+                   "and whether /odom is advancing)")
+            rospy.logerr(f"[Manual] {msg}")
+            return False, msg
+        msg = f"{what} done: travelled {travelled():.3f} m"
+        rospy.loginfo(f"[Manual] {msg}")
+        return True, msg
+
+    def pivot_angle(self, angle_deg, speed=None):
+        """Pivot in place by `angle_deg` (positive = CCW / left), closed on
+        odometry yaw. Returns (ok, message)."""
+        angle_deg = float(angle_deg)
+        target = abs(math.radians(angle_deg))
+        what = f"pivot {angle_deg:+.1f} deg"
+        if abs(angle_deg) > self.manual_max_angle_deg:
+            return False, (f"{what} refused — over manual_move.max_angle_deg "
+                           f"({self.manual_max_angle_deg:.0f} deg)")
+        why = self._manual_begin(what)
+        if why:
+            rospy.logwarn(f"[Manual] {why}")
+            return False, why
+        if target < self.manual_pivot_tol_rad:
+            return True, f"{what}: below pivot tolerance, nothing to do"
+
+        sign = 1.0 if angle_deg > 0 else -1.0
+        w_top = min(abs(float(speed)) if speed else self.manual_default_angular,
+                    self.max_angular)
+        accel = self.angular_accel
+        turned = [0.0]
+        last_yaw = [self.current_theta]
+
+        def progress():
+            # Integrate wrapped deltas rather than comparing against the
+            # start: a pivot through +-180 would otherwise read as a jump
+            # backwards.
+            d = self.current_theta - last_yaw[0]
+            turned[0] += abs(math.atan2(math.sin(d), math.cos(d)))
+            last_yaw[0] = self.current_theta
+            return turned[0]
+
+        rospy.loginfo(f"[Manual] {what} at up to {w_top:.3f} rad/s")
+        ok, reason = self._manual_run_loop(
+            progress=progress, target=target, tol=self.manual_pivot_tol_rad,
+            eps=self.manual_stall_eps_rad,
+            timeout_s=self._manual_timeout_s(target, w_top, accel),
+            command=lambda rem: (
+                0.0, sign * self._manual_envelope(rem, w_top, accel)),
+            braking=lambda: (self.current_angular_vel ** 2 / (2.0 * accel)
+                             + abs(self.current_angular_vel) * self.stop_latency_s),
+            what=what)
+        if not ok:
+            return False, reason
+        # One more sample AFTER the ramp-out: the accumulator only advances
+        # when called, and the ramp-out is real rotation the loop never saw.
+        short = target - progress()
+        if not self._manual_arrived(short, target, 3 * self.manual_pivot_tol_rad):
+            msg = (f"{what} ended {math.degrees(short):.1f} deg short — the "
+                   "base did not follow the command (check /motor/error, "
+                   "/motor/alarm, and whether /odom is advancing)")
+            rospy.logerr(f"[Manual] {msg}")
+            return False, msg
+        msg = (f"{what} done: turned {math.degrees(turned[0]):.2f} deg "
+               f"(error {math.degrees(short):+.2f} deg)")
+        rospy.loginfo(f"[Manual] {msg}")
+        return True, msg
+
     def _smooth_speed_factor(self, ratio, phase='accel'):
         """
         Converts linear ratio [0,1] to smooth speed factor.
@@ -1295,6 +2096,9 @@ class MobileController:
         start_odom_x = self.odom_x
         start_odom_y = self.odom_y
         start_theta = self.current_theta
+        launch_theta_ref = start_theta       # re-anchored to a tag when seen
+        launch_peak_yaw_err = 0.0            # for the arrival record
+        launch_ff_applied = False
 
         prediction_segment = self._make_prediction_segment(
             start_id=start_id,
@@ -1349,6 +2153,7 @@ class MobileController:
 
             # ===== STEERING (tag-based if visible) =====
             omega = 0.0
+            sf_heading_applied = False
             tag_visible = target_id in self.detected_tags
 
             # Once the target tag is in view the profile speed is scaled down
@@ -1363,11 +2168,15 @@ class MobileController:
             speed = target_speed * move_dir_sign
 
             if tag_visible:
-                tag = self.detected_tags[target_id]
+                # Median over the last frames + latency extrapolation —
+                # every decision below (steer, stop, final approach, the
+                # arrival record) sees the same filtered measurement.
+                tag = self._tag_view(target_id) or self.detected_tags[target_id]
                 # image row + (down) = the robot's right, so `lateral` keeps the
                 # same sign it had before front_cam was rotated on 2026-08-13.
                 lateral = tag['y']
-                heading_error_deg = tag_edge_angle_deg(tag['corners'])
+                heading_error_deg = tag.get('edge_deg',
+                                            tag_edge_angle_deg(tag['corners']))
                 # Always the ~0.30 m camera height, never a range — the optical
                 # axis pointed down before the rotation too, so the lookahead
                 # below has always been pinned at look_ahead_base. Pre-existing;
@@ -1389,15 +2198,22 @@ class MobileController:
                 image_center_y = (self.camera_params[3]
                                   if self.camera_params is not None
                                   else self.image_center_y_fallback)
-                stop_offset = self.cfg['robot'].get('center_x_stop_offset', 0.0)
                 stop_tolerance = self.cfg['robot'].get('center_x_stop_tolerance', 10.0)
-                # ONE stop column for both directions (user decision
-                # 2026-09-02: "후진에서 기존에 만들어놓았던 태그 목표 중심에서
-                # 정지해야돼"). The tag is brought to the same target column
-                # whether the robot arrives driving forward or in reverse, so
-                # the physical stop spot over the tag is the same either way;
-                # only the approach side differs. A direction-mirrored
-                # variant (cx ± offset) was tried and backed out the same day.
+                # The stop column depends on the direction of travel
+                # (2026-09-04). Forward: cx + center_x_stop_offset, the tag
+                # arriving from image-right. Reverse: cx +
+                # center_x_stop_offset_reverse, the tag arriving from
+                # image-left and carried on to the far right of the frame
+                # (= ahead of the lens), so the physical stop spot in reverse
+                # is that many px * depth / fx further along the reverse
+                # direction than the forward spot. Both columns are drawn on
+                # /front_cam/tag_overlay. (History: one shared column from
+                # 2026-09-02, after a cx - offset mirror was backed out —
+                # that variant stopped the tag on the LEFT; this one is the
+                # opposite side and was asked for explicitly.) A reverse hop
+                # whose TARGET is a 500-series tag keeps the forward column
+                # (center_x_stop_offset_reverse_skip_tag_ranges).
+                stop_offset = self._stop_offset_px(direction, target_id)
                 target_x = image_center_x + stop_offset
                 diff = center_x - target_x
                 center_y_diff = tag['center_y'] - image_center_y
@@ -1439,6 +2255,8 @@ class MobileController:
                     self._final_approach = False   # re-arm for the next move
                     v_at_stop = abs(self.current_linear_vel)
                     self.stop()
+                    self._arrival_fore_m = float(tag.get('x', 0.0))
+                    self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
                     rospy.loginfo(
                         f"Arrived at {target_id} (traveled:{traveled_dist:.3f}m, "
                         f"cmd {v_at_stop:.4f} m/s, lead {lead_px:.1f}px)")
@@ -1447,9 +2265,20 @@ class MobileController:
                         yaw_error_deg=heading_error_deg,
                         traveled_m=traveled_dist,
                         extra={'commanded_speed_at_stop_mps': round(v_at_stop, 5),
+                               'direction': str(direction),
+                               'stop_offset_px': round(float(stop_offset), 2),
+                               'stop_target_x_px': round(float(target_x), 2),
+                               'tag_offset_from_target_px': round(
+                                   float(diff), 2),
                                'stop_lead_px': round(lead_px, 2),
                                'stop_lead_mm': round(lead_m * 1000.0, 2),
-                               'stop_latency_s': self.stop_latency_s})
+                               'stop_latency_s': self.stop_latency_s,
+                               'launch_peak_yaw_err_deg': round(launch_peak_yaw_err, 3),
+                               'tag_age_s': round(float(tag.get('age_s', 0.0)), 3),
+                               'latency_comp_px': round(float(tag.get('comp_px', 0.0)), 2),
+                               'steer_mode': self.steer_mode,
+                               'launch_ff_applied': launch_ff_applied,
+                               'last_align_turn_sign': self._last_align_turn_sign})
                     return True
 
                 # ===== FINAL APPROACH LATCH =====
@@ -1481,22 +2310,126 @@ class MobileController:
                         2.0, "[Navigation] No CameraInfo yet — final approach "
                              "deceleration is inactive")
 
-                # Pure Pursuit steering
-                L = max(dist_to_tag, self.cfg['robot']['look_ahead_base'])
-                alpha = math.atan2(-lateral, L)
-                curvature = (2.0 * math.sin(alpha)) / L
-                gain = self.cfg['robot']['pp_gain_backward'] if move_dir_sign < 0 else self.cfg['robot']['pp_gain_forward']
-                omega = abs(speed) * curvature * gain
-                # Only the calibrated approach changes visible steering. When
-                # no map_world segment is available, leave the old Pure
-                # Pursuit + post-align behaviour untouched.
-                if prediction_segment is not None:
-                    omega += -math.radians(heading_error_deg) * self.approach_heading_gain
+                # Pure Pursuit steering — on the BASE CENTRE's lateral offset,
+                # not the lens's (2026-09-04). The lens is camera_offset
+                # (0.55 m) ahead of the centre the align rotates about, so
+                # steering the lens onto the tag leaves the base off the
+                # line by 0.55*sin(yaw) and the align then swings the lens
+                # that far back out (robot records: arrival lateral +1.5 mm,
+                # yaw -1.66 deg -> after align +19.5 mm; predicted 17.4).
+                # Aiming the base at the line means the align lands the lens
+                # ON the tag. Sign checked against those records.
+                if self.pp_lateral_reference == 'base':
+                    lateral_pp = lateral - self.camera_offset * math.sin(
+                        math.radians(heading_error_deg))
+                    # The base-referenced error obeys e_y' = v sin(theta), so
+                    # the lateral steering SIGN flips with the direction of
+                    # travel — reversing, the base centre moves the other
+                    # way for the same yaw (a car backing up). The
+                    # lens-referenced error did not need this: the lens is
+                    # 0.55 m ahead of the pivot, and that lever moved it
+                    # toward the tag under a CW turn whichever way the base
+                    # rolled. Missing this made the reverse lateral loop
+                    # positive feedback (found 2026-09-04, sim-confirmed).
+                    lat_dir = float(move_dir_sign)
+                else:
+                    lateral_pp = lateral
+                    lat_dir = 1.0
+                # Predicted heading (2026-09-04): the base still executes the
+                # last stop_latency_s of angular commands, so steer on where
+                # the heading WILL be, not where the delayed frame says it
+                # is — the same lead the stop and the align use. The edge
+                # angle moves with the yaw, so predicted = current + pending.
+                pending_yaw_deg = math.degrees(self._pending_yaw_rad())
+                heading_pred_deg = heading_error_deg + pending_yaw_deg
+                sf_heading_applied = False
+                if self.steer_mode == 'state_feedback':
+                    # omega = -(v k_y) e_y - k_theta e_theta: the lateral term
+                    # scales with speed like Pure Pursuit (kinematics: e_y' =
+                    # v e_theta), the heading term does not — that is what
+                    # gives it authority at the 0.01-0.03 m/s the last 25 cm
+                    # are driven at. Closed-loop: wn = v sqrt(k_y),
+                    # zeta = k_theta / (2 v sqrt(k_y)) -> 1.6 at 0.033 m/s,
+                    # 0.53 at 0.1 m/s with the defaults 32 / 0.6.
+                    v_gain = max(abs(speed), self.sf_min_speed_for_gain) * lat_dir
+                    omega = (-(v_gain * self.sf_lateral_gain) * lateral_pp
+                             - self.sf_heading_gain * math.radians(heading_pred_deg))
+                    sf_heading_applied = True
+                else:
+                    L = max(dist_to_tag, self.cfg['robot']['look_ahead_base'])
+                    alpha = math.atan2(-lateral_pp, L)
+                    curvature = (2.0 * math.sin(alpha)) / L
+                    gain = self.cfg['robot']['pp_gain_backward'] if move_dir_sign < 0 else self.cfg['robot']['pp_gain_forward']
+                    omega = abs(speed) * curvature * gain * lat_dir
+                    # Only the calibrated approach changes visible steering.
+                    if prediction_segment is not None:
+                        omega += -math.radians(heading_pred_deg) * self.approach_heading_gain
+                        sf_heading_applied = True
                 omega = np.clip(omega, -self.move_max_angular,
                                 self.move_max_angular)
             elif prediction_segment is not None:
                 omega = self._predictive_centering_omega(
                     prediction_segment, speed)
+
+            # ===== LAUNCH YAW HOLD =====
+            # Hold the heading the align left us with through the first few
+            # cm, where one wheel starting late twists the base and Pure
+            # Pursuit (omega ~ speed x lateral) cannot see it yet. The edge
+            # angle moves WITH the base yaw, and a positive angle is removed
+            # by turning CW (same convention as align_to_tag), so the odom
+            # fallback uses the same sign: yaw error = theta - theta_start.
+            # Direction-independent — a yaw error is undone by the same
+            # in-place turn whether the base is moving forward or back.
+            if (self.launch_yaw_hold_dist > 0 and
+                    traveled_dist < self.launch_yaw_hold_dist):
+                # Heading reference, best source first: the START tag we
+                # just aligned to (in view for the first cm), else the
+                # target tag, else odom yaw against a reference that is
+                # re-anchored to the tag whenever a tag IS in view — so a
+                # twist the encoders cannot see (gear play on the reversing
+                # wheel) is still held once the tag has left the frame.
+                ref_tag = None
+                if start_id is not None and start_id in self.detected_tags:
+                    ref_tag = start_id
+                elif tag_visible:
+                    ref_tag = target_id
+                already = False
+                if ref_tag is not None:
+                    rv = self._tag_view(ref_tag) or self.detected_tags[ref_tag]
+                    yaw_err_deg = rv.get('edge_deg', tag_edge_angle_deg(rv['corners']))
+                    launch_theta_ref = self.current_theta - math.radians(yaw_err_deg)
+                    src = f'tag {ref_tag}'
+                    # the steering law above already holds the heading on
+                    # the target tag
+                    already = (ref_tag == target_id and tag_visible
+                               and sf_heading_applied)
+                else:
+                    yaw_err_deg = math.degrees(
+                        (self.current_theta - launch_theta_ref + math.pi)
+                        % (2.0 * math.pi) - math.pi)
+                    src = 'odom'
+                # act on the heading the base will settle at, not the one it
+                # had when the frame was taken (command delay)
+                yaw_err_deg += math.degrees(self._pending_yaw_rad())
+                if abs(yaw_err_deg) > abs(launch_peak_yaw_err):
+                    launch_peak_yaw_err = yaw_err_deg      # signed, largest |.|
+                if not already:
+                    omega += -math.radians(yaw_err_deg) * self.launch_yaw_gain
+                # Backlash feed-forward against the wheel that has to
+                # reverse after the align (see __init__), first ff_s only.
+                ff = 0.0
+                if (self.launch_backlash_ff_omega > 0 and
+                        self._last_align_turn_sign != 0 and
+                        (rospy.Time.now() - start_time).to_sec() < self.launch_backlash_ff_s):
+                    ff = -self._last_align_turn_sign * self.launch_backlash_ff_omega
+                    omega += ff
+                    launch_ff_applied = True
+                omega = float(np.clip(omega, -self.move_max_angular,
+                                      self.move_max_angular))
+                rospy.loginfo_throttle(
+                    0.5, "[LaunchYawHold] traveled %.3f m yaw_err %+.2f deg "
+                         "(%s) ff %+.3f omega %+.4f", traveled_dist, yaw_err_deg,
+                    src, ff, omega)
 
             # Also check if we've traveled the expected distance (backup stop)
             if traveled_dist >= total_distance * 0.95:

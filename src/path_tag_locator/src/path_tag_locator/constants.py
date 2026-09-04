@@ -97,6 +97,18 @@ class AlignCfg:
     # Detections collected per align iteration; the median-tilt frame is
     # used. 1 = trust a single frame (pre-2026-09-02 behaviour).
     samples_per_iteration: int = 5
+    # The initial view move is chunked: up to this many clamped steps of
+    # max_initial_step_m each, so a seed farther than one step from the
+    # start pose is still REACHED instead of stopped short. 1 = the old
+    # single-clamped-step behaviour (which, with the arm homing before
+    # every base move since 2026-09-03, left every seed > 0.8 m from the
+    # home TCP out of the camera's view — 6/26 entries on 2026-09-04).
+    max_initial_steps: int = 4
+    # Retry seed fallback (map_calibrator): when the first attempt failed
+    # because the ref tag was not seen from the seed, a retry may raise
+    # the camera by this much (m) to widen the field of view. Used only
+    # when no session correction / anchor estimate is available.
+    retry_raise_m: float = 0.25
 
 
 @dataclass
@@ -146,6 +158,8 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
         auto_view_distance_m=0.20,
         continue_on_move_failure=True,
         samples_per_iteration=5,
+        max_initial_steps=4,
+        retry_raise_m=0.25,
     )
     align_defaults.update(root.get("align", {}))
     align = AlignCfg(**align_defaults)

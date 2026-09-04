@@ -113,8 +113,8 @@ class Viz:
         ax.set_xlabel('world x [m] (east)')
         ax.set_ylabel('world y [m] (north)')
 
-        # plates (estimated outlines, centres 0 / 3.89)
-        for cx in (0.0, 3.89):
+        # plates (estimated outlines, centres 0 / 3.90 — measured 2026-09-04)
+        for cx in (0.0, 3.90):
             ax.add_patch(Rectangle((cx - 1.26, -1.6), 2.52, 3.2,
                                    fill=False, ls='--', ec='#909090'))
 

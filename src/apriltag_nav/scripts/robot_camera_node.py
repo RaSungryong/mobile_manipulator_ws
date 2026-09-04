@@ -35,7 +35,13 @@ Publishes:
   /<NAME>/tag_overlay  sensor_msgs/Image — the frame annotated with a centre
                      crosshair, each tag's ID, its offset from the crosshair
                      in px and degrees, its roll/pitch/yaw and how far off
-                     square it sits. Rendered only while subscribed to.
+                     square it sits. front_cam's overlay also draws the
+                     navigation stop columns — FWD at cx +
+                     robot.center_x_stop_offset and REV at cx +
+                     robot.center_x_stop_offset_reverse (robot.yaml), the
+                     columns mobile_controller stops the tag on — so the
+                     operator sees the target the drive is aiming at.
+                     Rendered only while subscribed to.
 Serves (one per camera, always advertised — even while that camera is off):
   /robot_camera/<NAME>/set_enabled   std_srvs/SetBool
 
@@ -94,6 +100,8 @@ _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _CROSSHAIR = (80, 220, 255)   # BGR, amber — the optical axis reference
 _MARK = (0, 255, 0)           # tag marker + leader line
 _TEXT = (0, 255, 255)         # BGR yellow — all overlay text
+_STOP_FWD = (255, 200, 0)     # BGR cyan-blue — forward stop column
+_STOP_REV = (255, 0, 255)     # BGR magenta — reverse stop column
 
 
 def _rot_to_matrix(rot):
@@ -136,8 +144,12 @@ class _CameraTagWorker:
 
     def __init__(self, name, image_topic, info_topic, detections_topic,
                  tag_family, tag_size, bridge, driver_service, enabled,
-                 quad_decimate=1.0):
+                 quad_decimate=1.0, stop_columns=None):
         self.name = name
+        # {'FWD': offset_px, 'REV': offset_px} from the calibrated cx, drawn
+        # on the overlay. Only the navigation camera gets them; None = draw
+        # nothing beyond the crosshair.
+        self.stop_columns = dict(stop_columns) if stop_columns else None
         self.image_topic = image_topic
         self.info_topic = info_topic
         self.tag_family = tag_family
@@ -286,26 +298,72 @@ class _CameraTagWorker:
 
     def _publish_overlay(self, src_msg, cv_img, detections):
         out_msg = self.bridge.cv2_to_imgmsg(
-            draw_overlay(cv_img, detections, self.name, self.camera_params),
+            draw_overlay(cv_img, detections, self.name, self.camera_params,
+                         self.stop_columns),
             "bgr8")
         out_msg.header = src_msg.header
         self.overlay_pub.publish(out_msg)
 
 
-def draw_overlay(cv_img, detections, name, camera_params):
-    """Annotated copy of the frame: crosshair, tag IDs, offsets, yaw.
+def draw_overlay(cv_img, detections, name, camera_params, stop_columns=None):
+    """Annotated copy of the frame: crosshair, tag IDs, offsets, yaw, and
+    (navigation camera only) the stop target columns.
+
+    `stop_columns` is {'FWD': px, 'REV': px, 'REV_skip': 'lo-hi, ...'} —
+    offsets (and, optionally, the target-tag ranges that keep the forward
+    column in reverse, appended to the REV label) from the CALIBRATED
+    cx (camera_params[2]), exactly as mobile_controller computes
+    `target_x = cx + offset`, so the drawn line is the column the stop test
+    uses and not the frame's geometric centre (they differ by ~2 px on
+    front_cam). Each is a vertical line with a label at the top; when both
+    offsets are equal one line carries both labels.
 
     Kept free of ROS so it can be rendered and checked without a camera.
     """
     img = cv_img.copy()
     h, w = img.shape[:2]
-    cx_img, cy_img = w // 2, h // 2
     fx, fy = camera_params[0], camera_params[1]
+    # The crosshair, the stop columns and every offset printed below are
+    # measured from the CALIBRATED principal point (CameraInfo cx, cy) —
+    # the same reference mobile_controller stops and records against — not
+    # the frame's geometric centre (they differ by ~2 px on front_cam,
+    # which made a tag resting exactly on the REV line read "off +398").
+    # Falls back to w/2, h/2 only when no CameraInfo has arrived.
+    cx_cal = (camera_params[2] if len(camera_params) > 2
+              and camera_params[2] else w / 2.0)
+    cy_cal = (camera_params[3] if len(camera_params) > 3
+              and camera_params[3] else h / 2.0)
+    cx_img, cy_img = int(round(cx_cal)), int(round(cy_cal))
 
-    # Crosshair = where the optical axis lands. Everything below is measured
+    # Crosshair = the calibrated optical axis. Everything below is measured
     # against it, so it is drawn even with no tag in view.
     cv2.line(img, (cx_img, 0), (cx_img, h), _CROSSHAIR, 1)
     cv2.line(img, (0, cy_img), (w, cy_img), _CROSSHAIR, 1)
+
+    if stop_columns:
+        by_col = {}
+        skip_note = stop_columns.get('REV_skip') or ''
+        for label, off in stop_columns.items():
+            if off is None or label == 'REV_skip':
+                continue
+            col = int(round(cx_cal + float(off)))
+            by_col.setdefault(col, []).append((label, float(off)))
+        # One label row per column, stacked from the bottom, so a long REV
+        # label that has to sit LEFT of its column cannot overprint FWD's.
+        for row, (col, items) in enumerate(sorted(by_col.items())):
+            colour = _STOP_REV if any(l == 'REV' for l, _ in items) else _STOP_FWD
+            # Dashed so it reads as a target, not as a second crosshair.
+            for y0 in range(0, h, 24):
+                cv2.line(img, (col, y0), (col, min(h, y0 + 12)), colour, 2)
+            text = " / ".join(f"{l} stop {o:+.0f}px" for l, o in items)
+            if skip_note and any(l == 'REV' for l, _ in items):
+                # e.g. "REV stop +400px (tags 500-599: crosshair)" — those
+                # targets stop on the crosshair in BOTH directions
+                text += f" (tags {skip_note}: crosshair)"
+            (tw, _), _ = cv2.getTextSize(text, _FONT, 0.6, 2)
+            tx = col + 8 if col + 8 + tw <= w - 4 else max(4, col - 8 - tw)
+            cv2.putText(img, text, (tx, h - 14 - row * 24), _FONT, 0.6,
+                        colour, 2)
 
     cv2.putText(img, f"{name}  {w}x{h}", (10, 26), _FONT, 0.7, _TEXT, 2)
 
@@ -313,7 +371,7 @@ def draw_overlay(cv_img, detections, name, camera_params):
         tx, ty = int(d.center_x), int(d.center_y)
         # Offset in pixels, and the same offset as a bearing angle — px alone
         # means nothing across cameras with different focal lengths.
-        dx, dy = d.center_x - cx_img, d.center_y - cy_img
+        dx, dy = d.center_x - cx_cal, d.center_y - cy_cal
         bear_x = np.degrees(np.arctan2(dx, fx))
         bear_y = np.degrees(np.arctan2(dy, fy))
 
@@ -359,6 +417,22 @@ class RobotCameraNode:
         decimate_cfg = cam_cfg.get('quad_decimate') or {}
         enabled_cfg = cam_cfg.get('enabled') or {}
         driver_cfg = cam_cfg.get('driver_toggle') or {}
+        # The columns mobile_controller stops the tag on, read from the SAME
+        # keys it reads (robot.yaml `robot:`), drawn on front_cam's overlay
+        # only — it is the navigation camera. Same fallback rule as the
+        # controller: no reverse key -> one shared column.
+        fwd_off = float(robot_cfg.get('center_x_stop_offset', 0.0) or 0.0)
+        rev_raw = robot_cfg.get('center_x_stop_offset_reverse', None)
+        rev_off = float(rev_raw) if rev_raw is not None else fwd_off
+        nav_stop_columns = {'FWD': fwd_off, 'REV': rev_off}
+        # Target tags that keep the forward column in reverse — shown in the
+        # REV label so the operator knows which column applies to a hop.
+        skip = robot_cfg.get(
+            'stop_offset_skip_tag_ranges',
+            robot_cfg.get('center_x_stop_offset_reverse_skip_tag_ranges', [])) or []
+        nav_stop_columns['REV_skip'] = ", ".join(
+            f"{int(r[0])}-{int(r[1])}" for r in skip
+            if isinstance(r, (list, tuple)) and len(r) >= 2)
 
         bridge = CvBridge()
 
@@ -382,7 +456,9 @@ class RobotCameraNode:
                 rospy.get_param(f'~driver_{name}', True)
                 and rospy.get_param(f'~enable_{name}',
                                     enabled_cfg.get(name, True)),
-                quad_decimate=decimate_cfg.get(name, 1.0))
+                quad_decimate=decimate_cfg.get(name, 1.0),
+                stop_columns=(nav_stop_columns if name == 'front_cam'
+                              else None))
 
         active = [n for n, w in self.workers.items() if w.enabled]
         if not active:

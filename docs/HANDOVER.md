@@ -38,7 +38,7 @@ pull + `catkin_make` before anything below.
 1. **정반 2 mass "tag not detected" — root-cause with the new survey
    tool before re-running anything.** Suspect: physical cross tags laid
    by the "2번정반 중심" CSV origin (+3.420) while config assumes the
-   plate's geometric centre (+3.890) — a 0.47 m offset. Procedure: park
+   plate's geometric centre (+3.900, measured 2026-09-04) — a 0.48 m offset. Procedure: park
    at a D-corridor stop, arm to that entry's plan seed pose, robot_ui →
    Scripts → `find_cross_tags` → RUN (sweeps ±0.6 m, reports sightings;
    sim-blind-tested to 1 mm on a manufactured 0.47 m offset).
@@ -57,7 +57,14 @@ pull + `catkin_make` before anything below.
    degrade instead of failing the entry when the ref tag is visible
    (results marked `degraded` — check those residuals); robot_ui has a
    Calibration tab (plate selector, dry-run, cancel, online lamp).
-4. First good session: extract the REAL hand-cam yaw noise from the
+4. **Plate 1 ran 2026-09-04 (20/26 ok).** The 6 failures were the
+   initial-move clamp (one 0.8 m step from the home TCP, seed 1.15 m
+   away) — fixed: chunked approach (`align.max_initial_steps`), retry
+   with a re-estimated seed (session correction → anchor → raised), and
+   `calibration_plan_plate1.yaml` seeds rewritten from the session
+   (`scripts/update_plan_seeds_from_session.py`). Re-run plate 1 to pick
+   up the six; expect the retry path to be exercised for the first time.
+5. First good session: extract the REAL hand-cam yaw noise from the
    session archive `history` and feed it to
    `path_tag_locator/scripts/error_budget.py` (assumed 0.2° today; the
    xy budget is dominated by yaw × the A→B lever).
@@ -92,7 +99,7 @@ pull + `catkin_make` before anything below.
   top, face up, yaw assumed 0). Not yet checked against the physical tags —
   `verify_map_world.py`'s relative-geometry check on the first session is
   what confirms them (a wrong yaw rotates every result about that tag).
-  Plate 2 uses `reference_tags_plate2.yaml` (= plate 1 + 3.890 m x) and its
+  Plate 2 uses `reference_tags_plate2.yaml` (= plate 1 + 3.900 m x) and its
   own plan — plan and ref file swap together.
 - `camera_offset` 0.55 (map design value) vs 0.547 (tape measure) is
   unreconciled. If 547 is right, move the tags, not the key.
@@ -116,15 +123,54 @@ pull + `catkin_make` before anything below.
 
 - ~~`align_to_tag()` has no timeout~~ — **fixed 2026-09-02**
   (`align_timeout_s: 20.0`, hop fails on expiry). Same day: align now runs
-  after pivots too. The stop column is unchanged and shared by both
-  directions (`cx + center_x_stop_offset`) — a mirrored reverse line was
-  tried and backed out. Offline-verified only; `mobile_node` must be
-  restarted and the first pivot watched. Also 2026-09-02: hops touching
+  after pivots too. **Since 2026-09-04 the stop column depends on the
+  direction:** forward `cx + center_x_stop_offset` (0), reverse
+  `cx + center_x_stop_offset_reverse` (+400 px = tag at the far right of
+  the frame, ~162 mm ahead of the lens; remove the key for one shared
+  column) — EXCEPT a reverse hop whose target is a 500-series tag, which
+  keeps the forward column (`center_x_stop_offset_reverse_skip_tag_ranges:
+  [[500, 599]]`; dock / pivot tags need the base on the designed pose).
+  Both columns are drawn on `/front_cam/tag_overlay` (FWD cyan,
+  REV magenta). `go_to_next_tag` corrects the next hop's odom distance
+  for where the lens actually rests (see the 2026-09-04 Work Log entry).
+  Offline-verified only; `mobile_node` AND `robot_camera_node` must be
+  restarted, and the first reverse hop watched on the overlay: the whole
+  tag must still be in frame at rest. Also 2026-09-02: hops touching
   tags 400–499 (zone A lane) run with prediction OFF — Pure Pursuit when
   the tag is seen, straight command when blind, align at the stop
-  (`predictive_centering.disabled_tag_ranges`). 400→400 hops also skip
-  the in-place align (`align_skip_tag_ranges`); any hop with a 100-/500-
-  series endpoint aligns.
+  (`predictive_centering.disabled_tag_ranges`). **Since 2026-09-04 EVERY
+  hop ends with stop → align_to_tag** — the 400→400 align skip
+  (`align_skip_tag_ranges`) is retired and the key is ignored with a
+  warning; a tag out of view at rest fails the hop on `align_timeout_s`.
+  Same day: the align stop is led by the pending rotation of the 0.55 s
+  command delay, then settles 0.85 s and re-measures at rest (skid-steer
+  overshoot fix, `align_settle_s` / `align_max_passes` /
+  `align_lead_target_ratio`); `final_approach_dist` 0.08 and
+  `blind_approach_dist` 0.15 (were 0.06 / 0.12); and a launch yaw hold
+  (`launch_yaw_hold_dist` 0.15 m, `launch_yaw_gain` 1.0) holds the
+  aligned heading through the first 15 cm of every hop — the "sets off
+  twisted, one wheel late" symptom — plus a backlash feed-forward
+  (`launch_backlash_ff_omega` 0.02 rad/s for 0.3 s, opposing the wheel the
+  align left backing; fit it from `launch_peak_yaw_err_deg` in the
+  arrival records). PP steering: `move_max_angular_speed` 0.25 (was 0.12),
+  `look_ahead_base` 0.25 (was 0.4), and `pp_lateral_reference: base` —
+  PP puts the BASE CENTRE on the line so the align lands the lens on the
+  tag (the 14:33 records showed the align swinging the lens 10–20 mm
+  sideways: 0.55 m × sin(yaw)). Aligned yaw at rest on that run: all
+  within ±0.19°. `align_mode: pulse` exists as a fallback. Later the
+  same day: `steer_mode: state_feedback` (lateral + PREDICTED heading
+  law replacing Pure Pursuit while the tag is in view), median of
+  `stop_measure_frames` 3 detections for every decision, and
+  `camera_latency_compensation` (image stamp × executed speed). All
+  offline-only; watch the first hops for steering oscillation. With the
+  base-referenced lateral the steering sign flips in REVERSE (fixed the
+  same day; a reverse hop that drifts sideways while the tag is in view
+  would be the symptom of getting this wrong). Then, to make forward
+  behave like reverse: `center_x_stop_offset` 300 px (forward stops with
+  the tag ~12 cm ahead of the lens so the next launch sees it),
+  `stop_offset_skip_tag_ranges` (500-series stop on the crosshair both
+  ways), `/robot_pose` gained the fore-aft term, the heading hold covers
+  the whole hop, and the reverse predictive-centering sign was fixed.
 - **Reverse hops see their target tag only ~3 cm out** (bumper hides the
   floor behind the lens). Fixed 2026-09-02 with an odom creep zone
   (`blind_approach_dist` 0.12 m at 0.015 m/s); before it reverse stops
@@ -169,6 +215,9 @@ pull + `catkin_make` before anything below.
 2. One commander of the base at a time: no `TASK`/`GOTO` during a
    calibration session; never run `tools/navigate.py`, `tools/vw_drive.py`
    or `tools/lift_calib_ui.py` while the stack is up (second writers).
+   Manual "go N m / turn N deg" moves belong in **robot_ui's Mobile tab**
+   (2026-09-04): they run inside `mobile_node` via `/mobile/move_cmd`, so
+   they are safe with the stack up — unlike the tools above.
 3. `/lifter/*` (ours, guarded) ≠ `/lift/*` (raw driver). Read twice before
    `rostopic pub`. Absolute lift moves are refused until lift origin homing;
    `/lift/homed == true` can still need a re-home (command logged, position

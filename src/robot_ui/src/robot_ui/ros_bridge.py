@@ -57,6 +57,13 @@ STREAM_CAMERAS = {
     'side_cam': '/side_cam/color/image_raw',
     'hand_cam': '/hand_cam/color/image_raw',
 }
+# robot_camera_node's annotated frame per camera: amber crosshair on the
+# optical axis, and per tag its ID, px + bearing offset from the crosshair,
+# rpy / tilt / range. Rendered by the node ONLY while something subscribes,
+# so showing it costs nothing when the box is unticked. The UI subscribes to
+# either this or the raw stream per camera — never both (see
+# set_stream_source), so a camera pane is one subscription either way.
+OVERLAY_TOPICS = {name: f'/{name}/tag_overlay' for name in STREAM_CAMERAS}
 
 ARM_AXES = ('x', 'y', 'z', 'rx', 'ry', 'rz')
 
@@ -74,6 +81,7 @@ class RosBridge(QObject):
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
     calib_progress = pyqtSignal(dict)
+    tag_ids = pyqtSignal(str, object)   # (camera, [tag ids in latest frame])
     log = pyqtSignal(str)
 
     def __init__(self, node_name='robot_ui', init_node=True):
@@ -115,6 +123,12 @@ class RosBridge(QObject):
         self._arm_lock = threading.Lock()
         self._arm_latest = None
         self._arm_event = threading.Event()
+        # Latest /mobile/state dict, for wait_for_mobile(). Kept in its own
+        # slot rather than looked up in _cache: PyQt returns a NEW bound
+        # signal object on every `self.mobile_state` access, so a dict keyed
+        # by it cannot be read back.
+        self._mobile_lock = threading.Lock()
+        self._mobile_latest = None
 
         # ---------- publishers ----------
         self._pub_task_cmd = rospy.Publisher('/task_command', String,
@@ -129,15 +143,21 @@ class RosBridge(QObject):
                                                queue_size=1)
         self._pub_lift_mm = rospy.Publisher('/lifter/height_cmd', Float32,
                                             queue_size=1)
+        self._pub_mobile_move = rospy.Publisher('/mobile/move_cmd', String,
+                                                queue_size=1)
 
         # ---------- subscribers ----------
         # queue_size=1 + a large buff_size on the image topics on purpose: for
         # a live view the newest frame is the only one that matters, and the
         # default 64 kB buffer fragments 720p frames badly enough to look like
         # packet loss.
-        for name, topic in STREAM_CAMERAS.items():
-            self._sub(topic, Image, self._cb_image, callback_args=name,
-                      queue_size=1, buff_size=2 ** 24)
+        # One subscription per tag camera, raw OR overlay; the overlay is the
+        # default because the operator is usually checking what the detector
+        # sees. set_stream_source() swaps it live.
+        self._stream_subs = {}
+        self._stream_overlay = {}
+        for name in STREAM_CAMERAS:
+            self._subscribe_stream(name, overlay=True)
         self._sub('/basler/image_raw', Image, self._cb_image,
                   callback_args='basler', queue_size=1, buff_size=2 ** 24)
 
@@ -146,8 +166,7 @@ class RosBridge(QObject):
                   callback_args=self.task_state, queue_size=5)
         self._sub('/lifter/state', String, self._cb_json,
                   callback_args=self.lift_state, queue_size=1)
-        self._sub('/mobile/state', String, self._cb_json,
-                  callback_args=self.mobile_state, queue_size=1)
+        self._sub('/mobile/state', String, self._cb_mobile, queue_size=1)
         self._sub('/camera/state', String, self._cb_camera_state, queue_size=1)
         self._sub('/bms/state', BatteryState, self._cb_battery, queue_size=1)
         self._sub('/safety/estop', Bool, self._cb_estop, queue_size=1)
@@ -165,15 +184,46 @@ class RosBridge(QObject):
         # latest_detections().
         self._det_lock = threading.Lock()
         self._det_latest = {}
-        for cam, topic in (('hand_cam', '/hand_cam/tag_detections'),
-                           ('front_cam', '/front_cam/tag_detections')):
-            self._sub(topic, AprilTagDetectionArray, self._cb_detections,
-                      callback_args=cam, queue_size=1)
+        for cam in STREAM_CAMERAS:
+            self._sub(f'/{cam}/tag_detections', AprilTagDetectionArray,
+                      self._cb_detections, callback_args=cam, queue_size=1)
 
     def _sub(self, topic, msg_type, callback, **kwargs):
         sub = rospy.Subscriber(topic, msg_type, callback, **kwargs)
         self._subs.append(sub)
         return sub
+
+    def _subscribe_stream(self, name, overlay):
+        old = self._stream_subs.pop(name, None)
+        if old is not None:
+            try:
+                old.unregister()
+            except Exception:
+                pass
+            if old in self._subs:
+                self._subs.remove(old)
+        topic = OVERLAY_TOPICS[name] if overlay else STREAM_CAMERAS[name]
+        # queue_size=1 + a large buff_size on purpose: for a live view the
+        # newest frame is the only one that matters, and the default 64 kB
+        # buffer fragments 720p frames badly enough to look like packet loss.
+        self._stream_subs[name] = self._sub(
+            topic, Image, self._cb_image, callback_args=name,
+            queue_size=1, buff_size=2 ** 24)
+        self._stream_overlay[name] = bool(overlay)
+        return topic
+
+    def set_stream_source(self, name, overlay):
+        """Show one tag camera as the detector's annotated overlay (True) or
+        the raw colour stream (False). (ok, message)."""
+        if name not in STREAM_CAMERAS:
+            return False, f'unknown camera {name}'
+        if self._stream_overlay.get(name) == bool(overlay):
+            return True, f'{name} already on {"overlay" if overlay else "raw"}'
+        topic = self._subscribe_stream(name, overlay)
+        return True, f'{name} <- {topic}'
+
+    def stream_is_overlay(self, name):
+        return bool(self._stream_overlay.get(name, False))
 
     def replay(self):
         """Re-emit the latest value of every cached state signal.
@@ -250,6 +300,18 @@ class RosBridge(QObject):
             self._emit(signal, json.loads(msg.data))
         except Exception as e:
             rospy.logwarn_throttle(10.0, f'[UI] bad JSON state: {e}')
+
+    def _cb_mobile(self, msg):
+        if not self._alive:
+            return
+        try:
+            state = json.loads(msg.data)
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f'[UI] bad /mobile/state JSON: {e}')
+            return
+        with self._mobile_lock:
+            self._mobile_latest = state
+        self._emit(self.mobile_state, state)
 
     def _cb_camera_state(self, msg):
         if not self._alive:
@@ -429,7 +491,80 @@ class RosBridge(QObject):
         return self._call_trigger('/lifter/stop', 5.0)
 
     def mobile_stop(self):
+        """EMERGENCY latch on mobile_node — needs mobile_clear_stop() after."""
         return self._call_trigger('/mobile/stop', 5.0)
+
+    def mobile_cancel(self):
+        """Preempt stop: zero velocity, no emergency latch."""
+        return self._call_trigger('/mobile/cancel', 5.0)
+
+    def mobile_clear_stop(self):
+        return self._call_trigger('/mobile/clear_stop', 5.0)
+
+    # ---- manual relative moves (odometry-closed, no tag) ----
+    # Same completion model as move_to_tag in MobileClient: mobile_node
+    # stamps every finished move with an incrementing `seq`; read it BEFORE
+    # publishing and wait for it to advance. /mobile/state is a periodic
+    # 5 Hz topic; _cb_mobile keeps the latest dict for the poll below.
+
+    def mobile_snapshot(self):
+        with self._mobile_lock:
+            return dict(self._mobile_latest) if self._mobile_latest else None
+
+    def mobile_seq(self):
+        st = self.mobile_snapshot()
+        return int(st.get('seq', 0)) if st else 0
+
+    def wait_for_mobile(self, since_seq, timeout=120.0, ack_timeout=5.0):
+        """Block until mobile_node's seq passes `since_seq`. (ok, message)."""
+        # Phase 1: did the node pick it up? Either it went busy, or it
+        # already finished (seq advanced).
+        deadline = rospy.get_time() + ack_timeout
+        while not rospy.is_shutdown() and self._alive:
+            st = self.mobile_snapshot()
+            if st and (st.get('busy') or st.get('seq', 0) > since_seq):
+                break
+            if rospy.get_time() > deadline:
+                return False, (f'mobile_node never acknowledged within '
+                               f'{ack_timeout:.0f}s — is it running?')
+            rospy.sleep(0.05)
+        # Phase 2: completion.
+        deadline = rospy.get_time() + timeout
+        while not rospy.is_shutdown() and self._alive:
+            st = self.mobile_snapshot()
+            if st and st.get('seq', 0) > since_seq:
+                res = st.get('result') or {}
+                return bool(res.get('ok')), str(res.get('message', ''))
+            if rospy.get_time() > deadline:
+                return False, f'timed out after {timeout:.0f}s waiting for base'
+            rospy.sleep(0.05)
+        return False, 'shutting down'
+
+    def mobile_drive(self, distance_m, speed=None, timeout=120.0):
+        """Drive the base `distance_m` along body X (negative = reverse).
+        Blocks until mobile_node reports completion. (ok, message)."""
+        if self.mobile_snapshot() is None:
+            return False, 'no /mobile/state — is mobile_node running?'
+        seq = self.mobile_seq()
+        req = {'type': 'move', 'distance_m': float(distance_m)}
+        if speed:
+            req['speed'] = float(speed)
+        self._pub_mobile_move.publish(String(json.dumps(req)))
+        self.log.emit(f'[UI] /mobile/move_cmd <- {json.dumps(req)}')
+        return self.wait_for_mobile(seq, timeout)
+
+    def mobile_pivot(self, angle_deg, speed=None, timeout=120.0):
+        """Pivot the base in place by `angle_deg` (positive = CCW / left).
+        Blocks until mobile_node reports completion. (ok, message)."""
+        if self.mobile_snapshot() is None:
+            return False, 'no /mobile/state — is mobile_node running?'
+        seq = self.mobile_seq()
+        req = {'type': 'pivot', 'angle_deg': float(angle_deg)}
+        if speed:
+            req['speed'] = float(speed)
+        self._pub_mobile_move.publish(String(json.dumps(req)))
+        self.log.emit(f'[UI] /mobile/move_cmd <- {json.dumps(req)}')
+        return self.wait_for_mobile(seq, timeout)
 
     def send_task_command(self, command):
         """Publish a line to /task_command (TASK / GOTO / STOP / STATE)."""
@@ -455,6 +590,9 @@ class RosBridge(QObject):
             return
         with self._det_lock:
             self._det_latest[cam] = msg
+        # Small list at frame rate — cheap enough to hand to the GUI thread
+        # directly; the window shows it under the camera pane.
+        self.tag_ids.emit(cam, [int(d.id) for d in msg.detections])
 
     def latest_detections(self, cam='hand_cam', max_age_s=1.0):
         """Fresh detections of one camera as a list of dicts (id,

@@ -9,6 +9,7 @@
 # ref tag's normal at the view height, optical axis through the
 # tag; the noted cam yaw spins about that axis only (free for
 # alignment), chosen so the FLANGE sits closest to the arm base.
+# Seeds UPDATED from session 20260904_153218 on 2026-09-04 16:06 by scripts/update_plan_seeds_from_session.py (per-line "# seed:" comments say how). Re-running the generator resets them.
 
 defaults:
   retry_count: 1
@@ -17,80 +18,80 @@ defaults:
 plan:
   - path_tag_id: 100    # B, y -1.850, flange reach 1.198 m (cam yaw 50°)
     ref_tag_id: 0
-    arm_view_tcp_mm_deg: [-1052.1, 931.3, 60.2, 178.7, 0.3, 37.3]
+    arm_view_tcp_mm_deg: [-1079.6, 907.5, 60.2, 178.7, 0.3, 37.3]    # seed: design + median Δxy[-27.5, -23.8] of ref 0 (same ref, n=3) 20260904_153218
     # START HERE — park the base on this tag before calling run_calibration
   - path_tag_id: 101    # B, y -1.450, flange reach 0.929 m (cam yaw 60°)
     ref_tag_id: 0
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-695.5, 873.2, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 102    # B, y -1.050, flange reach 0.739 m (cam yaw 75°)
     ref_tag_id: 0
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-326.3, 852.4, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 103    # B, y -0.650, flange reach 0.670 m (cam yaw 95°)
     ref_tag_id: 0
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [9.2, 834.4, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 104    # B, y -0.250, flange reach 0.929 m (cam yaw 60°)
     ref_tag_id: 1
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-656.6, 900.0, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 105    # B, y +0.150, flange reach 0.739 m (cam yaw 75°)
     ref_tag_id: 1
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-318.8, 867.8, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 106    # B, y +0.550, flange reach 0.670 m (cam yaw 95°)
     ref_tag_id: 1
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [23.2, 845.2, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 107    # B, y +0.950, flange reach 0.929 m (cam yaw 60°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-671.7, 900.2, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 108    # B, y +1.350, flange reach 0.739 m (cam yaw 75°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-317.3, 873.1, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 109    # B, y +1.750, flange reach 0.670 m (cam yaw 95°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [28.9, 854.2, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 110    # B, y +2.150, flange reach 0.740 m (cam yaw 120°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [376.6, 844.1, 60.2, 178.7, 0.3, -32.7]
+    arm_view_tcp_mm_deg: [364.0, 876.9, 60.2, 178.7, 0.3, -32.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 111    # B, y +2.550, flange reach 0.929 m (cam yaw 135°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [734.5, 855.8, 60.2, 178.7, 0.3, -47.7]
+    arm_view_tcp_mm_deg: [719.2, 856.5, 60.2, 178.7, 0.3, -47.7]    # seed: design + median Δxy[-15.3, 0.7] of ref 2 (same ref, n=4) 20260904_153218
   - path_tag_id: 112    # B, y +2.950, flange reach 1.198 m (cam yaw 145°)
     ref_tag_id: 2
-    arm_view_tcp_mm_deg: [1108.7, 869.5, 60.2, 178.7, 0.3, -57.7]
+    arm_view_tcp_mm_deg: [1093.4, 870.2, 60.2, 178.7, 0.3, -57.7]    # seed: design + median Δxy[-15.3, 0.7] of ref 2 (same ref, n=4) 20260904_153218
   - path_tag_id: 113    # C, y +1.850, flange reach 1.198 m (cam yaw 230°)
     ref_tag_id: 3
-    arm_view_tcp_mm_deg: [-1052.1, 931.3, 60.2, 178.7, 0.3, 37.3]
+    arm_view_tcp_mm_deg: [-1070.2, 913.9, 60.2, 178.7, 0.3, 37.3]    # seed: design + median Δxy[-18.1, -17.4] of ref 3 (same ref, n=3) 20260904_153218
   - path_tag_id: 114    # C, y +1.450, flange reach 0.929 m (cam yaw 240°)
     ref_tag_id: 3
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-670.2, 889.2, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 115    # C, y +1.050, flange reach 0.739 m (cam yaw 255°)
     ref_tag_id: 3
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-317.3, 858.8, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 116    # C, y +0.650, flange reach 0.670 m (cam yaw 275°)
     ref_tag_id: 3
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [9.5, 842.4, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 117    # C, y +0.250, flange reach 0.929 m (cam yaw 240°)
     ref_tag_id: 4
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-685.9, 874.7, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 118    # C, y -0.150, flange reach 0.739 m (cam yaw 255°)
     ref_tag_id: 4
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-320.2, 870.6, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 119    # C, y -0.550, flange reach 0.670 m (cam yaw 275°)
     ref_tag_id: 4
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [26.9, 852.9, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 120    # C, y -0.950, flange reach 0.929 m (cam yaw 240°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [-668.0, 906.8, 60.2, 178.7, 0.3, 27.3]
+    arm_view_tcp_mm_deg: [-688.9, 890.0, 60.2, 178.7, 0.3, 27.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 121    # C, y -1.350, flange reach 0.739 m (cam yaw 255°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [-299.2, 876.2, 60.2, 178.7, 0.3, 12.3]
+    arm_view_tcp_mm_deg: [-316.8, 861.7, 60.2, 178.7, 0.3, 12.3]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 122    # C, y -1.750, flange reach 0.670 m (cam yaw 275°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [48.9, 849.8, 60.2, 178.7, 0.3, -7.7]
+    arm_view_tcp_mm_deg: [8.4, 843.4, 60.2, 178.7, 0.3, -7.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 123    # C, y -2.150, flange reach 0.740 m (cam yaw 300°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [376.6, 844.1, 60.2, 178.7, 0.3, -32.7]
+    arm_view_tcp_mm_deg: [364.0, 820.8, 60.2, 178.7, 0.3, -32.7]    # seed: measured x,y 20260904_153218 (z/orientation: design)
   - path_tag_id: 124    # C, y -2.550, flange reach 0.929 m (cam yaw 315°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [734.5, 855.8, 60.2, 178.7, 0.3, -47.7]
+    arm_view_tcp_mm_deg: [715.3, 840.2, 60.2, 178.7, 0.3, -47.7]    # seed: design + median Δxy[-19.2, -15.6] of ref 5 (same ref, n=4) 20260904_153218
   - path_tag_id: 125    # C, y -2.950, flange reach 1.198 m (cam yaw 325°)
     ref_tag_id: 5
-    arm_view_tcp_mm_deg: [1108.7, 869.5, 60.2, 178.7, 0.3, -57.7]
+    arm_view_tcp_mm_deg: [1089.5, 853.9, 60.2, 178.7, 0.3, -57.7]    # seed: design + median Δxy[-19.2, -15.6] of ref 5 (same ref, n=4) 20260904_153218

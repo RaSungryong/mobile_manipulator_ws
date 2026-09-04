@@ -7,6 +7,22 @@
 # centre stops 0.55 m behind the tag along its heading.
 # zone selects the tag->pose transform in mobile_controller: A/DOCK = heading 0
 # (east), B/D = +90 (north), C/E = -90 (south).
+#
+# 2026-09-04 — five pivot tags were physically re-laid (503, 505, 506,
+# 507, 508) and tape-measured against their neighbouring WORK tag, which
+# stayed put; only the measured axis of the moved tag changed, every
+# other tag keeps its design value:
+#     111 ↔ 505 = 1.03 m → 505 y 3.58      113 ↔ 506 = 0.64 m → 506 y 2.49
+#     137 ↔ 507 = 1.04 m → 507 y 3.59      138 ↔ 508 = 0.62 m → 508 y 2.47 (= design)
+#     502 ↔ 503 = 0.50 m → 503 x 2.76
+#   Consequences: 503's stop pose is now x 2.21, 3 cm east of the zone D
+#   lane (2.18) where 507 still sits — the 503→507 pivot lands the front
+#   camera ~3 cm beside 507 and align/Pure Pursuit take it from there. The
+#   exit tags are no longer exactly 0.55 from the y 3.02 lane (505/507
+#   0.56/0.57 north, 506 0.53 south); that only changes those hops' odom
+#   distances. The plate-to-plate distance was measured at 3.90 m the same
+#   day (design 3.89) — applied to reference_tags_plate2.yaml (the cross
+#   tags ON 정반 2), NOT to the D/E floor lanes, which stay at 2.18 / 5.6.
 
 # Tag Database
 tags:
@@ -27,7 +43,7 @@ tags:
     name: Entry_B
   505:
     x: -1.71
-    y: 3.57
+    y: 3.58
     type: PIVOT
     zone: B
     name: Exit_B
@@ -40,20 +56,20 @@ tags:
     name: Entry_C
   506:
     x: 1.71
-    y: 2.47
+    y: 2.49
     type: PIVOT
     zone: C
     name: Exit_C
 
   503:
-    x: 2.73
+    x: 2.76
     y: 3.02
     type: PIVOT
     zone: A
     name: Entry_D
   507:
     x: 2.18
-    y: 3.57
+    y: 3.59
     type: PIVOT
     zone: D
     name: Exit_D

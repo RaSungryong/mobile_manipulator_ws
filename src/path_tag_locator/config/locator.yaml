@@ -62,8 +62,21 @@ path_tag_locator:
     angle_tol_deg:         1.0     # convergence: tilt between cam +z and tag +z
     max_step_m:            0.10    # per-iteration translation clamp
     max_step_deg:          15.0    # per-iteration rotation clamp
-    max_initial_step_m:    0.80    # clamp on the user-supplied initial move
-    max_initial_step_deg:  180.0   # clamp on the user-supplied initial move
+    max_initial_step_m:    0.80    # clamp on ONE step of the initial move
+    max_initial_step_deg:  180.0   # clamp on ONE step of the initial move
+    # The initial move is chunked into up to this many clamped steps so
+    # the seed is REACHED. With the arm homing before every base move
+    # (home TCP ~(-160, 700, 774) mm) most seeds are 0.9-1.2 m away; a
+    # single 0.8 m step left 6/26 plate-1 entries short of the seed on
+    # 2026-09-04 ("initial move clamped" -> "tag A not detected").
+    max_initial_steps:     4
+    # Retry fallback when the ref tag was not seen from the seed and no
+    # session correction / anchor estimate is available yet: raise the
+    # camera by this much (m) — at 0.5 m view height the half-FOV is
+    # ~0.35 m, at 0.75 m ~0.53 m. The result is still valid, just from
+    # further away (worse yaw budget); the record's view_tcp_source
+    # says "+raised".
+    retry_raise_m:         0.25
     move_vel:              20.0    # arm_node move_cart vel
     move_acc:              20.0
     move_ovl:              100.0   # kept for signature parity (unused)

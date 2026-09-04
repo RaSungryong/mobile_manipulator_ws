@@ -23,6 +23,7 @@ as Qt signals on the GUI thread.
 """
 
 import os
+import time
 from datetime import datetime
 
 import cv2
@@ -128,10 +129,12 @@ class MainWindow(QMainWindow):
         self.lbl_battery = self._status_chip('BAT —')
         self.lbl_arm = self._status_chip('ARM —')
         self.lbl_lift = self._status_chip('LIFT —')
+        self.lbl_mobile = self._status_chip('BASE —')
         self.lbl_task = self._status_chip('TASK —')
         self.lbl_camera = self._status_chip('CAM —')
         for chip in (self.lbl_estop, self.lbl_battery, self.lbl_arm,
-                     self.lbl_lift, self.lbl_task, self.lbl_camera):
+                     self.lbl_lift, self.lbl_mobile, self.lbl_task,
+                     self.lbl_camera):
             row.addWidget(chip)
         row.addStretch(1)
 
@@ -188,22 +191,49 @@ class MainWindow(QMainWindow):
         self.lbl_ra.setAlignment(Qt.AlignCenter)
         shot_layout.addWidget(self.lbl_ra)
 
-        self.main_views = QTabWidget()
-        self.main_views.addTab(self._views['basler'], 'Basler (live)')
-        self.main_views.addTab(shot_page, 'Last capture')
-
-        # Tag cameras: a thumbnail strip. They are for confirming a camera is
-        # alive and roughly aimed, not for judging surface texture — double
-        # click one to inspect it properly.
-        self.thumb_strip = QWidget()
-        strip = QHBoxLayout(self.thumb_strip)
-        strip.setContentsMargins(0, 0, 0, 0)
+        # Tag cameras: each pane shows robot_camera_node's tag overlay (IDs,
+        # crosshair offset, rpy) by default; the "tags" box swaps it for the
+        # raw stream, the "on" box turns the camera + detector off entirely
+        # (robot_camera/<name>/set_enabled). A label under each pane lists
+        # the IDs in the latest detection frame.
+        self.chk_cam_on = {}
+        self.chk_cam_tags = {}
+        self.lbl_cam_tags = {}
+        self._tag_seen_at = {}
         for name in STREAM_CAMERAS:
             self._views[name] = ImageView(name)
-            strip.addWidget(self._views[name])
 
+        # One MAIN slot and a thumbnail strip; every camera lives in a "cell"
+        # (view + its control row) and a single click on any thumbnail moves
+        # that cell into the main slot and the previous main cell back down.
+        # Cells are moved between layouts rather than views re-created, so a
+        # camera keeps its last frame, ROI and checkbox state across swaps.
+        self._cells = {'basler': self._make_cell('basler')}
+        for name in STREAM_CAMERAS:
+            self._cells[name] = self._make_cell(name)
+
+        self._main_slot = QWidget()
+        self._main_layout = QVBoxLayout(self._main_slot)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_views = QTabWidget()
+        self.main_views.addTab(self._main_slot, 'Live')
+        self.main_views.addTab(shot_page, 'Last capture')
+
+        self.thumb_strip = QWidget()
+        self._strip_layout = QHBoxLayout(self.thumb_strip)
+        self._strip_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_name = None
+        self._select_main('basler')
+
+        for name, view in self._views.items():
+            view.clicked.connect(lambda _t, n=name: self._select_main(n))
         for view in list(self._views.values()) + [self.view_shot]:
             view.double_clicked.connect(self._on_view_double_clicked)
+
+        # Age out the per-camera tag list when a camera stops reporting.
+        self._tag_age_timer = QTimer(self)
+        self._tag_age_timer.timeout.connect(self._age_tag_labels)
+        self._tag_age_timer.start(1000)
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -223,6 +253,81 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.main_views, 7)
         layout.addWidget(self.thumb_strip, 2)
         return panel
+
+    def _make_cell(self, name):
+        """A camera view plus its one-line control row, as one widget."""
+        cell = QWidget()
+        lay = QVBoxLayout(cell)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        lay.addWidget(self._views[name], 1)
+        row = QHBoxLayout()
+        row.setContentsMargins(2, 0, 2, 0)
+        if name in STREAM_CAMERAS:
+            on = QCheckBox('on')
+            on.setChecked(True)
+            on.setToolTip(f'/robot_camera/{name}/set_enabled — stops the '
+                          'detector AND the vendor stream')
+            on.toggled.connect(
+                lambda v, n=name: self._run(
+                    self.bridge.set_stream_camera_enabled, n, v,
+                    label=f'{n} {"on" if v else "off"}'))
+            tags = QCheckBox('tags')
+            tags.setChecked(True)
+            tags.setToolTip('Show the detector overlay (tag ID, offset from '
+                            'the optical axis, rpy) instead of the raw image')
+            tags.toggled.connect(
+                lambda v, n=name: self._run(
+                    self.bridge.set_stream_source, n, v,
+                    label=f'{n} {"overlay" if v else "raw"}'))
+            lbl = QLabel('tags: —')
+            lbl.setStyleSheet('color:#aaa; font-family:monospace;')
+            row.addWidget(on)
+            row.addWidget(tags)
+            row.addWidget(lbl, 1)
+            self.chk_cam_on[name] = on
+            self.chk_cam_tags[name] = tags
+            self.lbl_cam_tags[name] = lbl
+        else:
+            hint = QLabel('wrist camera — drag an ROI, right-click clears')
+            hint.setStyleSheet('color:#888;')
+            row.addWidget(hint, 1)
+        lay.addLayout(row)
+        return cell
+
+    def _select_main(self, name):
+        """Put camera `name` in the main slot; everything else in the strip."""
+        if name == self._main_name or name not in self._cells:
+            return
+        for cell in self._cells.values():
+            for lay in (self._main_layout, self._strip_layout):
+                lay.removeWidget(cell)
+        self._main_layout.addWidget(self._cells[name], 1)
+        for other in self._cells:
+            if other != name:
+                self._strip_layout.addWidget(self._cells[other], 1)
+                self._cells[other].show()
+        self._cells[name].show()
+        self._main_name = name
+        self.main_views.setTabText(0, f'{name} (live)')
+        if self.main_views.currentIndex() != 0:
+            self.main_views.setCurrentIndex(0)
+        self.append_log(f'[UI] main view: {name}')
+
+    def _on_tag_ids(self, cam, ids):
+        lbl = self.lbl_cam_tags.get(cam)
+        if lbl is None:
+            return
+        self._tag_seen_at[cam] = time.monotonic()
+        lbl.setText('tags: ' + (', '.join(str(i) for i in ids) if ids else '—'))
+
+    def _age_tag_labels(self):
+        now = time.monotonic()
+        for cam, lbl in self.lbl_cam_tags.items():
+            seen = self._tag_seen_at.get(cam)
+            if seen is not None and now - seen > 1.5:
+                lbl.setText('tags: — (no detections topic)')
+                self._tag_seen_at[cam] = None
 
     def _on_view_double_clicked(self, title):
         """Give the image the whole window, or put the controls back.
@@ -272,6 +377,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_collect_tab(save_dir), 'Collect')
         tabs.addTab(self._build_arm_tab(), 'Arm')
         tabs.addTab(self._build_task_tab(), 'Task')
+        tabs.addTab(self._build_mobile_tab(), 'Mobile')
         tabs.addTab(self._build_calibration_tab(), 'Calibration')
         tabs.addTab(self._build_plugin_tab(), 'Scripts')
 
@@ -370,17 +476,8 @@ class MainWindow(QMainWindow):
         form.addRow('', self.btn_capture)
         layout.addWidget(cap_box)
 
-        cam_box = QGroupBox('Tag cameras')
-        cam_layout = QHBoxLayout(cam_box)
-        for name in STREAM_CAMERAS:
-            chk = QCheckBox(name)
-            chk.setChecked(True)
-            chk.toggled.connect(
-                lambda on, n=name: self._run(
-                    self.bridge.set_stream_camera_enabled, n, on))
-            cam_layout.addWidget(chk)
-        layout.addWidget(cam_box)
-
+        # Tag-camera on/off moved to the camera panes themselves (2026-09-04),
+        # next to the overlay toggle and the detected-ID readout.
         layout.addStretch(1)
         return tab
 
@@ -561,6 +658,107 @@ class MainWindow(QMainWindow):
         layout.addWidget(lift_box)
 
         layout.addStretch(1)
+        return tab
+
+    # ---------- Mobile tab ----------
+    def _build_mobile_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        box = QGroupBox('Manual move  (odometry-closed, no tag)')
+        box_layout = QVBoxLayout(box)
+        note = QLabel(
+            'Drives the base a fixed distance or pivots a fixed angle through '
+            'mobile_node (/mobile/move_cmd) — trapezoid profile, closed on '
+            '/odom, aborts if odom stalls. Refused while a GOTO/TASK or a '
+            'calibration session is driving. After STOP ALL the base is '
+            'emergency-latched: press "Clear stop latch" before the next move.')
+        note.setWordWrap(True)
+        note.setStyleSheet('color:#888;')
+        box_layout.addWidget(note)
+
+        # --- straight line ---
+        line = QHBoxLayout()
+        line.addWidget(QLabel('Distance'))
+        self.spin_mob_dist = QDoubleSpinBox()
+        self.spin_mob_dist.setRange(0.005, 5.0)
+        self.spin_mob_dist.setDecimals(3)
+        self.spin_mob_dist.setSingleStep(0.05)
+        self.spin_mob_dist.setSuffix(' m')
+        self.spin_mob_dist.setValue(0.300)
+        line.addWidget(self.spin_mob_dist)
+        line.addWidget(QLabel('speed'))
+        self.spin_mob_v = QDoubleSpinBox()
+        self.spin_mob_v.setRange(0.005, 0.5)
+        self.spin_mob_v.setDecimals(3)
+        self.spin_mob_v.setSingleStep(0.005)
+        self.spin_mob_v.setSuffix(' m/s')
+        self.spin_mob_v.setValue(0.05)
+        self.spin_mob_v.setToolTip('Capped by robot.yaml max_linear_speed')
+        line.addWidget(self.spin_mob_v)
+        self.btn_mob_fwd = QPushButton('▲ Forward')
+        self.btn_mob_fwd.clicked.connect(lambda: self._on_mobile_drive(+1))
+        self.btn_mob_rev = QPushButton('▼ Reverse')
+        self.btn_mob_rev.clicked.connect(lambda: self._on_mobile_drive(-1))
+        line.addWidget(self.btn_mob_fwd)
+        line.addWidget(self.btn_mob_rev)
+        line.addStretch(1)
+        box_layout.addLayout(line)
+
+        # --- pivot ---
+        turn = QHBoxLayout()
+        turn.addWidget(QLabel('Angle'))
+        self.spin_mob_angle = QDoubleSpinBox()
+        self.spin_mob_angle.setRange(0.5, 360.0)
+        self.spin_mob_angle.setDecimals(1)
+        self.spin_mob_angle.setSingleStep(5.0)
+        self.spin_mob_angle.setSuffix(' °')
+        self.spin_mob_angle.setValue(90.0)
+        turn.addWidget(self.spin_mob_angle)
+        turn.addWidget(QLabel('speed'))
+        self.spin_mob_w = QDoubleSpinBox()
+        self.spin_mob_w.setRange(0.01, 1.0)
+        self.spin_mob_w.setDecimals(3)
+        self.spin_mob_w.setSingleStep(0.01)
+        self.spin_mob_w.setSuffix(' rad/s')
+        self.spin_mob_w.setValue(0.20)
+        self.spin_mob_w.setToolTip('Capped by robot.yaml max_angular_speed')
+        turn.addWidget(self.spin_mob_w)
+        self.btn_mob_ccw = QPushButton('↺ Turn left (CCW)')
+        self.btn_mob_ccw.clicked.connect(lambda: self._on_mobile_pivot(+1))
+        self.btn_mob_cw = QPushButton('↻ Turn right (CW)')
+        self.btn_mob_cw.clicked.connect(lambda: self._on_mobile_pivot(-1))
+        turn.addWidget(self.btn_mob_ccw)
+        turn.addWidget(self.btn_mob_cw)
+        turn.addStretch(1)
+        box_layout.addLayout(turn)
+
+        # --- stop / latch ---
+        ctl = QHBoxLayout()
+        btn_cancel = QPushButton('Stop base')
+        btn_cancel.setStyleSheet('background:#8a4a00; color:white; '
+                                 'font-weight:bold;')
+        btn_cancel.clicked.connect(
+            lambda: self._run(self.bridge.mobile_cancel, label='base stop'))
+        btn_clear = QPushButton('Clear stop latch')
+        btn_clear.clicked.connect(
+            lambda: self._run(self.bridge.mobile_clear_stop,
+                              label='base clear_stop'))
+        ctl.addWidget(btn_cancel)
+        ctl.addWidget(btn_clear)
+        ctl.addStretch(1)
+        box_layout.addLayout(ctl)
+
+        self.lbl_mob_status = QLabel('base: —')
+        self.lbl_mob_status.setStyleSheet('color:#888;')
+        self.lbl_mob_status.setWordWrap(True)
+        box_layout.addWidget(self.lbl_mob_status)
+        layout.addWidget(box)
+        layout.addStretch(1)
+
+        self._mobile_buttons = (self.btn_mob_fwd, self.btn_mob_rev,
+                                self.btn_mob_ccw, self.btn_mob_cw)
+        self._mobile_move_inflight = False
         return tab
 
     # ---------- Scripts tab ----------
@@ -787,10 +985,12 @@ class MainWindow(QMainWindow):
         self.bridge.arm_state.connect(self._on_arm_state)
         self.bridge.task_state.connect(self._on_task_state)
         self.bridge.lift_state.connect(self._on_lift_state)
+        self.bridge.mobile_state.connect(self._on_mobile_state)
         self.bridge.battery_state.connect(self._on_battery)
         self.bridge.estop_state.connect(self._on_estop)
         self.bridge.camera_state.connect(self._on_camera_state)
         self.bridge.calib_progress.connect(self._on_calib_progress)
+        self.bridge.tag_ids.connect(self._on_tag_ids)
         self.bridge.log.connect(self.append_log)
 
         # Ask for whatever already arrived. The bridge subscribes in its own
@@ -864,6 +1064,25 @@ class MainWindow(QMainWindow):
         self.lbl_lift.setText(text)
         self._tint(self.lbl_lift, '#553311' if homed is False else '')
 
+    def _on_mobile_state(self, state):
+        busy = state.get('busy')
+        if state.get('emergency_stop'):
+            text, colour = 'BASE E-LATCHED', '#552222'
+        elif busy:
+            text, colour = f'BASE {busy}', '#553311'
+        elif state.get('stop_requested'):
+            text, colour = 'BASE STOPPED', '#553311'
+        else:
+            text, colour = 'BASE idle', '#1b3a1b'
+        self.lbl_mobile.setText(text)
+        self._tint(self.lbl_mobile, colour)
+        tags = state.get('visible_tags') or []
+        last = state.get('last_known_tag')
+        res = state.get('result') or {}
+        self.lbl_mob_status.setText(
+            f'base: {busy or "idle"} | visible tags {tags} | last tag {last}'
+            + (f' | last result: {res.get("message")}' if res else ''))
+
     def _on_battery(self, state):
         pct = state['percentage']
         self.lbl_battery.setText(f'BAT {pct:.0f}% {state["voltage"]:.1f}V')
@@ -887,8 +1106,13 @@ class MainWindow(QMainWindow):
     # ==========================================================
     # ACTIONS
     # ==========================================================
-    def _run(self, fn, *args, label=None, on_done=None, **kwargs):
-        """Run a blocking bridge call on the pool and log its result."""
+    def _run(self, fn, *args, label=None, on_done=None, on_error=None,
+             **kwargs):
+        """Run a blocking bridge call on the pool and log its result.
+
+        `on_done(result)` runs only when the call returned; `on_error(msg)`
+        only when it raised — kept separate because every existing on_done
+        unpacks its result and would not survive a None."""
         worker = CallWorker(fn, *args, **kwargs)
         self._busy_calls += 1
         self._update_busy()
@@ -910,6 +1134,8 @@ class MainWindow(QMainWindow):
             self._busy_calls -= 1
             self._update_busy()
             self.append_log(f'[{label or "call"}] ERROR: {message}')
+            if on_error is not None:
+                on_error(message)
 
         worker.signals.finished.connect(_finished)
         worker.signals.failed.connect(_failed)
@@ -922,6 +1148,27 @@ class MainWindow(QMainWindow):
         step = self.spin_step.value() * sign
         self._run(self.bridge.arm_jog, axis, step, self.spin_vel.value(),
                   label=f'jog {axis} {step:+g}')
+
+    def _set_mobile_inflight(self, inflight):
+        self._mobile_move_inflight = inflight
+        for b in self._mobile_buttons:
+            b.setEnabled(not inflight)
+
+    def _on_mobile_drive(self, sign):
+        dist = self.spin_mob_dist.value() * sign
+        self._set_mobile_inflight(True)
+        self._run(self.bridge.mobile_drive, dist, self.spin_mob_v.value(),
+                  label=f'base drive {dist:+.3f} m',
+                  on_done=lambda _r: self._set_mobile_inflight(False),
+                  on_error=lambda _m: self._set_mobile_inflight(False))
+
+    def _on_mobile_pivot(self, sign):
+        angle = self.spin_mob_angle.value() * sign
+        self._set_mobile_inflight(True)
+        self._run(self.bridge.mobile_pivot, angle, self.spin_mob_w.value(),
+                  label=f'base pivot {angle:+.1f} deg',
+                  on_done=lambda _r: self._set_mobile_inflight(False),
+                  on_error=lambda _m: self._set_mobile_inflight(False))
 
     def _on_fill_target(self):
         for i, axis in enumerate(ARM_AXES):
