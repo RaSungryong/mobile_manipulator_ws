@@ -1248,6 +1248,33 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-08 — Session index (evening): what changed today and what tomorrow starts with
+
+Six things landed on `real` today, all offline-verified, the first three
+also driven; details are in the dated entries below this one and in the
+standing sections named here:
+
+| commit | change | driven? |
+|---|---|---|
+| `4388538` | pivot finishes ON its exit tag (odom → tag error → slow inside 5° → delay-led stop) | yes, 19 hops |
+| `b310326` | the FIRST hop of every command aligns on its start tag first (move, pivot, dock alike) | yes |
+| `5401ace` | forward/reverse arrivals: `steer_mode: aim_and_drive` — stop at first sight, aim the base centre at the stop pose (plate-wall cap), drive straight, stop align lands the lens on the tag | yes — aims converged, but ±10 mm lateral bias → next row |
+| `f738a10` | front_cam is tilted 1.3° (roll +1.228, pitch −0.504, lens 302 mm): `robot_camera_node` now re-images detections through a level virtual camera; lever confirmed 0.552 m | **no — restart `robot_camera_node` and re-drive** (HANDOVER §2-0) |
+
+Also today, other sessions: the Keyence standoff rewrite (uncommitted in
+this checkout) and the calibration ref-tag re-pairing (uncommitted). A
+dev worktree (`~/mobile_manipulator_ws_dev`, branch `dev-20260908`) was
+made in the morning and retired the same day — work goes into this
+checkout directly; the worktree can be removed.
+
+Standing rules that came out of today, promoted into the sections above:
+every stop aligns and every command's first hop aligns first (align
+section); `aim_and_drive` and its wall cap (align section + `robot.yaml
+robot:`); the front_cam ground-plane correction and how to re-fit it
+(*front_cam ground-plane correction* section); calibrate with a precisely
+laid tag pair as the ruler and the base's motion only as excitation —
+the base under-executes small commands and yaws on its own.
+
 ### 2026-09-08 — front_cam tilt found and corrected (ground-plane projection); lever confirmed 0.552 m
 
 First robot run of aim-and-drive (21:15–21:24, `GOTO 117/120/123/114`,

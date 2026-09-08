@@ -29,7 +29,43 @@ or superseded; it is in git history if you need it.
 
 ## 2. Open items
 
-### 2-0. ▶ NEXT ON-ROBOT SESSION — do these first (written 2026-09-03, dev side)
+### 2-0. ▶ NEXT ON-ROBOT SESSION — navigation (written 2026-09-08 evening, on the robot)
+
+Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
+`f738a10`); only the first three have been driven. Do these in order:
+
+1. **Restart `robot_camera_node`** so the front_cam ground-plane
+   correction (`f738a10`) is live: `rosnode kill /robot_camera_node`,
+   then `rosrun apriltag_nav robot_camera_node.py` (the launch's
+   `~driver_*` params persist on the master). The startup log must show
+   `ground-plane correction ON — roll +1.228 pitch -0.504 deg, height
+   302.0 mm, D applied`. If it says `disabled:` the CameraInfo D was not
+   parsed — stop and report.
+2. **Drive the same corridor as 2026-09-08 21:15** (`GOTO 117 → 120 →
+   123`, then back to `114`) and compare the `aligned` records in
+   `~/.ros/apriltag_nav/nav_log/<day>/` with yesterday's: forward lateral
+   was +8.8 ± 1.3 mm and reverse −11.6 ± 1.6 mm on EVERY hop; both should
+   now be within a few mm with no direction-dependent sign. Yaw at rest
+   (±0.2°) and fore-aft (+2…+5 mm forward, 155–158 mm reverse) were
+   already fine and must stay so. If a bias remains, its sign per
+   direction is the diagnostic — bring the yaml files.
+3. Watch the `[Aim]` lines: `at rest: … aim ±x deg (cap …)` on every
+   arrival, the pivot converging in one pass, no `LIMITED` unless the
+   base was > ~20 mm toward the plate. Hop time is ~24 s (was 9–12);
+   `plan_prepare_dist` 0.28 / `aim_drive_speed` 0.03 are the knobs.
+4. **Known and not yet fixed** (do not chase as new bugs): manual
+   `drive_distance` 0.02 m executes ~11 mm and `pivot_angle` 5° ~3.7°
+   (stop-latency lead over-compensates on tiny moves); offsets > ~20 mm
+   toward the plate cannot be removed in one hop under the wall cap (a
+   launch aim from the START tag is the proposed follow-up); tag 15 of
+   the calibration pair has skewed corners — use the pair's centre line,
+   never one tag's edge, as an angular reference.
+5. The `docs/all_tags_position.csv` LibreOffice lock file and the
+   Keyence standoff work (`keyence_standoff.py`, `arm_controller.py`,
+   parts of `robot.yaml` / `CLAUDE.md`) are another session's
+   UNCOMMITTED changes in this checkout — leave them alone.
+
+### 2-0b. ▶ NEXT ON-ROBOT SESSION — calibration (written 2026-09-03, dev side; still open)
 
 The user asked to be reminded of this when back on the robot. Commit
 `9b2be76` (dev machine, sim-verified) changed the calibration workflow;
