@@ -123,7 +123,12 @@ pull + `catkin_make` before anything below.
 
 - ~~`align_to_tag()` has no timeout~~ — **fixed 2026-09-02**
   (`align_timeout_s: 20.0`, hop fails on expiry). Same day: align now runs
-  after pivots too. **Since 2026-09-04 the stop column depends on the
+  after pivots too. **Since 2026-09-08 (dev branch `dev-20260908`, not yet
+  merged / driven) a pivot aligns on BOTH tags and finishes on the exit
+  tag** — odom until the exit tag is in view, tag error from then, slow
+  (0.05 rad/s) inside 5°, delay-led stop, then the exit align certifies
+  0.2° at rest; keys `pivot_tag_slow_deg` / `pivot_tag_slow_max_angular` /
+  `pivot_timeout_s`. **Since 2026-09-04 the stop column depends on the
   direction:** forward `cx + center_x_stop_offset` (0), reverse
   `cx + center_x_stop_offset_reverse` (+400 px = tag at the far right of
   the frame, ~162 mm ahead of the lens; remove the key for one shared

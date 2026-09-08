@@ -1579,10 +1579,20 @@ class MobileController:
         )
 
         if action_type == 'pivot':
-            # Odometry-only quarter turn, then square up to the EXIT tag the
-            # front_cam should now be over (505 after 501 etc.) — the same
-            # stop -> align_to_tag tail every move hop has (2026-09-02).
-            if not self.execute_pivot(direction):
+            # A pivot is bracketed by an in-place align on BOTH tags (user
+            # rule 2026-09-08): square up to the START tag first — the
+            # previous hop normally left the base aligned there, in which
+            # case this is one at-rest measurement (~0.85 s), but a pivot
+            # that is the FIRST hop of a command (base parked on 501, GOTO
+            # 505) had no align at all before — then the quarter turn,
+            # which finishes on the EXIT tag itself (execute_pivot: odom
+            # until the exit tag is in view, tag-error from then on, slow
+            # inside pivot_tag_slow_deg, delay-led stop), then the same
+            # stop -> align_to_tag tail every move hop has, which is what
+            # measures the exit tag AT REST and certifies the 0.2 deg band.
+            if not self._align_on_tag(current_id, 'before pivot'):
+                return False
+            if not self.execute_pivot(direction, exit_tag_id=target_id):
                 return False
             return self._align_after_arrival(target_id, current_id)
 
@@ -1629,12 +1639,18 @@ class MobileController:
         rather than being waved through. The ONLY remaining skip is a
         temporarily-missing VIRTUAL tag (`temporary_missing_tags`, off by
         default): there is physically nothing to align to."""
-        if self._is_temp_missing_tag(target_id):
+        return self._align_on_tag(target_id, 'after arrival')
+
+    def _align_on_tag(self, tag_id, why):
+        """In-place align on `tag_id` unless it is a temporarily-missing
+        VIRTUAL tag (nothing to align to). `why` is for the log only."""
+        if self._is_temp_missing_tag(tag_id):
             rospy.logwarn(
-                "[TemporaryMissingTag] skip align_to_tag(%s); tag is temporarily virtual",
-                target_id)
+                "[TemporaryMissingTag] skip align_to_tag(%s) %s; tag is "
+                "temporarily virtual", tag_id, why)
             return True
-        return self.align_to_tag(target_id)
+        rospy.loginfo("[Robot] align_to_tag(%s) %s", tag_id, why)
+        return self.align_to_tag(tag_id)
 
         
     def move_to_tag(self, target_id):
@@ -1707,13 +1723,69 @@ class MobileController:
         return True
 
 
-    def execute_pivot(self, direction):
+    def execute_pivot(self, direction, exit_tag_id=None):
+        """Quarter turn in place, finishing ON the exit tag (2026-09-08).
+
+        Three phases, in order:
+          1. ODOM   — no exit tag in view: P control on the odom yaw
+                      toward +/-90 deg at up to max_angular_speed.
+          2. TAG    — the exit tag (`exit_tag_id`, the tag the front_cam
+                      lands over after the turn — 505 after 501) is in
+                      view: the error becomes the tag's edge angle, which
+                      is the truth the following align uses, so a tag
+                      laid a degree off the odom quarter turn is turned
+                      to, not past. Same gain / cap as the odom phase.
+          3. SLOW   — once the PREDICTED settled error (edge angle plus
+                      the rotation still pending from the last
+                      stop_latency_s of commands) is inside
+                      pivot_tag_slow_deg (5 deg), the command drops to the
+                      align law: -angle x align_gain, capped at
+                      pivot_tag_slow_max_angular, floored at
+                      align_min_angular_speed. The stop fires when the
+                      predicted settled angle reaches ~zero (the align's
+                      lead-target rule), so the 0.55 s delay does not
+                      carry the base past the tag.
+        Every phase acts on the PREDICTED error (current minus pending),
+        the Smith-predictor idea already used by the align and the drive:
+        P control on the raw odom error with gain 1.5 and a 0.55 s delay
+        (loop gain x delay = 0.83) rang and overshot.
+
+        The at-rest measurement, the settle and the re-pass that certify
+        the 0.2 deg band are NOT here — they are `align_to_tag`, which
+        `go_to_next_tag` runs right after this returns; the command
+        history is shared, so its first tick already sees the pivot's
+        pending rotation. Returns True when the base has stopped on the
+        exit tag (or, if the tag never came into view, on the odom
+        target — the align then waits for the tag and fails on its own
+        timeout). False on preempt / timeout.
+        """
+        rcfg = self.cfg['robot']
         target_angle = self.current_theta + (
             math.pi/2 if 'ccw' in direction else -math.pi/2
         )
         target_angle = math.atan2(math.sin(target_angle), math.cos(target_angle))
 
         rate = rospy.Rate(20)
+        pivot_gain = float(rcfg.get('pivot_gain', 1.5))
+        odom_threshold = math.radians(float(rcfg.get('pivot_threshold_deg', 1.0)))
+        slow_deg = float(rcfg.get('pivot_tag_slow_deg', 5.0))
+        slow_max = min(float(rcfg.get('pivot_tag_slow_max_angular', 0.05)),
+                       self.max_angular)
+        align_gain = float(rcfg.get('align_gain', 0.8))
+        align_min_angular = min(float(rcfg.get('align_min_angular_speed', 0.0)),
+                                slow_max)
+        lead_target = float(rcfg.get('align_threshold_deg', 0.5)) * float(
+            rcfg.get('align_lead_target_ratio', 0.25))
+        timeout_s = float(rcfg.get('pivot_timeout_s', 30.0))
+
+        phase = 'odom'
+        tag_seen = False
+        start_time = rospy.Time.now()
+        rospy.loginfo(
+            "[Pivot] %s toward %.1f deg (odom), exit tag %s: tag error from "
+            "first sight, slow inside %.1f deg at <= %.3f rad/s",
+            direction, math.degrees(target_angle), exit_tag_id, slow_deg,
+            slow_max)
 
         while not rospy.is_shutdown():
 
@@ -1722,22 +1794,98 @@ class MobileController:
                 rospy.logwarn("[Robot] pivot interrupted")
                 self.stop()
                 return False
+            if timeout_s > 0:
+                elapsed = (rospy.Time.now() - start_time).to_sec()
+                if elapsed > timeout_s:
+                    self.stop()
+                    rospy.logerr("[Pivot] TIMEOUT after %.1fs in phase %s "
+                                 "(exit tag %s %s)", elapsed, phase, exit_tag_id,
+                                 'seen' if tag_seen else 'never seen')
+                    return False
 
-            diff = target_angle - self.current_theta
-            diff = math.atan2(math.sin(diff), math.cos(diff))
+            pending_deg = math.degrees(self._pending_yaw_rad())
+            tag = None
+            if exit_tag_id is not None and exit_tag_id in self.detected_tags:
+                tag = self._tag_view(exit_tag_id) or self.detected_tags[exit_tag_id]
 
-            if abs(diff) < math.radians(1.0):
-                self.stop()
-                rospy.loginfo(
-                    f"Pivot Complete. Final error: {math.degrees(diff):.2f} deg"
-                )
-                return True
+            if tag is not None:
+                # The edge angle moves WITH the base yaw and a positive
+                # angle is removed by turning CW — the align convention.
+                angle_deg = tag.get('edge_deg', tag_edge_angle_deg(tag['corners']))
+                predicted_deg = angle_deg + pending_deg
+                if not tag_seen:
+                    tag_seen = True
+                    rospy.loginfo(
+                        "[Pivot] exit tag %s in view: error %+.2f deg "
+                        "(pending %+.2f) — steering on the tag now",
+                        exit_tag_id, angle_deg, pending_deg)
+                if phase != 'slow' and abs(predicted_deg) <= slow_deg:
+                    phase = 'slow'
+                    rospy.loginfo(
+                        "[Pivot] predicted error %+.2f deg inside %.1f: slow "
+                        "phase (<= %.3f rad/s)", predicted_deg, slow_deg,
+                        slow_max)
+                elif phase == 'odom':
+                    phase = 'tag'
 
-            vel = diff * self.cfg['robot'].get('pivot_gain', 1.5)
-            vel = np.clip(vel, -self.max_angular, self.max_angular)
+                if phase == 'slow':
+                    crossing = (angle_deg != 0.0 and
+                                math.copysign(1.0, predicted_deg) !=
+                                math.copysign(1.0, angle_deg))
+                    if abs(predicted_deg) <= lead_target or crossing:
+                        self.stop()
+                        rospy.loginfo(
+                            "[Pivot] stop on exit tag %s: error %+.2f deg, "
+                            "pending %+.2f -> predicted %+.2f; align_to_tag "
+                            "settles and re-measures", exit_tag_id, angle_deg,
+                            pending_deg, predicted_deg)
+                        return True
+                    omega = -math.radians(angle_deg) * align_gain
+                    if align_min_angular > 0 and abs(omega) < align_min_angular:
+                        omega = math.copysign(align_min_angular, omega)
+                    omega = float(np.clip(omega, -slow_max, slow_max))
+                else:
+                    omega = -math.radians(predicted_deg) * pivot_gain
+                    omega = float(np.clip(omega, -self.max_angular,
+                                          self.max_angular))
+            else:
+                if phase == 'slow':
+                    # The tag dropped out inside the slow phase — the base
+                    # is within a few degrees of it; stop and let the
+                    # align (which waits for the tag, bounded by its own
+                    # timeout) finish rather than steer blind on odom.
+                    self.stop()
+                    rospy.logwarn(
+                        "[Pivot] exit tag %s lost in the slow phase — "
+                        "stopping; align_to_tag takes over", exit_tag_id)
+                    return True
+                diff = target_angle - self.current_theta
+                diff = math.atan2(math.sin(diff), math.cos(diff))
+                predicted = diff - math.radians(pending_deg)
+                if abs(predicted) < odom_threshold:
+                    self.stop()
+                    rospy.loginfo(
+                        "[Pivot] odom target reached (error %+.2f deg, "
+                        "pending %+.2f)%s", math.degrees(diff), pending_deg,
+                        '' if exit_tag_id is None else
+                        f" — exit tag {exit_tag_id} "
+                        + ('lost' if tag_seen else 'never seen')
+                        + "; align_to_tag takes over")
+                    return True
+                phase = 'odom'      # tag lost before the slow phase: back to odom
+                omega = float(np.clip(predicted * pivot_gain,
+                                      -self.max_angular, self.max_angular))
 
-            self.send_vel(0, vel)
+            if omega != 0.0:
+                # feeds the launch backlash feed-forward of the next hop
+                self._last_align_turn_sign = 1 if omega > 0 else -1
+            rospy.loginfo_throttle(
+                0.5, "[Pivot:%s] pending %+.2f deg omega %+.4f", phase,
+                pending_deg, omega)
+            self.send_vel(0, omega)
             rate.sleep()
+
+        return False
 
 
     # ==========================================================

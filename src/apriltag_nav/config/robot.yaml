@@ -370,10 +370,27 @@ robot:
   # ignores it with a warning if it is ever put back. A tag out of view at
   # rest now fails the hop on align_timeout_s instead of being waved on.
 
-  # Pivot Tuning
-  pivot_gain: 1.5           # Proportional gain for pivot rotation
-  pivot_slowdown_deg: 10.0  # Start slowing down when error < this (degrees)
-  pivot_threshold_deg: 1.0  # Pivot complete when error < this (degrees)
+  # Pivot Tuning — execute_pivot (2026-09-08). A corridor pivot is
+  # bracketed by an in-place align on BOTH tags: align on the START tag,
+  # quarter turn, align on the EXIT tag (mandatory, user rule). The turn
+  # itself runs in three phases: odom P control (pivot_gain, capped at
+  # max_angular_speed) until the EXIT tag is in view; from then on the
+  # error is the tag's edge angle (the truth the align uses, so a tag laid
+  # a degree off the odom quarter turn is turned TO, not past); and once
+  # the PREDICTED settled error (edge angle + the rotation still pending
+  # from the 0.55 s command delay) is inside pivot_tag_slow_deg the command
+  # drops to the align law (-angle x align_gain) capped at
+  # pivot_tag_slow_max_angular and floored at align_min_angular_speed. The
+  # stop fires when the predicted settled angle reaches ~0 (the align's
+  # lead-target rule), and align_to_tag then measures AT REST, settles and
+  # re-passes until the error is inside align_threshold_deg (0.2). Every
+  # phase acts on the predicted error, not the raw one: raw P with gain
+  # 1.5 and a 0.55 s delay rang and overshot.
+  pivot_gain: 1.5                  # P gain (rad/s per rad) in the odom / tag phases
+  pivot_threshold_deg: 1.0         # odom-phase finish band, used only if the exit tag never appears
+  pivot_tag_slow_deg: 5.0          # slow phase from this predicted tag error (user: "5도")
+  pivot_tag_slow_max_angular: 0.05 # rad/s cap in the slow phase (2.9 deg/s; align cap is 0.12)
+  pivot_timeout_s: 30.0            # whole turn; a 90 deg turn takes ~8-12 s
 
   # Manual relative moves — robot_ui's Mobile tab, via /mobile/move_cmd on
   # mobile_node (MobileController.drive_distance / pivot_angle). Ported from

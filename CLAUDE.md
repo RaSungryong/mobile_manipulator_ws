@@ -326,7 +326,14 @@ VIRTUAL tag (`temporary_missing_tags`, off), which has nothing to align to. Befo
 `stop()`, sleep and `continue` forever, with `MobileClient.move_timeout_s`
 (600 s) as the only exit. It now runs after **every** hop — forward, backward
 **and pivot** (`_align_after_arrival`; the pivot squares up to its EXIT tag,
-e.g. 505 after 501→505). **`center_x_stop_offset` (currently +50 px)** is what
+e.g. 505 after 501→505). **Since 2026-09-08 a pivot is bracketed by an
+align on BOTH tags** — `go_to_next_tag` aligns on the START tag first
+(covers a pivot that is the first hop of a command), then `execute_pivot`
+turns on odom only until the EXIT tag is in view, steers on the tag's
+edge angle from then on, drops to `pivot_tag_slow_max_angular` (0.05
+rad/s) once the predicted settled error is inside `pivot_tag_slow_deg`
+(5°), and stops on the delay-led prediction; the exit-tag align then
+measures at rest and certifies the 0.2° band. **`center_x_stop_offset` (currently +50 px)** is what
 decides how much tag is left in frame; **more positive** stops earlier and
 leaves more margin. **It is 0 since 2026-09-02** (user: the tag centre must
 reach the target centre), so the target column is the optical axis itself.
@@ -1185,6 +1192,63 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-08 — Pivot turns finish on the exit tag; align on both pivot tags (dev worktree)
+
+Done in `~/mobile_manipulator_ws_dev` (branch `dev-20260908`, a worktree
+made this session so the running `ws_20260902` stack is untouched — merge
+back with `git merge --ff-only dev-20260908` once the robot has been
+restarted for it). User requirement: while pivoting, once the next tag is
+in view and the align error is inside **5°**, slow the turn right down and
+stop inside **±0.2°**; and align on **both** the start and the end tag of
+every pivot, 0.2° each.
+
+**What it was:** `execute_pivot` was odom-only — raw P (`pivot_gain` 1.5)
+on `±90°`, stop at 1° of ODOM error, no use of the tag at all, no delay
+compensation — followed by a separate `align_to_tag` on the exit tag. In
+the yaw plant with the robot's 0.55 s command delay that loop parks
+**+4.2° past** the target before the align starts (loop gain × delay =
+0.83 rings). And a pivot that was the FIRST hop of a command (base parked
+on 501, `GOTO 505`) never aligned on the start tag: only the previous hop's
+tail did that.
+
+**What it is now** (`execute_pivot(direction, exit_tag_id)`, `go_to_next_tag`
+pivot branch; new `robot.yaml` keys `pivot_tag_slow_deg: 5.0`,
+`pivot_tag_slow_max_angular: 0.05`, `pivot_timeout_s: 30`;
+`pivot_threshold_deg` is finally read; the never-read `pivot_slowdown_deg`
+is gone): `align_to_tag(start)` → turn → `align_to_tag(exit)`. The turn
+has three phases, every one acting on the PREDICTED error (current minus
+the rotation still pending from the last `stop_latency_s` of commands —
+the same Smith-predictor lead the drive stop and the align use): odom P
+until the exit tag is detected; from then the error is the tag's edge
+angle, so a tag laid 2–3° off the odom quarter turn is turned TO, not
+past; inside 5° predicted the command drops to the align law
+(−angle × `align_gain`, cap 0.05 rad/s, floor `align_min_angular_speed`);
+the stop fires when the predicted settled angle reaches ~0 (the align's
+lead-target rule). The at-rest measurement / settle / re-pass that
+certify 0.2° are deliberately NOT duplicated — they are `align_to_tag`,
+which runs right after and shares the command history. Exit tag never
+seen → stops on the odom band and the align's 20 s timeout fails the hop,
+as before. Tag lost inside the slow phase → stop, align takes over.
+
+Verified offline only (`t_pivot.py`, 25 checks, real controller + real
+robot.yaml, yaw plant with 0.55 s delay and a front_cam that sees the
+exit tag only inside 15° of its heading): CCW/CW pivots reach the 0.25
+cap, enter the slow phase, never exceed 0.05 rad/s after it, stop 0.5°
+short and settle at +0.04° BEFORE the align, and end at ±0.04° after it
+in one pass (8.2 s turn); an exit tag laid +2 / −3° off the odom turn is
+turned to (base at 92.0 / 87.0°, error ≤ 0.04°); no exit tag → odom
+finish at 89.1°; preempt → False; `go_to_next_tag` order is
+align(501) → pivot(ccw, exit 505) → align(505), and a start tag 1.5° off
+is inside 0.2° when the turn begins; a plant with an extra 0.3 s lag and
+0.15° measurement noise still ends inside 0.1°. A sweep of the tag
+visibility window (15 / 10 / 7 / 4°) × placement (0 / ±2°) ended every
+case inside 0.1° after the align — the odom phase's predicted-error P has
+already slowed the turn by the time the tag appears, so the window size
+barely matters. Not driven on the robot; `mobile_node` restart required.
+First thing to watch: the `[Pivot] exit tag N in view` line should
+appear several degrees before the end, then `slow phase`, then the
+align finishing in one pass.
 
 ### 2026-09-04 — Forward stop column back to the crosshair (user request); what still covers the forward launch
 
