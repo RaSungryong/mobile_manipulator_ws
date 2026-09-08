@@ -335,7 +335,16 @@ repeated there, but a command may begin on a tag the base was pushed
 onto by hand or be resuming after an e-stop with nothing squared up.
 Consequence: the start tag must be in view at rest — a base parked off
 its tag fails the command on `align_timeout_s` instead of driving blind
-from `last_known_tag`. **A pivot then finishes ON its exit tag**: `execute_pivot`
+from `last_known_tag`. **Forward / reverse arrivals use `steer_mode:
+aim_and_drive` since 2026-09-08 (evening)**: at the first sight of the
+target tag the base stops, measures the tag at rest, pivots so its
+CENTRE points at the stop pose on the tag's line (capped by the plate
+wall, `aim_wall_*`, and by tag visibility, `aim_max_deg`), drives that
+straight line, stops on the yaw-corrected column, and the stop align
+then lands the lens ON the tag instead of swinging it off by
+0.55·sin(yaw) — see the 2026-09-08 aim-and-drive Work Log entry;
+`state_feedback` and the smooth-path `tag_line_plan` stay selectable.
+**A pivot then finishes ON its exit tag**: `execute_pivot`
 turns on odom only until the EXIT tag is in view, steers on the tag's
 edge angle from then on, drops to `pivot_tag_slow_max_angular` (0.05
 rad/s) once the predicted settled error is inside `pivot_tag_slow_deg`
@@ -1199,6 +1208,98 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-08 — Arrival rework: aim-and-drive — stop at first sight, point the base centre at the stop pose, drive straight; smooth path kept as an option
+
+User: on a forward hop (105→106) the moving align is not meaningful —
+the tag can be dead on the crosshair at the stop and the stop align then
+rotates it off, and the base cannot crab. Diagnosed from the geometry:
+the stop align turns about the BASE CENTRE, the lens is 0.55 m ahead,
+so a yaw fix of θ moves the lens 0.55·sin θ (1° → 9.6 mm); the lens can
+only end ON the tag if the base centre is already on the tag's line when
+the stop align runs. `state_feedback` (gains 32 / 0.6) is far too slow
+for that in the 0.2 m of tag visibility (closed loop ζ 1.6, slow pole
+0.066 rad/s: a 20 mm base offset shrinks 40 %), and the blind-phase
+predictive centering assumes the hop STARTS on the lane, so an initial
+offset is never corrected.
+
+**Two designs were built and measured on a 2-D plant** (unicycle base,
+0.55 s command delay, 20 Hz, front_cam geometry with the lens 0.55 m
+ahead, 0.1 s image latency, 3-frame median, bumper occlusion, whole-tag
+visibility; `t_plan.py`, 72 checks). Lens lateral error after the stop
+align, forward / reverse:
+
+| start offset | state_feedback | tag_line_plan (quintic) | **aim_and_drive** |
+|---|---|---|---|
+| 10 mm | 9.3 / 9.3 | 0.1 / 0.1 | **0.5 / 0.6** |
+| 20 mm | 18.6 / 18.1 | 3.5 / 3.2 | **1.0 / 0.2** |
+| 30 mm | 28.1 / 27.6 | 8.0 / 8.6 | 15.0 / 13.6 (wall-capped) |
+| 40 mm | 36.9 / 36.5 | 11.7 / 16.1 (body 0.53 m!) | 28.5 / 28.2 (wall-capped) |
+
+- **`tag_line_plan`** (kept, selectable): once the target tag has been
+  in view for 3 frames, a quintic path from the base centre's measured
+  (offset, slope, curvature) relative to the TARGET tag's line — the
+  proper perpendicular distance `ty cos θ − tx sin θ − 0.55 sin θ`,
+  which `lateral = tag y` alone misses by ~9 mm at first sight — to
+  (0, 0, 0) at the stop is planned once and tracked by odom travel
+  (curvature feed-forward led by the delay + heading loop + a deviation
+  term with the 6/L² gain), re-planned on a 3 mm deviation, at a
+  per-plan speed keeping the peak ω inside 0.04 rad/s. Two earlier
+  versions failed instructively: re-planning every tick with a floored
+  horizon left the base ON the line but 6° yawed (the turn-back never
+  finished), and planning from the current roll-lead-shortened
+  horizon while the base was still doing 0.09 m/s spiralled. The
+  residual that remains is the launch delay's lost lateral progress —
+  and the path swings the body to 0.455–0.53 m from the lane at
+  20–40 mm, PAST the plate margin. Not the default.
+- **`aim_and_drive`** (DEFAULT; the user's two-straight-lines idea with
+  the corner placed at the stop pose itself): at first sight the base
+  STOPS, settles, measures the tag at rest (median 5), computes the
+  stop pose S = tag − (0.55 + f)·line direction (f = the fore distance
+  the column leaves, 0 forward / 0.16 reverse), pivots so its CENTRE
+  points at S (`_align_to_tag_continuous` with `target_deg`, delay-led,
+  verified at rest, `record=False`), drives that straight line at
+  `aim_drive_speed` holding the pivoted heading on the tag (odom if it
+  drops out; the launch hold is re-anchored to the aim heading), stops
+  on the column corrected for the yaw (`(0.55+f) cos θ − 0.55`), and
+  the mandatory stop align turns the yaw back about the base centre —
+  with the centre on the line, the lens lands ON the tag. Accuracy is
+  the align's; the base error at the stop was ±0.1 mm in every
+  uncapped case.
+
+**The plate wall caps the aim (user's constraint: the plate face is
+~460 mm from the tag).** A 0.90 × 0.70 body spun about its centre by ψ
+reaches `0.45 sin|ψ| + 0.35 cos|ψ|` sideways — the same for either
+sign of ψ (CCW swings the rear-right corner out, CW the front-right) —
+plus the base's own offset toward the plate; that must stay inside
+`aim_wall_dist_m` 0.45 − `aim_wall_margin_m` 0.03. The plate is on the
+robot's RIGHT on every lane (`aim_wall_side`), so an offset AWAY from
+it buys angle (then `aim_max_deg` 9, the tag-visibility limit, binds);
+the other side is bounded by `aim_free_side_dist_m` 0.60. With the
+base 20 mm toward the plate the cap is 6.7° — just enough for 20 mm
+over the ~0.17 m left after the first-sight stop — and 30 / 40 mm are
+capped at 5.3 / 3.9°, leaving 13–15 / 28 mm for the NEXT hop (logged
+as `[Aim] pivot limited`). The plant's body reach never exceeded
+0.421 m. ⚠️ Only the chassis rectangle is modelled: if the arm at
+home, the lift or a cable chain overhangs the 0.70 m width toward the
+plate, raise `aim_body_half_width_m`.
+
+**Cost:** ~+11 s per 0.4 m hop in the plant (20.6 vs 9.2 s forward,
+22.7 vs 11.7 reverse): the pre-slow to `aim_drive_speed` 0.03 from
+`plan_prepare_dist` 0.28 m of odom distance (the base must be slow when
+the tag appears — at 0.09 m/s the stop roll ate 5 cm of the 0.2 m
+approach), the stop + settle + measure (~1.1 s), the pivot (~2–3 s).
+The user accepted slowing the visible approach.
+
+**Open:** offsets over ~20 mm toward the plate cannot be removed in one
+hop under the wall constraint — a launch aim from the START tag (known
+to ~1 mm at rest after the launch align, over the whole 0.4 m hop, so
+4.3° for 30 mm) would take most of it before the target tag appears
+and leave the target-tag aim as a trim; not built, proposed. Not driven
+on the robot; `mobile_node` restart required. First things to watch:
+`[Aim] at rest: … aim +x deg (cap …)`, the pivot converging in one
+pass, and the `aligned` record's lateral within a few mm on a hop that
+started visibly off the lane.
 
 ### 2026-09-08 — Pivot turns finish on the exit tag; align on both pivot tags (dev worktree)
 

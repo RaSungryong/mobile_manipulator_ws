@@ -131,7 +131,14 @@ pull + `catkin_make` before anything below.
   in view, tag error from then, slow
   (0.05 rad/s) inside 5°, delay-led stop, then the exit align certifies
   0.2° at rest; keys `pivot_tag_slow_deg` / `pivot_tag_slow_max_angular` /
-  `pivot_timeout_s`. **Since 2026-09-04 the stop column depends on the
+  `pivot_timeout_s`. **Same evening: forward / reverse arrivals are
+  `steer_mode: aim_and_drive`** — stop at first sight of the target tag,
+  pivot the base centre onto a straight line to the stop pose on the
+  tag's line (capped by the plate wall: `aim_wall_dist_m` 0.45,
+  `aim_wall_margin_m` 0.03, plate on the robot's right), drive it, and
+  the stop align lands the lens on the tag. Plant: 10–20 mm start
+  offsets end within ~1 mm; ≥ 30 mm toward the plate is wall-capped and
+  spills into the next hop; ~+11 s per hop. Not driven. **Since 2026-09-04 the stop column depends on the
   direction:** forward `cx + center_x_stop_offset` (0), reverse
   `cx + center_x_stop_offset_reverse` (+400 px = tag at the far right of
   the frame, ~162 mm ahead of the lens; remove the key for one shared

@@ -99,6 +99,65 @@ class MobileController:
         self.sf_heading_gain = float(self.cfg['robot'].get('sf_heading_gain', 0.6))
         self.sf_min_speed_for_gain = float(
             self.cfg['robot'].get('sf_min_speed_for_gain', 0.02))
+        # 'tag_line_plan' (2026-09-08): while the target tag is in view, a
+        # Hermite path from the BASE CENTRE's current offset / heading
+        # relative to the TARGET TAG'S LINE to (0, 0) at the stop point is
+        # re-planned every tick and its initial curvature commanded — a
+        # state feedback whose gains scale with 1/L^2 and 1/L, L = distance
+        # still to go, so the base is ON the line, squared, when it stops,
+        # and the stop align no longer swings the lens off the tag.
+        self.plan_min_horizon_m = float(
+            self.cfg['robot'].get('plan_min_horizon_m', 0.08))
+        self.plan_approach_speed = float(
+            self.cfg['robot'].get('plan_approach_speed', 0.02))
+        self.plan_slow_lateral_m = float(
+            self.cfg['robot'].get('plan_slow_lateral_mm', 3.0)) / 1000.0
+        self.plan_heading_gain = float(
+            self.cfg['robot'].get('plan_heading_gain', 1.0))
+        self.plan_replan_m = float(
+            self.cfg['robot'].get('plan_replan_mm', 5.0)) / 1000.0
+        self.plan_settle_frames = max(1, int(
+            self.cfg['robot'].get('plan_settle_frames', 3)))
+        self.plan_omega_budget = float(
+            self.cfg['robot'].get('plan_omega_budget', 0.04))
+        self.plan_prepare_dist = float(
+            self.cfg['robot'].get('plan_prepare_dist', 0.25))
+        self.plan_prepare_decel = float(
+            self.cfg['robot'].get('plan_prepare_decel', 0.1))
+        self.plan_min_speed = float(
+            self.cfg['robot'].get('plan_min_speed', 0.005))
+        self._line_plan = None      # active Hermite plan (see _plan_to_tag_line)
+        self._plan_seen_ticks = 0
+        # 'aim_and_drive' (2026-09-08, default): at the first sight of the
+        # target tag STOP, measure at rest, pivot so the base centre points
+        # at the stop pose ON the target tag's line, drive that straight
+        # line holding the pivoted heading on the tag, stop on the column
+        # (corrected for the yaw), and let the mandatory stop align turn
+        # the yaw back — which lands the lens ON the tag because the base
+        # centre is already on the line. The pivot angle is capped by the
+        # plate wall: the body's lateral reach 0.45 sin(psi) + 0.35 cos(psi)
+        # plus the base's own offset must stay inside aim_wall_dist_m -
+        # aim_wall_margin_m. See _aim_at_stop_pose.
+        self.aim_max_deg = float(self.cfg['robot'].get('aim_max_deg', 9.0))
+        self.aim_min_deg = float(self.cfg['robot'].get('aim_min_deg', 0.3))
+        self.aim_min_horizon_m = float(self.cfg['robot'].get('aim_min_horizon_m', 0.08))
+        self.aim_wall_dist_m = float(self.cfg['robot'].get(
+            'aim_wall_dist_m', self.cfg['robot'].get('wall_dist_work_zone', 0.45)))
+        self.aim_wall_margin_m = float(self.cfg['robot'].get('aim_wall_margin_m', 0.03))
+        # which side of the lane the plate is on, in the ROBOT frame ('right'
+        # in every work zone and on the zone-A lane: the arm side), or
+        # 'both' to treat both sides as the plate; the other side is bounded
+        # by aim_free_side_dist_m.
+        self.aim_wall_side = str(self.cfg['robot'].get('aim_wall_side', 'right')).lower()
+        self.aim_free_side_dist_m = float(self.cfg['robot'].get('aim_free_side_dist_m', 0.60))
+        self.aim_body_half_length_m = float(self.cfg['robot'].get(
+            'aim_body_half_length_m', float(self.cfg['robot'].get('length', 0.90)) / 2.0))
+        self.aim_body_half_width_m = float(self.cfg['robot'].get(
+            'aim_body_half_width_m', float(self.cfg['robot'].get('width', 0.70)) / 2.0))
+        self.aim_drive_speed = float(self.cfg['robot'].get('aim_drive_speed', 0.02))
+        self.aim_measure_frames = max(1, int(self.cfg['robot'].get('aim_measure_frames', 5)))
+        self.aim_heading_gain = float(self.cfg['robot'].get('aim_heading_gain', 1.0))
+        self._aim = None            # active aim (see _aim_at_stop_pose)
         self.camera_params = None
         self.image_center_x_fallback = 0.0
         self.image_center_y_fallback = 0.0
@@ -1133,6 +1192,132 @@ class MobileController:
             rate.sleep()
         return float(np.median(vals)), last
 
+    def _measure_tag_at_rest(self, tag_id, frames, rate):
+        """Median x / y / z / edge_deg over `frames` consecutive detections
+        of `tag_id` (base at rest). None if the tag is not seen."""
+        rows = []
+        misses = 0
+        while len(rows) < frames and not rospy.is_shutdown():
+            if self.stop_requested:
+                return None
+            t = self.detected_tags.get(tag_id)
+            if t is not None:
+                rows.append({'x': float(t['x']), 'y': float(t['y']), 'z': float(t['z']),
+                             'edge_deg': float(t.get('edge_deg',
+                                                     tag_edge_angle_deg(t['corners'])))})
+                misses = 0
+            else:
+                misses += 1
+                if misses > frames * 3:
+                    return None
+            rate.sleep()
+        return {k: float(np.median([r[k] for r in rows])) for k in rows[0]}
+
+    def _aim_wall_cap_rad(self, base_toward_wall_m):
+        """Largest |yaw| the body may take about its centre without its
+        lateral reach toward the plate,  hl sin|psi| + hw cos|psi| + (base
+        offset toward the plate, signed: negative = away, more room),
+        crossing aim_wall_dist_m - aim_wall_margin_m — nor its reach the
+        other way crossing aim_free_side_dist_m - margin. The reach of a
+        rectangle spun about its centre is the same for either sign of
+        psi (a CCW turn swings the rear-right corner out, a CW turn the
+        front-right one), so only the base offset makes it one-sided.
+        0 if even the square body is already inside the margin."""
+        hl, hw = self.aim_body_half_length_m, self.aim_body_half_width_m
+        allowed = min(self.aim_wall_dist_m - self.aim_wall_margin_m - base_toward_wall_m,
+                      self.aim_free_side_dist_m - self.aim_wall_margin_m + base_toward_wall_m)
+        if hw >= allowed:
+            return 0.0
+        lo, hi = 0.0, math.radians(45.0)
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            if hl * math.sin(mid) + hw * math.cos(mid) <= allowed:
+                lo = mid
+            else:
+                hi = mid
+        return lo
+
+    def _aim_at_stop_pose(self, target_id, direction, rate):
+        """aim_and_drive, step 1 (2026-09-08): the base has just seen its
+        target tag. Stop, settle, measure the tag at rest, and pivot so the
+        BASE CENTRE points straight at the stop pose S on the target tag's
+        line (S = tag - (camera_offset + f) along the line, f = the fore
+        distance the stop column leaves the tag ahead of the lens: 0
+        forward, ~0.16 m reverse). Driving that line puts the base centre
+        on the tag's line at the stop; the stop align then turns the yaw
+        back about the base centre and the lens lands ON the tag, instead
+        of being swung off it by 0.55 sin(yaw) (the problem this exists
+        for). The pivot angle is capped by aim_max_deg (tag visibility
+        during the drive) and by the plate wall (_aim_wall_cap_rad); a
+        capped aim leaves a residual for the next hop and says so.
+        Returns the aim dict, or None (tag lost / pivot failed / preempt)."""
+        move_dir_sign = -1 if 'backward' in direction else 1
+        self.stop()
+        settle_s = self.stop_latency_s + float(self.cfg['robot'].get('align_settle_s', 0.3))
+        t_end = rospy.Time.now() + rospy.Duration(settle_s)
+        while rospy.Time.now() < t_end and not rospy.is_shutdown():
+            if self.stop_requested:
+                return None
+            rate.sleep()
+        m = self._measure_tag_at_rest(target_id, self.aim_measure_frames, rate)
+        if m is None:
+            rospy.logwarn("[Aim] tag %s not seen at rest — no aim", target_id)
+            return None
+        th = math.radians(m['edge_deg'])
+        tx, ty, z = m['x'], m['y'], m['z']
+        cam = self.camera_offset
+        f = self._stop_target_fore_m(direction, target_id)
+        # line direction in the robot frame (x forward, y RIGHT): +theta
+        dx, dy = math.cos(th), math.sin(th)
+        sx, sy = tx - (cam + f) * dx, ty - (cam + f) * dy      # stop pose of the base
+        vx, vy = sx + cam, sy                                   # from the base centre (-cam, 0)
+        dist = math.hypot(vx, vy)
+        # CCW-positive yaw that points the direction of travel along (vx, vy)
+        dpsi = math.atan2(move_dir_sign * (-vy), move_dir_sign * vx)
+        e_lens = ty * math.cos(th) - tx * math.sin(th)
+        e_base = e_lens - cam * math.sin(th)
+        b = -e_base                                             # base right of the line
+        if self.aim_wall_side == 'right':
+            b_wall = b
+        elif self.aim_wall_side == 'left':
+            b_wall = -b
+        else:
+            b_wall = abs(b)
+        cap_wall = self._aim_wall_cap_rad(b_wall)
+        cap = min(math.radians(self.aim_max_deg), cap_wall)
+        limited = abs(dpsi) > cap
+        dpsi_c = math.copysign(min(abs(dpsi), cap), dpsi) if dpsi != 0.0 else 0.0
+        rospy.loginfo(
+            "[Aim] at rest: tag (%.3f, %+.3f) m edge %+.2f deg -> base %+.1f mm off the "
+            "line, stop pose %.3f m away; aim %+.2f deg (cap %.2f: wall %.2f, max %.1f)%s",
+            tx, ty, m['edge_deg'], b * 1000.0, dist, math.degrees(dpsi),
+            math.degrees(cap), math.degrees(cap_wall), self.aim_max_deg,
+            " — LIMITED" if limited else "")
+        if limited:
+            residual = abs(b) - dist * math.tan(cap)
+            rospy.logwarn(
+                "[Aim] pivot limited to %+.2f deg (plate wall %.2f m, margin %.2f, body "
+                "half-width %.2f): ~%.0f mm of lateral error will be left for the next hop",
+                math.degrees(dpsi_c), self.aim_wall_dist_m, self.aim_wall_margin_m,
+                self.aim_body_half_width_m, max(0.0, residual) * 1000.0)
+        target_deg = m['edge_deg'] + math.degrees(dpsi_c)
+        if abs(dpsi_c) >= math.radians(self.aim_min_deg):
+            if not self._align_to_tag_continuous(target_id, target_deg=target_deg,
+                                                 record=False):
+                rospy.logwarn("[Aim] pivot to %+.2f deg failed", target_deg)
+                return None
+        else:
+            target_deg = m['edge_deg']
+            rospy.loginfo("[Aim] %+.2f deg is under aim_min_deg — no pivot", math.degrees(dpsi_c))
+        # Stop column while yawed target_deg to the line: the tag's fore-aft
+        # in the robot frame at S is (cam + f) cos(th_t) - cam, not f.
+        th_t = math.radians(target_deg)
+        stop_offset_px = None
+        if self.camera_params is not None and self.camera_params[0] > 0 and z > 0:
+            stop_offset_px = ((cam + f) * math.cos(th_t) - cam) * self.camera_params[0] / z
+        return {'target_deg': target_deg, 'dist_m': dist, 'stop_offset_px': stop_offset_px,
+                'dpsi_deg': math.degrees(dpsi_c), 'limited': limited, 'b_mm': b * 1000.0}
+
     def _align_to_tag_pulse(self, tag_id):
         """Pulse alignment for a skid-steer base with a command delay,
         stiction and a release lurch (2026-09-04, user: the continuous
@@ -1266,8 +1451,11 @@ class MobileController:
         self.stop()
         return False
 
-    def _align_to_tag_continuous(self, tag_id):
-        """Rotate in place until the tag's edge reads square (yaw only).
+    def _align_to_tag_continuous(self, tag_id, target_deg=0.0, record=True):
+        """Rotate in place until the tag's edge reads `target_deg` (0 =
+        square; the aim pivot of aim_and_drive passes the heading that
+        points the base centre at the stop pose, with record=False so no
+        'aligned' record is written for it). Yaw only.
 
         Runs after EVERY hop — forward, backward and pivot — once the base
         has stopped (2026-09-02). Bounded by `align_timeout_s`: the tag can
@@ -1332,7 +1520,8 @@ class MobileController:
                 rate.sleep()
                 continue
 
-            angle_deg = tag_edge_angle_deg(self.detected_tags[tag_id]['corners'])
+            angle_deg = (tag_edge_angle_deg(self.detected_tags[tag_id]['corners'])
+                         - target_deg)      # error to the target angle
 
             if settle_until is not None:
                 # Command is zero; let the delayed rotation play out before
@@ -1343,28 +1532,33 @@ class MobileController:
                 settle_until = None
                 if abs(angle_deg) < align_threshold:
                     tag = dict(self.detected_tags[tag_id])
-                    # Base at rest now — the best estimate of where the
-                    # lens sits relative to this tag for the next hop.
-                    self._arrival_fore_m = float(tag.get('x', 0.0))
-                    self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                    if record:
+                        # Base at rest now — the best estimate of where the
+                        # lens sits relative to this tag for the next hop.
+                        self._arrival_fore_m = float(tag.get('x', 0.0))
+                        self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
                     rospy.loginfo(f"Alignment Complete. Final Angle: "
-                                  f"{angle_deg:.2f} (pass {passes})")
-                    self._record_tag_offset(tag_id, tag, 'aligned',
-                                            yaw_error_deg=angle_deg,
-                                            extra={'align_passes': passes})
+                                  f"{angle_deg:.2f} (pass {passes}"
+                                  + (f", target {target_deg:+.2f}" if target_deg else "") + ")")
+                    if record:
+                        self._record_tag_offset(tag_id, tag, 'aligned',
+                                                yaw_error_deg=angle_deg,
+                                                extra={'align_passes': passes})
                     return True
                 if passes >= max_passes:
                     tag = dict(self.detected_tags[tag_id])
-                    self._arrival_fore_m = float(tag.get('x', 0.0))
-                    self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                    if record:
+                        self._arrival_fore_m = float(tag.get('x', 0.0))
+                        self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
                     rospy.logwarn(
                         f"[Robot] align_to_tag({tag_id}): {angle_deg:+.2f} deg "
                         f"left after {passes} passes (band {align_threshold}) "
                         "— accepting; check stop_latency_s / align_settle_s")
-                    self._record_tag_offset(tag_id, tag, 'aligned',
-                                            yaw_error_deg=angle_deg,
-                                            extra={'align_passes': passes,
-                                                   'align_residual_accepted': True})
+                    if record:
+                        self._record_tag_offset(tag_id, tag, 'aligned',
+                                                yaw_error_deg=angle_deg,
+                                                extra={'align_passes': passes,
+                                                       'align_residual_accepted': True})
                     return True
                 rospy.loginfo(f"[Robot] align pass {passes} settled at "
                               f"{angle_deg:+.2f} deg, correcting again")
@@ -2170,6 +2364,30 @@ class MobileController:
             # ratio=0 -> 0, ratio=1 -> 1, smooth end
             return ratio * ratio
 
+    @staticmethod
+    def _plan_ref(plan, s):
+        """(b, db/ds, d2b/ds2) of the plan's quintic at travel s: from
+        (b0, m0, k0) at s = 0 to (0, 0, 0) at s = L — position, slope AND
+        curvature matched at both ends, so the commanded omega starts from
+        the base's own state and is back to 0 before the stop. Clamped to
+        [0, L]; beyond L everything is 0."""
+        L = plan['L']
+        if s >= L:
+            return 0.0, 0.0, 0.0
+        t = max(0.0, s / L)
+        b0, m0, k0 = plan['b0'], plan['m0'], plan.get('k0', 0.0)
+        t2, t3, t4, t5 = t * t, t ** 3, t ** 4, t ** 5
+        b = (b0 * (1 - 10 * t3 + 15 * t4 - 6 * t5)
+             + L * m0 * (t - 6 * t3 + 8 * t4 - 3 * t5)
+             + L * L * k0 * (0.5 * t2 - 1.5 * t3 + 1.5 * t4 - 0.5 * t5))
+        db = (b0 * (-30 * t2 + 60 * t3 - 30 * t4)
+              + L * m0 * (1 - 18 * t2 + 32 * t3 - 15 * t4)
+              + L * L * k0 * (t - 4.5 * t2 + 6 * t3 - 2.5 * t4)) / L
+        ddb = (b0 * (-60 * t + 180 * t2 - 120 * t3)
+               + L * m0 * (-36 * t + 96 * t2 - 60 * t3)
+               + L * L * k0 * (1 - 9 * t + 18 * t2 - 10 * t3)) / (L * L)
+        return b, db, ddb
+
     def _latch_final_approach(self, remaining_m, traveled_dist):
         """Enter the final approach and solve for the deceleration it needs.
 
@@ -2276,6 +2494,10 @@ class MobileController:
         # when the stop condition fires too; this covers the paths that do not
         # get there — a preempt, a timeout, or a move that ends blind.
         self._final_approach = False
+        self._line_plan = None
+        self._plan_seen_ticks = 0
+        self._aim = None
+        aim_target_deg = 0.0                 # heading the aim drive holds
 
         rospy.loginfo(f"[Navigation] Moving {total_distance:.2f}m to tag {target_id}, timeout: {timeout_limit:.1f}s")
 
@@ -2371,6 +2593,9 @@ class MobileController:
                 # whose TARGET is a 500-series tag keeps the forward column
                 # (center_x_stop_offset_reverse_skip_tag_ranges).
                 stop_offset = self._stop_offset_px(direction, target_id)
+                if (self._aim is not None and
+                        self._aim.get('stop_offset_px') is not None):
+                    stop_offset = self._aim['stop_offset_px']   # yaw-corrected column
                 target_x = image_center_x + stop_offset
                 diff = center_x - target_x
                 center_y_diff = tag['center_y'] - image_center_y
@@ -2407,6 +2632,24 @@ class MobileController:
                         heading_error_deg, speed)
 
                 should_stop = diff * move_dir_sign <= fire_px
+                # Metres the base still has to travel to the stop point —
+                # the same pixel quantity the stop test uses, on the tag
+                # plane (depth / fx). None until CameraInfo has arrived.
+                remaining_m_to_stop = None
+                plan_horizon_m = None
+                if self.camera_params is not None and self.camera_params[0] > 0:
+                    remaining_m_to_stop = (max(0.0, remaining_px_to_stop)
+                                           * tag['z'] / self.camera_params[0])
+                    # Horizon for the tag-line plan: to where the stop will
+                    # fire at the END (column minus the roll at
+                    # final_approach_speed), not minus the roll at the
+                    # CURRENT speed — at first sight the base can still be
+                    # doing 0.09 m/s, whose 5 cm lead shrank the plan to
+                    # 0.13 m of a 0.19 m approach (offline plant).
+                    plan_horizon_m = ((diff * move_dir_sign - stop_tolerance)
+                                      * tag['z'] / self.camera_params[0]
+                                      - self.final_approach_speed * max(self.stop_latency_s, 0.0))
+                    plan_horizon_m = max(0.0, plan_horizon_m)
 
                 if should_stop:
                     self._final_approach = False   # re-arm for the next move
@@ -2434,6 +2677,9 @@ class MobileController:
                                'tag_age_s': round(float(tag.get('age_s', 0.0)), 3),
                                'latency_comp_px': round(float(tag.get('comp_px', 0.0)), 2),
                                'steer_mode': self.steer_mode,
+                               'aim': ({k: (round(v, 3) if isinstance(v, float) else v)
+                                        for k, v in self._aim.items()}
+                                       if self._aim is not None else None),
                                'launch_ff_applied': launch_ff_applied,
                                'last_align_turn_sign': self._last_align_turn_sign})
                     return True
@@ -2445,20 +2691,16 @@ class MobileController:
                 # metres-per-pixel on the tag's plane is depth / fx; tag['z'] is
                 # that depth (the ~0.30 m camera height, since the optical axis
                 # points down) and camera_params[0] is fx.
-                if not self._final_approach and self.camera_params is not None:
-                    fx = self.camera_params[0]
-                    if fx > 0:
-                        # Measure to where the stop ACTUALLY fires, not to the
-                        # nominal target_x: should_stop triggers a whole
-                        # stop_tolerance early (10 px is ~3 mm at this depth).
-                        # Aiming the envelope at target_x instead left the
-                        # robot doing 0.024 m/s at the real stop point rather
-                        # than final_approach_speed.
-                        remaining_px = diff * move_dir_sign - fire_px
-                        remaining_m = max(0.0, remaining_px) * tag['z'] / fx
-                        if remaining_m <= self.final_approach_dist:
-                            self._latch_final_approach(remaining_m,
-                                                       traveled_dist)
+                if not self._final_approach and remaining_m_to_stop is not None:
+                    # Measured to where the stop ACTUALLY fires, not to the
+                    # nominal target_x: should_stop triggers a whole
+                    # stop_tolerance early (10 px is ~3 mm at this depth).
+                    # Aiming the envelope at target_x instead left the
+                    # robot doing 0.024 m/s at the real stop point rather
+                    # than final_approach_speed.
+                    if remaining_m_to_stop <= self.final_approach_dist:
+                        self._latch_final_approach(remaining_m_to_stop,
+                                                   traveled_dist)
                 elif self.camera_params is None:
                     # Startup transient only — CameraInfo and detections come
                     # from different publishers. Say so rather than silently
@@ -2500,7 +2742,189 @@ class MobileController:
                 pending_yaw_deg = math.degrees(self._pending_yaw_rad())
                 heading_pred_deg = heading_error_deg + pending_yaw_deg
                 sf_heading_applied = False
-                if self.steer_mode == 'state_feedback':
+                if self.steer_mode == 'aim_and_drive':
+                    # ---- aim_and_drive (2026-09-08): see _aim_at_stop_pose ----
+                    aim = self._aim
+                    if aim is None:
+                        self._plan_seen_ticks += 1
+                        if (self._plan_seen_ticks >= self.plan_settle_frames and
+                                plan_horizon_m is not None and
+                                plan_horizon_m >= self.aim_min_horizon_m):
+                            t_aim0 = rospy.Time.now()
+                            aim = self._aim_at_stop_pose(target_id, direction, rate)
+                            timeout_limit += (rospy.Time.now() - t_aim0).to_sec() + 15.0
+                            if aim is None:
+                                if self.stop_requested:
+                                    return False
+                                aim = {'failed': True, 'target_deg': 0.0,
+                                       'stop_offset_px': None}
+                            self._aim = aim
+                            aim_target_deg = aim['target_deg']
+                            # the launch heading hold now holds the AIM heading
+                            if target_id in self.detected_tags:
+                                e_now = tag_edge_angle_deg(
+                                    self.detected_tags[target_id]['corners'])
+                                launch_theta_ref = (self.current_theta
+                                                    - math.radians(e_now - aim_target_deg))
+                            else:
+                                launch_theta_ref = self.current_theta
+                            self._final_approach = False   # base at rest: re-latch later
+                            rate.sleep()
+                            continue
+                        omega = -self.aim_heading_gain * math.radians(heading_pred_deg)
+                    else:
+                        # drive the straight line: hold the aim heading on the tag
+                        omega = -self.aim_heading_gain * math.radians(
+                            heading_pred_deg - aim['target_deg'])
+                    omega = float(np.clip(omega, -self.move_max_angular,
+                                          self.move_max_angular))
+                    sf_heading_applied = True
+                    if self.aim_drive_speed > 0 and abs(speed) > self.aim_drive_speed:
+                        speed = math.copysign(self.aim_drive_speed, speed)
+                    rospy.loginfo_throttle(
+                        0.5, "[Aim] %s th %+.2f (pred %+.2f) deg target %+.2f omega %+.4f spd %+.3f",
+                        'drive' if aim is not None else 'wait',
+                        heading_error_deg, heading_pred_deg, aim_target_deg, omega, speed)
+                elif self.steer_mode == 'tag_line_plan' and plan_horizon_m is not None:
+                    # ---- plan to the TARGET TAG'S LINE (2026-09-08) ----
+                    # The line through the tag centre along its edge, in the
+                    # robot frame, runs at angle +theta (theta = edge angle =
+                    # the base's yaw relative to the line, + CCW; image down
+                    # = robot right, so +y_r is RIGHT). Signed offset of that
+                    # line from the lens and from the base centre (0.55 m
+                    # behind the lens), + = line to the robot's right:
+                    #   e_lens = ty cos(th) - tx sin(th)
+                    #   e_base = e_lens - camera_offset sin(th)
+                    # The tx sin(th) term is what `lateral = tag['y']` alone
+                    # misses — 8.7 mm at first sight (tx 0.25 m, 2 deg).
+                    # b = -e_base is the base's position relative to the line
+                    # (+ right); db/ds = -dir sin(th) (reversing, the same yaw
+                    # moves the base the other way).
+                    #
+                    # Once the tag has been in view for plan_settle_frames,
+                    # a Hermite cubic b_ref(s) from (b, db/ds) to (0, 0) over
+                    # the distance L0 still to go is planned ONCE and tracked
+                    # by odom travel s: omega = feed-forward from the path's
+                    # curvature (led by stop_latency_s) + plan_heading_gain x
+                    # (theta_ref(s) - predicted theta) + a lateral term on the
+                    # deviation from b_ref. A deviation over plan_replan_mm
+                    # re-plans from the measured state. Planning once is what
+                    # makes the turn-back happen: re-planning every tick with
+                    # a floored horizon left the base ON the line but still
+                    # 6 deg yawed at the stop (offline plant, 2026-09-08).
+                    th_m = math.radians(heading_error_deg)
+                    th_p = math.radians(heading_pred_deg)
+                    tx = float(tag.get('x', 0.0))
+                    e_lens_line = lateral * math.cos(th_m) - tx * math.sin(th_m)
+                    e_base_line = e_lens_line - self.camera_offset * math.sin(th_m)
+                    b_meas = -e_base_line
+                    m_meas = -move_dir_sign * math.sin(th_m)
+                    self._plan_seen_ticks += 1
+                    plan = self._line_plan
+                    s_now = None
+                    if plan is not None:
+                        s_now = max(0.0, traveled_dist - plan['s0'])
+                        b_ref_now = self._plan_ref(plan, s_now)[0]
+                        if (abs(b_meas - b_ref_now) > self.plan_replan_m and
+                                plan_horizon_m >= self.plan_min_horizon_m):
+                            rospy.loginfo(
+                                "[TagLinePlan] deviation %+.1f mm from the plan — "
+                                "re-planning over %.3f m", (b_meas - b_ref_now) * 1000.0,
+                                plan_horizon_m)
+                            plan = None
+                    if (plan is None and self._plan_seen_ticks >= self.plan_settle_frames
+                            and plan_horizon_m >= self.plan_min_horizon_m):
+                        # Start curvature = what the previous plan intended
+                        # here (a re-plan) or 0 (base rolling straight), so
+                        # the path's omega starts from the base's own state
+                        # instead of demanding a step it executes 0.55 s
+                        # late plus an accel ramp.
+                        k_meas = 0.0
+                        if self._line_plan is not None:
+                            k_meas = self._plan_ref(self._line_plan, s_now)[2]
+                        L0 = plan_horizon_m
+                        # Speed for this plan: the quintic's peak curvature is
+                        # ~5.77 |b0| / L^2 (+ the slope term), so the peak
+                        # feed-forward omega = v x that; choose v so it stays
+                        # inside plan_omega_budget, between plan_min_speed and
+                        # plan_approach_speed. Slower = more time for the same
+                        # heading change against the command delay (user:
+                        # slowing the visible approach is fine).
+                        kappa_pk = (5.77 * abs(b_meas) / (L0 * L0)
+                                    + 3.0 * abs(m_meas) / L0 + abs(k_meas))
+                        v_p = self.plan_approach_speed
+                        if kappa_pk > 1e-6 and self.plan_omega_budget > 0:
+                            v_p = min(v_p, self.plan_omega_budget / kappa_pk)
+                        v_p = max(v_p, self.plan_min_speed)
+                        plan = {'b0': b_meas, 'm0': m_meas, 'k0': k_meas, 'L': L0,
+                                's0': traveled_dist, 'dir': move_dir_sign, 'v': v_p}
+                        self._line_plan = plan
+                        s_now = 0.0
+                        rospy.loginfo(
+                            "[TagLinePlan] plan: base %+.1f mm off the tag line, heading "
+                            "%+.2f deg, %.3f m to go -> peak heading ~%.1f deg, "
+                            "approach at %.3f m/s (peak omega %.3f)",
+                            b_meas * 1000.0, heading_error_deg, L0,
+                            math.degrees(1.875 * abs(b_meas) / max(L0, 1e-3)),
+                            v_p, v_p * kappa_pk)
+                    # The speed the base will actually be doing when this
+                    # command executes: the plan cap below, the odom creep
+                    # zone and the final-approach envelope all cut `speed`
+                    # AFTER this block, and a curvature feed-forward scaled
+                    # by a speed 2-3x too high overshoots the heading
+                    # (plant: peak 12 deg for an 8.6 deg path).
+                    v_plan = abs(speed)
+                    if plan is not None and s_now is not None and s_now < plan['L']:
+                        v_plan = min(v_plan, plan['v'])
+                    elif (self.plan_approach_speed > 0 and
+                            abs(e_base_line) > self.plan_slow_lateral_m):
+                        v_plan = min(v_plan, self.plan_approach_speed)
+                    if (self.blind_approach_dist > 0 and
+                            remaining_dist <= self.blind_approach_dist):
+                        v_plan = min(v_plan, self.blind_approach_speed)
+                    if self._final_approach:
+                        v_plan = min(v_plan, self._final_approach_speed_at(traveled_dist))
+                    v_abs = max(v_plan, 0.003)
+                    if plan is not None:
+                        b_ref, db_ref, ddb_ref = self._plan_ref(plan, s_now)
+                        # lead the reference by the base's command delay
+                        s_lead = s_now + v_abs * max(self.stop_latency_s, 0.0)
+                        _, db_lead, ddb_lead = self._plan_ref(plan, s_lead)
+                        th_ref = -move_dir_sign * math.asin(max(-0.5, min(0.5, db_lead)))
+                        omega_ff = -move_dir_sign * v_abs * ddb_lead / max(math.cos(th_ref), 0.5)
+                        # Deviation from the reference lateral, closed with
+                        # the plan's own distance-scheduled gain 6 / L_rem^2
+                        # (a fixed 32 left a 5 mm lag from the launch delay
+                        # uncorrected to the stop; floored at
+                        # plan_min_horizon_m so it cannot blow up).
+                        L_rem = max(plan['L'] - s_now, self.plan_min_horizon_m)
+                        omega = (omega_ff
+                                 + self.plan_heading_gain * (th_ref - th_p)
+                                 + move_dir_sign * v_abs * (6.0 / (L_rem * L_rem)) * (b_meas - b_ref))
+                    else:
+                        # too close to plan (or not settled yet): hold the
+                        # heading square; the residual is the stop align's
+                        omega = -self.plan_heading_gain * th_p
+                    sf_heading_applied = True
+                    # A visible lateral correction gets more time: the plan's
+                    # own speed while it runs, else the general approach cap
+                    # while the base is off the line (the creep zone / final
+                    # approach below still win).
+                    if abs(speed) > v_plan:
+                        speed = math.copysign(v_plan, speed)
+                    rospy.loginfo_throttle(
+                        0.5, "[TagLinePlan] %s s %.3f/%.3f m (to stop %.3f, tx %+.3f, seen %d) "
+                             "base %+.1f mm (ref %+.1f) "
+                             "th %+.2f (pred %+.2f, ref %+.2f) deg omega %+.4f spd %+.3f",
+                        'track' if plan is not None else 'hold',
+                        s_now if s_now is not None else 0.0,
+                        plan['L'] if plan is not None else 0.0,
+                        plan_horizon_m, tx, self._plan_seen_ticks,
+                        b_meas * 1000.0,
+                        (self._plan_ref(plan, s_now)[0] * 1000.0) if plan is not None else 0.0,
+                        heading_error_deg, heading_pred_deg,
+                        math.degrees(th_ref) if plan is not None else 0.0, omega, speed)
+                elif self.steer_mode == 'state_feedback':
                     # omega = -(v k_y) e_y - k_theta e_theta: the lateral term
                     # scales with speed like Pure Pursuit (kinematics: e_y' =
                     # v e_theta), the heading term does not — that is what
@@ -2524,6 +2948,18 @@ class MobileController:
                         sf_heading_applied = True
                 omega = np.clip(omega, -self.move_max_angular,
                                 self.move_max_angular)
+            elif (self.steer_mode == 'aim_and_drive' and self._aim is not None
+                  and not self._aim.get('failed')):
+                # aim drive with the tag out of view: hold the aim heading on
+                # odom against the reference anchored at the end of the pivot
+                # (and re-anchored on every tag frame by the launch hold below)
+                yaw_err = ((self.current_theta - launch_theta_ref + math.pi)
+                           % (2.0 * math.pi) - math.pi) + self._pending_yaw_rad()
+                omega = float(np.clip(-self.aim_heading_gain * yaw_err,
+                                      -self.move_max_angular, self.move_max_angular))
+                sf_heading_applied = True
+                if self.aim_drive_speed > 0 and abs(speed) > self.aim_drive_speed:
+                    speed = math.copysign(self.aim_drive_speed, speed)
             elif prediction_segment is not None:
                 omega = self._predictive_centering_omega(
                     prediction_segment, speed)
@@ -2554,6 +2990,8 @@ class MobileController:
                 if ref_tag is not None:
                     rv = self._tag_view(ref_tag) or self.detected_tags[ref_tag]
                     yaw_err_deg = rv.get('edge_deg', tag_edge_angle_deg(rv['corners']))
+                    if ref_tag == target_id:
+                        yaw_err_deg -= aim_target_deg     # the aim drive holds THIS heading
                     launch_theta_ref = self.current_theta - math.radians(yaw_err_deg)
                     src = f'tag {ref_tag}'
                     # the steering law above already holds the heading on
@@ -2565,6 +3003,9 @@ class MobileController:
                         (self.current_theta - launch_theta_ref + math.pi)
                         % (2.0 * math.pi) - math.pi)
                     src = 'odom'
+                    # the aim drive's own odom hold above already acted
+                    already = (self._aim is not None and not self._aim.get('failed')
+                               and sf_heading_applied)
                 # act on the heading the base will settle at, not the one it
                 # had when the frame was taken (command delay)
                 yaw_err_deg += math.degrees(self._pending_yaw_rad())
@@ -2634,6 +3075,22 @@ class MobileController:
                 speed = math.copysign(self.blind_approach_speed, speed)
 
             accel_override = None
+            # ===== PLAN PREPARE ZONE (tag_line_plan) =====
+            # The target tag appears ~0.2 m out; the lateral plan needs the
+            # base SLOW from its first sight (a 20 mm correction over 0.19 m
+            # is a ~0.013 m/s manoeuvre), and the profile's 0.05 m/s^2 ramp
+            # would otherwise carry 0.09 m/s eight cm into the visible zone.
+            # So inside the last plan_prepare_dist of ODOM distance the speed
+            # is capped at plan_approach_speed, braking at plan_prepare_decel.
+            prepare_cap = (self.aim_drive_speed if self.steer_mode == 'aim_and_drive'
+                           else self.plan_approach_speed)
+            if (self.steer_mode in ('tag_line_plan', 'aim_and_drive')
+                    and self.plan_prepare_dist > 0
+                    and remaining_dist <= self.plan_prepare_dist
+                    and abs(speed) > prepare_cap > 0):
+                speed = math.copysign(prepare_cap, speed)
+                if self.plan_prepare_decel > 0:
+                    accel_override = self.plan_prepare_decel
             if self._final_approach:
                 speed = self._final_approach_speed_at(traveled_dist) * move_dir_sign
                 # The envelope is already a constant-deceleration curve that

@@ -217,7 +217,80 @@ robot:
   # 0.033 m/s, 0.53 at 0.1 m/s. Below sf_min_speed_for_gain the lateral
   # gain is held at that speed so creeping still steers. 'pure_pursuit'
   # restores the old point tracker.
-  steer_mode: state_feedback
+  # tag_line_plan (2026-09-08, default): the base's offset and heading are
+  # measured against the TARGET TAG'S LINE (through the tag centre along
+  # its edge — the proper perpendicular distance, tx*sin(theta) included,
+  # which `lateral = tag y` alone misses by ~9 mm at first sight). Once
+  # the tag has been in view for plan_settle_frames, a Hermite cubic from
+  # the BASE CENTRE's (offset, heading) to (0, 0) at the stop point is
+  # planned ONCE over the distance still to go and tracked by odom travel:
+  # omega = path-curvature feed-forward (led by stop_latency_s) +
+  # plan_heading_gain x (reference heading - predicted heading) +
+  # sf_lateral_gain x |v| x (deviation from the reference lateral). A
+  # deviation over plan_replan_mm re-plans from the measured state. The
+  # base therefore arrives ON the line and square, the stop align has
+  # nothing to undo and the lens stays on the tag. (state_feedback reached
+  # the tag still ~e off the line, yawed e/0.55 toward it, and the stop
+  # align swung the lens off by that e — user, 2026-09-08. Re-planning
+  # every tick with a floored horizon was tried first and left 6 deg of
+  # yaw at the stop.) Peak heading of the path is ~1.5 e / L: 20 mm over
+  # 0.2 m = 8.6 deg. No plan is made under plan_min_horizon_m; the
+  # heading is just held square. While |e_base| > plan_slow_lateral_mm
+  # the approach speed is capped at plan_approach_speed (user: slowing the
+  # visible approach is fine); 0 disables the cap.
+  # aim_and_drive (2026-09-08, DEFAULT — user's two-straight-lines idea with
+  # the corner AT the stop pose): at the first sight of the target tag the
+  # base STOPS, measures the tag at rest (median of aim_measure_frames),
+  # pivots (the align loop with a non-zero target, delay-led, verified at
+  # rest) so its CENTRE points straight at the stop pose S on the target
+  # tag's line, drives that line at aim_drive_speed holding the pivoted
+  # heading on the tag (odom if the tag drops out), stops on the column
+  # corrected for the yaw, and the mandatory stop align turns the yaw back
+  # about the base centre — landing the lens ON the tag, since the centre
+  # is already on the line. Accuracy is the align's (0.2 deg x 0.18 m =
+  # 0.6 mm), independent of the starting offset; costs ~+5 s per hop.
+  # The pivot is capped by aim_max_deg (past ~9 deg the lens, 0.55 m
+  # ahead of the pivot, swings the tag out of the frame) and by the PLATE
+  # WALL: the body's lateral reach about its centre, 0.45 sin(psi) +
+  # 0.35 cos(psi), plus the base's own offset from the lane must stay
+  # inside aim_wall_dist_m - aim_wall_margin_m (both sides treated as
+  # walls). A capped aim leaves the remainder for the next hop and logs
+  # it. ⚠️ Only the chassis rectangle is modelled: if anything on the deck
+  # (arm at home, lift, cable chain) overhangs the 0.70 m width toward
+  # the plate, raise aim_body_half_width_m to the widest point.
+  steer_mode: aim_and_drive
+  aim_max_deg: 9.0
+  aim_min_deg: 0.3               # smaller aims are skipped (< 1 mm over 0.18 m)
+  aim_min_horizon_m: 0.08        # no aim when the tag first appears closer than this
+  aim_wall_dist_m: 0.45          # = wall_dist_work_zone: lane centre to the plate face
+  aim_wall_margin_m: 0.03
+  aim_wall_side: right           # the plate is on the robot's RIGHT on every lane (arm side); 'left' / 'both'
+  aim_free_side_dist_m: 0.60     # what bounds the other side (conservative; nothing is documented there)
+  aim_body_half_length_m: 0.45   # = robot.length / 2 (body centred on the base centre)
+  aim_body_half_width_m: 0.35    # = robot.width / 2 — raise for deck overhang
+  aim_drive_speed: 0.03
+  aim_measure_frames: 5
+  aim_heading_gain: 1.0
+  # ---- tag_line_plan: the smooth-path alternative (selectable) ----
+  plan_min_horizon_m: 0.08
+  plan_heading_gain: 1.0
+  plan_replan_mm: 3.0
+  plan_settle_frames: 3
+  # Per-plan speed: the quintic's peak curvature is ~5.77 |e| / L^2, so the
+  # approach runs at min(plan_approach_speed, plan_omega_budget / that),
+  # never below plan_min_speed — a 20 mm correction over 0.2 m goes at
+  # ~0.014 m/s, over 0.13 m at ~0.006. Slower buys time against the 0.55 s
+  # delay; the path itself needs no more heading.
+  plan_omega_budget: 0.04
+  plan_min_speed: 0.005
+  # The base must already be slow when the tag appears (~0.2 m out):
+  # inside the last plan_prepare_dist of odom distance the speed is capped
+  # at plan_approach_speed, braking at plan_prepare_decel (the general
+  # linear_accel 0.05 would carry 0.09 m/s eight cm into the visible zone).
+  plan_prepare_dist: 0.28
+  plan_prepare_decel: 0.1
+  plan_approach_speed: 0.02
+  plan_slow_lateral_mm: 3.0
   sf_lateral_gain: 32.0
   sf_heading_gain: 0.6
   sf_min_speed_for_gain: 0.02
