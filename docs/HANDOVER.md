@@ -138,7 +138,15 @@ pull + `catkin_make` before anything below.
   `aim_wall_margin_m` 0.03, plate on the robot's right), drive it, and
   the stop align lands the lens on the tag. Plant: 10–20 mm start
   offsets end within ~1 mm; ≥ 30 mm toward the plate is wall-capped and
-  spills into the next hop; ~+11 s per hop. Not driven. **Since 2026-09-04 the stop column depends on the
+  spills into the next hop; ~+11 s per hop. **Driven 21:15 the same
+  day:** aims converge, but every stop carried a +8.8 mm (fwd) /
+  −11.6 mm (rev) lateral bias — traced to **front_cam being tilted 1.3°**
+  (edge angle reads +0.67° for a tag 0.2 m ahead). Fixed by ground-plane
+  re-imaging in `robot_camera_node` (`robot_camera.ground_plane`,
+  fitted from a tag pair by `tools/fit_front_cam_ground.py`; lever
+  confirmed 0.552 m). Correction NOT yet driven — restart
+  `robot_camera_node` and re-run a corridor; the `aligned` lateral should
+  land within a few mm both ways. **Since 2026-09-04 the stop column depends on the
   direction:** forward `cx + center_x_stop_offset` (0), reverse
   `cx + center_x_stop_offset_reverse` (+400 px = tag at the far right of
   the frame, ~162 mm ahead of the lens; remove the key for one shared

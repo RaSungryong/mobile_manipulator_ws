@@ -828,6 +828,33 @@ robot_camera:
   # corrupted corners with a 20-30 deg bogus tilt (offline on a saved frame:
   # 1.0 -> tilt 2.7 deg, 1.5 -> 20.7 deg, 2.0 -> nothing). side_cam's 30 mm
   # tags are smaller still. 1.0 = full resolution.
+  # Ground-plane correction (2026-09-08). front_cam is not exactly vertical
+  # and its lens distorts: a tag's EDGE ANGLE then reads wrong in proportion
+  # to where the tag is in the frame (+0.67 deg for a square-laid tag 0.2 m
+  # ahead — the aim's measuring position — and -0.21 deg on the crosshair),
+  # and the aim / align lever (0.55-0.75 m) turned that into the +8.8 mm
+  # forward / -11.6 mm reverse lateral bias seen at every stop. With this
+  # block enabled robot_camera_node undistorts the detected corners
+  # (CameraInfo D), casts them through the tilted camera onto the floor and
+  # re-images them with a LEVEL virtual camera of the same K at height_m:
+  # /front_cam/tag_detections then carries flat-view pixels and pose_x/y =
+  # floor position relative to the lens NADIR (pose_z = height_m).
+  # mobile_controller is unchanged. Values FITTED (not measured mechanically)
+  # by tools/fit_front_cam_ground.py from a 60 mm tag pair laid 0.150 m
+  # apart, 15 snapshots, 0.33 px rms (0.74 with a level camera); the same
+  # session put the lens-to-pivot lever at 0.552 m (camera_offset 0.55 ok).
+  # Re-fit after any camera remount. The angles live in the tool's frame
+  # convention (see apriltag_nav/ground_plane.py) — do not read them as
+  # spirit-level angles. The optical axis meets the floor ~7 mm from the
+  # nadir, so "lens over the tag" moved by that constant vs. before.
+  ground_plane:
+    front_cam:
+      enabled: true
+      roll_deg: 1.228
+      pitch_deg: -0.504
+      height_m: 0.302
+    side_cam: null
+    hand_cam: null
   quad_decimate:
     front_cam: 2.0
     side_cam:  1.0

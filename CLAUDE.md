@@ -501,6 +501,45 @@ Consequences worth remembering:
   different publishers now. The stop condition falls back to
   `image_height / 2`; the calibrated `cy` is usually a few px off that.
 
+### front_cam ground-plane correction — the camera is tilted 1.3° and it matters
+
+**Since 2026-09-08 `robot_camera_node` re-images front_cam's detections
+through a level virtual camera** (`robot_camera.ground_plane.front_cam` in
+`robot.yaml`, module `apriltag_nav/ground_plane.py`): the raw corners are
+undistorted with CameraInfo `D`, cast through the calibrated tilt (roll
++1.228°, pitch −0.504°, lens 302 mm) onto the floor, and re-projected with
+the same K at that height. `/front_cam/tag_detections` therefore carries
+flat-view pixels, `pose_x/pose_y` = floor position relative to the lens
+NADIR (m, robot frame), `pose_z` = 0.302; `mobile_controller` is
+unchanged and its `z / fx` scaling stays consistent. The overlay still
+draws the raw frame with raw boxes.
+
+Why: a tilt rotates a tag's imaged edge in proportion to the tag's
+fore-aft position — a square-laid tag read **+0.67° at 0.2 m ahead** (where
+`aim_and_drive` measures), +0.50° at the reverse column, −0.21° on the
+crosshair — and every consumer multiplies that by a 0.55–0.75 m lever.
+That was the whole +8.8 mm forward / −11.6 mm reverse lateral bias of the
+first aim-and-drive run, AND it means every "aligned" stop actually left
+the body 0.2–0.5° yawed. Lens distortion (k1 0.083) moves positions
+~4 mm at the frame edge but barely touches angles (0.05°).
+
+How it was measured (`tools/fit_front_cam_ground.py`): two 60 mm tags laid
+0.150 m apart (user, 0.1 mm), 8 snapshots of small manual moves + 7 of
+±4° in-place pivots, all read AT REST — the commanded motion is never
+used, only what the tags show (the base under-executes small moves by
+~45 % and pivots by ~25 %). 120 corner points, rms 0.33 px (0.74 with a
+level camera). The same session put the **lens-to-pivot lever at
+0.552 ± 0.001 m** (`camera_offset` 0.55 stands) and the camera yaw vs the
+travel axis at −0.38 ± 0.22° (from a straight-drive test; not corrected,
+1.3 mm per 0.2 m). Re-fit after any camera remount: snapshots must be
+taken with `ground_plane.enabled: false` (raw detections). One of the two
+tags (15) had corners skewed ~0.4° (print or glare) — use the pair's
+centre line, not a single tag's edge, as the angular reference.
+
+Consequence to remember: "lens over the tag" is now the nadir, 7 mm from
+where the optical axis meets the floor, so `/robot_pose`'s lateral and
+every stop moved by that constant relative to pre-2026-09-08 records.
+
 ### Reading tag ID and orientation off the image
 
 `robot_camera_node` publishes `/<cam>/tag_overlay` — the frame with an amber
@@ -1208,6 +1247,57 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-08 — front_cam tilt found and corrected (ground-plane projection); lever confirmed 0.552 m
+
+First robot run of aim-and-drive (21:15–21:24, `GOTO 117/120/123/114`,
+10 forward + 9 reverse hops): the aim pivots converged in one pass, yaw
+at rest ±0.18°, fore-aft +2…+5 mm forward / 155–158 mm reverse, hop time
+24 s — but the lens lateral after the stop align was **+8.8 ± 1.3 mm on
+every forward hop and −11.6 ± 1.6 mm on every reverse hop**, independent
+of the aim angle. A constant, direction-flipping bias with 1.5 mm scatter
+is a model error, not control. (With state_feedback the same corridor had
+shown +12 → +27 mm growing along the run.)
+
+Chased in three steps, each using the user's precisely laid tags as the
+ruler and the robot's imprecise motion only as excitation:
+1. Straight-drive test on tag 118 (7 records, reverse/forward 0.15 m ×3):
+   camera yaw vs travel axis −0.38 ± 0.22° — too small (1.3 mm) to be the
+   cause; the base translates straight (residual < 0.8 mm per 0.14 m) but
+   yaws 0.1–0.8° per segment on its own.
+2. Tag pair (60 mm, 0.150 m apart) in one frame: pair spacing measured
+   150.82 ± 0.08 mm at all positions (scale fine), but the two tags'
+   `yaw` readings differed by an amount that GREW with image position
+   (+2.2°/1000 px) — not lens distortion (undistorting with D changed
+   edge angles by 0.05°), and a single tag's two parallel edges converged
+   by 0.2–0.4°: perspective, i.e. the optical axis is not vertical.
+3. Full fit (15 snapshots incl. 6 pivots, 120 corners): roll +1.228°,
+   pitch −0.504°, height 302 mm, rms 0.33 px. The uncorrected pipeline
+   reads a square-laid tag's edge at +0.67° when the tag is 0.2 m ahead
+   (the aim's measuring position), +0.50° at the reverse column, −0.21°
+   on the crosshair. 0.67° × the 0.75 m tag-to-base lever = **8.8 mm** —
+   the forward bias exactly; the reverse column's +0.50° (align leaves the
+   body −0.5° yawed, lens swings 4.8 mm, tag 0.155 m ahead adds 1.4) plus
+   the −0.3° at the reverse aim position give ≈ −9 mm vs −11.6 measured.
+   The lever from the pivots: 0.552 ± 0.001 m.
+
+Fix: `apriltag_nav/ground_plane.py` + `robot_camera_node` re-imaging
+(see the new section above), `robot.yaml robot_camera.ground_plane`,
+`tools/fit_front_cam_ground.py` (the fit, reusable). Verified offline
+(`t_ground.py`, 27 checks): identity for a level undistorted camera;
+with the fitted numbers a square-laid tag reads edge 0.000° and its true
+floor position anywhere in the frame; the real scans' tag-16 edge vs the
+pair line goes from +0.27…+0.77° (raw) to −0.06…+0.12°; spacing
+149.7–150.3 mm. Not yet driven with the correction on;
+`robot_camera_node` restart required (the launch's `~driver_*` params
+persist on the master, so `rosnode kill /robot_camera_node` + `rosrun`
+works, as on 2026-09-02). Expect the aligned lateral bias to drop from
+±10 mm to a few mm in both directions; `aim_and_drive` needs no change.
+
+Also seen and not yet fixed: a manual `drive_distance` of 0.02 m executes
+~11 mm and `pivot_angle` 5° executes ~3.7° — the stop-latency lead in
+the manual profile over-compensates at tiny moves (fine for the
+calibration, which never trusts the command).
 
 ### 2026-09-08 — Arrival rework: aim-and-drive — stop at first sight, point the base centre at the stop pose, drive straight; smooth path kept as an option
 

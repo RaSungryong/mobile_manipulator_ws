@@ -77,6 +77,7 @@ so robot.yaml decides among the cameras the launch did start.
 """
 
 import cv2
+import math
 import numpy as np
 import rospy
 from sensor_msgs.msg import Image, CameraInfo
@@ -116,6 +117,9 @@ def _rot_from_matrix(m):
             else R.from_dcm(m))
 
 
+from apriltag_nav.ground_plane import GroundPlane
+
+
 def _orientation(pose_R):
     """(roll, pitch, yaw, tilt_from_normal) in degrees from dt_apriltags pose_R.
 
@@ -144,8 +148,15 @@ class _CameraTagWorker:
 
     def __init__(self, name, image_topic, info_topic, detections_topic,
                  tag_family, tag_size, bridge, driver_service, enabled,
-                 quad_decimate=1.0, stop_columns=None):
+                 quad_decimate=1.0, stop_columns=None, ground_plane=None):
         self.name = name
+        # Ground-plane correction (2026-09-08): {enabled, roll_deg,
+        # pitch_deg, height_m} from robot.yaml robot_camera.ground_plane.
+        # Built once CameraInfo (K + D) has arrived. See
+        # apriltag_nav/ground_plane.py for what it does and why.
+        self.ground_cfg = dict(ground_plane) if ground_plane else None
+        self.ground = None
+        self.camera_dist = None    # CameraInfo D (plumb_bob)
         # {'FWD': offset_px, 'REV': offset_px} from the calibrated cx, drawn
         # on the overlay. Only the navigation camera gets them; None = draw
         # nothing beyond the crosshair.
@@ -257,6 +268,28 @@ class _CameraTagWorker:
         if self.camera_params is None:
             K = msg.K
             self.camera_params = [K[0], K[4], K[2], K[5]]  # fx, fy, cx, cy
+            self.camera_dist = list(msg.D) if msg.D else []
+            if self.ground_cfg and self.ground_cfg.get('enabled', False):
+                try:
+                    self.ground = GroundPlane(
+                        K[0], K[4], K[2], K[5], self.camera_dist,
+                        math.radians(float(self.ground_cfg.get('roll_deg', 0.0))),
+                        math.radians(float(self.ground_cfg.get('pitch_deg', 0.0))),
+                        float(self.ground_cfg.get('height_m', 0.30)))
+                    ax = self.ground.axis_offset_m()
+                    rospy.loginfo(
+                        "[RobotCamera] %s: ground-plane correction ON — roll %+.3f "
+                        "pitch %+.3f deg, height %.1f mm, D %s; optical axis meets "
+                        "the floor %+.1f / %+.1f mm from the nadir",
+                        self.name, float(self.ground_cfg.get('roll_deg', 0.0)),
+                        float(self.ground_cfg.get('pitch_deg', 0.0)),
+                        self.ground.h * 1000.0,
+                        'applied' if self.ground.D is not None else 'none',
+                        ax[0] * 1000.0, ax[1] * 1000.0)
+                except Exception as e:
+                    rospy.logerr("[RobotCamera] %s: ground-plane correction "
+                                 "disabled: %s", self.name, e)
+                    self.ground = None
 
     def _image_cb(self, msg):
         if self.camera_params is None or not self.enabled:
@@ -274,6 +307,7 @@ class _CameraTagWorker:
             out.camera_name = self.name
             out.image_height, out.image_width = cv_img.shape[:2]
 
+            raw_dets = []          # what the frame actually shows, for the overlay
             for det in detections:
                 d = AprilTagDetection()
                 d.id = int(det.tag_id)
@@ -284,14 +318,31 @@ class _CameraTagWorker:
                 d.pose_z = float(det.pose_t[2][0])
                 d.roll, d.pitch, d.yaw, d.tilt_from_normal = _orientation(det.pose_R)
                 d.corners = np.asarray(det.corners, dtype=float).ravel().tolist()
-                out.detections.append(d)
+                raw_dets.append(d)
+                if self.ground is not None:
+                    # Re-image through a level, distortion-free virtual
+                    # camera: corners / centre in its pixels, pose = the
+                    # floor position relative to the lens nadir, pose_z =
+                    # the calibrated lens height (so consumers' z/fx
+                    # scaling stays consistent). Orientation fields keep
+                    # dt_apriltags' values.
+                    vc, vcen, g = self.ground.correct(det.corners, det.center)
+                    c = AprilTagDetection()
+                    c.id, c.roll, c.pitch, c.yaw, c.tilt_from_normal = (
+                        d.id, d.roll, d.pitch, d.yaw, d.tilt_from_normal)
+                    c.center_x, c.center_y = float(vcen[0]), float(vcen[1])
+                    c.pose_x, c.pose_y, c.pose_z = float(g[0]), float(g[1]), float(self.ground.h)
+                    c.corners = np.asarray(vc, dtype=float).ravel().tolist()
+                    out.detections.append(c)
+                else:
+                    out.detections.append(d)
 
             self.pub.publish(out)
 
             # Drawing a 1920x1080 overlay at 30 Hz is not free, so it happens
             # only while something is actually looking (RViz, rqt, a rosbag).
             if self.overlay_pub.get_num_connections() > 0:
-                self._publish_overlay(msg, cv_img, out.detections)
+                self._publish_overlay(msg, cv_img, raw_dets)
 
         except Exception as e:
             rospy.logerr(f"[RobotCamera] {self.name} processing error: {e}")
@@ -417,6 +468,7 @@ class RobotCameraNode:
         decimate_cfg = cam_cfg.get('quad_decimate') or {}
         enabled_cfg = cam_cfg.get('enabled') or {}
         driver_cfg = cam_cfg.get('driver_toggle') or {}
+        ground_cfg = cam_cfg.get('ground_plane') or {}
         # The columns mobile_controller stops the tag on, read from the SAME
         # keys it reads (robot.yaml `robot:`), drawn on front_cam's overlay
         # only — it is the navigation camera. Same fallback rule as the
@@ -458,7 +510,8 @@ class RobotCameraNode:
                                     enabled_cfg.get(name, True)),
                 quad_decimate=decimate_cfg.get(name, 1.0),
                 stop_columns=(nav_stop_columns if name == 'front_cam'
-                              else None))
+                              else None),
+                ground_plane=ground_cfg.get(name))
 
         active = [n for n, w in self.workers.items() if w.enabled]
         if not active:

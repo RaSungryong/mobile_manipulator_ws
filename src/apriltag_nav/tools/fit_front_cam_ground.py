@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Fit front_cam's ground-plane extrinsics from tag-pair snapshots.
+
+Method (2026-09-08): two tags are laid on the floor a precisely known
+distance apart, edges parallel to the line joining their centres. The base
+is parked so both are in the frame and the operator saves the raw
+detections at rest at several positions (small manual moves and small
+in-place pivots — the commanded motion is NOT used, only what the tags
+show). Every snapshot then constrains the camera with 8 corner points of
+known relative geometry at an unknown robot pose. The fit solves
+    roll, pitch, lens height, printed tag size (+ 3 pose params / snapshot)
+against CameraInfo K / D, and reports the residual, the numbers for
+robot.yaml `robot_camera.ground_plane.front_cam`, the edge-angle error the
+UNCORRECTED pipeline would read vs fore-aft position, and — from any
+consecutive pivot snapshots — the lens-to-pivot lever (`camera_offset`).
+
+Snapshots: `rostopic echo -n1 /front_cam/tag_detections > dir/scan_<t>.txt`
+(the node must be publishing RAW detections, i.e. ground_plane disabled, or
+the fit sees already-corrected data). CameraInfo:
+`rostopic echo -n1 /front_cam/color/camera_info > dir/camera_info.txt`.
+
+    rosrun apriltag_nav fit_front_cam_ground.py ~/calib_pair --spacing 0.150 --tags 15 16
+"""
+import argparse
+import glob
+import math
+import os
+import re
+import sys
+
+import numpy as np
+from scipy.optimize import least_squares
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+from apriltag_nav.ground_plane import GroundPlane, rot_xyz  # noqa: E402
+
+
+def parse_snapshot(fn):
+    txt = open(fn).read()
+    out = {}
+    for tid, cx, cy, cs in re.findall(
+            r"id: (\d+).*?center_x: ([-\d.e]+).*?center_y: ([-\d.e]+).*?corners: \[([^\]]+)\]", txt, re.S):
+        out[int(tid)] = dict(cx=float(cx), cy=float(cy),
+                             c=np.array([float(v) for v in cs.split(',')]).reshape(4, 2))
+    return out
+
+
+def parse_camera_info(fn):
+    txt = open(fn).read()
+    K = [float(v) for v in re.search(r"K: \[([^\]]+)\]", txt).group(1).split(',')]
+    m = re.search(r"D: \[([^\]]+)\]", txt)
+    D = [float(v) for v in m.group(1).split(',')] if m else []
+    return K[0], K[4], K[2], K[5], D
+
+
+def pair_corners(size, spacing):
+    """Corners of both tags in the PAIR frame (x along the pair, y right), in
+    dt_apriltags order as seen on this camera: c0 (x-, y-), c1 (x-, y+),
+    c2 (x+, y+), c3 (x+, y-)."""
+    h = size / 2.0
+    base = np.array([[-h, -h], [-h, h], [h, h], [h, -h]])
+    return np.vstack([base, base + [spacing, 0.0]])
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('dir')
+    ap.add_argument('--spacing', type=float, default=0.150, help='tag centre spacing (m)')
+    ap.add_argument('--tags', type=int, nargs=2, default=[15, 16], help='tag ids, first -> second along +x')
+    ap.add_argument('--size', type=float, default=0.060, help='nominal printed tag size (m), refined by the fit')
+    ap.add_argument('--height', type=float, default=0.30, help='initial lens height (m)')
+    ap.add_argument('--camera-info', default=None, help='camera_info dump (default <dir>/camera_info.txt)')
+    a = ap.parse_args()
+
+    fx, fy, cx, cy, D = parse_camera_info(a.camera_info or os.path.join(a.dir, 'camera_info.txt'))
+    files = sorted(glob.glob(os.path.join(a.dir, '*.txt')))
+    snaps = []
+    for f in files:
+        if os.path.basename(f).startswith('camera_info'):
+            continue
+        d = parse_snapshot(f)
+        if a.tags[0] in d and a.tags[1] in d:
+            snaps.append((os.path.basename(f), d))
+    if len(snaps) < 3:
+        sys.exit(f"need at least 3 snapshots with both tags, found {len(snaps)}")
+    t0, t1 = a.tags
+    obs = [np.vstack([d[t0]['c'], d[t1]['c']]) for _, d in snaps]
+
+    def residuals(p):
+        roll, pitch, h, s = p[:4]
+        gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
+        pc = pair_corners(s, a.spacing)
+        res = []
+        for k in range(len(snaps)):
+            X, Y, psi = p[4 + 3 * k: 7 + 3 * k]
+            c, sn = math.cos(psi), math.sin(psi)
+            g = np.column_stack([X + c * pc[:, 0] - sn * pc[:, 1], Y + sn * pc[:, 0] + c * pc[:, 1]])
+            res.append((gp.project(g) - obs[k]).ravel())
+        return np.concatenate(res)
+
+    p0 = [0.0, 0.0, a.height, a.size]
+    for _, d in snaps:
+        p0 += [(d[t0]['cx'] - cx) * a.height / fx, (d[t0]['cy'] - cy) * a.height / fy,
+               math.atan2(d[t1]['cy'] - d[t0]['cy'], d[t1]['cx'] - d[t0]['cx'])]
+    fit = least_squares(residuals, p0, method='lm', xtol=1e-12, ftol=1e-12)
+    roll, pitch, h, s = fit.x[:4]
+    r = residuals(fit.x)
+    lvl = least_squares(lambda q: residuals(np.concatenate([[0.0, 0.0], q])), p0[2:], method='lm')
+    r0 = residuals(np.concatenate([[0.0, 0.0], lvl.x]))
+    gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
+    ax = gp.axis_offset_m()
+
+    print(f"snapshots {len(snaps)}, corner points {8 * len(snaps)}, rms {math.sqrt(np.mean(r ** 2)):.3f} px "
+          f"(max {np.abs(r).max():.2f}); level camera would give {math.sqrt(np.mean(r0 ** 2)):.3f} px")
+    print(f"roll {math.degrees(roll):+.3f} deg, pitch {math.degrees(pitch):+.3f} deg, height {h * 1000:.1f} mm, "
+          f"tag size {s * 1000:.2f} mm; optical axis meets the floor {ax[0] * 1000:+.1f} / {ax[1] * 1000:+.1f} mm from the nadir")
+    print("\nrobot.yaml:\n  robot_camera:\n    ground_plane:\n      front_cam:\n        enabled: true\n"
+          f"        roll_deg: {math.degrees(roll):.3f}\n        pitch_deg: {math.degrees(pitch):.3f}\n"
+          f"        height_m: {h:.3f}")
+
+    print("\nedge angle the UNCORRECTED pipeline reads for a square-laid 90 mm tag, vs fore-aft position:")
+    for X in (-0.03, 0.0, 0.05, 0.10, 0.155, 0.20):
+        sq = np.array([[X - 0.045, -0.045], [X - 0.045, 0.045], [X + 0.045, 0.045], [X + 0.045, -0.045]])
+        c = gp.project(sq)
+        ang = (math.degrees(math.atan2(c[1][1] - c[0][1], c[1][0] - c[0][0])) - 90.0 + 90.0) % 180.0 - 90.0
+        print(f"   X {X:+.3f} m: {ang:+.3f} deg")
+
+    print("\nground-projected pair per snapshot (spacing should be the laid value, edges parallel):")
+    for (name, d) in snaps:
+        g0 = gp.to_ground(d[t0]['c']); g1 = gp.to_ground(d[t1]['c'])
+        sp = np.linalg.norm(g1.mean(0) - g0.mean(0)) * 1000
+        e0 = math.degrees(math.atan2(g0[1][1] - g0[0][1], g0[1][0] - g0[0][0])) - 90
+        e1 = math.degrees(math.atan2(g1[1][1] - g1[0][1], g1[1][0] - g1[0][0])) - 90
+        print(f"   {name:18s} spacing {sp:7.2f} mm  edges {e0:+6.3f} / {e1:+6.3f} deg  centre {t0} at ({g0.mean(0)[0]:+.3f}, {g0.mean(0)[1]:+.3f}) m")
+
+    piv = [(n, d) for n, d in snaps if n.startswith('piv')]
+    if len(piv) >= 2:
+        print("\nlens-to-pivot lever from consecutive pivot snapshots (needs >= 2 deg of rotation):")
+        Ls = []
+        for (n0, d0), (n1, d1) in zip(piv, piv[1:]):
+            g0 = np.vstack([gp.to_ground(d0[t0]['c']), gp.to_ground(d0[t1]['c'])])
+            g1 = np.vstack([gp.to_ground(d1[t0]['c']), gp.to_ground(d1[t1]['c'])])
+            m0, m1 = g0.mean(0), g1.mean(0)
+            a0 = math.atan2(*(g0[4:].mean(0) - g0[:4].mean(0))[::-1])
+            a1 = math.atan2(*(g1[4:].mean(0) - g1[:4].mean(0))[::-1])
+            dpsi = a1 - a0
+            if abs(math.degrees(dpsi)) < 2.0:
+                continue
+            L = (m1[1] - math.cos(dpsi) * m0[1]) / math.sin(dpsi) - m0[0]
+            Ls.append(L)
+            print(f"   {n0} -> {n1}: rotated {math.degrees(dpsi):+.2f} deg -> lever {L:.3f} m")
+        if Ls:
+            print(f"   lever mean {np.mean(Ls):.3f} m, sd {np.std(Ls):.3f}  (robot.yaml camera_offset)")
+
+
+if __name__ == '__main__':
+    main()
