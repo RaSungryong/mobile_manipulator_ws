@@ -370,9 +370,11 @@ robot:
   # ignores it with a warning if it is ever put back. A tag out of view at
   # rest now fails the hop on align_timeout_s instead of being waved on.
 
-  # Pivot Tuning — execute_pivot (2026-09-08). A corridor pivot is
-  # bracketed by an in-place align on BOTH tags: align on the START tag,
-  # quarter turn, align on the EXIT tag (mandatory, user rule). The turn
+  # Pivot Tuning — execute_pivot (2026-09-08). A corridor pivot ends with
+  # an in-place align on the EXIT tag (mandatory, user rule). The start
+  # tag is aligned by the previous hop's arrival align, or — when the
+  # pivot is the FIRST hop of a command — by the first-hop align every
+  # command starts with (go_to_next_tag; move hops too). The turn
   # itself runs in three phases: odom P control (pivot_gain, capped at
   # max_angular_speed) until the EXIT tag is in view; from then on the
   # error is the tag's edge angle (the truth the align uses, so a tag laid

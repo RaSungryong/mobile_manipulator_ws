@@ -1537,7 +1537,7 @@ class MobileController:
             dist = 0.05
         return dist
 
-    def go_to_next_tag(self, target_id, known_start_id=None):
+    def go_to_next_tag(self, target_id, known_start_id=None, first_hop=False):
 
         # ★ NEW: early abort
         if self.stop_requested:
@@ -1578,20 +1578,28 @@ class MobileController:
             f"Going to {target_id} from {current_id} ({action_type}, {direction})"
         )
 
+        # The FIRST hop of every command starts with an in-place align on
+        # the tag the base is standing on — forward, reverse, pivot, dock
+        # 500, no exception (user rule 2026-09-08). A mid-route hop starts
+        # where the previous hop's mandatory arrival align left the base,
+        # so nothing is repeated there; but a command may begin on a tag
+        # the base was pushed onto by hand, or be resuming after an e-stop
+        # or a preempted task, with nothing squared up — and the launch
+        # heading hold / backlash feed-forward only HOLD whatever heading
+        # the base sets off with. Same 0.2 deg band as every other align.
+        # Consequence: the start tag has to be in front_cam's view at rest;
+        # a base parked off its tag fails the command on align_timeout_s
+        # instead of driving blind from last_known_tag.
+        if first_hop:
+            if not self._align_on_tag(current_id, 'before the first hop'):
+                return False
+
         if action_type == 'pivot':
-            # A pivot is bracketed by an in-place align on BOTH tags (user
-            # rule 2026-09-08): square up to the START tag first — the
-            # previous hop normally left the base aligned there, in which
-            # case this is one at-rest measurement (~0.85 s), but a pivot
-            # that is the FIRST hop of a command (base parked on 501, GOTO
-            # 505) had no align at all before — then the quarter turn,
-            # which finishes on the EXIT tag itself (execute_pivot: odom
-            # until the exit tag is in view, tag-error from then on, slow
-            # inside pivot_tag_slow_deg, delay-led stop), then the same
+            # Quarter turn that finishes on the EXIT tag (execute_pivot:
+            # odom until the exit tag is in view, tag-error from then on,
+            # slow inside pivot_tag_slow_deg, delay-led stop), then the same
             # stop -> align_to_tag tail every move hop has, which is what
             # measures the exit tag AT REST and certifies the 0.2 deg band.
-            if not self._align_on_tag(current_id, 'before pivot'):
-                return False
             if not self.execute_pivot(direction, exit_tag_id=target_id):
                 return False
             return self._align_after_arrival(target_id, current_id)
@@ -1706,7 +1714,8 @@ class MobileController:
 
             ok = self.go_to_next_tag(
                 target_id=next_id,
-                known_start_id=current_id
+                known_start_id=current_id,
+                first_hop=(next_id == path[1])
             )
 
             if not ok:
