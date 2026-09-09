@@ -62,6 +62,14 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    that tag and a second `[Aim]` on the target; (c) the overlay is in mm.
    `tools/check_nav_sequencing.py` and `tools/check_ground_plane.py` are
    the offline regression checks (10 + 17).
+3c. **Charging manager (2026-09-09, not yet driven)** — restart
+   `task_executor`. Watch: `GOTO 500` → `[Charge] docked — /crevis/charging
+   true` → `charging confirmed by the BMS` within 15 s (else
+   `dock_failed`, no retry: the contacts / `dock_reverse_m`); at 85 %
+   `/crevis/charging false` → current drops → 0.10 m forward → green;
+   below 30 % a running task is preempted and the robot returns; after
+   any completed task it returns. `tools/check_charging_manager.py`
+   (13) is the offline check. `navifra.charging.enabled: false` disables.
 4. **Known and not yet fixed** (do not chase as new bugs): manual
    `drive_distance` 0.02 m executes ~11 mm and `pivot_angle` 5° ~3.7°
    (stop-latency lead over-compensates on tiny moves); offsets > ~20 mm

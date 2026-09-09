@@ -659,6 +659,35 @@ navifra:
   # --- Battery ---------------------------------------------------------
   low_battery_pct: 20.0       # warn below this (/bms/state.percentage x100)
 
+  # --- Charging manager (task_executor, 2026-09-09) ---------------------
+  # User rules: charge until full_pct, then send /crevis/charging false and
+  # come forward undock_forward_m; at return_pct stop whatever is running,
+  # lift origin home, drive to dock_tag and send /crevis/charging true
+  # (the charger only starts on an explicit true after docking); after a
+  # user task completes normally (and nothing else is queued) return to
+  # the charger as well (return_after_task — this deliberately overrides
+  # the 2026-08-10 "tasks never drive home" rule, on the user's decision).
+  # The lamp shows status_colors.charging while the BMS reports current
+  # into the pack and status_colors.charged once full and undocked.
+  # "Charging" is judged from /bms/state (current > charge_current_min_a
+  # or status CHARGING), not from the relay feedback topic. The two
+  # internal tasks (battery_return / battery_undock) run through the normal
+  # task machinery: a TASK/GOTO preempts them, STOP disarms auto-return
+  # until a task runs again, a docking that produces no current within
+  # charge_confirm_s ends in ERROR and is NOT retried.
+  charging:
+    enabled: true
+    full_pct: 85.0
+    return_pct: 30.0
+    return_after_task: true
+    dock_tag: 500               # = TaskManager.START_TAG; arrival = docked
+    dock_reverse_m: 0.0         # extra reverse push after arriving, if the contacts need it
+    undock_forward_m: 0.10
+    undock_speed: 0.02
+    charge_confirm_s: 15.0
+    charge_current_min_a: 0.5
+    poll_s: 2.0
+
   # --- Lighting --------------------------------------------------------
   # LED ownership is split by channel and must stay split:
   #   VISION                  -> basler_camera_node (see the camera: block)
@@ -672,6 +701,8 @@ navifra:
     moving:   "blue"
     scanning: "cyan"
     error:    "red"
+    charging: "red"       # IDLE and the BMS reports current into the pack
+    charged:  "green"     # IDLE after a full charge (undocked, waiting)
 
   # --- Lift ------------------------------------------------------------
   # Position is INCREMENTAL (encoder) and lost on power cycle, so homing is

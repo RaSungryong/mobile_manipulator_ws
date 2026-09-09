@@ -67,6 +67,9 @@ class MobileClient:
         self._state = None
 
         self._pub_goto = rospy.Publisher(goto_topic, Int32, queue_size=1)
+        # Manual odometry-closed moves (mobile_node /mobile/move_cmd, JSON) —
+        # used by task_executor's charging manager to undock (2026-09-09).
+        self._pub_move = rospy.Publisher('/mobile/move_cmd', String, queue_size=1)
         rospy.Subscriber(state_topic, String, self._cb_state, queue_size=1)
 
     # ==========================================================
@@ -170,6 +173,53 @@ class MobileClient:
             return False
         if not result.get('ok'):
             rospy.logwarn(f"[MobileClient] {result.get('message')}")
+            return False
+        rospy.loginfo(f"[MobileClient] {result.get('message')}")
+        return True
+
+    def drive_distance(self, distance_m, speed=None, timeout_s=120.0):
+        """Straight odometry-closed move of `distance_m` along body X
+        (negative = reverse), through mobile_node's /mobile/move_cmd — the
+        same handshake as move_to_tag (seq read before publishing, ack,
+        then completion). Returns bool; the reason is logged."""
+        ok, why = self.wait_for_node()
+        if not ok:
+            rospy.logerr(f"[MobileClient] {why}")
+            return False
+        st = self.state
+        seq_before = st.get('seq', 0) if st else 0
+        req = {'type': 'move', 'distance_m': float(distance_m)}
+        if speed:
+            req['speed'] = float(speed)
+        try:
+            self._pub_move.publish(String(json.dumps(req)))
+        except Exception as e:
+            rospy.logerr(f"[MobileClient] could not publish move_cmd: {e}")
+            return False
+        rospy.loginfo(f"[MobileClient] manual move {distance_m:+.3f} m — waiting")
+        ack_deadline = rospy.get_time() + self.ack_timeout_s
+        acked = False
+        while rospy.get_time() < ack_deadline and not rospy.is_shutdown():
+            st = self.state
+            if st is not None and (st.get('busy') or st.get('seq', 0) > seq_before):
+                acked = True
+                break
+            rospy.sleep(0.05)
+        if not acked:
+            rospy.logerr("[MobileClient] mobile_node never acknowledged the manual move")
+            return False
+        deadline = rospy.get_time() + float(timeout_s)
+        while not rospy.is_shutdown():
+            st = self.state
+            if st is not None and st.get('seq', 0) > seq_before:
+                break
+            if rospy.get_time() >= deadline:
+                rospy.logerr(f"[MobileClient] manual move timed out after {timeout_s:.0f}s")
+                return False
+            rospy.sleep(0.05)
+        result = (self.state or {}).get('result') or {}
+        if not result.get('ok'):
+            rospy.logwarn(f"[MobileClient] manual move failed: {result.get('message')}")
             return False
         rospy.loginfo(f"[MobileClient] {result.get('message')}")
         return True

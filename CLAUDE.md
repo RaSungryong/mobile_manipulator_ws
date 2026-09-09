@@ -875,6 +875,46 @@ copying whichever shape the last one used.
 on a preempted or failed task, and it is what lets the next task assume the
 lift starts at the origin.
 
+#### Charging manager — `task_executor` (2026-09-09)
+
+User rules, in `robot.yaml` `navifra.charging:`: charge until **85 %**
+(`full_pct`), then `/crevis/charging false` and come forward
+`undock_forward_m` (0.10); at **30 %** (`return_pct`) abandon whatever is
+running and go back to the charger; **after a user task completes
+normally, go back to the charger too** (`return_after_task`); after
+docking `/crevis/charging true` MUST be sent — the charger only starts
+on that explicit command (user-confirmed) — and the BMS must show
+current within `charge_confirm_s`. Lamp: `status_colors.charging`
+(red) while the BMS reports current into the pack, `charged` (green)
+once full and undocked; task states keep their colours.
+
+Mechanics: `_charge_tick()` runs every main-loop tick (`_tick()`, the
+old `run()` body) and only QUEUES two internal tasks — `battery_return`
+(lift origin home → `move_to_tag(dock_tag)` → optional `dock_reverse_m`
+→ `charge_on`) and `battery_undock` (`charge_off` → `drive_m` forward
+via the new `MobileClient.drive_distance`, mobile_node `/mobile/move_cmd`)
+— which go through the ordinary task machinery: a user TASK/GOTO
+preempts them, the safety gate applies, `/task_state` and the lamp follow.
+"Charging" is judged by `NavifraDevices.charging_by_bms()` (current >
+`charge_current_min_a` or status CHARGING), never by the relay feedback
+topic alone. Phases: working → returning → charging → full → (working…);
+**STOP** parks the manager (`stopped`) until a task runs again, and a
+docking that produces no current ends in `dock_failed` and is NOT retried
+(the arrival records + `[Charge]` log lines say why). `enabled: false`
+turns all of it off.
+
+⚠️ This deliberately overrides the 2026-08-10 "tasks never drive home"
+rule for the charge return only, on the user's decision, and only when
+nothing else is queued — a GUI that queues "scan, scan, scan" still runs
+all three before the robot returns. ⚠️ Assumed, not verified: the
+designed stop pose on dock 500 (reverse arrival, crosshair column) makes
+the charger contacts; if it needs an extra push, `dock_reverse_m` is the
+knob, and if 10 cm forward does not break contact raise
+`undock_forward_m`. Offline checks: `tools/check_charging_manager.py`
+(13: charge → 85 % undock → lamp; 29 % mid-task preempt → return → true
+→ confirmed; return after a completed task; return_after_task off;
+STOP disarms; dock without current → dock_failed, no retry; disabled).
+
 #### Tasks are composable blocks — none of them drives home
 
 **A task never returns to `START_TAG` on its own.** Returning is its own task
@@ -884,7 +924,10 @@ deliberate and is the shape the planned block-coding GUI needs: each block is
 one self-contained task, they run in the order they are placed, and the system
 waits at IDLE between them. Anything that auto-appends motion to the end of a
 task breaks that composition — a brief `return_home_on_finish` flag was tried
-on 2026-08-10 and removed the same day for exactly this reason.
+on 2026-08-10 and removed the same day for exactly this reason. (The
+one exception, since 2026-09-09, is the charging manager's
+`return_after_task`, which appends a charge return only when the queue
+is empty — see the section above.)
 
 `lifter.mm_per_count` is 343.2 mm / 6897 counts = **0.04976077**, re-measured
 2026-08-14 at the top of travel: commanded to the new `soft_max_counts` of
@@ -1277,6 +1320,25 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-09 — Charging manager: 85 % undock, 30 % return, return after every task, /crevis/charging true after docking
+
+User request over `/bms/state`: stop charging at 85 % and come forward
+a little, at 30 % stop work and go back to the charger, red lamp while
+charging / green when charged; then (same day) also return to the
+charger after a task completes, and — the operating fact that shaped
+the design — `rostopic pub /crevis/charging true/false` is the charge
+start/stop command and the charger only starts on an explicit true
+after docking. Built into `task_executor` as two internal tasks queued
+by a per-tick rule evaluation (see the *Charging manager* section);
+`NavifraDevices.charging_by_bms()` and `MobileClient.drive_distance()`
+were added for it, `run()` was split into `_tick()` so the manager is
+testable offline. The robot was charging at 57 % (+16 A) when this was
+written; nothing has been driven. First things to watch: after a `GOTO
+500` the log line `[Charge] docked — /crevis/charging true` followed
+within 15 s by `charging confirmed by the BMS`; at 85 % `/crevis/charging
+false`, the BMS current dropping, then a 0.10 m forward move and a green
+lamp. `task_executor` restart required.
 
 ### 2026-09-08 — Session index (evening): what changed today and what tomorrow starts with
 

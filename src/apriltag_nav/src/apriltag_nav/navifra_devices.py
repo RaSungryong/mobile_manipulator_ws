@@ -352,7 +352,26 @@ class NavifraDevices:
         b = self._battery
         return b is not None and b.current is not None and b.current > 0
 
+    def charging_by_bms(self, min_current_a=0.5):
+        """True when the BMS itself says current is flowing INTO the pack
+        (current > min_current_a, or power_supply_status CHARGING). Unlike
+        charging() this does not depend on the /crevis/charge_port_on
+        feedback topic arriving — the BMS is the ground truth for "the
+        battery is actually charging". None if no /bms/state yet."""
+        b = self._battery
+        if b is None:
+            return None
+        try:
+            if b.current is not None and float(b.current) > float(min_current_a):
+                return True
+            return int(b.power_supply_status) == 1      # POWER_SUPPLY_STATUS_CHARGING
+        except Exception:
+            return None
+
     def set_charging(self, on):
+        """Command the charger: /crevis/charging true = start, false = stop
+        (2026-09-09, user-confirmed: the relay only closes on an explicit
+        true after docking, and false is how charging is stopped)."""
         try:
             self._pub_charging.publish(Bool(bool(on)))
         except Exception as e:

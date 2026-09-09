@@ -40,6 +40,12 @@ class MobileManipulatorState(Enum):
 # PATHS — resolved centrally, see apriltag_nav/paths.py
 # ============================================================
 from apriltag_nav.paths import CONFIG_PATH, TASK_DIR
+
+# Tasks the charging manager queues for itself (2026-09-09). They run through
+# the ordinary task machinery (preempt, safety gate, /task_state, lamp) but
+# are not user tasks: they never trigger return_after_task, and a user
+# TASK/GOTO preempts them like anything else.
+INTERNAL_TASKS = ('battery_return', 'battery_undock')
 # The Ra model is loaded by arm_node (~model_path), not here.
 
 # ============================================================
@@ -87,6 +93,14 @@ class MobileManipulatorTaskExecutor:
         self._navifra_cfg = robot_config.get('navifra', {}) or {}
         self._status_colors = self._navifra_cfg.get('status_colors', {}) or {}
         self._battery_warned = False
+        # ---------- Charging manager (2026-09-09, see _charge_tick) ----------
+        self._charge_cfg = self._navifra_cfg.get('charging', {}) or {}
+        self._charge_enabled = bool(self._charge_cfg.get('enabled', False))
+        # unknown | working | charging | full | returning | stopped | dock_failed
+        self._charge_phase = 'unknown'
+        self._charge_next_eval = 0.0
+        self._lamp_key = None
+        self._task_completed = False
         self.devices = NavifraDevices(
             self._navifra_cfg,
             on_estop=self._abort_for_estop,
@@ -193,18 +207,30 @@ class MobileManipulatorTaskExecutor:
         except Exception as e:
             rospy.logwarn_throttle(10.0, f"[Executor] task_state publish failed: {e}")
 
-    def _publish_status_color(self):
-        """Map the task state onto the RGB STATUS lamp. Never raises."""
+    def _lamp_key_for_state(self):
         name = self._state.name.lower()
         # SCAN_DONE / ARRIVED have no dedicated colour — fall back to idle.
         if name in ('scanning',):
-            key = 'scanning'
-        elif name in ('moving', 'arrived'):
-            key = 'moving'
-        elif name == 'error':
-            key = 'error'
-        else:
-            key = 'idle'
+            return 'scanning'
+        if name in ('moving', 'arrived'):
+            return 'moving'
+        if name == 'error':
+            return 'error'
+        # IDLE: the charging manager owns the colour (user rule 2026-09-09:
+        # red while charging, green once charged). 'charged' falls back to
+        # idle's colour when not configured.
+        if self._charge_enabled:
+            if self._is_charging():
+                return 'charging'
+            if self._charge_phase == 'full':
+                return 'charged' if self._status_colors.get('charged') else 'idle'
+        return 'idle'
+
+    def _publish_status_color(self):
+        """Map the task state (and the charging phase) onto the RGB STATUS
+        lamp. Never raises."""
+        key = self._lamp_key_for_state()
+        self._lamp_key = key
         color = self._status_colors.get(key)
         if not color:
             return
@@ -277,6 +303,179 @@ class MobileManipulatorTaskExecutor:
                 self._battery_warned = False
         except Exception:
             pass
+
+    # ==========================================================
+    # CHARGING MANAGER (2026-09-09)
+    # ==========================================================
+    # User rules: charge until `full_pct` (85 %), then stop charging
+    # (/crevis/charging false) and come forward a little; at `return_pct`
+    # (30 %) stop whatever is running and go back to the charger; after a
+    # user task completes normally, go back to the charger too
+    # (`return_after_task`); /crevis/charging true must be sent explicitly
+    # after docking. Lamp: red while charging, green once charged.
+    #
+    # Everything here is decided in _charge_tick (run() loop) and DONE by
+    # two internal tasks that go through the ordinary task machinery, so a
+    # user TASK/GOTO can preempt them and the safety gate / lamp /
+    # /task_state apply as usual:
+    #   battery_return: lift origin home -> move_to_tag(dock) [-> reverse
+    #                   dock_reverse_m] -> /crevis/charging true, confirmed
+    #                   by BMS current within charge_confirm_s
+    #   battery_undock: /crevis/charging false (wait for the current to
+    #                   drop) -> drive undock_forward_m forward
+    # "Charging" is judged from the BMS (current into the pack or status
+    # CHARGING), never from the relay feedback topic alone.
+    def _is_charging(self):
+        try:
+            v = self.devices.charging_by_bms(
+                float(self._charge_cfg.get('charge_current_min_a', 0.5)))
+        except Exception:
+            v = None
+        return bool(v)
+
+    def _charge_pct(self):
+        try:
+            return self.devices.battery_percent
+        except Exception:
+            return None
+
+    def _queue_internal_task(self, name, items):
+        """Make `name` the pending task, preempting whatever runs — the same
+        path a TASK command takes."""
+        self._pending_task_name = name
+        self._pending_task = items
+        if self._task_running:
+            rospy.logwarn(f"[Charge] preempting '{self._current_task_name}' for '{name}'")
+            self._stop_requested = True
+            try:
+                self.mobile.preempt_stop_robot()
+            except Exception:
+                pass
+            try:
+                self.arm.cancel()
+            except Exception:
+                pass
+
+    def _battery_return_task(self):
+        items = [{'lift_home': True},
+                 {'tag': int(self._charge_cfg.get('dock_tag', self.task_mgr.START_TAG)), 'scan': False}]
+        back = float(self._charge_cfg.get('dock_reverse_m', 0.0) or 0.0)
+        if back > 0:
+            items.append({'drive_m': -back})
+        items.append({'charge_on': True})
+        return items
+
+    def _battery_undock_task(self):
+        return [{'charge_off': True},
+                {'drive_m': float(self._charge_cfg.get('undock_forward_m', 0.10))}]
+
+    def _charge_tick(self):
+        """One evaluation of the charging rules; cheap, called every loop tick."""
+        if not self._charge_enabled:
+            return
+        # The lamp follows the charging state even while IDLE (no state change)
+        if self._lamp_key != self._lamp_key_for_state():
+            self._publish_status_color()
+        now = rospy.get_time()
+        if now < self._charge_next_eval:
+            return
+        self._charge_next_eval = now + float(self._charge_cfg.get('poll_s', 2.0))
+
+        pct = self._charge_pct()
+        if pct is None:
+            return
+        full_pct = float(self._charge_cfg.get('full_pct', 85.0))
+        return_pct = float(self._charge_cfg.get('return_pct', 30.0))
+        charging = self._is_charging()
+        phase = self._charge_phase
+
+        if self._task_running:
+            # Only a USER task is abandoned for the battery; the return task
+            # itself, or the undock, is left to finish.
+            if (self._current_task_name not in INTERNAL_TASKS
+                    and pct <= return_pct and phase != 'returning'):
+                rospy.logwarn(f"[Charge] battery {pct:.1f}% <= {return_pct:.0f}%: "
+                              "stopping work and returning to the charger")
+                self._queue_internal_task('battery_return', self._battery_return_task())
+                self._charge_phase = 'returning'
+            return
+
+        if self._pending_task is not None:
+            return          # something is about to run; judge it once it runs
+
+        if charging:
+            if phase not in ('charging', 'full'):
+                rospy.loginfo(f"[Charge] charging ({pct:.1f}%)")
+                self._charge_phase = 'charging'
+                phase = 'charging'
+            if phase == 'charging' and pct >= full_pct:
+                rospy.loginfo(f"[Charge] battery {pct:.1f}% >= {full_pct:.0f}%: "
+                              "stopping the charge and coming forward")
+                self._charge_phase = 'full'
+                self._queue_internal_task('battery_undock', self._battery_undock_task())
+            return
+
+        # idle and NOT charging
+        if phase in ('full', 'stopped', 'dock_failed', 'returning'):
+            # full: undocked, waiting for work. stopped: the operator pressed
+            # STOP — no unattended motion until a task runs again. dock_failed:
+            # the last docking did not produce current; do not loop.
+            # returning: the return task ended without current (failed /
+            # preempted) — same as dock_failed until something else happens.
+            return
+        if pct <= return_pct:
+            rospy.logwarn(f"[Charge] battery {pct:.1f}% <= {return_pct:.0f}%: returning to the charger")
+            self._queue_internal_task('battery_return', self._battery_return_task())
+            self._charge_phase = 'returning'
+
+    def _run_service_item(self, item):
+        """Non-navigation task items (charging manager). Returns bool."""
+        if item.get('lift_home'):
+            rospy.loginfo("[Charge] lift origin homing before the drive")
+            ok, why = self.lift.home()
+            if not ok:
+                rospy.logerr(f"[Charge] lift origin homing failed — {why}")
+            return bool(ok)
+        if 'drive_m' in item:
+            d = float(item['drive_m'])
+            rospy.loginfo(f"[Charge] straight move {d:+.3f} m")
+            self.state = MobileManipulatorState.MOVING
+            ok = self.mobile.drive_distance(d, speed=self._charge_cfg.get('undock_speed'))
+            if not ok:
+                rospy.logerr("[Charge] straight move failed")
+            return bool(ok)
+        if item.get('charge_on'):
+            rospy.loginfo("[Charge] docked — /crevis/charging true")
+            self.devices.set_charging(True)
+            confirm_s = float(self._charge_cfg.get('charge_confirm_s', 15.0))
+            deadline = rospy.get_time() + confirm_s
+            while rospy.get_time() < deadline and not rospy.is_shutdown():
+                if self._is_charging():
+                    self._charge_phase = 'charging'
+                    rospy.loginfo(f"[Charge] charging confirmed by the BMS ({self._charge_pct()}%)")
+                    self._publish_status_color()
+                    return True
+                if self._stop_requested:
+                    return False
+                rospy.sleep(0.2)
+            rospy.logerr(f"[Charge] no charging current within {confirm_s:.0f}s after docking — "
+                         "check the contacts; not retrying automatically")
+            self._charge_phase = 'dock_failed'
+            return False
+        if item.get('charge_off'):
+            rospy.loginfo("[Charge] /crevis/charging false")
+            self.devices.set_charging(False)
+            deadline = rospy.get_time() + 5.0
+            while rospy.get_time() < deadline and not rospy.is_shutdown():
+                if not self._is_charging():
+                    break
+                rospy.sleep(0.2)
+            else:
+                rospy.logwarn("[Charge] BMS still reports charging current 5 s after the stop command")
+            self._publish_status_color()
+            return True
+        rospy.logerr(f"[TASK] unknown task item {item}")
+        return False
 
     def _set_task_lift_height(self, mm):
         """Raise/lower the lift to the height the task CSV asks for. (ok, why).
@@ -459,6 +658,9 @@ class MobileManipulatorTaskExecutor:
         # ---------- STOP ----------
         if cmd.upper() == "STOP":
             rospy.logerr("[TASK] EMERGENCY STOP")
+            # No unattended charge return after an operator STOP until a task
+            # runs again (or charging is seen).
+            self._charge_phase = 'stopped'
 
             self._stop_requested = True
             self._pending_task = None
@@ -559,64 +761,80 @@ class MobileManipulatorTaskExecutor:
     def run(self):
         rate = rospy.Rate(5)
         rospy.loginfo("[Executor] Main loop started")
-
         while not rospy.is_shutdown():
+            self._tick()
+            rate.sleep()
 
-            # Hardware e-stop aborts whatever is in flight, then falls through
-            # to the idle path below. Checked every tick, task running or not.
-            self._check_estop_abort()
-            self._warn_if_battery_low()
+    def _tick(self):
+        """One pass of the main loop (split out so it can be driven offline)."""
+        # Hardware e-stop aborts whatever is in flight, then falls through
+        # to the idle path below. Checked every tick, task running or not.
+        self._check_estop_abort()
+        self._warn_if_battery_low()
+        self._charge_tick()
 
-            # A task is currently executing — skip
-            if self._task_running:
-                rate.sleep()
-                continue
+        # A task is currently executing — skip
+        if self._task_running:
+            return
 
-            # Activate pending task
-            if self._current_task is None and self._pending_task is not None:
-                rospy.loginfo(
-                    f"[TASK] Activate pending task '{self._pending_task_name}'"
-                )
-                self._current_task = self._pending_task
-                self._current_task_name = self._pending_task_name
-                self._pending_task = None
-                self._pending_task_name = None
-
-            if self._current_task is None:
-                rate.sleep()
-                continue
-
-            # Safety gate — refuse to start a task under an active e-stop.
-            # (Once running, aborts come from _check_estop_abort above.)
-            ok, _why = self._check_safety_gate(
-                f"task '{self._current_task_name}'")
-            if not ok:
-                self._current_task = None
-                self._current_task_name = None
-                self.state = MobileManipulatorState.ERROR
-                rate.sleep()
-                continue
-
-            self._task_running = True
-            self._stop_requested = False
-            self.mobile.clear_stop_flag()
-
-            # Ensure arm is at home before starting a new task
-            # (move_to_home is idempotent — safe to call even if already home)
-            rospy.loginfo("[TASK] Ensuring arm is at home before task start")
-            self.arm.move_to_home()
-
-            self._run_task(
-                self._current_task_name,
-                self._current_task
+        # Activate pending task
+        if self._current_task is None and self._pending_task is not None:
+            rospy.loginfo(
+                f"[TASK] Activate pending task '{self._pending_task_name}'"
             )
+            self._current_task = self._pending_task
+            self._current_task_name = self._pending_task_name
+            self._pending_task = None
+            self._pending_task_name = None
 
+        if self._current_task is None:
+            return
+
+        # Safety gate — refuse to start a task under an active e-stop.
+        # (Once running, aborts come from _check_estop_abort above.)
+        ok, _why = self._check_safety_gate(
+            f"task '{self._current_task_name}'")
+        if not ok:
             self._current_task = None
             self._current_task_name = None
-            self._task_running = False
-            self.state = MobileManipulatorState.IDLE
+            self.state = MobileManipulatorState.ERROR
+            return
 
-            rate.sleep()
+        task_name = self._current_task_name
+        is_user_task = task_name not in INTERNAL_TASKS
+        if is_user_task and self._charge_enabled:
+            self._charge_phase = 'working'
+
+        self._task_running = True
+        self._stop_requested = False
+        self._task_completed = False
+        self.mobile.clear_stop_flag()
+
+        # Ensure arm is at home before starting a new task
+        # (move_to_home is idempotent — safe to call even if already home)
+        rospy.loginfo("[TASK] Ensuring arm is at home before task start")
+        self.arm.move_to_home()
+
+        self._run_task(task_name, self._current_task)
+
+        self._current_task = None
+        self._current_task_name = None
+        self._task_running = False
+        self.state = MobileManipulatorState.IDLE
+
+        if self._charge_enabled:
+            if task_name == 'battery_return' and not self._task_completed:
+                # navigation failed or the return was preempted: no loop —
+                # the operator / the next command decides
+                if self._charge_phase == 'returning':
+                    self._charge_phase = 'dock_failed' if not self._stop_requested else 'stopped'
+            elif (is_user_task and self._task_completed and not self._stop_requested
+                  and self._pending_task is None
+                  and bool(self._charge_cfg.get('return_after_task', True))
+                  and not self._is_charging()):
+                rospy.loginfo(f"[Charge] task '{task_name}' completed — returning to the charger")
+                self._queue_internal_task('battery_return', self._battery_return_task())
+                self._charge_phase = 'returning'
 
 
     # ==========================================================
@@ -654,6 +872,14 @@ class MobileManipulatorTaskExecutor:
             if self._stop_requested:
                 rospy.logwarn("[TASK] Task preempted safely")
                 return
+
+            if 'tag' not in item:
+                # charging-manager items (lift home, straight move, relay)
+                self._progress_index = idx
+                if not self._run_service_item(item):
+                    self.state = MobileManipulatorState.ERROR
+                    return
+                continue
 
             tag_id = item["tag"]
             do_scan = item.get("scan", False)
@@ -720,6 +946,7 @@ class MobileManipulatorTaskExecutor:
                 self.state = MobileManipulatorState.SCAN_DONE
                 rospy.loginfo(f"[TASK] Scan finished at tag {tag_id}")
 
+        self._task_completed = True
         self._finish_task(task_name)
 
 
