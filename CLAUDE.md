@@ -1269,7 +1269,7 @@ standing sections named here:
 | `4388538` | pivot finishes ON its exit tag (odom → tag error → slow inside 5° → delay-led stop) | yes, 19 hops |
 | `b310326` | the FIRST hop of every command aligns on its start tag first (move, pivot, dock alike) | yes |
 | `5401ace` | forward/reverse arrivals: `steer_mode: aim_and_drive` — stop at first sight, aim the base centre at the stop pose (plate-wall cap), drive straight, stop align lands the lens on the tag | yes — aims converged, but ±10 mm lateral bias → next row |
-| `f738a10` | front_cam is tilted 1.3° (roll +1.228, pitch −0.504, lens 302 mm): `robot_camera_node` now re-images detections through a level virtual camera; lever confirmed 0.552 m | **driven 2026-09-09: user reports the error "많이 줄었다"** — records not yet analysed here |
+| `f738a10` | front_cam is tilted 1.3° (roll +1.228, pitch −0.504, lens 302 mm): `robot_camera_node` now re-images detections through a level virtual camera; lever confirmed 0.552 m | **driven 2026-09-09, 108 hops: aligned lateral +1.9 ± 1.7 mm forward / −3.3 ± 2.2 mm reverse (was +8.8 / −11.6), yaw ±0.2°, no wall cap hit.** The residual, still direction-signed, is next (camera yaw −0.38° uncorrected ≈ 1.3 mm; the rest unexplained) |
 
 **2026-09-09:** overlay relaid out on the user's request (see *Reading tag
 ID and orientation off the image*): pixel text gone, stop columns in mm,
