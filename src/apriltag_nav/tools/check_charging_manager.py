@@ -204,7 +204,7 @@ def main():
     # ---- 1. docked and charging at 57 %: lamp red, nothing queued
     ex, b = make(57.0); b.relay = True
     ticks(ex, 15)
-    check('1 charging at 57%: phase charging, lamp yellow, no task', ex._charge_phase == 'charging' and b.lamp and b.lamp[-1] == 'yellow'
+    check('1 charging at 57%: phase charging, lamp magenta, no task', ex._charge_phase == 'charging' and b.lamp and b.lamp[-1] == 'magenta'
           and ex.mobile.calls == [], f'phase {ex._charge_phase} lamp {b.lamp[-1:]} calls {ex.mobile.calls}')
 
     # ---- 2. reaches 85 %: charging false, forward 0.10, phase full, lamp green
@@ -242,7 +242,7 @@ def main():
     check('4b return task: lift home -> goto 500 -> /crevis/charging true -> confirmed charging',
           ex.lift.calls == ['home'] and ('goto', 500) in ex.mobile.calls and b.relay is True and ex._charge_phase == 'charging',
           f'lift {ex.lift.calls} mobile {ex.mobile.calls} relay {b.relay} phase {ex._charge_phase}')
-    check('4c lamp yellow while charging', b.lamp[-1] == 'yellow', str(b.lamp[-2:]))
+    check('4c lamp magenta while charging', b.lamp[-1] == 'magenta', str(b.lamp[-2:]))
 
     # ---- 5. user task completes normally at 60 %: return after task
     ex, b = make(60.0, docked=False); ex._charge_phase = 'full'
