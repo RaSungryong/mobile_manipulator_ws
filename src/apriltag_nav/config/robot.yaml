@@ -614,6 +614,16 @@ robot:
   # commanded_speed_at_stop_mps and stop_lead_mm, and the actual roll is
   # (arrival fore-aft - aligned fore-aft); roll/speed = latency. 0 disables.
   stop_latency_s: 0.55
+  # Linear stop lead only (2026-09-09, user: "기준선보다 아주 미세하게 덜
+  # 도착"): measured over 247 stops at the 0.010 m/s final-approach speed,
+  # the base rolls 2.1 mm forward / 2.6 mm reverse after the trigger
+  # (0.21-0.26 s), so the 0.55 s lead (5.5 mm) left every stop ~3 mm short
+  # of its column. Used by the column stop, the plan horizons and the
+  # manual drive's braking lead (the 0.02 m -> 11 mm under-execution was
+  # the same over-lead); stop_latency_s above stays for the yaw lead, the
+  # align settle and the pivot. Re-fit from the arrival records:
+  # (fore at arrival - fore at rest) / commanded_speed_at_stop_mps.
+  stop_latency_linear_s: 0.22
 
   # Delays (seconds)
   stop_sleep_duration: 1.0

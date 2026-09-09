@@ -216,6 +216,14 @@ class MobileController:
         # of travel, so the base ENDS on the target column. 0 disables.
         self.stop_latency_s = max(0.0, float(
             self.cfg['robot'].get('stop_latency_s', 0.0)))
+        # The LINEAR stop lead has its own constant (2026-09-09): at the
+        # 0.010 m/s final-approach speed the base actually rolls 2.1 mm
+        # (forward) / 2.6 mm (reverse) after the trigger, i.e. 0.21-0.26 s,
+        # while the 0.55 s lead assumed 5.5 mm — every stop rested ~3 mm
+        # short of its column (247 stops). The yaw lead keeps stop_latency_s
+        # (the align's one-pass ±0.1° was validated with it).
+        self.stop_latency_linear_s = max(0.0, float(
+            self.cfg['robot'].get('stop_latency_linear_s', self.stop_latency_s)))
         self._vel_hist = []      # (t, |linear cmd|, angular cmd) for _pending_roll_m / _pending_yaw_rad
         # Odom-based creep before the stop, independent of tag visibility.
         # In REVERSE the target tag is hidden behind the front bumper until
@@ -940,7 +948,7 @@ class MobileController:
                 and now - self.odom_stamp.to_sec() < 0.3):
             return float(self.odom_v)
         if self._vel_hist:
-            t_exec = now - self.stop_latency_s
+            t_exec = now - self.stop_latency_linear_s
             v = None
             for h in self._vel_hist:
                 if h[0] <= t_exec:
@@ -1075,10 +1083,10 @@ class MobileController:
         under a pure transport-delay model: the commands of the last
         `stop_latency_s` seconds have not been executed yet, so integrate
         them. Falls back to |current cmd| x latency with no history."""
-        lat = self.stop_latency_s
+        lat = self.stop_latency_linear_s
         if lat <= 0:
             return 0.0
-        return self._integrate_pending(1, abs(self.current_linear_vel))
+        return self._integrate_pending(1, abs(self.current_linear_vel), lat)
 
     def _pending_yaw_rad(self):
         """Signed rotation (rad, + = CCW) the base will still make after a
@@ -1090,7 +1098,7 @@ class MobileController:
         the tag (user, 2026-09-04)."""
         return self._integrate_pending(2, self.current_angular_vel)
 
-    def _integrate_pending(self, col, fallback_rate):
+    def _integrate_pending(self, col, fallback_rate, lat=None):
         """Integral of column `col` of the command history over the last
         stop_latency_s. Exact under the delay model: each sample holds
         until the next one; the value in force at the START of the window
@@ -1099,7 +1107,7 @@ class MobileController:
         a whole `rate * latency` after ONE tick, which made align stop
         after a single 0.057 deg step, 2026-09-04). No history at all ->
         `fallback_rate * latency`."""
-        lat = self.stop_latency_s
+        lat = self.stop_latency_s if lat is None else lat
         if lat <= 0:
             return 0.0
         now = rospy.Time.now().to_sec()
@@ -2337,7 +2345,7 @@ class MobileController:
             command=lambda rem: (
                 sign * self._manual_envelope(rem, v_top, accel), 0.0),
             braking=lambda: (self.current_linear_vel ** 2 / (2.0 * accel)
-                             + abs(self.current_linear_vel) * self.stop_latency_s),
+                             + abs(self.current_linear_vel) * self.stop_latency_linear_s),
             what=what)
         if not ok:
             return False, reason
@@ -2670,7 +2678,7 @@ class MobileController:
                 # direction of travel, the target column itself is unchanged.
                 lead_px = 0.0
                 lead_m = 0.0
-                if (self.stop_latency_s > 0 and self.camera_params is not None
+                if (self.stop_latency_linear_s > 0 and self.camera_params is not None
                         and self.camera_params[0] > 0):
                     lead_m = self._pending_roll_m()
                     lead_px = lead_m * self.camera_params[0] / max(tag['z'], 1e-3)
@@ -2711,7 +2719,7 @@ class MobileController:
                     # 0.13 m of a 0.19 m approach (offline plant).
                     plan_horizon_m = ((diff * move_dir_sign - stop_tolerance)
                                       * tag['z'] / self.camera_params[0]
-                                      - self.final_approach_speed * max(self.stop_latency_s, 0.0))
+                                      - self.final_approach_speed * max(self.stop_latency_linear_s, 0.0))
                     plan_horizon_m = max(0.0, plan_horizon_m)
 
                 if should_stop:
@@ -2736,6 +2744,7 @@ class MobileController:
                                'stop_lead_px': round(lead_px, 2),
                                'stop_lead_mm': round(lead_m * 1000.0, 2),
                                'stop_latency_s': self.stop_latency_s,
+                               'stop_latency_linear_s': self.stop_latency_linear_s,
                                'launch_peak_yaw_err_deg': round(launch_peak_yaw_err, 3),
                                'tag_age_s': round(float(tag.get('age_s', 0.0)), 3),
                                'latency_comp_px': round(float(tag.get('comp_px', 0.0)), 2),
@@ -2952,7 +2961,7 @@ class MobileController:
                     if plan is not None:
                         b_ref, db_ref, ddb_ref = self._plan_ref(plan, s_now)
                         # lead the reference by the base's command delay
-                        s_lead = s_now + v_abs * max(self.stop_latency_s, 0.0)
+                        s_lead = s_now + v_abs * max(self.stop_latency_linear_s, 0.0)
                         _, db_lead, ddb_lead = self._plan_ref(plan, s_lead)
                         th_ref = -move_dir_sign * math.asin(max(-0.5, min(0.5, db_lead)))
                         omega_ff = -move_dir_sign * v_abs * ddb_lead / max(math.cos(th_ref), 0.5)

@@ -127,10 +127,12 @@ class Plant:
     camera reads is psi - heading. A tag is visible when the whole tag is in
     the 1280x720 frame and not hidden by the bumper (tx > -0.03)."""
 
-    def __init__(self, ctrl, x, y, psi, tags, delay=0.55, latency=0.10):
+    def __init__(self, ctrl, x, y, psi, tags, delay=0.55, delay_lin=0.25, latency=0.10):
+        # angular commands execute `delay` s late, linear ones `delay_lin`
+        # (measured on the robot 2026-09-09: 0.21-0.26 s at 0.010 m/s)
         self.c = ctrl; self.x, self.y, self.psi = x, y, psi
-        self.tags = tags; self.delay = delay; self.latency = latency
-        self.q = collections.deque(); self.last = (0.0, 0.0)
+        self.tags = tags; self.delay = delay; self.delay_lin = delay_lin; self.latency = latency
+        self.q = collections.deque(); self.last = (0.0, 0.0); self.last_v = 0.0
         self.hist = collections.deque()
         self.odom_x = self.odom_y = self.odom_psi = 0.0
         real_pub = ctrl._publish_vel
@@ -142,9 +144,13 @@ class Plant:
         self.push_odom(); self.push_cam()
 
     def cmd(self):
+        # linear part of each command executes after delay_lin, angular after delay
+        for t, v, w in self.q:
+            if t <= CLK.t - self.delay_lin:
+                self.last_v = v
         while self.q and self.q[0][0] <= CLK.t - self.delay:
             _, v, w = self.q.popleft(); self.last = (v, w)
-        return self.last
+        return self.last_v, self.last[1]
 
     def step(self, dt):
         v, w = self.cmd()
