@@ -1,0 +1,151 @@
+command: goto_111
+started_at: '2026-09-09T13:21:17.779'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1788927678.8056238
+  ros_time: 1788927678.80563
+  stage: aligned
+  tag_id: 110
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 647.137206765344
+  - 357.16040040643657
+  image_offset_px:
+  - 8.94012424581274
+  - 4.178710953311565
+  tag_pose_m:
+  - 0.0035987376018751997
+  - 0.0016831398943229173
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.0035987376018751997
+  - -0.0016831398943229173
+  camera_center_offset_from_tag_mm:
+  - -3.5987376018751998
+  - -1.6831398943229172
+  camera_center_offset_from_tag_norm_mm: 3.9728921746017503
+  tag_edge_yaw_error_deg: 0.03403783294641016
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - 3.599
+  - 1.683
+  image_center_offset_norm_mm: 3.973
+  calibrated_reference:
+    source_map_world_path: /home/abc/.ros/path_tag_locator/map_world_20260909_130740.yaml
+    calibrated_tag_position_m:
+    - -1.714997581142466
+    - 2.1482888884297213
+    - -0.053977889378055484
+    calibrated_tag_rpy_deg:
+    - -179.2971545198428
+    - 3.4781121172849536
+    - -0.4623846065523744
+    world_offset_from_calibrated_tag_m:
+    - -0.0036122034316168755
+    - -0.0016540431069434359
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - -3.6122034316168756
+    - -1.6540431069434358
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.7186097845740829
+    - 2.1466348453227777
+    - -0.053977889378055484
+- seq: 2
+  stamp: 1788927699.3137288
+  ros_time: 1788927699.313734
+  stage: arrival
+  tag_id: 111
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 651.160760533251
+  - 344.8336142736295
+  image_offset_px:
+  - 12.9636780137198
+  - -8.148075179495493
+  tag_pose_m:
+  - 0.005218369929078611
+  - -0.00328195717525826
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.005218369929078611
+  - 0.00328195717525826
+  camera_center_offset_from_tag_mm:
+  - -5.218369929078611
+  - 3.28195717525826
+  camera_center_offset_from_tag_norm_mm: 6.164627127161958
+  tag_edge_yaw_error_deg: -0.34341359414325723
+  traveled_m: 0.39810439477528153
+  commanded_speed_at_stop_mps: 0.01
+  direction: forward
+  stop_offset_px: -0.02
+  stop_target_x_px: 638.18
+  tag_offset_from_target_px: 12.98
+  stop_lead_px: 13.75
+  stop_lead_mm: 5.53
+  stop_latency_s: 0.55
+  launch_peak_yaw_err_deg: 0.385
+  tag_age_s: 0.3
+  latency_comp_px: -8.25
+  steer_mode: aim_and_drive
+  reseat: false
+  aim:
+    target_deg: -0.307
+    dist_m: 0.194
+    stop_offset_px: -0.02
+    dpsi_deg: -0.465
+    limited: false
+    b_mm: -1.041
+  launch_ff_applied: true
+  last_align_turn_sign: -1
+  image_center_offset_mm:
+  - 5.218
+  - -3.282
+  image_center_offset_norm_mm: 6.165
+  calibrated_reference: null
+- seq: 3
+  stamp: 1788927702.0866554
+  ros_time: 1788927702.086662
+  stage: aligned
+  tag_id: 111
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 646.4540805926325
+  - 349.7836475498933
+  image_offset_px:
+  - 8.256998073101272
+  - -3.198041903231683
+  tag_pose_m:
+  - 0.0033237535214566856
+  - -0.0012881369329409693
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.0033237535214566856
+  - 0.0012881369329409693
+  camera_center_offset_from_tag_mm:
+  - -3.323753521456686
+  - 1.2881369329409693
+  camera_center_offset_from_tag_norm_mm: 3.5646366195451513
+  tag_edge_yaw_error_deg: -0.19073661625594696
+  traveled_m: null
+  align_passes: 2
+  image_center_offset_mm:
+  - 3.324
+  - -1.288
+  image_center_offset_norm_mm: 3.565
+  calibrated_reference: null

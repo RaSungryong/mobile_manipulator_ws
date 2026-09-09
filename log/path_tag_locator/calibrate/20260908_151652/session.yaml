@@ -1,0 +1,319 @@
+started_at: '2026-09-08T15:16:52.391'
+status: finished
+note: 'One file per attempt under entries/, numbered in execution order; a retry is
+  a new number, nothing is overwritten. Camera-frame errors: see camera_frame_note
+  inside each entry file.'
+plan_yaml: /home/abc/mobile_manipulator_ws_20260902/src/path_tag_locator/config/calibration_plan_plate1.yaml
+ref_tags_yaml: /home/abc/mobile_manipulator_ws_20260902/src/path_tag_locator/config/reference_tags.yaml
+map_in_path: /home/abc/mobile_manipulator_ws_20260902/src/apriltag_nav/config/map.yaml
+map_out_path: /home/abc/.ros/path_tag_locator/map_world_20260908_151652.yaml
+session_lift_m: 0.0
+num_plan_entries: 26
+dry_run: false
+entries:
+- seq: 1
+  path_tag_id: 100
+  ref_tag_id: 0
+  attempt: 1
+  status: fail
+  position_m: null
+  error: 'auto_align: tag A (id=0) not detected at iteration 1 — adjust initial pose
+    (tag 0 not detected on /hand_cam/tag_detections within 3.0s)'
+  file: entries/001_tag100_attempt1_fail.yaml
+- seq: 2
+  path_tag_id: 100
+  ref_tag_id: 0
+  attempt: 2
+  status: fail
+  position_m: null
+  error: 'auto_align: tag A (id=0) not detected at iteration 1 — adjust initial pose
+    (tag 0 not detected on /hand_cam/tag_detections within 3.0s)'
+  file: entries/002_tag100_attempt2_fail.yaml
+- seq: 3
+  path_tag_id: 101
+  ref_tag_id: 0
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.721114541267379
+  - -1.45598747878573
+  - -0.058141452469312925
+  error: null
+  file: entries/003_tag101_attempt1_ok.yaml
+- seq: 4
+  path_tag_id: 102
+  ref_tag_id: 0
+  attempt: 1
+  status: fail
+  position_m: null
+  error: 'get_tcp_pose: no fresh pose_valid /arm/state within 5.0s — is arm_node running
+    and the arm reachable?'
+  file: entries/004_tag102_attempt1_fail.yaml
+- seq: 5
+  path_tag_id: 102
+  ref_tag_id: 0
+  attempt: 2
+  status: ok
+  position_m:
+  - -1.714284736258345
+  - -1.0561840064767476
+  - -0.06215994795277487
+  error: null
+  file: entries/005_tag102_attempt2_ok.yaml
+- seq: 6
+  path_tag_id: 103
+  ref_tag_id: 0
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7078959846059605
+  - -0.6567674044600503
+  - -0.05231268887525804
+  error: null
+  file: entries/006_tag103_attempt1_ok.yaml
+- seq: 7
+  path_tag_id: 104
+  ref_tag_id: 0
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7138191029633778
+  - -0.2501115548159156
+  - -0.045502410871304085
+  error: null
+  file: entries/007_tag104_attempt1_ok.yaml
+- seq: 8
+  path_tag_id: 105
+  ref_tag_id: 1
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.714388431020991
+  - 0.14157915762968792
+  - -0.06897687685755662
+  error: null
+  file: entries/008_tag105_attempt1_ok.yaml
+- seq: 9
+  path_tag_id: 106
+  ref_tag_id: 1
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7143276536948648
+  - 0.5430788200200103
+  - -0.06924931850071366
+  error: null
+  file: entries/009_tag106_attempt1_ok.yaml
+- seq: 10
+  path_tag_id: 107
+  ref_tag_id: 1
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7158639875281732
+  - 0.949169344666278
+  - -0.0809749693941133
+  error: null
+  file: entries/010_tag107_attempt1_ok.yaml
+- seq: 11
+  path_tag_id: 108
+  ref_tag_id: 2
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7141776899573027
+  - 1.34222473039551
+  - -0.07222532837079494
+  error: null
+  file: entries/011_tag108_attempt1_ok.yaml
+- seq: 12
+  path_tag_id: 109
+  ref_tag_id: 2
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.716434350638731
+  - 1.7431305822336691
+  - -0.06494552215652195
+  error: null
+  file: entries/012_tag109_attempt1_ok.yaml
+- seq: 13
+  path_tag_id: 110
+  ref_tag_id: 2
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.718066404482372
+  - 2.1482798455828735
+  - -0.05829794912480419
+  error: null
+  file: entries/013_tag110_attempt1_ok.yaml
+- seq: 14
+  path_tag_id: 111
+  ref_tag_id: 2
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.708591262172655
+  - 2.5540608597061025
+  - -0.05293857902229093
+  error: null
+  file: entries/014_tag111_attempt1_ok.yaml
+- seq: 15
+  path_tag_id: 112
+  ref_tag_id: 2
+  attempt: 1
+  status: ok
+  position_m:
+  - -1.7019528754980486
+  - 2.960120115278748
+  - -0.04464520153520173
+  error: null
+  file: entries/015_tag112_attempt1_ok.yaml
+- seq: 16
+  path_tag_id: 113
+  ref_tag_id: 3
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.7026764852282938
+  - 1.8453790954242626
+  - -0.06931330138989675
+  error: null
+  file: entries/016_tag113_attempt1_ok.yaml
+- seq: 17
+  path_tag_id: 114
+  ref_tag_id: 3
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.69682927333954
+  - 1.4457284962403176
+  - -0.07154568316458751
+  error: null
+  file: entries/017_tag114_attempt1_ok.yaml
+- seq: 18
+  path_tag_id: 115
+  ref_tag_id: 3
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6900769158218392
+  - 1.0518294288514203
+  - -0.07811309118061154
+  error: null
+  file: entries/018_tag115_attempt1_ok.yaml
+- seq: 19
+  path_tag_id: 116
+  ref_tag_id: 3
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6954928547142583
+  - 0.6488378153662241
+  - -0.07546547219578918
+  error: null
+  file: entries/019_tag116_attempt1_ok.yaml
+- seq: 20
+  path_tag_id: 117
+  ref_tag_id: 3
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6977711856487634
+  - 0.24367746689077685
+  - -0.07072552430205742
+  error: null
+  file: entries/020_tag117_attempt1_ok.yaml
+- seq: 21
+  path_tag_id: 118
+  ref_tag_id: 4
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6997956906494198
+  - -0.15069053161769583
+  - -0.08258682181148395
+  error: null
+  file: entries/021_tag118_attempt1_ok.yaml
+- seq: 22
+  path_tag_id: 119
+  ref_tag_id: 4
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.7010161412945664
+  - -0.5481598208150021
+  - -0.07804139335492453
+  error: null
+  file: entries/022_tag119_attempt1_ok.yaml
+- seq: 23
+  path_tag_id: 120
+  ref_tag_id: 4
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.7055564124927765
+  - -0.9613808345927716
+  - -0.07414823260907166
+  error: null
+  file: entries/023_tag120_attempt1_ok.yaml
+- seq: 24
+  path_tag_id: 121
+  ref_tag_id: 5
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.703333837332917
+  - -1.3499729751866194
+  - -0.05949398413708699
+  error: null
+  file: entries/024_tag121_attempt1_ok.yaml
+- seq: 25
+  path_tag_id: 122
+  ref_tag_id: 5
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.7017365256500088
+  - -1.748660145605712
+  - -0.06027295116758179
+  error: null
+  file: entries/025_tag122_attempt1_ok.yaml
+- seq: 26
+  path_tag_id: 123
+  ref_tag_id: 5
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.7003093425475861
+  - -2.1552378856138787
+  - -0.05121824528882018
+  error: null
+  file: entries/026_tag123_attempt1_ok.yaml
+- seq: 27
+  path_tag_id: 124
+  ref_tag_id: 5
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6944066882287512
+  - -2.5596236334338194
+  - -0.04787256896151065
+  error: null
+  file: entries/027_tag124_attempt1_ok.yaml
+- seq: 28
+  path_tag_id: 125
+  ref_tag_id: 5
+  attempt: 1
+  status: ok
+  position_m:
+  - 1.6859501109854067
+  - -2.9659716064508324
+  - -0.03900330546738424
+  error: null
+  file: entries/028_tag125_attempt1_ok.yaml
+finished_at: '2026-09-08T15:42:04.235'
+num_succeeded: 25
+num_failed: 1
+num_attempts: 28

@@ -46,3 +46,24 @@ Thumbs.db
 
 # GitHub personal access token used for pushing — never commit
 token
+
+# Robot run logs moved into the workspace 2026-09-09 (log/).
+# The RECORDS are versioned — yaml (nav_log arrivals, calibration session /
+# entry records, map_world), npz (hand-eye observations) and csv, ~6.5 MB.
+# The bulk is not, and both exclusions are deliberate:
+#   *.mp4 / *.webm  screen recordings, 230-388 MB each. GitHub hard-blocks
+#                   any file over 100 MB, so these CANNOT be pushed without
+#                   Git LFS + a paid data pack. Kept on disk / USB instead
+#                   (user's decision 2026-09-09).
+#   *.png           front_cam snapshots, 776 files / 471 MB. They would take
+#                   the repo from 119 MB to ~600 MB permanently; the yaml
+#                   record of each run is kept and carries the numbers.
+log/**/*.mp4
+log/**/*.webm
+log/**/*.png
+log/*.mp4
+log/*.webm
+log/**/*.tmp
+
+# LibreOffice lock files
+.~lock.*#

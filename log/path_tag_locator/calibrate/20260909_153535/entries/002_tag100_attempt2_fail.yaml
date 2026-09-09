@@ -1,0 +1,82 @@
+seq: 2
+recorded_at: '2026-09-09T15:36:07.560'
+path_tag_id: 100
+ref_tag_id: 0
+attempt: 2
+status: fail
+error: tag 0 not detected on /hand_cam/tag_detections within 3.0s
+plan_entry:
+  retry_count: 1
+  align_required: true
+  arm_view_tcp_mm_deg:
+  - -1079.6
+  - 907.5
+  - 60.2
+  - 178.7
+  - 0.3
+  - 37.3
+arm_homed_before_nav: true
+nav:
+  nav_start_id: null
+  arrived_tag_id: 100
+  base_theta_deg: 88.56001869832426
+view_tcp_mm_deg:
+- -1079.6
+- 907.5
+- 310.2
+- 178.7
+- 0.3
+- 37.3
+view_tcp_source: entry-override+raised(0.25 m)
+align_required: true
+auto_align:
+  iterations: 2
+  xy_offset_m: 0.06758961650836773
+  tilt_deg: 3.6986956172937675
+  final_tcp:
+  - -958.57275390625
+  - 860.3583984375
+  - 407.1280212402343
+  - -175.3272705078125
+  - 0.7102817296981812
+  - 37.50940322875976
+  tag_in_cam:
+    position_m:
+    - -0.043545
+    - -0.051693
+    - 0.843672
+    rpy_deg:
+    - -3.172651
+    - -1.902192
+    - -50.795642
+    xy_offset_m: 0.06759
+    z_distance_m: 0.843672
+    tilt_deg: 3.698696
+  history:
+  - iteration: 1
+    position_m:
+    - -0.117979
+    - -0.200049
+    - 0.826174
+    rpy_deg:
+    - 3.904577
+    - 4.533932
+    - -50.637432
+    xy_offset_m: 0.232247
+    z_distance_m: 0.826174
+    tilt_deg: 5.980838
+  - iteration: 2
+    position_m:
+    - -0.043545
+    - -0.051693
+    - 0.843672
+    rpy_deg:
+    - -3.172651
+    - -1.902192
+    - -50.795642
+    xy_offset_m: 0.06759
+    z_distance_m: 0.843672
+    tilt_deg: 3.698696
+  degraded: 'step 2 move failed, continuing with last reachable pose: move_cart failed:
+    move_cart failed: MoveL error 112 (target=[-1051.7862756874335, 892.9655115944661,
+    422.8882353694853, -178.7445626377005, -0.704696272744027, 37.437431012565504])'

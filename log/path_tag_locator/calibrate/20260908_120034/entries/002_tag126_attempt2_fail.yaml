@@ -1,0 +1,79 @@
+seq: 2
+recorded_at: '2026-09-08T12:08:57.641'
+path_tag_id: 126
+ref_tag_id: 0
+attempt: 2
+status: fail
+error: 'auto_align: tag A (id=0) not detected at iteration 3 — adjust initial pose
+  (tag 0 not detected on /hand_cam/tag_detections within 3.0s)'
+plan_entry:
+  retry_count: 1
+  align_required: true
+  arm_view_tcp_mm_deg:
+  - -1052.1
+  - 941.3
+  - 60.2
+  - 178.7
+  - 0.3
+  - 37.3
+arm_homed_before_nav: true
+nav:
+  nav_start_id: null
+  arrived_tag_id: 126
+  base_theta_deg: 90.07354089674678
+view_tcp_mm_deg:
+- -1052.1
+- 941.3
+- 310.2
+- 178.7
+- 0.3
+- 37.3
+view_tcp_source: entry-override+raised(0.25 m)
+align_required: true
+auto_align:
+  iterations: 3
+  xy_offset_m: 0.2562244031293672
+  tilt_deg: 3.7072591785478552
+  final_tcp: null
+  tag_in_cam:
+    position_m:
+    - -0.193672
+    - -0.167756
+    - 0.822221
+    rpy_deg:
+    - 3.077387
+    - 2.06823
+    - -50.667067
+    xy_offset_m: 0.256224
+    z_distance_m: 0.822221
+    tilt_deg: 3.707259
+  history:
+  - iteration: 1
+    position_m:
+    - -0.270358
+    - -0.258559
+    - 0.811723
+    rpy_deg:
+    - 0.868456
+    - 1.380885
+    - -51.347006
+    xy_offset_m: 0.374094
+    z_distance_m: 0.811723
+    tilt_deg: 1.63123
+  - iteration: 2
+    position_m:
+    - -0.193672
+    - -0.167756
+    - 0.822221
+    rpy_deg:
+    - 3.077387
+    - 2.06823
+    - -50.667067
+    xy_offset_m: 0.256224
+    z_distance_m: 0.822221
+    tilt_deg: 3.707259
+  degraded: 'initial move failed, using current pose: move_cart failed: move_cart
+    failed: MoveCart error 112 (target=[-1052.0999999999997, 941.2999999999997, 310.20000000000005,
+    178.70000000000002, 0.30000000000000004, 37.30000000000001])'
+  error: 'auto_align: tag A (id=0) not detected at iteration 3 — adjust initial pose
+    (tag 0 not detected on /hand_cam/tag_detections within 3.0s)'

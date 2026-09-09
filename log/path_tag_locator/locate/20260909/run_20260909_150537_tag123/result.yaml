@@ -1,0 +1,139 @@
+timestamp: '20260909_150537'
+success: true
+message: ok
+tag_a_id: 5
+tag_a_size_m: 0.09
+tag_b_id: 123
+tag_b_size_m: 0.09
+apriltag_family: tag36h11
+tcp_pose_mm_deg:
+- 347.4482421875
+- 823.5722045898438
+- 53.53322601318359
+- -178.8319549560547
+- -0.5265082716941833
+- -32.73079299926758
+T_B_world_position_m:
+- 1.6972551244354173
+- -2.161522186038348
+- -0.0371453708881273
+T_B_world_rpy_deg:
+- -178.7932507152307
+- 3.483365041379132
+- 179.8464676075572
+camera_frame_note: 'camera optical frame: +x = image right, +y = image down, +z =
+  optical axis into the scene. position_m = tag centre relative to the camera centre
+  (x, y are the lateral error from the optical axis, z the range); rpy_deg = tag orientation
+  in that frame, ZYX intrinsic. Square-on tag: position [0, 0, z], rpy [0, 0, spin].'
+observations:
+  hand_cam_to_tag_a:
+    tag_id: 5
+    position_m:
+    - 0.003597
+    - -0.002752
+    - 0.476496
+    rpy_deg:
+    - 0.082171
+    - -0.111394
+    - 59.421646
+    xy_offset_m: 0.004529
+    z_distance_m: 0.476496
+    tilt_deg: 0.138422
+  front_cam_to_tag_b:
+    tag_id: 123
+    position_m:
+    - 0.001769
+    - 0.002887
+    - 0.302
+    rpy_deg:
+    - -0.93397
+    - -1.805219
+    - 89.734313
+    xy_offset_m: 0.003386
+    z_distance_m: 0.302
+    tilt_deg: 2.032444
+auto_align:
+  iterations: 5
+  xy_offset_m: 0.006516331649154701
+  tilt_deg: 0.488269293300052
+  final_tcp:
+  - 347.4321899414062
+  - 823.574951171875
+  - 53.52590179443359
+  - -178.8341217041015
+  - -0.5256125926971436
+  - -32.73053741455078
+  tag_in_cam:
+    position_m:
+    - 0.005002
+    - -0.004176
+    - 0.476389
+    rpy_deg:
+    - 0.475272
+    - -0.111908
+    - 59.392742
+    xy_offset_m: 0.006516
+    z_distance_m: 0.476389
+    tilt_deg: 0.488269
+  history:
+  - iteration: 1
+    position_m:
+    - 0.007892
+    - -0.032785
+    - 0.502354
+    rpy_deg:
+    - 1.422577
+    - -1.67589
+    - 59.475588
+    xy_offset_m: 0.033721
+    z_distance_m: 0.502354
+    tilt_deg: 2.198125
+  - iteration: 2
+    position_m:
+    - -0.013741
+    - 0.011664
+    - 0.476543
+    rpy_deg:
+    - -0.039297
+    - 0.643542
+    - 59.414683
+    xy_offset_m: 0.018024
+    z_distance_m: 0.476543
+    tilt_deg: 0.644741
+  - iteration: 3
+    position_m:
+    - -0.008691
+    - 0.008849
+    - 0.477858
+    rpy_deg:
+    - -0.051528
+    - -0.214259
+    - 59.317755
+    xy_offset_m: 0.012404
+    z_distance_m: 0.477858
+    tilt_deg: 0.220368
+  - iteration: 4
+    position_m:
+    - 0.003922
+    - -0.004134
+    - 0.477111
+    rpy_deg:
+    - 0.223997
+    - -0.241735
+    - 59.312781
+    xy_offset_m: 0.005698
+    z_distance_m: 0.477111
+    tilt_deg: 0.32956
+  - iteration: 5
+    position_m:
+    - 0.005002
+    - -0.004176
+    - 0.476389
+    rpy_deg:
+    - 0.475272
+    - -0.111908
+    - 59.392742
+    xy_offset_m: 0.006516
+    z_distance_m: 0.476389
+    tilt_deg: 0.488269
+  degraded: null
