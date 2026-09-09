@@ -67,7 +67,7 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    true` → `charging confirmed by the BMS` within 15 s (else
    `dock_failed`, no retry: the contacts / `dock_reverse_m`); at 85 %
    `/crevis/charging false` → current drops → 0.10 m forward → green;
-   below 30 % a running task is preempted and the robot returns; after
+   below 20 % a running task is preempted and the robot returns; after
    any completed task it returns. `tools/check_charging_manager.py`
    (13) is the offline check. `navifra.charging.enabled: false` disables.
 4. **Known and not yet fixed** (do not chase as new bugs): manual

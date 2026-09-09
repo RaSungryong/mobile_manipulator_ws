@@ -228,12 +228,12 @@ def main():
     for _ in range(30):
         if ex._task_running: break
         _sleep(0.05); __import__('time').sleep(0.01)
-    b.pct = 29.0
+    b.pct = ex._charge_cfg['return_pct'] - 1.0
     # the manager runs from the main loop while the task thread blocks
     for _ in range(40):
         ex._charge_tick(); CLK.t += 0.3; __import__('time').sleep(0.01)
         if ex._stop_requested: break
-    check('4a 29% during a task: task preempted for battery_return', ex._stop_requested and ex._pending_task_name == 'battery_return',
+    check('4a below return_pct during a task: task preempted for battery_return', ex._stop_requested and ex._pending_task_name == 'battery_return',
           f'stop {ex._stop_requested} pending {ex._pending_task_name}')
     th.join(timeout=5.0)
     b.docked = True
@@ -263,16 +263,16 @@ def main():
     check('6 return_after_task false: stays where the task ended', ex.mobile.calls == [('goto', 106)] and not b.relay, str(ex.mobile.calls))
 
     # ---- 7. STOP disarms the auto-return; a new task re-arms it
-    ex, b = make(25.0, docked=False); ex._charge_phase = 'full'
+    ex, b = make(15.0, docked=False); ex._charge_phase = 'full'
     ex._command_cb(types.SimpleNamespace(data='STOP'))
     ticks(ex, 15)
-    check('7a after STOP at 25%: no auto-return', ex._charge_phase == 'stopped' and ('goto', 500) not in ex.mobile.calls, f'{ex._charge_phase} {ex.mobile.calls}')
+    check('7a after STOP at 15%: no auto-return', ex._charge_phase == 'stopped' and ('goto', 500) not in ex.mobile.calls, f'{ex._charge_phase} {ex.mobile.calls}')
     ex._pending_task_name, ex._pending_task = 'goto_106', [{'tag': 106, 'scan': False}]
     ticks(ex, 3); b.docked = True; ticks(ex, 6)
     check('7b a user task re-arms it: after the task, return + charge', ('goto', 500) in ex.mobile.calls and ex._charge_phase == 'charging', f'{ex.mobile.calls} {ex._charge_phase}')
 
     # ---- 8. docking produces no current: ERROR, dock_failed, no retry
-    ex, b = make(25.0, docked=False); ex._charge_phase = 'working'
+    ex, b = make(15.0, docked=False); ex._charge_phase = 'working'
     ex.mobile.dock_ok = False   # contacts never made
     ticks(ex, 3)
     n_goto = ex.mobile.calls.count(('goto', 500))
@@ -283,7 +283,7 @@ def main():
     check('8b not retried', ex.mobile.calls.count(('goto', 500)) == 1)
 
     # ---- 9. manager disabled: nothing happens at 25 %
-    ex, b = make(25.0, docked=False); ex._charge_enabled = False
+    ex, b = make(15.0, docked=False); ex._charge_enabled = False
     ticks(ex, 15)
     check('9 disabled: no motion, no relay', ex.mobile.calls == [] and not b.relay)
 

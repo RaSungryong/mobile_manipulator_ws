@@ -879,8 +879,9 @@ lift starts at the origin.
 
 User rules, in `robot.yaml` `navifra.charging:`: charge until **85 %**
 (`full_pct`), then `/crevis/charging false` and come forward
-`undock_forward_m` (0.10); at **30 %** (`return_pct`) abandon whatever is
-running and go back to the charger; **after a user task completes
+`undock_forward_m` (0.10); at **20 %** (`return_pct`; 30 → 20 on the
+user's instruction the same day) abandon whatever is running and go back
+to the charger; **after a user task completes
 normally, go back to the charger too** (`return_after_task`); after
 docking `/crevis/charging true` MUST be sent — the charger only starts
 on that explicit command (user-confirmed) — and the BMS must show
@@ -1321,10 +1322,11 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
-### 2026-09-09 — Charging manager: 85 % undock, 30 % return, return after every task, /crevis/charging true after docking
+### 2026-09-09 — Charging manager: 85 % undock, 20 % return, return after every task, /crevis/charging true after docking
 
 User request over `/bms/state`: stop charging at 85 % and come forward
-a little, at 30 % stop work and go back to the charger, red lamp while
+a little, at 20 % (first said 30, changed the same day) stop work and go
+back to the charger, red lamp while
 charging / green when charged; then (same day) also return to the
 charger after a task completes, and — the operating fact that shaped
 the design — `rostopic pub /crevis/charging true/false` is the charge
