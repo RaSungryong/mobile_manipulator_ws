@@ -119,6 +119,17 @@ pull + `catkin_make` before anything below.
    `calibration_plan_plate1.yaml` seeds rewritten from the session
    (`scripts/update_plan_seeds_from_session.py`). Re-run plate 1 to pick
    up the six; expect the retry path to be exercised for the first time.
+   **2026-09-08: the ref-tag pairing was changed on the user's
+   instruction** (`REF_RANGES` in the generator — 5/3/5 tags per cross
+   tag per column, on both plates). Four entries per plate moved to a
+   different cross tag (plate 1: 104→0, 107→1, 117→3, 120→4; plate 2:
+   130→0, 133→1, 142→3, 145→4) and got NEW design seeds — the four
+   plate-1 ones carry an estimated seed (design + that ref's session
+   median), not a measured one, so watch them on the next run. The
+   other 22 plate-1 seeds are unchanged. Plate 2 still carries design
+   seeds; sessions 20260904_162230 (25/25) and 20260908_120034 (24/24)
+   can be fed to `update_plan_seeds_from_session.py` (it now ignores a
+   measurement taken against a since-changed ref).
 5. First good session: extract the REAL hand-cam yaw noise from the
    session archive `history` and feed it to
    `path_tag_locator/scripts/error_budget.py` (assumed 0.2° today; the
@@ -274,8 +285,12 @@ pull + `catkin_make` before anything below.
 - `vision_stop.stop_tag_ids: []` — vision soft-stop inert until filled.
 - `navifra.require_safety_link: false` — warn-only; set `true` for
   production.
-- `keyence_max_step_mm: 1.0` — bring-up clamp doing real work; read
-  `docs/keyence_scan_chain.md` before raising it.
+- `keyence_max_step_mm: 1.0` — the standoff loop's APPROACH fine step
+  (loop rewritten 2026-09-08, `keyence_standoff.py`: whole-range
+  engagement, gap-proportional steps, fresh median readings, outcome in
+  the CSV row; not yet run on the robot). Read `docs/keyence_scan_chain.md`
+  before raising it. `keyence.seek_enabled` stays false until the ±99999
+  sentinel's sign is confirmed on the real sensor.
 - `grid_path_line{1,2}_-5.csv` use `group_id` 4/5, valid in no map.
 
 ### 2-6. Documentation debt

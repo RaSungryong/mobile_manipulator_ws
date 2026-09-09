@@ -18,6 +18,49 @@ changed, and what is still open.
 - All of it is fixed and verified on hardware; the loop now converges. Two
   issues remain open — see [Open issues](#open-issues).
 
+## 2026-09-08 — loop rewritten: whole-range engagement, gap-proportional approach, fresh median readings
+
+User request: the loop's working range was too short (it refused anything
+beyond 5 mm and the scan then ran at the wrong standoff, unrecorded) and the
+correction happened too close to the mould with fixed 1 mm blind steps. The
+inline loop became `src/apriltag_nav/keyence_standoff.py`
+(`StandoffController`, pure logic, offline-tested); `ArmController` keeps
+only the two robot-side conversions — `perp = reading × cos(beam)` and
+`toolZ = approach × (−keyence_dir)` — and the MoveL.
+
+| | before | now |
+|---|---|---|
+| engage window | \|perp\| < 5 mm, else skip | \|err\| < 20 mm (`activate_threshold`); the sensor's own range binds first, out-of-range is the ±99999 sentinel and is rejected as invalid, never treated as a distance |
+| approach step | kp·err clamped to 1.0 mm | ≤ max(1.0, 0.5 × measured gap) — half the gap while far, the 1 mm fine step inside ~2 mm; a reading would have to be 2× wrong to reach the surface and it is re-measured every step |
+| retreat step | same 1.0 mm clamp | up to 3 mm (moving away is always safe) |
+| total travel | 10 × 1 mm implicit | `max_travel_mm` 25, explicit, exceeded → stop + record |
+| reading | the cached value, one sample, possibly stale | median of 5 readings that ARRIVED after the last move settled; sentinel frames dropped; sensor silent → stop, no motion |
+| stale value | stepped up to 10 × 1 mm against a value that never changed | response check: a step ≥ 0.3 mm must move the reading by ≥ 25 % of it, two misses abort ("reading does not follow the motion") |
+| slope / spot walk | 1 mm clamp only | adaptive gain: next step ÷ measured d(reading)/d(motion) of the last one, clamped [1, 4] — only ever reduces |
+| target standoff | fixed at the sensor zero (10 mm) | `keyence.target_distance_mm` live (default 10 = unchanged); `sensor_zero_mm` 10 |
+| wait per step | fixed 1.0 s | settle 0.3 s + ~0.17 s of fresh samples |
+| outcome | logged, then `execution_message: Success` | returned; CSV row says `Success (standoff ok (err −0.04 mm, 3 steps, travel 2.0 mm))` or `Success (standoff NOT corrected: <reason> …)`; `require_converged: true` fails the point and skips the capture instead |
+| out of range at start | skip | skip with the side named (sign of the sentinel); opt-in `seek_enabled` steps 2 mm toward the indicated side up to 10 mm — OFF until the sentinel sign is confirmed on this sensor |
+
+Offline verification (`t_standoff.py`, 44 checks, surface plant with the
+42.6° spot walk, signed sentinel, dropouts, frozen/silent sensor;
+`t_arm_wiring.py`, 20 checks on the real `ArmController` methods with a fake
+Fairino whose reading follows the real tool-Z geometry): flat starts 4 / 8 /
+12 / 14.9 / 16 / 20 mm all converge (2–5 steps, ≤ 10 mm travel), where the
+old loop refused 4 / 16 / 20; linear slopes with effective k 1.5 / 1.9 /
+2.5 / 3.2 converge in ≤ 3 steps with at most one reversal, where the old
+loop and the non-adaptive variant hit the step budget at k ≥ 2.5; a sinusoid
+of 0.3 mm amplitude / 2 mm period converges on 5/5 starts; 20 % dropout
+frames converge through the median; a frozen value stops after 2 steps
+(2 mm) where the old loop walked 10 mm toward the mould; a silent sensor
+never moves; target 15 mm ends at 15; travel / step budgets and cancel
+stop cleanly; the ±99999 sentinel reaches the loop unprojected (a first
+version multiplied it by cos and it slipped under the 90 mm invalid
+threshold — caught by the plant). **Not run on the robot**; `arm_node`
+restart required. First live run to watch: the per-step
+`[Standoff n/15] err … -> approach/retreat …` lines and the
+`standoff ok (…)` summary in the CSV's `execution_message`.
+
 ## Sensor facts (measured, not from a datasheet)
 
 | Property | Value | How established |
@@ -100,9 +143,14 @@ have broken the moment kp was retuned or the sensor remounted.
 | `keyence_dir` | −1.0 | sign | launch |
 | `keyence_kp` | 0.8 | — | launch |
 | `keyence_tol` | 0.2 | perp mm | launch |
-| `keyence_max_steps` | 10 | — | launch |
-| `keyence_max_step_mm` | **1.0** | perp mm | launch — *temporary bring-up value* |
-| `keyence_activate_threshold` | 5.0 | perp mm | `robot.yaml` |
+| `keyence_max_steps` | 15 (was 10) | — | launch |
+| `keyence_max_step_mm` | **1.0** | perp mm | launch — the APPROACH fine-step cap since 2026-09-08 |
+| `keyence_activate_threshold` | 20.0 (was 5.0) | perp mm | `robot.yaml` |
+| `approach_fraction` / `retreat_step_mm` / `max_travel_mm` | 0.5 / 3.0 / 25 | — / perp mm / perp mm | `robot.yaml` (2026-09-08) |
+| `samples` / `settle_s` / `read_timeout_s` | 5 / 0.3 s / 1.0 s | | `robot.yaml` (2026-09-08) |
+| `adaptive_gain` / `gain_ratio_max` / `min_response_ratio` | true / 4.0 / 0.25 | | `robot.yaml` (2026-09-08) |
+| `sensor_zero_mm` / `target_distance_mm` | 10.0 / 10.0 | perp mm | `robot.yaml` (2026-09-08, target now LIVE) |
+| `seek_enabled` / `require_converged` | false / false | | `robot.yaml` (2026-09-08) |
 
 Precedence is `~param` on `arm_node` > `robot.yaml keyence:` >
 hardcoded default. `robot.yaml` now mirrors the launch values so both paths
@@ -147,7 +195,12 @@ truncated the runaway steps (1 and 4 both hit it) until the spot reached
 flatter ground.
 
 **So `keyence_max_step_mm = 1.0` is load-bearing, not just cautious — do not
-restore 5.0 yet.** Candidate mitigations, in increasing order of effort:
+restore 5.0 yet.** *2026-09-08: mitigated in software — the rewritten loop
+divides each step by the effective sensitivity measured from the previous
+one (clamped [1, 4]), and in the plant model converges in ≤ 3 steps at
+k_eff 3.2 where the fixed-gain loop hit its step budget. The 1 mm fine step
+is kept as the backstop; the structural fix below is still not attempted.*
+Candidate mitigations, in increasing order of effort:
 
 - lower `keyence_kp` 0.8 → 0.3–0.4, moving the divergence limit to k ≈ 6.8–9.1
   (costs ~5–6 steps instead of 3 on flat surfaces);
@@ -167,9 +220,11 @@ work; found by `test_all_devices.py`.
 ### 3. Reflective dropout
 
 On the polished surface the reading intermittently drops to the ±99999
-out-of-range sentinel. `_adjust_distance_to_surface()` treats a missing value
-as "skip", so a dropout mid-loop silently ends the correction. Worth confirming
-the reading is stable before trusting a scan.
+out-of-range sentinel. *2026-09-08: handled — each decision is the median of
+5 fresh readings with sentinel frames dropped, so an isolated dropout costs
+nothing; only a majority of invalid frames on three consecutive reads ends
+the loop, and then the CSV row says so.* Worth confirming the reading is
+stable before trusting a scan.
 
 ## Test tooling
 

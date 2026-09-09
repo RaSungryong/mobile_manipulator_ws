@@ -87,18 +87,21 @@
              when too close — so a negative reading must move the tool closer. -->
         <param name="keyence_dir"           value="-1.0"/>
         <param name="keyence_kp"            value="0.8"/>
-        <param name="keyence_max_steps"     value="10"/>
-        <!-- TEMPORARY 1.0 (was 5.0), 2026-08-05: bring-up guard for the first
-             real run of the distance loop after the keyence_dir sign fix above.
-             Caps how far one bad correction can travel, and with the 42.6 deg
-             beam it also caps the laser spot's lateral walk to 1*tan(42.6) =
-             0.92 mm per step, so a correction stays on roughly the same spot.
-             Still sufficient, not just safe: the loop only engages below the
-             5 mm activate threshold, and from that worst case it converges in
-             5 clamped steps, inside keyence_max_steps=10.
-             Restore 5.0 once the loop is trusted.
-             NOTE all three of keyence_tol / _max_step_mm / _activate_threshold
-             are PERPENDICULAR standoff mm, not raw along-the-beam reading. -->
+        <param name="keyence_max_steps"     value="15"/>
+        <!-- Since 2026-09-08 this is the APPROACH fine-step cap of the
+             rewritten loop (src/apriltag_nav/keyence_standoff.py): it binds
+             inside the last ~2 mm; further out an approach step may be up to
+             half the measured gap, and retreat steps up to
+             keyence_retreat_step_mm. Kept at 1.0 (was 5.0 before 2026-08-05):
+             with the 42.6 deg beam it caps the laser spot's lateral walk to
+             1*tan(42.6) = 0.92 mm per fine step, which is what kept the first
+             live run from diverging on sloped material. The adaptive gain now
+             backs that up. The rest of the loop's tuning (approach_fraction,
+             retreat_step_mm, activate_threshold 20, max_travel_mm, samples,
+             settle_s, seek, require_converged, target_distance_mm) lives in
+             robot.yaml keyence: and is not overridden here.
+             NOTE keyence_tol / _max_step_mm / _activate_threshold are
+             PERPENDICULAR standoff mm, not raw along-the-beam reading. -->
         <param name="keyence_max_step_mm"   value="1.0"/>
     </node>
 

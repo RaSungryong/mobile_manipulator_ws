@@ -202,9 +202,9 @@ def _effective_keyence_params(node='/arm_node'):
         'kp':  float(y.get('kp', 0.8)),
         'tol': float(y.get('tolerance_mm', 0.2)),
         'beam_angle_deg': float(y.get('beam_angle_deg', 0.0)),
-        'max_steps': float(y.get('max_steps', 10)),
+        'max_steps': float(y.get('max_steps', 15)),
         'max_step_mm': float(y.get('max_step_mm', 1.0)),
-        'activate_threshold': float(y.get('activate_threshold', 5.0)),
+        'activate_threshold': float(y.get('activate_threshold', 20.0)),
     }
     src = 'robot.yaml'
     overridden = []
@@ -251,9 +251,12 @@ def check_keyence(rep, duration):
             f"{watch.count} msg  {hz:.1f} Hz  last={watch.last:.3f} mm "
             f"(min {watch.vmin:.3f} / max {watch.vmax:.3f})")
 
-    # The controller only engages the loop when |val| < keyence_activate_threshold
-    # (default 5 mm) and stops once |val| <= tolerance. Outside that band the
-    # scan runs with NO distance correction at all, which is the quiet failure.
+    # The controller engages the loop when |err| < keyence_activate_threshold
+    # (20 mm since 2026-09-08; the sensor's own range binds first — an
+    # out-of-range reading is the +/-99999 sentinel and is rejected outright)
+    # and stops once |err| <= tolerance. Outside that band the scan runs with
+    # NO distance correction; since 2026-09-08 the result row says so in
+    # execution_message instead of reading "Success".
     #
     # The published value is a deviation measured ALONG THE LASER BEAM, zero at
     # the sensor's own 10 mm standoff setting. The beam is mounted oblique, so

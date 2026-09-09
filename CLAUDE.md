@@ -1058,8 +1058,24 @@ covers the "driver not running" case separately.
 ## Keyence Distance Loop
 
 `_adjust_distance_to_surface()` in `arm_controller.py` nudges the tool along
-tool Z before each capture. Three things about it are not guessable from the
-code — full record in `docs/keyence_scan_chain.md`:
+tool Z before each capture. **Since 2026-09-08 the loop itself is
+`src/apriltag_nav/keyence_standoff.py` (`StandoffController`, pure logic,
+offline-tested)**; the controller only projects the reading by
+`cos(beam_angle)`, converts approach mm to tool Z with `keyence_dir`, and
+does the MoveL. What the rewrite changed: it engages over the whole sensor
+range (`activate_threshold` 20 mm, was 5), an approach step is at most half
+the MEASURED gap while far and `max_step_mm` (1.0) near the target while a
+retreat may be 3 mm, a `max_travel_mm` budget bounds the whole adjustment,
+every decision is the median of 5 readings that arrived AFTER the last move
+(a cached value cannot drive the arm; a silent sensor means no motion), a
+reading that does not follow the motion aborts, the gain adapts DOWN to the
+measured sensitivity on sloped material, `keyence.target_distance_mm` is
+live (default 10 = the sensor zero), and the outcome is written into the
+CSV row's `execution_message` (`require_converged` makes a failed standoff
+fail the point). `seek_enabled` (step toward an out-of-range side) is OFF
+until the sentinel's sign is confirmed on the real sensor. Not yet run on
+the robot. Three things about it are not guessable from the code — full
+record in `docs/keyence_scan_chain.md`:
 
 - **The laser is mounted oblique, 42.6° off tool Z** (measured, not documented
   anywhere in the URDF or TCP). The reading is a distance along the *beam*, so
@@ -1074,11 +1090,12 @@ code — full record in `docs/keyence_scan_chain.md`:
   never noticed because `keyence_dlen1_node` was commented out of the launch
   file, so the loop had literally never run. Re-derive with
   `tools/measure_keyence_angle.py` if the sensor is remounted.
-- **`keyence_max_step_mm` is 1.0 as a bring-up guard and is doing real work.**
-  The oblique beam walks the laser spot `0.919*dz` sideways per correction, so
-  on a sloped surface the effective sensitivity is much larger than the
-  calibrated 1.358 — one observed step hit 7.52, past the divergence limit of
-  3.40. The clamp is what kept that from running away. Don't restore 5.0 without
+- **`keyence_max_step_mm` is 1.0 and is doing real work.** The oblique beam
+  walks the laser spot `0.919*dz` sideways per correction, so on a sloped
+  surface the effective sensitivity is much larger than the calibrated 1.358
+  — one observed step hit 7.52, past the divergence limit of 3.40. The clamp
+  is what kept that from running away; since 2026-09-08 it is the approach
+  FINE step and the adaptive gain backs it up, but don't raise it without
   reading the open-issues section of the doc.
 
 ⚠️ **The lift breaks the constant `arm_base_z`.** Pose-mode IK is silently
@@ -1625,6 +1642,100 @@ barely matters. Not driven on the robot; `mobile_node` restart required.
 First thing to watch: the `[Pivot] exit tag N in view` line should
 appear several degrees before the end, then `slow phase`, then the
 align finishing in one pass.
+
+### 2026-09-08 — Keyence standoff loop rewritten: whole sensor range, gap-proportional steps, fresh median readings, outcome recorded
+
+User: "거리센서 현재 측정범위는 너무 짧아, 조정 범위도 금형과 가까우니 이
+알고리즘을 최적화해줘". Two things were wrong with the inline loop in
+`arm_controller._adjust_distance_to_surface`: it refused anything beyond a
+5 mm window and scanned anyway with `execution_message: Success`, and
+inside that window it took fixed 1 mm blind steps against a CACHED reading
+with a fixed 1 s sleep — a sensor whose value stopped updating would have
+been stepped toward the mould ten times. The loop is now
+`src/apriltag_nav/keyence_standoff.py` (`StandoffController`, pure logic in
+approach-positive perpendicular mm); `ArmController` keeps the two
+conversions (`perp = reading × cos(beam)`, `toolZ = approach × −dir`), a
+sequence-counted `keyence_cb` so readings are known to be fresh, and the
+MoveL. Full before/after table in `docs/keyence_scan_chain.md`.
+
+The design, in one paragraph: engage whenever |err| < 20 mm (the sensor's
+own range binds first; the ±99999 sentinel is rejected, never read as a
+distance); approach by at most half the MEASURED gap while far and by
+≤ 1 mm inside the last ~2 mm (a reading would have to be 2× wrong to reach
+the surface, and it is re-measured after every move); retreat up to 3 mm;
+25 mm total budget; every decision the median of 5 readings that arrived
+after the move settled (0.3 s); a step ≥ 0.3 mm that moves the reading by
+< 25 % of itself twice in a row aborts ("reading does not follow the
+motion"); the next step is divided by the sensitivity measured from the
+last one, clamped [1, 4] — the doc's open issue 1 (spot walk on slopes,
+k_eff 7.5 observed) handled in software, the 1 mm clamp kept as backstop;
+`keyence.target_distance_mm` is live against `sensor_zero_mm` (both 10, so
+nothing moves by default — raising the target scans further from the mould
+but the Basler focus / Ra model were set at 10); the result goes into the
+CSV row (`Success (standoff ok (err −0.04 mm, 3 steps, travel 2.0 mm))` /
+`Success (standoff NOT corrected: …)`), and `require_converged: true` fails
+the point instead. `seek_enabled` (step toward the side an out-of-range
+sentinel names) exists but is OFF: it approaches on no measurement, and the
+sentinel's sign has not been confirmed on this sensor.
+
+Verified offline only: `t_standoff.py` (44 checks — surface plant with the
+42.6° spot walk, signed sentinel, dropouts, frozen / silent sensor; flat
+4–20 mm starts converge in 2–5 steps where the old loop refused 4 / 16 / 20;
+slopes k_eff up to 3.2 converge in ≤ 3 steps with ≤ 1 reversal where the
+old and non-adaptive loops hit the budget; 20 % dropout converges; frozen
+value stops after 2 mm vs the old loop's 10 mm walk) and `t_arm_wiring.py`
+(20 checks on the real `ArmController` methods against a fake Fairino with
+the real tool-Z geometry, incl. `execution_message` / `require_converged`).
+One bug found by the plant: the sentinel was being projected by cos and
+slipped under the invalid threshold — it now passes unprojected. Config:
+`robot.yaml keyence:` (new keys documented inline, `activate_threshold`
+5 → 20, `max_steps` 10 → 15), launch `keyence_max_steps` 15,
+`tools/test_scan_chain.py` defaults. Not run on the robot; `arm_node`
+restart required.
+
+### 2026-09-08 — Calibration ref-tag pairing changed to explicit ranges; eight view seeds recomputed
+
+User instruction: pair the drive (WORK) tags with the cross (ref) tags
+as **100-104→0, 105-107→1, 108-112→2, 113-117→3, 118-120→4,
+121-125→5** and **126-130→0, 131-133→1, 134-137→2, 138-142→3,
+143-145→4, 146-150→5**, and recompute the initial
+`arm_view_tcp_mm_deg` to match. The generator's old rule was
+"nearest cross tag by TAG y", which split each column 4/3/6; the new
+split is 5/3/5 and — checked against every tag — equals "nearest
+cross tag to the robot's STOP pose" (tag y − 0.55 m along the
+heading). It is kept as an explicit table (`REF_RANGES` in
+`generate_calibration_artifacts.py`), not as that rule, because the
+table is what the user specified; the generator refuses a ref that is
+not on the column facing the tag's corridor.
+
+**What changed, per plate: exactly four entries** (plate 1: 104 1→0,
+107 2→1, 117 4→3, 120 5→4; plate 2: 130 1→0, 133 2→1, 142 4→3,
+145 5→4). Their design view TCPs moved from x ≈ −668 to x ≈ +377 mm in
+the arm frame (the ref tag is now 0.4 m on the other side of the
+stop) and their flange reach dropped 0.93 → 0.74 m. Every other
+entry's design TCP is byte-identical to before (the pre-change
+generator was run first and diffed). `docs/all_tags_position.csv`
+regenerated — it was open in LibreOffice at the time (lock file
+present), so reload it there.
+
+**Seeds.** Plate 1 keeps its 22 session-measured seeds from
+`20260904_153218`; the four re-paired entries get design + the
+same-ref session median (−20…−28 mm x, −6…−24 mm y), since a pose
+converged over the OLD ref is 1.2 m off for the new one.
+`update_plan_seeds_from_session.py` now detects a session ref that
+differs from the plan's and falls back to that estimate instead of
+copying the stale measurement — needed for exactly this, and for any
+future re-pairing. Plate 2 stays on design seeds (as committed);
+it has since been run four times (09-04 16:22: 25/25 ok; 09-08 11:37:
+24/24; 12:00: 24/24; 12:55: 12 ok of 38 attempts) and any of the
+good sessions can be fed to that script.
+
+Verified offline only: both plans load through the real
+`load_calibration_plan` with every entry matching `REF_RANGES`; the
+generator's diff against its own pre-change output is the header +
+the eight entries; the seed script's dry run reproduces all 22
+unchanged plate-1 seeds exactly. Not run on the robot. The
+calibration nodes read the plan per session, so no restart is needed.
 
 ### 2026-09-04 — Forward stop column back to the crosshair (user request); what still covers the forward launch
 

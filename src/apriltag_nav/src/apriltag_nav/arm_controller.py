@@ -20,6 +20,7 @@ current_pose_msg / publish_done / is_busy / shutdown. arm_node.py
 wraps this class; nothing else instantiates it.
 """
 
+import threading
 import time
 import numpy as np
 
@@ -33,6 +34,7 @@ from apriltag_nav.paths import load_yaml_block
 from apriltag_nav.arm_transform import transform_world_to_arm
 from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.scan_results import ScanResultWriter
+from apriltag_nav.keyence_standoff import StandoffConfig, StandoffController
 
 # ================= Fairino SDK =================
 if not paths.add_fairino_sdk_to_path():
@@ -112,14 +114,56 @@ class ArmController:
 
         # ---------- Keyence distance alignment parameters ----------
         # Lookup chain: private ROS param > robot.yaml keyence block > hardcoded default.
+        # The loop itself lives in keyence_standoff.StandoffController (pure
+        # logic, offline-testable); this block only gathers its config and
+        # the two robot-side conversions (beam projection, tool-Z sign).
         _keyence_cfg = load_yaml_block('keyence')
         self.current_keyence_val = None
-        self.keyence_tol          = rospy.get_param('~keyence_tol', _keyence_cfg.get('tolerance_mm', 0.2))       # tolerance (mm)
-        self.keyence_dir          = rospy.get_param('~keyence_dir', 1.0)                                         # direction sign (1.0 or -1.0)
-        self.keyence_kp           = rospy.get_param('~keyence_kp',  _keyence_cfg.get('kp', 0.8))                 # proportional gain
-        self.keyence_max_steps    = rospy.get_param('~keyence_max_steps', _keyence_cfg.get('max_steps', 10))     # max adjustment iterations
-        self.keyence_max_step_mm  = rospy.get_param('~keyence_max_step_mm', _keyence_cfg.get('max_step_mm', 1.0))                     # single-step move limit (mm)
-        self.keyence_activate_threshold = rospy.get_param('~keyence_activate_threshold', _keyence_cfg.get('activate_threshold', 5.0)) # only adjust when |perp| < this (mm)
+        self._keyence_seq = 0            # bumps on every /keyence/value message
+        self._keyence_lock = threading.Lock()
+
+        def _kp(name, key, default):
+            return rospy.get_param('~keyence_' + name, _keyence_cfg.get(key, default))
+
+        self.keyence_tol          = float(_kp('tol', 'tolerance_mm', 0.2))      # perpendicular mm
+        self.keyence_dir          = float(rospy.get_param('~keyence_dir', 1.0))  # -sign(k); launch sets -1.0
+        self.keyence_kp           = float(_kp('kp', 'kp', 0.8))
+        self.keyence_max_steps    = int(_kp('max_steps', 'max_steps', 15))
+        self.keyence_max_step_mm  = float(_kp('max_step_mm', 'max_step_mm', 1.0))   # approach fine step
+        self.keyence_activate_threshold = float(_kp('activate_threshold', 'activate_threshold', 20.0))
+        self.keyence_approach_fraction  = float(_kp('approach_fraction', 'approach_fraction', 0.5))
+        self.keyence_retreat_step_mm    = float(_kp('retreat_step_mm', 'retreat_step_mm', 3.0))
+        self.keyence_max_travel_mm      = float(_kp('max_travel_mm', 'max_travel_mm', 25.0))
+        self.keyence_invalid_abs_mm     = float(_kp('invalid_abs_mm', 'invalid_abs_mm', 90.0))
+        self.keyence_samples            = int(_kp('samples', 'samples', 5))
+        self.keyence_read_timeout_s     = float(_kp('read_timeout_s', 'read_timeout_s', 1.0))
+        self.keyence_settle_s           = float(_kp('settle_s', 'settle_s', 0.3))
+        self.keyence_adaptive_gain      = bool(_kp('adaptive_gain', 'adaptive_gain', True))
+        self.keyence_gain_ratio_max     = float(_kp('gain_ratio_max', 'gain_ratio_max', 4.0))
+        self.keyence_min_response_ratio = float(_kp('min_response_ratio', 'min_response_ratio', 0.25))
+        self.keyence_seek_enabled       = bool(_kp('seek_enabled', 'seek_enabled', False))
+        self.keyence_seek_step_mm       = float(_kp('seek_step_mm', 'seek_step_mm', 2.0))
+        self.keyence_seek_max_mm        = float(_kp('seek_max_mm', 'seek_max_mm', 10.0))
+        self.keyence_require_converged  = bool(_kp('require_converged', 'require_converged', False))
+        # Target standoff. The DL-EN1 reads 0 at sensor_zero_mm; the loop holds
+        # the reading at (sensor_zero - target), so target == zero (the
+        # default, 10 mm) reproduces the old "drive the reading to 0".
+        self.keyence_sensor_zero_mm     = float(_kp('sensor_zero_mm', 'sensor_zero_mm', 10.0))
+        self.keyence_target_distance_mm = float(_kp('target_distance_mm', 'target_distance_mm',
+                                                    self.keyence_sensor_zero_mm))
+        self.keyence_setpoint_mm = self.keyence_sensor_zero_mm - self.keyence_target_distance_mm
+        if self.keyence_setpoint_mm != 0.0:
+            rospy.logwarn(
+                f"[Arm REAL] Keyence target standoff {self.keyence_target_distance_mm} mm "
+                f"!= sensor zero {self.keyence_sensor_zero_mm} mm: the loop holds the "
+                f"reading at {self.keyence_setpoint_mm:+.2f} mm perpendicular. The "
+                "Basler focus / Ra model were established at the sensor zero.")
+        if self.keyence_seek_enabled:
+            rospy.logwarn(
+                "[Arm REAL] keyence seek is ENABLED: an out-of-range first "
+                f"reading steps {self.keyence_seek_step_mm} mm per attempt "
+                f"(<= {self.keyence_seek_max_mm} mm) on the sentinel's sign. "
+                "Only safe if the sentinel sign has been confirmed on this sensor.")
         # Angle between the DL-EN1 laser beam and the tool Z axis. The sensor
         # measures along its BEAM, but the correction below moves along tool Z,
         # so the reading must be projected: a perpendicular error e shows up as
@@ -184,8 +228,12 @@ class ArmController:
         self.current_pose_msg = msg
 
     def keyence_cb(self, msg):
-        """Cache the latest Keyence sensor reading."""
-        self.current_keyence_val = msg.data
+        """Cache the latest Keyence sensor reading and count it, so the
+        standoff loop can insist on readings that arrived AFTER its last move
+        (a cached value that stopped updating must not drive the arm)."""
+        with self._keyence_lock:
+            self.current_keyence_val = msg.data
+            self._keyence_seq += 1
 
     # --------------------------------------------------
     # HOME
@@ -348,10 +396,26 @@ class ArmController:
                 rospy.loginfo(f"[Arm REAL] Stabilizing {self.stabilization_time}s ...")
                 time.sleep(self.stabilization_time)
 
-                # Keyence closed-loop distance adjustment before scan
+                # Keyence closed-loop distance adjustment before scan. The
+                # outcome goes into the result row: a scan taken at the wrong
+                # standoff used to be indistinguishable from a good one.
+                standoff = None
                 if not self.cancel_requested:
-                    self._adjust_distance_to_surface()
+                    standoff = self._adjust_distance_to_surface()
                     time.sleep(0.5)
+                if standoff is not None:
+                    if not standoff.converged and self.keyence_require_converged:
+                        entry["success"] = False
+                        entry["execution_message"] = (
+                            f"Standoff not corrected: {standoff.reason}")
+                        rospy.logerr(
+                            f"[Arm REAL] Point {pid}: {standoff.summary()} — "
+                            "capture skipped (keyence_require_converged)")
+                        results.append(entry)
+                        if current_csv_path:
+                            self.results_writer.save(current_csv_path, results)
+                        continue
+                    entry["execution_message"] = f"Success ({standoff.summary()})"
 
                 # Capture and infer (delegated — nothing here moves the arm)
                 if not self.cancel_requested:
@@ -393,102 +457,106 @@ class ArmController:
     # --------------------------------------------------
     # KEYENCE DISTANCE ADJUSTMENT
     # --------------------------------------------------
+    def _keyence_read_fresh(self, n, timeout_s):
+        """Return up to n perpendicular readings that arrive from now on.
+        Each /keyence/value message is taken once (by sequence), so a sensor
+        that stopped publishing yields [] after the timeout instead of its
+        last value repeated n times."""
+        out = []
+        with self._keyence_lock:
+            last_seq = self._keyence_seq
+        deadline = time.time() + max(0.05, float(timeout_s))
+        while len(out) < n and time.time() < deadline:
+            if self.cancel_requested:
+                break
+            with self._keyence_lock:
+                seq, val = self._keyence_seq, self.current_keyence_val
+            if seq != last_seq and val is not None:
+                last_seq = seq
+                v = float(val)
+                # The +/-99999 out-of-range sentinel must reach the loop
+                # unprojected, or cos() would shrink it under invalid_abs_mm
+                # and it would be taken for a (huge) real reading.
+                out.append(v if abs(v) >= self.keyence_invalid_abs_mm
+                           else v * self._keyence_cos)
+                continue
+            time.sleep(0.002)
+        return out
+
+    def _keyence_move_approach(self, approach_mm):
+        """Translate the tool along its own Z axis by approach_mm of
+        PERPENDICULAR standoff (positive = toward the surface), orientation
+        unchanged, then settle so the next reading is taken at rest.
+        keyence_dir carries the tool-Z sign: it is -sign(k) with
+        k = d(reading)/d(toolZ), so approach = -dir along tool Z."""
+        dz = float(approach_mm) * (-self.keyence_dir)
+
+        ret, pose = self.robot.GetActualTCPPose()
+        if ret != 0:
+            rospy.logerr(f"[Arm REAL] GetActualTCPPose failed: {ret}")
+            return False
+        x, y, z, rx, ry, rz = pose
+
+        # Tool Z-axis direction in the robot base frame (Fairino: degrees).
+        r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
+        # scipy compat: >=1.4 as_matrix(), 1.3 as_dcm()
+        r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
+        z_vec = r_mat[:, 2]
+        new_pose = [x + z_vec[0] * dz, y + z_vec[1] * dz, z + z_vec[2] * dz,
+                    rx, ry, rz]
+
+        # Low speed for the fine correction; MoveL keeps the orientation and
+        # blocks until the motion is done.
+        self.robot.SetSpeed(5)
+        ret = self.robot.MoveL(new_pose, tool=TOOL_ID, user=0)
+        if ret != 0:
+            rospy.logerr(f"[Arm REAL] MoveL failed during standoff adjustment: {ret}")
+            return False
+        time.sleep(self.keyence_settle_s)
+        return True
+
     def _adjust_distance_to_surface(self):
         """
-        Translate the tool along its Z-axis using Keyence feedback
-        until the reading reaches 0 within tolerance. Orientation is preserved.
+        Close the standoff loop before a capture: read the Keyence, move the
+        tool along its Z axis, repeat until the perpendicular error is inside
+        keyence_tol. Returns a keyence_standoff.StandoffResult; the algorithm
+        and every parameter are documented in that module.
         """
         rospy.loginfo("[Arm REAL] Adjusting tool distance using Keyence sensor...")
-
-        for step in range(self.keyence_max_steps):
-            if self.cancel_requested:
-                rospy.logwarn("[Arm REAL] Adjustment cancelled.")
-                break
-
-            if self.current_keyence_val is None:
-                rospy.logwarn("[Arm REAL] Keyence value NOT available, skipping adjustment.")
-                break
-
-            val = self.current_keyence_val
-
-            # Project the beam reading onto the surface normal FIRST, then use
-            # that everywhere. keyence_tol / keyence_activate_threshold /
-            # keyence_max_step_mm are all PERPENDICULAR standoff millimetres —
-            # the physical quantity the scan cares about — so they must not be
-            # compared against the raw along-the-beam reading, which is larger
-            # by 1/cos (at 42.6 deg, 36% larger).
-            perp = val * self._keyence_cos
-
-            if abs(perp) >= self.keyence_activate_threshold:
-                rospy.logwarn(
-                    f"[Arm REAL] Keyence {val:.3f} mm (beam) = {perp:.3f} mm "
-                    f"perpendicular >= {self.keyence_activate_threshold} mm, "
-                    "skipping adjustment."
-                )
-                break
-
-            if abs(perp) <= self.keyence_tol:
-                rospy.loginfo(
-                    f"[Arm REAL] Distance reached target. Current: {val:.3f} mm "
-                    f"(beam) = {perp:.3f} mm perpendicular")
-                break
-
-            # Displacement along tool Z-axis (mm). `perp` is already the
-            # perpendicular error, so this is a plain proportional step in the
-            # same units, clamped by keyence_max_step_mm (also perpendicular mm).
-            # keyence_dir carries the sensor's polarity: it must be -sign(k),
-            # where k = d(reading)/d(toolZ) — see tools/measure_keyence_angle.py.
-            dz = np.clip(
-                perp * self.keyence_dir * self.keyence_kp,
-                -self.keyence_max_step_mm,
-                self.keyence_max_step_mm
-            )
-
-            ret, pose = self.robot.GetActualTCPPose()
-            if ret != 0:
-                rospy.logerr(f"[Arm REAL] GetActualTCPPose failed: {ret}")
-                break
-
-            x, y, z, rx, ry, rz = pose
-
-            # Compute tool Z-axis direction in robot base frame
-            # Fairino uses degrees for Euler angles
-            r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
-            # scipy compat: >=1.4 as_matrix(), 1.3 as_dcm()
-            r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
-            z_vec = r_mat[:, 2]  # third column of rotation matrix
-
-            # Apply offset while keeping orientation (rx, ry, rz) unchanged
-            new_pose = [
-                x + z_vec[0] * dz,
-                y + z_vec[1] * dz,
-                z + z_vec[2] * dz,
-                rx, ry, rz
-            ]
-
-            rospy.loginfo(
-                f"  -> [Adjust {step+1}/{self.keyence_max_steps}] "
-                f"Sensor: {val:.3f} mm (beam) -> {perp:.3f} mm perpendicular. "
-                f"Shifting tool Z by {dz:.3f} mm "
-                f"(Kp={self.keyence_kp}, dir={self.keyence_dir}, "
-                f"beam={self.keyence_beam_angle_deg} deg)"
-            )
-
-            # Use low speed for fine distance adjustment
-            self.robot.SetSpeed(5)
-            # MoveL preserves orientation during linear motion
-            ret = self.robot.MoveL(new_pose, tool=TOOL_ID, user=0)
-            if ret != 0:
-                rospy.logerr(f"[Arm REAL] MoveL failed during adjustment: {ret}")
-                break
-
-            # Wait for motion to complete and sensor to refresh
-            time.sleep(1.0)
+        cfg = StandoffConfig(
+            tolerance_mm=self.keyence_tol,
+            kp=self.keyence_kp,
+            max_steps=self.keyence_max_steps,
+            max_step_mm=self.keyence_max_step_mm,
+            approach_fraction=self.keyence_approach_fraction,
+            retreat_step_mm=self.keyence_retreat_step_mm,
+            activate_threshold_mm=self.keyence_activate_threshold,
+            max_travel_mm=self.keyence_max_travel_mm,
+            invalid_abs_mm=self.keyence_invalid_abs_mm,
+            samples=self.keyence_samples,
+            read_timeout_s=self.keyence_read_timeout_s,
+            adaptive_gain=self.keyence_adaptive_gain,
+            gain_ratio_max=self.keyence_gain_ratio_max,
+            min_response_ratio=self.keyence_min_response_ratio,
+            setpoint_mm=self.keyence_setpoint_mm,
+            seek_enabled=self.keyence_seek_enabled,
+            seek_step_mm=self.keyence_seek_step_mm,
+            seek_max_mm=self.keyence_seek_max_mm,
+        )
+        ctl = StandoffController(
+            cfg,
+            read=self._keyence_read_fresh,
+            move=self._keyence_move_approach,
+            cancelled=lambda: self.cancel_requested,
+            log_info=lambda s: rospy.loginfo(f"[Arm REAL] {s}"),
+            log_warn=lambda s: rospy.logwarn(f"[Arm REAL] {s}"),
+        )
+        result = ctl.run()
+        if result.converged:
+            rospy.loginfo(f"[Arm REAL] {result.summary()}")
         else:
-            rospy.logwarn(
-                f"[Arm REAL] Failed to reach 0 within {self.keyence_max_steps} steps. "
-                f"Last val: {self.current_keyence_val:.3f} mm."
-            )
+            rospy.logwarn(f"[Arm REAL] {result.summary()}")
+        return result
 
     # --------------------------------------------------
     # JOINT MOTION

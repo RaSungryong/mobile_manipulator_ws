@@ -1030,10 +1030,16 @@ keyence:
   ip: "192.168.100.105"
   port: 64000
 
-  # INFORMATIONAL ONLY — nothing reads this. The zero point is configured in
-  # the DL-EN1 itself; the controller simply drives the published value to 0.
-  # Measured on the real sensor: the reading is zero at a 10 mm standoff.
-  # (It said 30.0 until 2026-08-05, which matched no hardware setting.)
+  # The DL-EN1's own zero point: it reads 0 at this perpendicular standoff
+  # (measured on the real sensor; it said 30.0 until 2026-08-05, which
+  # matched no hardware setting). Since 2026-09-08 target_distance_mm is
+  # LIVE: the loop holds the projected reading at (sensor_zero - target), so
+  # target == zero reproduces the old "drive the reading to 0". Raise the
+  # target to scan further from the mould WITHOUT reconfiguring the sensor —
+  # but the Basler focus and the Ra model were established at 10 mm, so a
+  # different standoff changes the images. Keep the target inside the
+  # sensor's measuring range (out of range = the +/-99999 sentinel).
+  sensor_zero_mm:     10.0
   target_distance_mm: 10.0
 
   # SENSOR POLARITY (set in the DL-EN1, confirmed on the robot 2026-08-05):
@@ -1095,14 +1101,71 @@ keyence:
   #
   # UNITS: every value below is PERPENDICULAR standoff mm. The raw reading is
   # projected by cos(beam_angle_deg) before any of them is applied.
-  tolerance_mm:        0.2    # ~keyence_tol        — converged when |perp| <= this
+  #
+  # The loop itself is src/apriltag_nav/keyence_standoff.py (StandoffController,
+  # pure logic, offline-tested) since 2026-09-08. Read its module docstring
+  # for the algorithm; the short version: engage over the whole sensor range
+  # (not a 5 mm window), approach steps capped at half the MEASURED gap while
+  # far and at max_step_mm near the target, retreat steps larger, a total
+  # travel budget, fresh median readings after every move, a "did the reading
+  # follow the motion" check, and an adaptive gain that only ever reduces the
+  # step on sloped / rough material.
+  tolerance_mm:        0.2    # ~keyence_tol        — converged when |err| <= this
   kp:                  0.8    # ~keyence_kp         — per-step residual is |1 - kp|
-  max_steps:           10     # ~keyence_max_steps  — give up after this many
-  max_step_mm:         1.0    # ~keyence_max_step_mm — single-step clamp
-                              #   TEMPORARY bring-up value; launch says 5.0 is
-                              #   the normal setting. See the launch comment.
-  activate_threshold:  5.0    # ~keyence_activate_threshold — skip the loop when
-                              #   |perp| >= this (too far to trust the reading)
+  max_steps:           15     # ~keyence_max_steps  — decisions before giving up
+                              #   (was 10; a 20 mm start needs ~5-6 halving
+                              #   steps plus the fine ones)
+  max_step_mm:         1.0    # ~keyence_max_step_mm — APPROACH fine-step cap,
+                              #   binding inside the last ~2 mm. Still the
+                              #   slope guard from 2026-08-05 (see the doc);
+                              #   the adaptive gain now backs it up.
+  approach_fraction:   0.5    # ~keyence_approach_fraction — while far, one
+                              #   approach step <= this x |measured gap|. A
+                              #   reading would have to be wrong by 2x to
+                              #   reach the surface, and it is re-measured
+                              #   every step. 20 mm -> 10 -> 5 -> 2.5 -> ...
+  retreat_step_mm:     3.0    # ~keyence_retreat_step_mm — cap when moving
+                              #   AWAY from the surface (always safe)
+  activate_threshold:  20.0   # ~keyence_activate_threshold — |err| >= this
+                              #   is not trusted (was 5.0: the loop refused
+                              #   anything beyond 5 mm and the scan then ran
+                              #   at the wrong standoff). The sensor's own
+                              #   range bounds it below this in practice.
+  max_travel_mm:       25.0   # ~keyence_max_travel_mm — total |motion| per
+                              #   adjustment; exceeded -> stop, recorded
+  invalid_abs_mm:      90.0   # ~keyence_invalid_abs_mm — |reading| at/above
+                              #   this is the +/-99999 out-of-range sentinel
+  samples:             5      # ~keyence_samples — fresh readings per decision;
+                              #   the median is used, sentinel frames dropped.
+                              #   5 @ 30 Hz = ~0.17 s
+  read_timeout_s:      1.0    # ~keyence_read_timeout_s — no fresh sample in
+                              #   this long = "sensor silent", loop stops
+  settle_s:            0.3    # ~keyence_settle_s — rest after each MoveL
+                              #   before reading (was a fixed 1.0 s sleep
+                              #   that also stood in for "sensor refreshed")
+  adaptive_gain:       true   # ~keyence_adaptive_gain — divide the next step
+                              #   by the measured d(reading)/d(motion) of the
+                              #   last one, clamped to [1, gain_ratio_max];
+                              #   never amplifies. Handles the oblique beam's
+                              #   spot walk on slopes (doc open issue 1).
+  gain_ratio_max:      4.0
+  min_response_ratio:  0.25   # ~keyence_min_response_ratio — a step of
+                              #   >= 0.3 mm must move the reading by at least
+                              #   this fraction of it; two misses in a row
+                              #   abort (frozen sensor / arm not moving)
+  # Seek: OFF. When the FIRST reading is out of range the sentinel's sign says
+  # which side (negative = too far, positive = too close). With seek on, the
+  # loop steps seek_step_mm that way, up to seek_max_mm, until a reading
+  # appears. Approaching on no measurement is exactly what the loop exists to
+  # avoid, so enable this only after confirming on the real sensor that the
+  # sentinel is signed the way the readings are.
+  seek_enabled:        false  # ~keyence_seek_enabled
+  seek_step_mm:        2.0
+  seek_max_mm:         10.0
+  # When the loop did not converge: false (default) scans anyway and writes
+  # "Success (standoff NOT corrected: <reason>)" into execution_message; true
+  # marks the point failed and skips the capture.
+  require_converged:   false  # ~keyence_require_converged
 
   # NOTE: there is no timeout_s here on purpose. The socket timeout belongs to
   # keyence_dlen1_node (~timeout_s, 5.0 in the launch file), not to this

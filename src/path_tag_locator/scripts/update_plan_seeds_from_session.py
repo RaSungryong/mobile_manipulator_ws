@@ -16,7 +16,12 @@ For every plan entry:
   * an entry that FAILED (or was not run) keeps its design seed shifted by
     the MEDIAN (aligned - seed) x, y of the successful entries that share
     its ref tag (any ref tag as fallback) — i.e. its initial pose is
-    estimated from the tags that were measured.
+    estimated from the tags that were measured;
+  * an entry whose ref tag in the PLAN differs from the one it was
+    measured against in the session (the plan was re-paired since — e.g.
+    the 2026-09-08 REF_RANGES change) is treated like a not-run entry: a
+    pose converged over a different cross tag is 1.2 m off for the new
+    one, so it gets design + the median correction of its NEW ref.
 
 z and the orientation are KEPT from the plan on purpose: z is the design
 view height (0.5 m above the tag), and the recorded z is not — the align
@@ -111,13 +116,17 @@ def rewrite_plan(text, plan_entries, session, corr, session_name):
         indent = m.group(1)
         old = [float(v) for v in m.group(2).split(',')]
         r = session.get(cur_tag)
-        if r and r['status'] == 'ok' and r['final']:
+        plan_ref = next((int(e['ref_tag_id']) for e in plan_entries
+                         if int(e['path_tag_id']) == cur_tag), None)
+        repaired = r is not None and plan_ref is not None and r['ref'] != plan_ref
+        if r and r['status'] == 'ok' and r['final'] and not repaired:
             new = list(old)
             new[0], new[1] = float(r['final'][0]), float(r['final'][1])
             how = f'measured x,y {session_name} (z/orientation: design)'
         else:
-            ref = r['ref'] if r else next(
-                (e['ref_tag_id'] for e in plan_entries if e['path_tag_id'] == cur_tag), None)
+            # the PLAN's ref decides which correction pool applies — after a
+            # re-pairing the session's ref is the OLD one
+            ref = plan_ref if plan_ref is not None else (r['ref'] if r else None)
             c, n, same = median_correction(corr, ref)
             if c is None:
                 rows.append((cur_tag, 'unchanged (no data)', old, old))
@@ -125,7 +134,9 @@ def rewrite_plan(text, plan_entries, session, corr, session_name):
             new = list(old)
             for k in range(2):
                 new[k] = old[k] + float(c[k])
-            how = (f'design + median Δxy{fmt(c)} of ref {ref} '
+            why = (f'ref re-paired {r["ref"]}→{plan_ref} since the session; '
+                   if repaired else '')
+            how = (f'{why}design + median Δxy{fmt(c)} of ref {ref} '
                    f'({"same" if same else "any"} ref, n={n}) {session_name}')
         lines[i] = f'{indent}arm_view_tcp_mm_deg: {fmt(new)}    # seed: {how}'
         rows.append((cur_tag, how, old, new))

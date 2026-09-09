@@ -5,9 +5,11 @@ Generate every design-value calibration artifact in one pass:
 
   1. config/calibration_plan_plate1.yaml   (zones B+C, 정반 1 cross tags)
   2. config/calibration_plan_plate2.yaml   (zones D+E, 정반 2 cross tags)
-     — each WORK tag paired with the nearest-by-y cross tag of the column
-       facing its corridor, WITH a per-entry ``arm_view_tcp_mm_deg``
-       computed from design values (see below).
+     — each WORK tag paired with a cross tag by the EXPLICIT id ranges in
+       ``REF_RANGES`` (user assignment, 2026-09-08; it replaced the older
+       nearest-by-y rule, which split every column differently: 4/3/6
+       tags per ref instead of 5/3/5), WITH a per-entry
+       ``arm_view_tcp_mm_deg`` computed from design values (see below).
   3. <ws>/docs/all_tags_position.csv — all 78 tags with position,
      orientation, and for WORK tags: ref pairing, robot stop pose, the
      arm view TCP and the ab-frame reach distance.
@@ -71,6 +73,37 @@ WEST = {0: -1.2, 1: 0.0, 2: 1.2}      # cross-tag column ids by y
 EAST = {5: -1.2, 4: 0.0, 3: 1.2}
 PLATE_OF_ZONE = {"B": 1, "C": 1, "D": 2, "E": 2}
 COLUMN_OF_ZONE = {"B": WEST, "C": EAST, "D": WEST, "E": EAST}
+# WORK tag -> ref (cross) tag, by inclusive id range. User assignment
+# 2026-09-08 ("각 주행태그의 참고 태그"): the three y-extreme tags of a
+# corridor end share the corner ref tag, the middle three the centre one
+# — 5 / 3 / 5 per column on both plates (zone B/D ids ascend northward,
+# C/E descend, so the two corridors of a plate mirror each other).
+# Checked 2026-09-08: this table equals "nearest cross tag to the robot's
+# STOP pose" (tag y − 0.55 m along the heading) for every tag, which is
+# why every re-paired entry got a SHORTER flange reach (0.93 → 0.74 m)
+# than under the old rule. The table stays the source of truth.
+# The generator refuses a ref that is not on the column facing the
+# tag's corridor, so a typo here cannot send the camera across the plate.
+REF_RANGES = (
+    # plate 1 — zone B (west column 0/1/2), zone C (east column 3/4/5)
+    (100, 104, 0), (105, 107, 1), (108, 112, 2),
+    (113, 117, 3), (118, 120, 4), (121, 125, 5),
+    # plate 2 — zone D (west), zone E (east); same ids 0-5 on 정반 2
+    (126, 130, 0), (131, 133, 1), (134, 137, 2),
+    (138, 142, 3), (143, 145, 4), (146, 150, 5),
+)
+REF_OF_TAG = {}
+_PLATE_TAG_IDS = {}         # plate -> WORK tag ids seen (filled in main)
+for _lo, _hi, _ref in REF_RANGES:
+    for _t in range(_lo, _hi + 1):
+        assert _t not in REF_OF_TAG, "tag %d in two REF_RANGES" % _t
+        REF_OF_TAG[_t] = _ref
+
+
+def ref_ranges_text(plate):
+    """'100-104→0, 105-107→1, …' for the plan header of one plate."""
+    return ", ".join("%d-%d→%d" % (lo, hi, ref) for lo, hi, ref in REF_RANGES
+                     if lo in _PLATE_TAG_IDS[plate])
 
 
 def rz(deg):
@@ -148,7 +181,15 @@ def main():
         zone = info["zone"]
         plate = PLATE_OF_ZONE[zone]
         column = COLUMN_OF_ZONE[zone]
-        ref_id = min(column, key=lambda k: abs(column[k] - info["y"]))
+        if tid not in REF_OF_TAG:
+            raise SystemExit("WORK tag %d has no entry in REF_RANGES" % tid)
+        ref_id = REF_OF_TAG[tid]
+        if ref_id not in column:
+            raise SystemExit(
+                "tag %d (zone %s) -> ref %d, which is not on the column "
+                "facing that corridor (%s)" % (tid, zone, ref_id,
+                                               sorted(column)))
+        _PLATE_TAG_IDS.setdefault(plate, set()).add(tid)
         sx, sy, heading = stop_pose(info)
         # Camera yaw about the tag normal is free: sweep it and keep the
         # pose whose FLANGE sits closest to the arm base.
@@ -180,8 +221,9 @@ def main():
             "# scripts/generate_calibration_artifacts.py (lift %.0f mm, "
             "view %.2f m)\n"
             "# — do not hand-edit values; re-run the generator instead.\n"
-            "# Pairing: nearest-by-y cross tag of the column facing the "
-            "corridor.\n"
+            "# Pairing: EXPLICIT id ranges (REF_RANGES in the generator, "
+            "user assignment 2026-09-08):\n"
+            "#   %s\n"
             "# Run with ref_tags_path = config/%s (SWAP TOGETHER with the "
             "plan).\n"
             "# Per-entry arm_view_tcp_mm_deg are DESIGN seeds (map.yaml "
@@ -194,7 +236,7 @@ def main():
             "\ndefaults:\n  retry_count: 1\n  align_required: true\n"
             "\nplan:\n"
             % (plate, "+".join(zones), args.lift_mm, view_m,
-               ref_yaml_name[plate])]
+               ref_ranges_text(plate), ref_yaml_name[plate])]
         first = True
         for tid in sorted(views):
             v = views[tid]
