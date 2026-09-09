@@ -21,11 +21,17 @@ are the ground coordinates relative to the lens NADIR (the point straight
 below the lens), in the robot frame (x forward, y right).
 
 Frame conventions (must match tools/fit_front_cam_ground.py, which produced
-the numbers in robot.yaml): ground frame X = image column direction
-(forward), Y = image row direction (right), Z down, floor at Z = 0, lens at
-Z = -height. Camera axes = ground axes rotated by R = Rz(0) Ry(pitch)
-Rx(roll); a ground direction d maps to camera coordinates R d. The angles
-are FIT parameters in this convention, not mechanical readings.
+the numbers in robot.yaml): ground frame X = the robot's travel axis
+(forward), Y = right, Z down, floor at Z = 0, lens at Z = -height. Camera
+axes = ground axes rotated by R = Rz(yaw) Ry(pitch) Rx(roll); a ground
+direction d maps to camera coordinates R d. roll / pitch are FIT
+parameters in this convention, not mechanical readings. `yaw` is the
+camera's rotation about its optical axis relative to the travel axis: the
+edge angle a tag laid parallel to the travel axis reads on the crosshair
+with yaw = 0 (front_cam: -0.38 deg, from a straight-drive test — the tag
+pair cannot see it, only motion can). With it set, the virtual camera's
+x axis IS the travel axis, so "edge 0" means the body is parallel to the
+lane and the aim's base-offset estimate is made in the body frame.
 """
 import math
 
@@ -55,15 +61,18 @@ class GroundPlane(object):
                      (None / empty = no distortion)
     roll, pitch    : radians, see the module docstring
     height         : lens height above the floor (m)
+    yaw            : radians, camera rotation about the optical axis vs
+                     the travel axis (see the module docstring); 0 = none
     """
 
-    def __init__(self, fx, fy, cx, cy, dist, roll, pitch, height):
+    def __init__(self, fx, fy, cx, cy, dist, roll, pitch, height, yaw=0.0):
         self.fx, self.fy, self.cx, self.cy = float(fx), float(fy), float(cx), float(cy)
         self.K = np.array([[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]])
         d = np.asarray(dist if dist is not None else [], dtype=float).ravel()
         self.D = d if d.size and np.any(d != 0.0) else None
         self.roll, self.pitch, self.h = float(roll), float(pitch), float(height)
-        self.R = rot_xyz(self.roll, self.pitch, 0.0)
+        self.yaw = float(yaw)
+        self.R = rot_xyz(self.roll, self.pitch, self.yaw)
 
     # ---- raw pixels -> floor ----
     def undistort(self, px):

@@ -540,6 +540,18 @@ Consequence to remember: "lens over the tag" is now the nadir, 7 mm from
 where the optical axis meets the floor, so `/robot_pose`'s lateral and
 every stop moved by that constant relative to pre-2026-09-08 records.
 
+**`yaw_deg: -0.38` (2026-09-09)** adds the camera's rotation about its
+optical axis vs the TRAVEL axis, which the tag pair cannot see: it is the
+edge angle a tag laid parallel to the lane reads on the crosshair when
+the body is parallel to it, from the 2026-09-08 straight-drive test
+(−0.38 ± 0.22°). With it the virtual camera's x axis is the travel axis,
+so "aligned" means body-parallel and the aim's base offset is estimated
+in the body frame. Caveat: that test used the RAW pipeline's pose `yaw`
+as the edge, so up to ~0.1–0.2° of tilt bias may be folded in; the
+forward hops of 2026-09-09 (residual +1.9 mm) suggest ~−0.45°. Re-measure
+with the same straight-drive test with the correction ON — the residual
+drift is then the error of this number.
+
 ### Reading tag ID and orientation off the image
 
 `robot_camera_node` publishes `/<cam>/tag_overlay`. **Layout since
@@ -1274,7 +1286,9 @@ standing sections named here:
 **2026-09-09:** overlay relaid out on the user's request (see *Reading tag
 ID and orientation off the image*): pixel text gone, stop columns in mm,
 per-tag `ID / offset (mm) / degree` block top-left, frame rectified to the
-level virtual camera when the correction is on.
+level virtual camera when the correction is on. Then the measured camera
+yaw (−0.38°) was added to the correction as `ground_plane.front_cam.yaw_deg`
+(user request); not yet driven — `robot_camera_node` restart required.
 
 Also today, other sessions: the Keyence standoff rewrite (uncommitted in
 this checkout) and the calibration ref-tag re-pairing (uncommitted). A

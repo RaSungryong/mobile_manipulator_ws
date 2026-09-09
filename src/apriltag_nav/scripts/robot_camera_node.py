@@ -275,14 +275,16 @@ class _CameraTagWorker:
                         K[0], K[4], K[2], K[5], self.camera_dist,
                         math.radians(float(self.ground_cfg.get('roll_deg', 0.0))),
                         math.radians(float(self.ground_cfg.get('pitch_deg', 0.0))),
-                        float(self.ground_cfg.get('height_m', 0.30)))
+                        float(self.ground_cfg.get('height_m', 0.30)),
+                        yaw=math.radians(float(self.ground_cfg.get('yaw_deg', 0.0))))
                     ax = self.ground.axis_offset_m()
                     rospy.loginfo(
                         "[RobotCamera] %s: ground-plane correction ON — roll %+.3f "
-                        "pitch %+.3f deg, height %.1f mm, D %s; optical axis meets "
+                        "pitch %+.3f yaw %+.3f deg, height %.1f mm, D %s; optical axis meets "
                         "the floor %+.1f / %+.1f mm from the nadir",
                         self.name, float(self.ground_cfg.get('roll_deg', 0.0)),
                         float(self.ground_cfg.get('pitch_deg', 0.0)),
+                        float(self.ground_cfg.get('yaw_deg', 0.0)),
                         self.ground.h * 1000.0,
                         'applied' if self.ground.D is not None else 'none',
                         ax[0] * 1000.0, ax[1] * 1000.0)

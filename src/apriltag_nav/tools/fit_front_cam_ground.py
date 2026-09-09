@@ -116,7 +116,8 @@ def main():
           f"tag size {s * 1000:.2f} mm; optical axis meets the floor {ax[0] * 1000:+.1f} / {ax[1] * 1000:+.1f} mm from the nadir")
     print("\nrobot.yaml:\n  robot_camera:\n    ground_plane:\n      front_cam:\n        enabled: true\n"
           f"        roll_deg: {math.degrees(roll):.3f}\n        pitch_deg: {math.degrees(pitch):.3f}\n"
-          f"        height_m: {h:.3f}")
+          f"        height_m: {h:.3f}\n        yaw_deg: <keep the current value — not observable from tags; "
+          "re-measure with a straight-drive test (see robot.yaml)>")
 
     print("\nedge angle the UNCORRECTED pipeline reads for a square-laid 90 mm tag, vs fore-aft position:")
     for X in (-0.03, 0.0, 0.05, 0.10, 0.155, 0.20):
