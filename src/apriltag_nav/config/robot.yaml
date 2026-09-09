@@ -672,8 +672,9 @@ navifra:
   # come forward undock_forward_m; at return_pct stop whatever is running,
   # lift origin home, drive to dock_tag and send /crevis/charging true
   # (the charger only starts on an explicit true after docking); after a
-  # user task completes normally (and nothing else is queued) return to
-  # the charger as well (return_after_task — this deliberately overrides
+  # user TASK completes normally (and nothing else is queued) return to
+  # the charger as well (return_after_task; a GOTO never does unless
+  # return_after_goto — this deliberately overrides
   # the 2026-08-10 "tasks never drive home" rule, on the user's decision).
   # The lamp shows status_colors.charging (magenta) while the BMS reports
   # current into the pack and status_colors.charged (white) once full and
@@ -688,7 +689,8 @@ navifra:
     enabled: true
     full_pct: 85.0
     return_pct: 20.0            # user: 20 % (2026-09-09); low_battery_pct's warning fires at the same level
-    return_after_task: true
+    return_after_task: true     # after a TASK completes (not after a GOTO)
+    return_after_goto: false    # GOTO is positioning, not work — leave it where it stops
     dock_tag: 500               # = TaskManager.START_TAG; arrival = docked
     dock_reverse_m: 0.0         # extra reverse push after arriving, if the contacts need it
     undock_forward_m: 0.10

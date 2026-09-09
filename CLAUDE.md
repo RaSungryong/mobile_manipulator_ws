@@ -886,8 +886,11 @@ User rules, in `robot.yaml` `navifra.charging:`: charge until **85 %**
 (`full_pct`), then `/crevis/charging false` and come forward
 `undock_forward_m` (0.10); at **20 %** (`return_pct`; 30 → 20 on the
 user's instruction the same day) abandon whatever is running and go back
-to the charger; **after a user task completes
-normally, go back to the charger too** (`return_after_task`); after
+to the charger; **after a user TASK completes
+normally, go back to the charger too** (`return_after_task`) — but never
+after a `GOTO`, which is positioning, not work (`return_after_goto`
+false; found on the robot 2026-09-09 when `GOTO 100` was followed by an
+unasked-for drive back to the dock); after
 docking `/crevis/charging true` MUST be sent — the charger only starts
 on that explicit command (user-confirmed) — and the BMS must show
 current within `charge_confirm_s`. Lamp: `status_colors.charging`

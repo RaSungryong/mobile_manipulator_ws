@@ -244,21 +244,25 @@ def main():
           f'lift {ex.lift.calls} mobile {ex.mobile.calls} relay {b.relay} phase {ex._charge_phase}')
     check('4c lamp magenta while charging', b.lamp[-1] == 'magenta', str(b.lamp[-2:]))
 
-    # ---- 5. user task completes normally at 60 %: return after task
+    # ---- 5. user TASK completes normally at 60 %: return after task; a GOTO does not
     ex, b = make(60.0, docked=False); ex._charge_phase = 'full'
-    ex.task_mgr.get_task = lambda n: [{'tag': 106, 'scan': False}]
-    ex._pending_task_name, ex._pending_task = 'goto_106', [{'tag': 106, 'scan': False}]
+    ex._pending_task_name, ex._pending_task = 'scan_line_x', [{'tag': 106, 'scan': False}]
     ticks(ex, 3)
     b.docked = True
     ticks(ex, 6)
-    check('5 completed task -> battery_return queued and run -> charging',
+    check('5a completed TASK -> battery_return queued and run -> charging',
           ex.mobile.calls[:1] == [('goto', 106)] and ('goto', 500) in ex.mobile.calls and ex._charge_phase == 'charging' and b.relay,
+          f'{ex.mobile.calls} phase {ex._charge_phase}')
+    ex, b = make(60.0, docked=False); ex._charge_phase = 'full'
+    ex._pending_task_name, ex._pending_task = 'goto_100', [{'tag': 100, 'scan': False}]
+    ticks(ex, 10)
+    check('5b completed GOTO -> stays there (no return, no relay)', ex.mobile.calls == [('goto', 100)] and not b.relay and ex._charge_phase == 'working',
           f'{ex.mobile.calls} phase {ex._charge_phase}')
 
     # ---- 6. return_after_task off: no return
     ex, b = make(60.0, docked=False); ex._charge_phase = 'full'
     ex._charge_cfg = dict(ex._charge_cfg, return_after_task=False)
-    ex._pending_task_name, ex._pending_task = 'goto_106', [{'tag': 106, 'scan': False}]
+    ex._pending_task_name, ex._pending_task = 'scan_line_x', [{'tag': 106, 'scan': False}]
     ticks(ex, 8)
     check('6 return_after_task false: stays where the task ended', ex.mobile.calls == [('goto', 106)] and not b.relay, str(ex.mobile.calls))
 
@@ -267,9 +271,9 @@ def main():
     ex._command_cb(types.SimpleNamespace(data='STOP'))
     ticks(ex, 15)
     check('7a after STOP at 15%: no auto-return', ex._charge_phase == 'stopped' and ('goto', 500) not in ex.mobile.calls, f'{ex._charge_phase} {ex.mobile.calls}')
-    ex._pending_task_name, ex._pending_task = 'goto_106', [{'tag': 106, 'scan': False}]
+    ex._pending_task_name, ex._pending_task = 'scan_line_x', [{'tag': 106, 'scan': False}]
     ticks(ex, 3); b.docked = True; ticks(ex, 6)
-    check('7b a user task re-arms it: after the task, return + charge', ('goto', 500) in ex.mobile.calls and ex._charge_phase == 'charging', f'{ex.mobile.calls} {ex._charge_phase}')
+    check('7b a user TASK re-arms it: after the task, return + charge', ('goto', 500) in ex.mobile.calls and ex._charge_phase == 'charging', f'{ex.mobile.calls} {ex._charge_phase}')
 
     # ---- 8. docking produces no current: ERROR, dock_failed, no retry
     ex, b = make(15.0, docked=False); ex._charge_phase = 'working'

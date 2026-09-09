@@ -831,6 +831,11 @@ class MobileManipulatorTaskExecutor:
             elif (is_user_task and self._task_completed and not self._stop_requested
                   and self._pending_task is None
                   and bool(self._charge_cfg.get('return_after_task', True))
+                  # a GOTO is an operator positioning command, not work: it
+                  # never triggers the return (2026-09-09: 'GOTO 100' was
+                  # followed by an unasked-for drive back to the dock)
+                  and (not task_name.startswith('goto_')
+                       or bool(self._charge_cfg.get('return_after_goto', False)))
                   and not self._is_charging()):
                 rospy.loginfo(f"[Charge] task '{task_name}' completed — returning to the charger")
                 self._queue_internal_task('battery_return', self._battery_return_task())
