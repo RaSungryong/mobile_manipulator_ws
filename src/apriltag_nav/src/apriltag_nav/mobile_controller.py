@@ -158,6 +158,16 @@ class MobileController:
         self.aim_measure_frames = max(1, int(self.cfg['robot'].get('aim_measure_frames', 5)))
         self.aim_heading_gain = float(self.cfg['robot'].get('aim_heading_gain', 1.0))
         self._aim = None            # active aim (see _aim_at_stop_pose)
+        # Re-seat before a forward hop that starts from a REVERSE arrival
+        # (user rule 2026-09-09): the tag then rests on the REV column,
+        # ~0.16 m ahead of the lens; bring it to the FWD column with the
+        # SAME arrival algorithm as any forward hop (aim_and_drive: stop,
+        # measure, aim pivot, straight drive, column stop) and align there,
+        # so every forward hop sets off from the same pose. Only when the
+        # start tag is visible at least reseat_min_fore_m ahead of the lens.
+        self.reseat_forward = bool(self.cfg['robot'].get('reseat_forward_from_reverse_column', True))
+        self.reseat_min_fore_m = float(self.cfg['robot'].get('reseat_min_fore_m', 0.08))
+        self._reseat_active = False
         self.camera_params = None
         self.image_center_x_fallback = 0.0
         self.image_center_y_fallback = 0.0
@@ -1806,6 +1816,33 @@ class MobileController:
                 rospy.logerr("Missing tag info for move")
                 return False
 
+            # ---- re-seat (2026-09-09): reverse arrival -> forward hop ----
+            # A reverse arrival leaves the start tag on the REV column, ~0.16 m
+            # ahead of the lens. Before a FORWARD hop, drive that tag onto the
+            # FWD column exactly like any forward arrival (execute_pure_pursuit
+            # on the start tag with the normal steer_mode — aim included, the
+            # user wants no special case) and align on it, so the hop launches
+            # from the standard pose; _odom_distance_for_hop then reads the
+            # live fore ~0.
+            if ('backward' not in direction and self.reseat_forward
+                    and not self._is_temp_missing_tag(current_id)
+                    and current_id in self.detected_tags
+                    and float(self.detected_tags[current_id].get('x', 0.0)) >= self.reseat_min_fore_m):
+                fore = float(self.detected_tags[current_id]['x'])
+                rospy.loginfo("[Reseat] start tag %s is %.3f m ahead of the lens (reverse column): "
+                              "bringing it to the FWD column before the forward hop", current_id, fore)
+                self._reseat_active = True
+                try:
+                    ok = self.execute_pure_pursuit(target_id=current_id, direction='forward',
+                                                   total_distance=fore, start_id=None)
+                finally:
+                    self._reseat_active = False
+                if not ok:
+                    rospy.logerr("[Reseat] failed to bring tag %s to the FWD column", current_id)
+                    return False
+                if not self._align_on_tag(current_id, 'after re-seat'):
+                    return False
+
             dx = target_info['x'] - start_info['x']
             dy = target_info['y'] - start_info['y']
             total_distance = self._odom_distance_for_hop(
@@ -2677,6 +2714,7 @@ class MobileController:
                                'tag_age_s': round(float(tag.get('age_s', 0.0)), 3),
                                'latency_comp_px': round(float(tag.get('comp_px', 0.0)), 2),
                                'steer_mode': self.steer_mode,
+                               'reseat': bool(self._reseat_active),
                                'aim': ({k: (round(v, 3) if isinstance(v, float) else v)
                                         for k, v in self._aim.items()}
                                        if self._aim is not None else None),

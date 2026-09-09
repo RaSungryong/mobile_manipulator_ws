@@ -344,7 +344,15 @@ straight line, stops on the yaw-corrected column, and the stop align
 then lands the lens ON the tag instead of swinging it off by
 0.55·sin(yaw) — see the 2026-09-08 aim-and-drive Work Log entry;
 `state_feedback` and the smooth-path `tag_line_plan` stay selectable.
-**A pivot then finishes ON its exit tag**: `execute_pivot`
+**Since 2026-09-09 a forward hop that starts from a REVERSE arrival
+re-seats first** (`reseat_forward_from_reverse_column`): the start tag
+rests on the REV column ~0.16 m ahead of the lens, so before the hop
+the base drives that tag onto the FWD column with the very same arrival
+algorithm (aim, straight drive, column stop, align) and only then plans
+the hop — every forward hop launches from the standard pose and
+`_odom_distance_for_hop` reads the live fore ≈ 0. Skipped when the tag
+is already within `reseat_min_fore_m` (0.08) of the crosshair, before
+reverse hops, and for virtual tags. **A pivot then finishes ON its exit tag**: `execute_pivot`
 turns on odom only until the EXIT tag is in view, steers on the tag's
 edge angle from then on, drops to `pivot_tag_slow_max_angular` (0.05
 rad/s) once the predicted settled error is inside `pivot_tag_slow_deg`
@@ -1289,6 +1297,13 @@ per-tag `ID / offset (mm) / degree` block top-left, frame rectified to the
 level virtual camera when the correction is on. Then the measured camera
 yaw (−0.38°) was added to the correction as `ground_plane.front_cam.yaw_deg`
 (user request); not yet driven — `robot_camera_node` restart required.
+Same day, user rule: **a forward hop after a reverse arrival first
+re-seats the start tag from the REV column onto the FWD column with the
+normal arrival algorithm, then aligns, then hops** (`go_to_next_tag`
+move branch, `reseat_*` keys). The lost scratch suites were replaced by
+two repo-resident checks: `tools/check_ground_plane.py` (17) and
+`tools/check_nav_sequencing.py` (10: re-seat sequencing + plant run,
+first-hop rules, pivot). Not driven; `mobile_node` restart required.
 
 Also today, other sessions: the Keyence standoff rewrite (uncommitted in
 this checkout) and the calibration ref-tag re-pairing (uncommitted). A

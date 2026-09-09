@@ -259,6 +259,14 @@ robot:
   # (arm at home, lift, cable chain) overhangs the 0.70 m width toward
   # the plate, raise aim_body_half_width_m to the widest point.
   steer_mode: aim_and_drive
+  # Re-seat (2026-09-09, user rule): a reverse arrival leaves the tag on
+  # the REV column, ~0.16 m ahead of the lens. Before the next FORWARD hop
+  # the start tag is first driven onto the FWD column with the SAME
+  # arrival algorithm as any forward hop (aim_and_drive, no special case)
+  # and aligned there, so every forward hop launches from the standard pose.
+  # Applies only when the start tag is visible >= reseat_min_fore_m ahead.
+  reseat_forward_from_reverse_column: true
+  reseat_min_fore_m: 0.08
   aim_max_deg: 9.0
   aim_min_deg: 0.3               # smaller aims are skipped (< 1 mm over 0.18 m)
   aim_min_horizon_m: 0.08        # no aim when the tag first appears closer than this

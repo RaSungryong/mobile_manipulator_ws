@@ -53,6 +53,15 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    arrival, the pivot converging in one pass, no `LIMITED` unless the
    base was > ~20 mm toward the plate. Hop time is ~24 s (was 9–12);
    `plan_prepare_dist` 0.28 / `aim_drive_speed` 0.03 are the knobs.
+3b. **2026-09-09 additions, not yet driven** — restart `mobile_node`
+   AND `robot_camera_node`: (a) `ground_plane.front_cam.yaw_deg −0.38`
+   (camera yaw vs travel axis); (b) a forward hop after a reverse
+   arrival now re-seats the start tag onto the FWD column first (same
+   arrival algorithm, then align, then the hop) — watch for
+   `[Reseat] start tag N is 0.16 m ahead …` followed by an `[Aim]` on
+   that tag and a second `[Aim]` on the target; (c) the overlay is in mm.
+   `tools/check_nav_sequencing.py` and `tools/check_ground_plane.py` are
+   the offline regression checks (10 + 17).
 4. **Known and not yet fixed** (do not chase as new bugs): manual
    `drive_distance` 0.02 m executes ~11 mm and `pivot_angle` 5° ~3.7°
    (stop-latency lead over-compensates on tiny moves); offsets > ~20 mm
