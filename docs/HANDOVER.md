@@ -57,7 +57,9 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    AND `robot_camera_node`: (a) `ground_plane.front_cam.yaw_deg −0.38`
    (camera yaw vs travel axis); (b) a forward hop after a reverse
    arrival now re-seats the start tag onto the FWD column first (same
-   arrival algorithm, then align, then the hop) — watch for
+   arrival algorithm, then align, then the hop), and a command ENDING on
+   a reverse arrival re-seats before it returns (`reseat_at_command_end`:
+   calibration / scan arm work happens at the FWD column) — watch for
    `[Reseat] start tag N is 0.16 m ahead …` followed by an `[Aim]` on
    that tag and a second `[Aim]` on the target; (c) the overlay is in mm.
    `tools/check_nav_sequencing.py` and `tools/check_ground_plane.py` are

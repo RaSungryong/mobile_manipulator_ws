@@ -284,6 +284,36 @@ def main():
     check('E1 first hop: align(106) -> reseat -> align(106) -> pp(107) -> align(107)',
           ok and [x[:2] for x in calls] == [('align', 106), ('pp', 106), ('align', 106), ('pp', 107), ('align', 107)], str(calls))
 
+    # ---- G. a command ENDING on a reverse arrival re-seats before returning (arm work at the FWD column)
+    c, p = make(0.40 - CAM, 0.0, 0.0, {106: (0.40, 0.0), 105: (0.0, 0.0)})   # lens over 106, reverse to 105
+    c.map_mgr.edges[(106, 105)] = {'type': 'move', 'direction': 'backward'}
+    c.map_mgr.get_tag_info = lambda t: {'x': 0.40 if t == 106 else 0.0, 'y': 0.0, 'zone': 'A'}
+    c.map_mgr.path = [106, 105]; c.last_known_tag = 106
+    calls = []; spy(c, calls)
+    ok = c.move_to_tag(105)
+    for _ in range(20): Rate(20).sleep()
+    fore_after = c.detected_tags[105]['x'] if 105 in c.detected_tags else float('nan')
+    check('G1 reverse-ending command: align(106) -> pp(105 bwd) -> align -> reseat pp(105 fwd ~0.16) -> align, returns True',
+          ok and [x[:3] for x in calls] == [('align', 106), ('pp', 105, 'backward'), ('align', 105), ('pp', 105, 'forward'), ('align', 105)]
+          and abs(calls[3][3] - 0.16) < 0.02, str(calls))
+    check('G2 ... and the tag rests on the FWD column (crosshair) within 5 mm, lens over the tag',
+          abs(fore_after) < 0.005 and abs(p.lens()[0] - 0.0) < 0.005, f'fore {fore_after:+.4f} lens x {p.lens()[0]:+.4f}')
+    calls.clear()
+    c.map_mgr.edges[(105, 106)] = {'type': 'move', 'direction': 'forward'}
+    c.map_mgr.path = [105, 106]
+    ok = c.move_to_tag(106)
+    check('G3 the following forward command needs no launch re-seat', ok and [x[:2] for x in calls] == [('align', 105), ('pp', 106), ('align', 106)], str(calls))
+    # config off: the old behaviour (tag left on the REV column)
+    cfg = copy.deepcopy(CFG0); cfg['robot']['reseat_at_command_end'] = False
+    c, p = make(0.40 - CAM, 0.0, 0.0, {106: (0.40, 0.0), 105: (0.0, 0.0)}, cfg)
+    c.map_mgr.edges[(106, 105)] = {'type': 'move', 'direction': 'backward'}
+    c.map_mgr.get_tag_info = lambda t: {'x': 0.40 if t == 106 else 0.0, 'y': 0.0, 'zone': 'A'}
+    c.map_mgr.path = [106, 105]; c.last_known_tag = 106
+    calls = []; spy(c, calls)
+    ok = c.move_to_tag(105)
+    check('G4 reseat_at_command_end off: the command ends on the REV column', ok and [x[:2] for x in calls] == [('align', 106), ('pp', 105), ('align', 105)]
+          and abs(c.detected_tags[105]['x'] - 0.16) < 0.02, str(calls))
+
     # ---- F. pivot sequencing (from the lost t_pivot suite)
     c, p = make(0.0, 0.0, 0.0, {501: (CAM, 0.0)})
     p.tags[505] = (0.0, CAM, math.pi / 2)   # exit tag under the lens after a +90 turn, laid along the perpendicular lane

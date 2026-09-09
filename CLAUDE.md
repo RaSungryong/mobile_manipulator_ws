@@ -352,7 +352,12 @@ algorithm (aim, straight drive, column stop, align) and only then plans
 the hop — every forward hop launches from the standard pose and
 `_odom_distance_for_hop` reads the live fore ≈ 0. Skipped when the tag
 is already within `reseat_min_fore_m` (0.08) of the crosshair, before
-reverse hops, and for virtual tags. **A pivot then finishes ON its exit tag**: `execute_pivot`
+reverse hops, and for virtual tags. **And a command whose LAST hop
+arrived in reverse re-seats before `move_to_tag` returns**
+(`reseat_at_command_end`, user rule the same day: "후진 기준점 도착 →
+전진 전환 → 전진 기준점 도착 → 로봇팔"), so a TASK scan or a
+calibration entry does its arm work only at the FWD-column pose; the
+following forward command then finds nothing to re-seat. **A pivot then finishes ON its exit tag**: `execute_pivot`
 turns on odom only until the EXIT tag is in view, steers on the tag's
 edge angle from then on, drops to `pivot_tag_slow_max_angular` (0.05
 rad/s) once the predicted settled error is inside `pivot_tag_slow_deg`
@@ -1368,6 +1373,13 @@ move branch, `reseat_*` keys). The lost scratch suites were replaced by
 two repo-resident checks: `tools/check_ground_plane.py` (17) and
 `tools/check_nav_sequencing.py` (10: re-seat sequencing + plant run,
 first-hop rules, pivot). Not driven; `mobile_node` restart required.
+**Then (user, calibration order):** the re-seat also runs at the END of
+a command whose last hop arrived in reverse (`reseat_at_command_end`),
+so the arm — calibration view move or scan — only ever works with the
+tag on the FWD column; `check_nav_sequencing.py` → 14 (a reverse-ending
+`move_to_tag` returns after `align → pp(rev) → align → pp(fwd 0.16) →
+align` with the tag on the crosshair; the next forward command has
+nothing to re-seat; key off restores the REV-column finish).
 
 Also today, other sessions: the Keyence standoff rewrite (uncommitted in
 this checkout) and the calibration ref-tag re-pairing (uncommitted). A

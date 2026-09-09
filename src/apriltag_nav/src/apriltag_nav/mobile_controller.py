@@ -167,6 +167,9 @@ class MobileController:
         # start tag is visible at least reseat_min_fore_m ahead of the lens.
         self.reseat_forward = bool(self.cfg['robot'].get('reseat_forward_from_reverse_column', True))
         self.reseat_min_fore_m = float(self.cfg['robot'].get('reseat_min_fore_m', 0.08))
+        # ... and at the END of a command whose last hop arrived in reverse
+        # (user rule 2026-09-09): the arm works only at the FWD-column pose.
+        self.reseat_at_command_end = bool(self.cfg['robot'].get('reseat_at_command_end', True))
         self._reseat_active = False
         self.camera_params = None
         self.image_center_x_fallback = 0.0
@@ -1824,23 +1827,8 @@ class MobileController:
             # user wants no special case) and align on it, so the hop launches
             # from the standard pose; _odom_distance_for_hop then reads the
             # live fore ~0.
-            if ('backward' not in direction and self.reseat_forward
-                    and not self._is_temp_missing_tag(current_id)
-                    and current_id in self.detected_tags
-                    and float(self.detected_tags[current_id].get('x', 0.0)) >= self.reseat_min_fore_m):
-                fore = float(self.detected_tags[current_id]['x'])
-                rospy.loginfo("[Reseat] start tag %s is %.3f m ahead of the lens (reverse column): "
-                              "bringing it to the FWD column before the forward hop", current_id, fore)
-                self._reseat_active = True
-                try:
-                    ok = self.execute_pure_pursuit(target_id=current_id, direction='forward',
-                                                   total_distance=fore, start_id=None)
-                finally:
-                    self._reseat_active = False
-                if not ok:
-                    rospy.logerr("[Reseat] failed to bring tag %s to the FWD column", current_id)
-                    return False
-                if not self._align_on_tag(current_id, 'after re-seat'):
+            if 'backward' not in direction and self.reseat_forward:
+                if not self._reseat_to_forward_column(current_id, 'before the forward hop'):
                     return False
 
             dx = target_info['x'] - start_info['x']
@@ -1867,6 +1855,33 @@ class MobileController:
         else:
             rospy.logerr(f"Unknown edge type: {action_type}")
             return False
+
+    def _reseat_needed(self, tag_id):
+        return (not self._is_temp_missing_tag(tag_id)
+                and tag_id in self.detected_tags
+                and float(self.detected_tags[tag_id].get('x', 0.0)) >= self.reseat_min_fore_m)
+
+    def _reseat_to_forward_column(self, tag_id, why):
+        """If `tag_id` rests ahead of the lens (a reverse arrival leaves it
+        on the REV column, ~0.16 m), drive it onto the FWD column exactly
+        like any forward arrival (execute_pure_pursuit with the normal
+        steer_mode — aim included, no special case) and align on it. True
+        when nothing had to be done or it succeeded."""
+        if not self._reseat_needed(tag_id):
+            return True
+        fore = float(self.detected_tags[tag_id]['x'])
+        rospy.loginfo("[Reseat] tag %s is %.3f m ahead of the lens (reverse column): "
+                      "bringing it to the FWD column %s", tag_id, fore, why)
+        self._reseat_active = True
+        try:
+            ok = self.execute_pure_pursuit(target_id=tag_id, direction='forward',
+                                           total_distance=fore, start_id=None)
+        finally:
+            self._reseat_active = False
+        if not ok:
+            rospy.logerr("[Reseat] failed to bring tag %s to the FWD column", tag_id)
+            return False
+        return self._align_on_tag(tag_id, 'after re-seat')
 
     def _align_after_arrival(self, target_id, start_id=None):
         """The one tail EVERY hop ends with: base already stopped, now
@@ -1957,6 +1972,17 @@ class MobileController:
 
             current_id = next_id
             self.last_known_tag = next_id
+
+        # A command that ENDS on a reverse arrival re-seats before it returns
+        # (user rule 2026-09-09): the caller — a TASK scan, a calibration
+        # entry — does its arm work only once the tag is on the FWD column,
+        # i.e. at the standard stop pose. Same re-seat as the launch one;
+        # 500-series tags already stop on the crosshair, so nothing happens
+        # there, and the next forward hop then finds nothing to re-seat.
+        if self.reseat_at_command_end and not self._reseat_to_forward_column(
+                target_id, 'at the end of the command'):
+            rospy.logerr(f"[Robot] move_to_tag: re-seat on {target_id} failed")
+            return False
 
         rospy.loginfo(f"[Robot] move_to_tag success → {target_id}")
         self.publish_robot_pose(target_id)
