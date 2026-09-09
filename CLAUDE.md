@@ -891,8 +891,10 @@ normally, go back to the charger too** (`return_after_task`); after
 docking `/crevis/charging true` MUST be sent — the charger only starts
 on that explicit command (user-confirmed) — and the BMS must show
 current within `charge_confirm_s`. Lamp: `status_colors.charging`
-(red) while the BMS reports current into the pack, `charged` (green)
-once full and undocked; task states keep their colours.
+(**yellow**) while the BMS reports current into the pack, `charged`
+(**white**) once full, undocked and waiting for a command; plain idle
+stays green and error red, so the four rest states are distinguishable
+(user's colour choice, 2026-09-09). Task states keep their colours.
 
 Mechanics: `_charge_tick()` runs every main-loop tick (`_tick()`, the
 old `run()` body) and only QUEUES two internal tasks — `battery_return`
@@ -1331,8 +1333,9 @@ standing rule up into the sections above instead of leaving it buried here.
 
 User request over `/bms/state`: stop charging at 85 % and come forward
 a little, at 20 % (first said 30, changed the same day) stop work and go
-back to the charger, red lamp while
-charging / green when charged; then (same day) also return to the
+back to the charger, a distinct lamp colour while
+charging and when charged (first red / green, then yellow / white);
+then (same day) also return to the
 charger after a task completes, and — the operating fact that shaped
 the design — `rostopic pub /crevis/charging true/false` is the charge
 start/stop command and the charger only starts on an explicit true

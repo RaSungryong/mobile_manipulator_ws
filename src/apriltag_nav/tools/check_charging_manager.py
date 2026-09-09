@@ -204,14 +204,14 @@ def main():
     # ---- 1. docked and charging at 57 %: lamp red, nothing queued
     ex, b = make(57.0); b.relay = True
     ticks(ex, 15)
-    check('1 charging at 57%: phase charging, lamp red, no task', ex._charge_phase == 'charging' and b.lamp and b.lamp[-1] == 'red'
+    check('1 charging at 57%: phase charging, lamp yellow, no task', ex._charge_phase == 'charging' and b.lamp and b.lamp[-1] == 'yellow'
           and ex.mobile.calls == [], f'phase {ex._charge_phase} lamp {b.lamp[-1:]} calls {ex.mobile.calls}')
 
     # ---- 2. reaches 85 %: charging false, forward 0.10, phase full, lamp green
     b.pct = 85.2
     ticks(ex, 20)
-    check('2 85%: /crevis/charging false, forward 0.10 m, phase full, lamp green',
-          ex._charge_phase == 'full' and b.relay is False and ('drive', 0.1) in ex.mobile.calls and b.lamp[-1] == 'green',
+    check('2 85%: /crevis/charging false, forward 0.10 m, phase full, lamp white',
+          ex._charge_phase == 'full' and b.relay is False and ('drive', 0.1) in ex.mobile.calls and b.lamp[-1] == 'white',
           f'phase {ex._charge_phase} relay {b.relay} calls {ex.mobile.calls} lamp {b.lamp[-1:]}')
     n_drives = ex.mobile.calls.count(('drive', 0.1))
     ticks(ex, 30)
@@ -242,7 +242,7 @@ def main():
     check('4b return task: lift home -> goto 500 -> /crevis/charging true -> confirmed charging',
           ex.lift.calls == ['home'] and ('goto', 500) in ex.mobile.calls and b.relay is True and ex._charge_phase == 'charging',
           f'lift {ex.lift.calls} mobile {ex.mobile.calls} relay {b.relay} phase {ex._charge_phase}')
-    check('4c lamp red while charging', b.lamp[-1] == 'red', str(b.lamp[-2:]))
+    check('4c lamp yellow while charging', b.lamp[-1] == 'yellow', str(b.lamp[-2:]))
 
     # ---- 5. user task completes normally at 60 %: return after task
     ex, b = make(60.0, docked=False); ex._charge_phase = 'full'

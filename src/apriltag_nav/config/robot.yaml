@@ -675,8 +675,9 @@ navifra:
   # user task completes normally (and nothing else is queued) return to
   # the charger as well (return_after_task — this deliberately overrides
   # the 2026-08-10 "tasks never drive home" rule, on the user's decision).
-  # The lamp shows status_colors.charging while the BMS reports current
-  # into the pack and status_colors.charged once full and undocked.
+  # The lamp shows status_colors.charging (yellow) while the BMS reports
+  # current into the pack and status_colors.charged (white) once full and
+  # undocked, waiting for a command; plain idle stays green.
   # "Charging" is judged from /bms/state (current > charge_current_min_a
   # or status CHARGING), not from the relay feedback topic. The two
   # internal tasks (battery_return / battery_undock) run through the normal
@@ -709,8 +710,8 @@ navifra:
     moving:   "blue"
     scanning: "cyan"
     error:    "red"
-    charging: "red"       # IDLE and the BMS reports current into the pack
-    charged:  "green"     # IDLE after a full charge (undocked, waiting)
+    charging: "yellow"    # IDLE and the BMS reports current into the pack (user: 노랑)
+    charged:  "white"     # IDLE after a full charge, undocked, waiting for a command (user: 흰색)
 
   # --- Lift ------------------------------------------------------------
   # Position is INCREMENTAL (encoder) and lost on power cycle, so homing is
