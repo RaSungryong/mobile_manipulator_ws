@@ -307,7 +307,6 @@ class _CameraTagWorker:
             out.camera_name = self.name
             out.image_height, out.image_width = cv_img.shape[:2]
 
-            raw_dets = []          # what the frame actually shows, for the overlay
             for det in detections:
                 d = AprilTagDetection()
                 d.id = int(det.tag_id)
@@ -318,7 +317,6 @@ class _CameraTagWorker:
                 d.pose_z = float(det.pose_t[2][0])
                 d.roll, d.pitch, d.yaw, d.tilt_from_normal = _orientation(det.pose_R)
                 d.corners = np.asarray(det.corners, dtype=float).ravel().tolist()
-                raw_dets.append(d)
                 if self.ground is not None:
                     # Re-image through a level, distortion-free virtual
                     # camera: corners / centre in its pixels, pose = the
@@ -342,52 +340,73 @@ class _CameraTagWorker:
             # Drawing a 1920x1080 overlay at 30 Hz is not free, so it happens
             # only while something is actually looking (RViz, rqt, a rosbag).
             if self.overlay_pub.get_num_connections() > 0:
-                self._publish_overlay(msg, cv_img, raw_dets)
+                self._publish_overlay(msg, cv_img, out.detections)
 
         except Exception as e:
             rospy.logerr(f"[RobotCamera] {self.name} processing error: {e}")
 
     def _publish_overlay(self, src_msg, cv_img, detections):
+        # With the ground-plane correction on, the overlay is drawn on the
+        # frame RECTIFIED to the level virtual camera, so the crosshair
+        # (= the lens nadir), the stop columns, the boxes and the mm
+        # numbers all refer to the same view — the one the detections and
+        # mobile_controller use. Without it, the raw frame as before.
+        frame = cv_img if self.ground is None else self.ground.rectify(cv_img)
         out_msg = self.bridge.cv2_to_imgmsg(
-            draw_overlay(cv_img, detections, self.name, self.camera_params,
-                         self.stop_columns),
+            draw_overlay(frame, detections, self.name, self.camera_params,
+                         self.stop_columns,
+                         ground_height=(self.ground.h if self.ground is not None else None)),
             "bgr8")
         out_msg.header = src_msg.header
         self.overlay_pub.publish(out_msg)
 
 
-def draw_overlay(cv_img, detections, name, camera_params, stop_columns=None):
-    """Annotated copy of the frame: crosshair, tag IDs, offsets, yaw, and
-    (navigation camera only) the stop target columns.
+def _edge_angle_deg(corners):
+    """In-plane angle of the corner0->corner1 edge vs the horizontal
+    centre line, 0 = square to the lane — the same number
+    mobile_controller aligns on (tag_edge_angle_deg)."""
+    c = np.asarray(corners, dtype=float).reshape(4, 2)
+    a = np.degrees(np.arctan2(c[1][1] - c[0][1], c[1][0] - c[0][0])) - 90.0
+    return (a + 90.0) % 180.0 - 90.0
 
-    `stop_columns` is {'FWD': px, 'REV': px, 'REV_skip': 'lo-hi, ...'} —
-    offsets (and, optionally, the target-tag ranges that keep the forward
-    column in reverse, appended to the REV label) from the CALIBRATED
-    cx (camera_params[2]), exactly as mobile_controller computes
-    `target_x = cx + offset`, so the drawn line is the column the stop test
-    uses and not the frame's geometric centre (they differ by ~2 px on
-    front_cam). Each is a vertical line with a label at the top; when both
-    offsets are equal one line carries both labels.
+
+def draw_overlay(cv_img, detections, name, camera_params, stop_columns=None,
+                 ground_height=None):
+    """Annotated copy of the frame (2026-09-09 layout, user request):
+
+    * crosshair on the calibrated principal point — with the ground-plane
+      correction this is the lens NADIR of the rectified frame the caller
+      passes in;
+    * the FWD / REV stop columns (navigation camera only), dashed,
+      labelled in mm from the crosshair — `offset_px * z / fx` with z =
+      `ground_height` (the calibrated lens height) or 0.30 m;
+    * per tag: marker, line from the crosshair, and the ID only;
+    * top-left, one block per tag, one line per kind:
+          ID 118
+          offset: (+5.3 mm, -8.2 mm)   x = along the horizontal centre
+                                        line (+ = image right = forward),
+                                        y = down (+ = robot right), from the
+                                        crosshair — pose_x / pose_y in mm
+          degree: +0.16                 corner0->corner1 edge vs the
+                                        horizontal centre line, 0 = square
+    No pixel numbers anywhere. `stop_columns` is {'FWD': px, 'REV': px,
+    'REV_skip': 'lo-hi, ...'} from the calibrated cx, exactly as
+    mobile_controller computes `target_x = cx + offset`.
 
     Kept free of ROS so it can be rendered and checked without a camera.
     """
     img = cv_img.copy()
     h, w = img.shape[:2]
     fx, fy = camera_params[0], camera_params[1]
-    # The crosshair, the stop columns and every offset printed below are
-    # measured from the CALIBRATED principal point (CameraInfo cx, cy) —
-    # the same reference mobile_controller stops and records against — not
-    # the frame's geometric centre (they differ by ~2 px on front_cam,
-    # which made a tag resting exactly on the REV line read "off +398").
-    # Falls back to w/2, h/2 only when no CameraInfo has arrived.
     cx_cal = (camera_params[2] if len(camera_params) > 2
               and camera_params[2] else w / 2.0)
     cy_cal = (camera_params[3] if len(camera_params) > 3
               and camera_params[3] else h / 2.0)
     cx_img, cy_img = int(round(cx_cal)), int(round(cy_cal))
+    z_ref = float(ground_height) if ground_height else 0.30
 
-    # Crosshair = the calibrated optical axis. Everything below is measured
-    # against it, so it is drawn even with no tag in view.
+    # Crosshair = the calibrated optical axis / nadir. Everything below is
+    # measured against it, so it is drawn even with no tag in view.
     cv2.line(img, (cx_img, 0), (cx_img, h), _CROSSHAIR, 1)
     cv2.line(img, (0, cy_img), (w, cy_img), _CROSSHAIR, 1)
 
@@ -403,49 +422,43 @@ def draw_overlay(cv_img, detections, name, camera_params, stop_columns=None):
         # label that has to sit LEFT of its column cannot overprint FWD's.
         for row, (col, items) in enumerate(sorted(by_col.items())):
             colour = _STOP_REV if any(l == 'REV' for l, _ in items) else _STOP_FWD
-            # Dashed so it reads as a target, not as a second crosshair.
             for y0 in range(0, h, 24):
                 cv2.line(img, (col, y0), (col, min(h, y0 + 12)), colour, 2)
-            text = " / ".join(f"{l} stop {o:+.0f}px" for l, o in items)
+            text = " / ".join(f"{l} stop {o * z_ref / fx * 1000.0:+.0f} mm"
+                              for l, o in items)
             if skip_note and any(l == 'REV' for l, _ in items):
-                # e.g. "REV stop +400px (tags 500-599: crosshair)" — those
-                # targets stop on the crosshair in BOTH directions
-                text += f" (tags {skip_note}: crosshair)"
+                text += f" (tags {skip_note}: FWD)"
             (tw, _), _ = cv2.getTextSize(text, _FONT, 0.6, 2)
             tx = col + 8 if col + 8 + tw <= w - 4 else max(4, col - 8 - tw)
             cv2.putText(img, text, (tx, h - 14 - row * 24), _FONT, 0.6,
                         colour, 2)
 
-    cv2.putText(img, f"{name}  {w}x{h}", (10, 26), _FONT, 0.7, _TEXT, 2)
-
-    for i, d in enumerate(detections):
-        tx, ty = int(d.center_x), int(d.center_y)
-        # Offset in pixels, and the same offset as a bearing angle — px alone
-        # means nothing across cameras with different focal lengths.
-        dx, dy = d.center_x - cx_cal, d.center_y - cy_cal
-        bear_x = np.degrees(np.arctan2(dx, fx))
-        bear_y = np.degrees(np.arctan2(dy, fy))
-
+    y_text = 34
+    for d in detections:
+        tx, ty = int(round(d.center_x)), int(round(d.center_y))
         cv2.line(img, (cx_img, cy_img), (tx, ty), _MARK, 1)
         cv2.circle(img, (tx, ty), 6, _MARK, -1)
+        cv2.putText(img, f"ID {d.id}", (tx + 14, ty - 12), _FONT, 1.2, _TEXT, 3)
 
-        # ID is what you look for first, so it gets the big type; the rest is
-        # detail and stays small underneath it.
-        cv2.putText(img, f"ID {d.id}", (tx + 14, ty - 24), _FONT, 1.4, _TEXT, 3)
-        for j, text in enumerate((
-                f"yaw {d.yaw:+.1f}deg",
-                f"off {dx:+.0f},{dy:+.0f}px ({bear_x:+.1f},{bear_y:+.1f}deg)",
-                f"dist {d.pose_z:.3f}m")):
-            cv2.putText(img, text, (tx + 14, ty + 4 + j * 20),
-                        _FONT, 0.55, _TEXT, 1)
-
-        # Same numbers stacked top-left, readable when tags sit at the frame
-        # edge and their per-tag labels run off screen.
-        cv2.putText(img,
-                    f"[{d.id}] yaw {d.yaw:+6.1f}deg  "
-                    f"bearing {bear_x:+.1f},{bear_y:+.1f}deg  "
-                    f"{d.pose_z:.2f}m",
-                    (10, 52 + i * 20), _FONT, 0.5, _TEXT, 1)
+        # mm from the crosshair: the detection's floor position (pose_x
+        # fore / pose_y right, already nadir-relative with the correction;
+        # otherwise pixel offset x depth / f).
+        if ground_height:
+            off_x_mm, off_y_mm = d.pose_x * 1000.0, d.pose_y * 1000.0
+        else:
+            z = d.pose_z if d.pose_z else z_ref
+            off_x_mm = (d.center_x - cx_cal) * z / fx * 1000.0
+            off_y_mm = (d.center_y - cy_cal) * z / fy * 1000.0
+        deg = _edge_angle_deg(d.corners) if len(d.corners) == 8 else float('nan')
+        if abs(deg) < 0.005:
+            deg = 0.0          # no '-0.00'
+        for line in (f"ID {d.id}",
+                     f"offset: ({off_x_mm:+.1f} mm, {off_y_mm:+.1f} mm)",
+                     f"degree: {deg:+.2f}"):
+            cv2.putText(img, line, (10, y_text), _FONT, 0.8, (0, 0, 0), 4)
+            cv2.putText(img, line, (10, y_text), _FONT, 0.8, _TEXT, 2)
+            y_text += 30
+        y_text += 12
 
     return img
 

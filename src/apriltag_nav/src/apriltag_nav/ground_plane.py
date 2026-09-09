@@ -115,6 +115,31 @@ class GroundPlane(object):
             xn, yn = xd, yd
         return np.column_stack([self.fx * xn + self.cx, self.fy * yn + self.cy])
 
+    # ---- whole-frame rectification (overlay only) ----
+    def rectify_maps(self, width, height):
+        """cv2.remap maps that turn a raw frame into the level virtual
+        camera's view (same K, nadir at (cx, cy)). Built once per size."""
+        cache = getattr(self, '_maps', None)
+        if cache is not None and cache[0] == (width, height):
+            return cache[1], cache[2]
+        u, v = np.meshgrid(np.arange(width, dtype=float), np.arange(height, dtype=float))
+        ground = np.column_stack([((u - self.cx) * self.h / self.fx).ravel(),
+                                  ((v - self.cy) * self.h / self.fy).ravel()])
+        raw = self.project(ground)
+        mx = raw[:, 0].reshape(height, width).astype(np.float32)
+        my = raw[:, 1].reshape(height, width).astype(np.float32)
+        self._maps = ((width, height), mx, my)
+        return mx, my
+
+    def rectify(self, img):
+        """The raw frame re-imaged by the level virtual camera (what the
+        corrected detections' pixels refer to)."""
+        if cv2 is None:
+            return img
+        h, w = img.shape[:2]
+        mx, my = self.rectify_maps(w, h)
+        return cv2.remap(img, mx, my, cv2.INTER_LINEAR)
+
     def axis_offset_m(self):
         """Where the optical axis meets the floor, relative to the nadir (m)."""
         return self.to_ground(np.array([[self.cx, self.cy]]))[0]

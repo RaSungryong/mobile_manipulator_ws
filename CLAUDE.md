@@ -542,10 +542,20 @@ every stop moved by that constant relative to pre-2026-09-08 records.
 
 ### Reading tag ID and orientation off the image
 
-`robot_camera_node` publishes `/<cam>/tag_overlay` — the frame with an amber
-crosshair on the optical axis, and per tag: its ID, offset from the crosshair
-in px **and degrees of bearing**, roll/pitch/yaw, tilt and range. Pixels alone
-are not comparable between cameras of different focal length, hence both.
+`robot_camera_node` publishes `/<cam>/tag_overlay`. **Layout since
+2026-09-09 (user request): no pixel numbers anywhere.** An amber crosshair
+on the calibrated principal point; on front_cam the dashed FWD / REV stop
+columns labelled in **mm** from the crosshair; per tag a marker, a leader
+line and the ID; and top-left, one block per tag, one line per kind —
+`ID n` / `offset: (x mm, y mm)` (x along the horizontal centre line,
++ = image right = forward; y down, + = robot right; these are
+`pose_x / pose_y`) / `degree: ±d.dd` (the corner0→corner1 edge vs the
+horizontal centre line, 0 = square — the number the align drives to 0).
+**With the ground-plane correction on, the overlay frame is the raw image
+RECTIFIED to the level virtual camera** (`GroundPlane.rectify`, ~7 ms,
+only while subscribed), so the crosshair is the lens nadir and the
+boxes, columns and mm numbers all refer to the same view the controller
+uses; a tag resting on the REV line reads `offset: (+161 mm, …)`.
 
 Rendered only while something subscribes, so it costs nothing when no viewer
 is open. The prepared RViz layout shows front_cam's overlay first.
@@ -574,8 +584,8 @@ plane (verified: 45° in-plane rotation still gives tilt 0).
 
 **Since 2026-09-04 the operator UI is the camera viewer.** Its left pane
 shows the Basler plus all three tag cameras; each tag camera defaults to
-`robot_camera_node`'s `/<cam>/tag_overlay` (crosshair, tag ID, px + bearing
-offset, rpy) with a `tags` box to fall back to the raw stream, an `on` box
+`robot_camera_node`'s `/<cam>/tag_overlay` (crosshair, stop columns in mm,
+per-tag ID / offset (mm) / degree) with a `tags` box to fall back to the raw stream, an `on` box
 that calls `/robot_camera/<cam>/set_enabled`, and a `tags: 105, 106` readout
 from `/<cam>/tag_detections`. A single click on any thumbnail makes it the
 main (large) view; double-click still maximises. The launch therefore no
@@ -1259,7 +1269,12 @@ standing sections named here:
 | `4388538` | pivot finishes ON its exit tag (odom → tag error → slow inside 5° → delay-led stop) | yes, 19 hops |
 | `b310326` | the FIRST hop of every command aligns on its start tag first (move, pivot, dock alike) | yes |
 | `5401ace` | forward/reverse arrivals: `steer_mode: aim_and_drive` — stop at first sight, aim the base centre at the stop pose (plate-wall cap), drive straight, stop align lands the lens on the tag | yes — aims converged, but ±10 mm lateral bias → next row |
-| `f738a10` | front_cam is tilted 1.3° (roll +1.228, pitch −0.504, lens 302 mm): `robot_camera_node` now re-images detections through a level virtual camera; lever confirmed 0.552 m | **no — restart `robot_camera_node` and re-drive** (HANDOVER §2-0) |
+| `f738a10` | front_cam is tilted 1.3° (roll +1.228, pitch −0.504, lens 302 mm): `robot_camera_node` now re-images detections through a level virtual camera; lever confirmed 0.552 m | **driven 2026-09-09: user reports the error "많이 줄었다"** — records not yet analysed here |
+
+**2026-09-09:** overlay relaid out on the user's request (see *Reading tag
+ID and orientation off the image*): pixel text gone, stop columns in mm,
+per-tag `ID / offset (mm) / degree` block top-left, frame rectified to the
+level virtual camera when the correction is on.
 
 Also today, other sessions: the Keyence standoff rewrite (uncommitted in
 this checkout) and the calibration ref-tag re-pairing (uncommitted). A
