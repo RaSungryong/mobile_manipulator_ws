@@ -79,15 +79,18 @@ debug path, not the way to bring the stack up.
 ## Task Commands
 
 ```
-TASK <name>                # per-line: scan_joints_line{1,2}, scan_grid_line{1,2}
-                           # merged: scan_full_pose  → *_ra_map.csv
-                           # other: go_home
-                           # (scan_joints_line1_new / move_route_A are commented
-                           #  out in task_manager.py TASK_DEFS — not available)
-                           # ⚠️ scan_full_joints does NOT register since
-                           #    2026-08-24 — line1 is at lift 300 mm and line2
-                           #    at 150, and it concatenates the two. See the
-                           #    `lift_height` section.
+TASK <name>                # joint (replays the RRT-planned path):
+                           #   scan_rrt_standoff{010,030,050}
+                           # pose  (IK from the world points):
+                           #   scan_grid_standoff{010,030,050}
+                           # other: go_home            → *_ra_map.csv
+                           #
+                           # The three standoffs are SEPARATE tasks because
+                           # the standoff changes which tag each work point is
+                           # assigned to, not just the offset.
+                           # 🛑 target_line 2 (groups 118/119/120) is not
+                           #    trustworthy yet — see the scan-CSV section.
+                           # (move_route_A is commented out in TASK_DEFS.)
 GOTO <tag_id>              # Navigate to AprilTag
                            # Every TASK / GOTO gets exactly ONE camera-centre-vs-tag
                            # record: ~/.ros/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
@@ -98,63 +101,61 @@ STOP / STATE               # Emergency stop / query state
 EXEC <code> / EVAL <expr>  # Debug execution
 ```
 
-`scan_joints_line1` is the **105 / 106 scan** — `optimized_joints_line1.csv`
-carries exactly those two `group_id`s (169 + 159 points), so it registers as
-two steps and the arm scans at tag 105 then tag 106. Rows are sorted by
-`(group_id, point_id)`, so 105 always runs first even though the CSV lists 106
-first; from `START_TAG` 500 that means the robot **drives past 106 to reach
-105 and then backtracks one tag**. Costs one corridor hop, nothing else. (Still
-true in the new cell: zone B is entered at its north end and the IDs descend, so
-`500→105` is `[500, 501, 505, 112 … 106, 105]`. Zone C ascends, so
-`scan_joints_line2` has no backtrack.)
+Each task registers one step per `group_id` in ascending order, and the robot
+drives to that tag before scanning its points. `scan_rrt_standoff010` is
+`[104, 105, 106, 107, 118, 119]`; 030 and 050 differ (`…107, 119, 120` and
+`…106, 119, 120`) because the standoff changes the assignment. All of them
+route from `START_TAG` 500.
 
-The two joint-mode scans no longer set the same lift height — **line1 is
-300 mm, line2 is 150 mm** (see the `lift_height` column below), which is why
-`scan_full_joints` is currently unregistered. The pose-mode `scan_grid_*` /
-`scan_full_pose` deliberately set none — `arm_base_z` is a constant, so a
-raised lift would offset every pose IK result.
+`lift_mm` is 0 in every one of these files, so the lift is commanded to its
+origin — which is where `arm_base_z` is measured, and what pose-mode IK
+assumes unless the live height says otherwise.
 
-### 🛑 EVERY scan CSV is invalid — the cell was replaced 2026-08-21
+### The RRT dialect: a path, not a point list
 
-**Do not trust the output of any scan task.** `map.yaml` was replaced with the
-new cell's map (see the design record in the parent directory's CLAUDE.md).
-This supersedes the older "joint-mode scans are 100 mm off" warning: the error
-is no longer 100 mm, it is *the wrong end of a different room*.
+The `rrt_final_path_*` files are **planned paths**. About 30 % of their rows
+are `transition` / `home` waypoints: the arm **drives through them** — that is
+the collision-free route, and skipping them would send it straight between
+work points instead — but does not settle, run the Keyence standoff loop,
+capture, or write a result row there. (Keyence especially: a transition pose
+is nowhere near the surface, so the loop would chase a meaningless reading.)
+`is_task_waypoint` marks the difference; `task_manager` turns it into a `scan`
+flag on the point, `arm_controller` acts on it, and `ScanResultWriter.begin`
+skips it so the Ra map has no permanently-empty rows.
 
-**Every `group_id` still resolves, which is exactly what makes it dangerous.**
-The zone letter is preserved for all of them, so the robot faces the right way
-and nothing errors — it just drives somewhere else:
+Three columns differ from the original dialect, all handled in
+`task_manager`'s module-level helpers:
 
-| group_id | old cell | new cell |
+| | RRT dialect | original |
 |---|---|---|
-| 105 / 106 (line1, zone B) | (−0.40, 2.45) / (−0.40, 2.85) | (−1.71, 0.15) / (−1.71, 0.55) |
-| 117 / 118 (line2, zone C) | (2.80, 2.00) / (2.80, 1.59) | (1.71, 0.25) / (1.71, −0.15) |
-| 129 / 130 (line3, zone D) | (3.47, 2.45) / (3.47, 2.85) | (2.18, −0.65) / (2.18, −0.25) |
+| work-point id | `source_point_id` (`point_id` is the path index) | `point_id` |
+| lift height | `lift_mm` | `lift_height` |
+| integer cells | may be `0.000000000000000000e+00` | plain ints |
 
-On top of the move, the **joint angles themselves were solved for the old
-cell's arm-over-plate geometry**, so joint mode cannot be rescued by any
-transform — those CSVs have to be re-solved. Pose mode is recoverable in
-principle (`arm_transform` follows `/robot_pose`) but its grid CSVs still
-describe the old workpiece position.
+⚠️ **The pairing key is `source_point_id`.** Each joint file pairs with the
+`assigned_workpoints_*` file of the SAME standoff — for world (x, y, z) in
+joint mode, for the IK seed in pose mode. Pairing on `point_id` instead
+matches only 797 of 1035 rows and silently drops the rest. Note the pose file
+has no `source_point_id` at all: there, `point_id` IS the work-point id.
 
-🛑 **And the lift cannot make up the difference — the arithmetic forecloses
-it.** Those angles assume an arm base **373 mm higher** than today's 0.652
-(they were solved on the retired base), while the whole lift stroke is only
-**343.35 mm**. So even at `soft_max_counts` the arm base reaches 0.995 m and
-is still **30 mm short** of the height they assume; at line1's 300 mm it is
-73 mm short, and at line2's 150 mm, 223 mm short. No `lift_height` value
-exists that makes an old joint CSV correct. Stop looking for one.
+### 🛑 target_line 2 is not trustworthy yet
 
-⚠️ **`_exec_joint` (`arm_controller.py:494`) is a bare `MoveJ(joints_deg)`** —
-no reachability check, no collision check. The Keyence standoff loop runs
-*after* the move completes, so it cannot intervene. A joint config whose TCP
-was tuned to sit just above the old plate will be driven straight down toward
-the new one. **This is a collision path, not a bad-data path** — do not run
-`scan_joints_line*` on the new cell to "see what happens".
+Both target lines are registered, but line 2's work points (groups
+**118 / 119 / 120**) sit **3.7–4.6 m** from the arm base of the zone-C tags
+they are assigned to — they are in zone B's region. Line 1 (104–107) measures
+0.6–2.0 m, matching the known-good older files. **Run line 1 first.** A line-2
+group fails IK in pose mode (safe); in joint mode it drives a valid planned
+trajectory to the wrong place — no collision, but the data is meaningless.
+Needs the generator's author.
 
-⚠️ `grid_path_line1_-5.csv` / `grid_path_line2_-5.csv` use `group_id` **4 and
-5**, which were never valid in *either* map. Pre-existing, not caused by the
-swap.
+⚠️ **The pre-cell-swap CSVs were deleted 2026-09-11** —
+`optimized_joints_line{1,2,3}*`, `grid_path_line{1,2}*` and the
+`scan_joints_line*` / `scan_grid_line*` / `scan_full_*` tasks that used them.
+They were solved for the retired base (an arm base 373 mm higher than today's
+0.652, a drop the whole 343.35 mm lift stroke cannot cover) and for the old
+cell's geometry, and `_exec_joint` is a bare `MoveJ` with no reachability or
+collision check — running them was a collision path, not merely a bad-data
+path. git has them.
 
 Two facts from the previous warning that are still load-bearing:
 
@@ -758,11 +759,11 @@ there are three of them and only one is in this workspace.
 A scan CSV may carry a `lift_height` column in **mm**. `task_executor` then
 raises the lift to it once and holds it for the whole task.
 
-**`optimized_joints_line1.csv` carries 300 mm** (6029 counts, ~24.2 s — set
-2026-08-24) and **`optimized_joints_line2.csv` carries 150 mm** (3014 counts,
-~12.1 s), on the measured 0.04976077 mm/count scale. So the arm base scans at
-652 + 300 = **952 mm** for line1 and 652 + 150 = **802 mm** for line2. The grid
-CSVs do not carry the column, so every pose-mode task is unchanged.
+**Every current scan CSV carries 0 mm** (the 2026-09-11 RRT set spells the
+column `lift_mm`; `task_manager` aliases it), so the lift is commanded to its
+origin — which is where `arm_base_z` is measured. Scale is 0.04976077 mm/count,
+so 300 mm would be 6029 counts (~24.2 s) and 150 mm 3014 counts (~12.1 s), the
+values the retired line1 / line2 CSVs used.
 
 ⚠️ **The ceiling is 343.35 mm** (`soft_max_counts` 6900 × `mm_per_count`), and
 overshooting it does not clamp-and-continue — it **fails the task**.
@@ -779,14 +780,13 @@ than every run before 2026-08-14. That is the scale being fixed, not a
 regression, but the joint angles in those CSVs were solved at one base height:
 if a scan starts fouling or missing standoff, this is the 3.2 mm to remember.
 
-⚠️ **Both line CSVs have to agree, and as of 2026-08-24 they do not.**
-`scan_full_joints` concatenates them and `_extract_lift_height` refuses both a
-partly-filled column and one whose values disagree, so it **unregisters the
-task** rather than degrading gracefully. With line1 at 300 and line2 at 150 it
-logs `lift_height disagrees across rows ([150.0, 300.0]) ... Refusing to load`
-at startup and `TASK scan_full_joints` is simply not a command. Accepted for
-now — every joint CSV has to be re-solved anyway (see the blocker above).
-Setting line2 to 300 as well is what restores it.
+⚠️ **A task built from several CSVs needs them all to agree.**
+`_extract_lift_height` refuses both a partly-filled column and one whose
+values disagree, and **unregisters the task** rather than picking a winner —
+the joint angles were solved at one base height, so guessing which rows are
+wrong is not safe. This is what unregistered the old `scan_full_joints` when
+its two halves were set to 300 and 150. The current tasks are one CSV each at
+0 mm, so it does not bite today; it will the moment two are concatenated.
 
 ```
 TASK → arm home pose → drive to first tag → SET LIFT → scan group
@@ -1580,6 +1580,64 @@ tilt should drop by ~1.33° (≈2.5° → ≈1.2°). If it does, the remainder i
 hand-eye and the 85/88 ambiguity is resolved by subtraction — i.e. this fix
 doubles as the disambiguating experiment. If it does not, `T_mb2fc` itself
 is wrong by more than the ground-plane fit says.
+
+### 2026-09-11 — Scan CSVs replaced: RRT-planned paths for the new cell
+
+The user supplied `Test_path_3_0911.zip` — six CSVs re-solved for the
+REPLACEMENT base — and asked to swap them in and delete the old ones. The
+old ones went; the new ones needed loader work first, so this is not a
+file swap.
+
+**What they are.** Three standoffs (10/30/50 mm), each a pair:
+`rrt_final_path_*` (joint) + `assigned_workpoints_*` (pose). Every file
+carries `base_height_mm` 652 and `lift_mm` 0, and the group ids are valid
+new-cell tags. Registered as six tasks — the standoffs are SEPARATE because
+the standoff changes which tag each work point is assigned to, not just the
+offset (010 uses {104-107,118,119}, 050 uses {104,105,106,119,120}).
+
+**The joint files are PATHS, not point lists.** ~30 % of their rows are
+`transition`/`home` waypoints. The arm must DRIVE THROUGH them — that is the
+collision-free route, and skipping them would send it straight between work
+points — but must not settle, run Keyence, capture or record there. So the
+scan loop gained a `scan` flag: the move executes, then `continue`. Keyence
+is the one that would actually misbehave, chasing a meaningless reading at a
+pose nowhere near the surface.
+
+**Three dialect differences, all silent failures if missed:**
+- pairing key is `source_point_id`, not `point_id` — the RRT file renumbers
+  `point_id` along the path. Pairing on `point_id` matched 797 of 1035 and
+  dropped the rest without a word.
+- `lift_mm` not `lift_height` — without an alias the file reads as "no lift
+  column" and the lift is never commanded. Harmless at 0, wrong at anything
+  else.
+- `assigned_workpoints_*` writes integer columns in scientific notation
+  (`0.000000000000000000e+00`), which plain `int()` rejects outright.
+
+Found while answering a follow-up: `ScanResultWriter.begin` seeded a result
+row for EVERY queued point, so a run would have written 422 permanently-empty
+rows into the Ra map — and a transition's `point_id` is a path index that can
+collide with a real work point's key and overwrite its metadata. Now skips
+non-scan points.
+
+🛑 **target_line 2 is not trustworthy and is documented as such rather than
+withheld.** Groups 118/119/120 sit 3.7-4.6 m from the arm base of the zone-C
+tags they are assigned to — they are in zone B's region. Line 1 is 0.6-2.0 m,
+matching the known-good older files. Pose mode fails IK there (safe); joint
+mode drives a valid planned trajectory to the wrong place. Needs the
+generator's author; run line 1 first.
+
+⚠️ **A methodology note, because two of my checks were wrong before they were
+right.** A flange-reach screen said 92.7 % of the new points were
+unreachable — but running the same screen on the OLD CSVs with the OLD map
+coordinates, a combination that demonstrably drove the robot, gave 3.2-6.6 m.
+A control that fails on known-good data invalidates the method, not the data;
+the claim was withdrawn. What survived is a frame-assumption-free check
+(horizontal distance from the arm base implied by `world_x = -msg.y`), which
+reproduces 0.90-1.43 m on the old known-good line 1 and is what flags line 2.
+
+Offline only. 6 tasks register with 0 errors, routing verified from
+`START_TAG` 500, traverse points carry no world coords and seed no result
+rows, older CSV dialects load unchanged.
 
 ### 2026-09-11 — Chain-error diagnosis: a camera-yaw sweep; dual-anchor built then removed
 

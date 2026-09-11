@@ -32,9 +32,19 @@ class ScanResultWriter:
         self._scan_meta = {}   # (group_id, point_id) → {x, y, z, csv_path}
 
     def begin(self, scan_points):
-        """Register the queued points; used to seed the CSV on first write."""
+        """Register the queued points; used to seed the CSV on first write.
+
+        ⚠️ TRAVERSE-ONLY points are skipped. An RRT-planned CSV interleaves
+        the collision-free route with the work points (`scan` False, see
+        task_manager._is_scan_row); the arm drives through those but never
+        measures there, so seeding a row for one puts a permanently-empty
+        line in the Ra map. Their `point_id` is a path index too, which can
+        collide with a real work point's id and overwrite its metadata.
+        """
         self._scan_meta = {}
         for i, p in enumerate(scan_points):
+            if not p.get("scan", True):
+                continue
             key = (int(p.get("group_id", -1)), int(p.get("point_id", i)))
             self._scan_meta[key] = {
                 "x":        float(p["x"]) if "x" in p else None,

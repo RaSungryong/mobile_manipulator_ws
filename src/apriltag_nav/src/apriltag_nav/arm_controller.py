@@ -373,12 +373,25 @@ class ArmController:
                 gid = int(p.get("group_id", -1))
                 current_csv_path = p.get("csv_path", "")
 
-                rospy.loginfo(f"[Arm REAL] Execute scan point {i+1}/{len(scan_points)}")
+                # TRAVERSE-ONLY waypoints (2026-09-11). An RRT-planned CSV
+                # interleaves the collision-free path between work points with
+                # the work points themselves; those transitions must be DRIVEN
+                # THROUGH but not scanned. Skipping them instead of executing
+                # them would send the arm straight between work points and
+                # throw away the planning. `scan` defaults True, so a CSV
+                # without the column behaves exactly as before.
+                do_scan = bool(p.get("scan", True))
+
+                rospy.loginfo(
+                    f"[Arm REAL] {'Execute scan point' if do_scan else 'Traverse'}"
+                    f" {i+1}/{len(scan_points)}")
 
                 # Pre-open the camera before the arm starts moving, so the
                 # device-open latency runs in parallel with motion + Keyence
-                # adjustment instead of serially at capture time.
-                self.pipeline.preopen()
+                # adjustment instead of serially at capture time. Pointless on
+                # a traverse point — nothing is captured there.
+                if do_scan:
+                    self.pipeline.preopen()
 
                 entry = {
                     "point_id":          pid,
@@ -408,6 +421,13 @@ class ArmController:
                     results.append(entry)
                     if current_csv_path:
                         self.results_writer.save(current_csv_path, results)
+                    continue
+
+                # A traverse point is DONE once the move lands: no settle, no
+                # Keyence (it is nowhere near the surface, and the standoff
+                # loop would chase a reading that means nothing there), no
+                # capture, and no result row — it is not a measurement.
+                if not do_scan:
                     continue
 
                 # Wait for arm to stabilize at target point

@@ -8,6 +8,53 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 
+# ---------------------------------------------------------------------------
+# CSV dialect helpers (2026-09-11)
+#
+# The RRT-planned scan CSVs interleave the collision-free path between work
+# points with the work points themselves, and renumber `point_id` along the
+# whole path. Two optional columns carry the difference; both default to the
+# original behaviour when absent, so older CSVs load unchanged.
+# ---------------------------------------------------------------------------
+def _is_scan_row(row) -> bool:
+    """Is this row a work point, or just a waypoint to drive through?
+
+    `is_task_waypoint` 0 marks a transition/home pose: the arm must MOVE
+    there (it is the planned collision-free route) but must not settle,
+    run the Keyence standoff loop or capture — none of which mean anything
+    away from the surface. Absent column = every row is a work point.
+    """
+    v = str(row.get("is_task_waypoint", "")).strip()
+    return True if v == "" else v not in ("0", "0.0", "False", "false")
+
+
+def _as_int(value, default=0) -> int:
+    """Integer from a CSV cell, tolerating float spelling.
+
+    The assigned_workpoints_* files write integer columns in scientific
+    notation ('0.000000000000000000e+00'), which plain int() rejects. Going
+    through float() accepts both dialects; an empty or unparsable cell falls
+    back to `default` rather than killing the whole task load.
+    """
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _work_point_id(row) -> int:
+    """The work-point index a row belongs to.
+
+    `source_point_id` when present (RRT dialect), else `point_id`. This is
+    the key that pairs a joint CSV with its pose CSV; using `point_id` on an
+    RRT file pairs only ~77 % of the rows, silently dropping the rest.
+    """
+    v = str(row.get("source_point_id", "")).strip()
+    if v:
+        return _as_int(v)
+    return _as_int(row.get("point_id", 0))
+
+
 class TaskManager:
     """
     TaskManager (Explicit + System Tasks)
@@ -45,66 +92,78 @@ class TaskManager:
 
     TASK_DEFS = {
 
-        # ---------------- scan (joint) ----------------
-        "scan_joints_line1": {
-            "file": "optimized_joints_line1.csv",
+        # ---------------- scan: RRT-planned, 2026-09-11 ----------------
+        # Re-solved for the REPLACEMENT base (every file carries
+        # base_height_mm 652 and lift_mm 0) after the 2026-08-21 cell swap
+        # invalidated everything before them. Three standoffs, registered
+        # separately because the standoff changes which tags each work point
+        # is assigned to, not just the offset.
+        #
+        # The rrt_final_path_* files are PATHS, not point lists: ~30 % of
+        # their rows are `transition`/`home` waypoints the arm drives through
+        # without scanning (is_task_waypoint 0). The assigned_workpoints_*
+        # file of the SAME standoff supplies the world (x, y, z) for the Ra
+        # map, paired on source_point_id -> point_id.
+        #
+        # 🛑 line 2 (target_line 2) is NOT trustworthy yet — its work points
+        # sit 3.7-4.6 m from the arm base of the zone-C tags they are
+        # assigned to, i.e. in zone B's region. line 1 measures 0.6-2.0 m,
+        # matching the known-good older files. Run line 1 first and treat a
+        # line-2 group that fails IK or reports nonsense as expected until
+        # the generator's author has confirmed the assignment.
+
+        "scan_rrt_standoff010": {
+            "file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
+            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
             "type": "scan",
             "scan_mode": "joint",
+            "result_name": "scan_rrt_standoff010_ra_map.csv",
         },
 
-        "scan_joints_line2": {
-            "file": "optimized_joints_line2.csv",
+        "scan_rrt_standoff030": {
+            "file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
+            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
             "type": "scan",
             "scan_mode": "joint",
+            "result_name": "scan_rrt_standoff030_ra_map.csv",
         },
 
-        # `scan_joints_line1_lift` / `joints_line1_lift.csv` were retired
-        # 2026-08-13: optimized_joints_line1.csv now carries the lift_height
-        # column itself, so the two were the same task. The CSV outlived the
-        # task def in this checkout and was deleted 2026-08-23, after
-        # confirming it was byte-identical to optimized_joints_line1.csv
-        # (328 rows, all 10 columns, zero value differences).
-
-        # ---------------- scan (pose) ----------------
-        "scan_grid_line1": {
-            "file": "grid_path_line1.csv",
-            "type": "scan",
-            "scan_mode": "pose",
-            "joint_file": "optimized_joints_line1.csv",
-        },
-
-        "scan_grid_line2": {
-            "file": "grid_path_line2.csv",
-            "type": "scan",
-            "scan_mode": "pose",
-            "joint_file": "optimized_joints_line2.csv",
-        },
-
-
-
-        # ---------------- scan (joint, new) ----------------
-        # "scan_joints_line1_new": {
-        #     "file": "optimized_joints_line1_new.csv",
-        #     "type": "scan",
-        #     "scan_mode": "joint",
-        # },
-
-        # ---------------- full scan (line1 + line2, joint) ----------------
-        "scan_full_joints": {
-            "files": ["optimized_joints_line1.csv", "optimized_joints_line2.csv"],
-            "pose_files": ["grid_path_line1.csv", "grid_path_line2.csv"],
+        "scan_rrt_standoff050": {
+            "file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
+            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
             "type": "scan",
             "scan_mode": "joint",
-            "result_name": "scan_full_joints_ra_map.csv",
+            "result_name": "scan_rrt_standoff050_ra_map.csv",
         },
 
-        # ---------------- full scan (line1 + line2, pose) ----------------
-        "scan_full_pose": {
-            "files": ["grid_path_line1.csv", "grid_path_line2.csv"],
-            "joint_files": ["optimized_joints_line1.csv", "optimized_joints_line2.csv"],
+        # ---------------- scan: pose mode, same three ----------------
+        # IK-solved from the world points instead of replaying the planned
+        # joints. No RRT transitions here, so the arm takes the direct route
+        # between work points — use the joint tasks above unless you
+        # specifically want pose mode.
+
+        "scan_grid_standoff010": {
+            "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
+            "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
             "type": "scan",
             "scan_mode": "pose",
-            "result_name": "scan_full_pose_ra_map.csv",
+            "result_name": "scan_grid_standoff010_ra_map.csv",
+        },
+
+        "scan_grid_standoff030": {
+            "file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
+            "joint_file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
+            "type": "scan",
+            "scan_mode": "pose",
+            "result_name": "scan_grid_standoff030_ra_map.csv",
+        },
+
+        "scan_grid_standoff050": {
+            "file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
+            "joint_file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
+            "type": "scan",
+            "scan_mode": "pose",
+            "result_name": "scan_grid_standoff050_ra_map.csv",
         },
 
         # ---------------- move-only CSV  --------
@@ -218,7 +277,8 @@ class TaskManager:
                             ppath = os.path.join(self.task_dir, pf)
                             if os.path.isfile(ppath):
                                 for r in self._read_csv(ppath):
-                                    key = (int(r["group_id"]), int(r["point_id"]))
+                                    key = (_as_int(r["group_id"]),
+                                           _work_point_id(r))
                                     pose_lookup[key] = (
                                         float(r["x"]), float(r["y"]), float(r["z"])
                                     )
@@ -270,6 +330,13 @@ class TaskManager:
         such column returns (True, None) — the lift is simply not commanded,
         which is how every pre-existing task keeps working.
         """
+        # `lift_mm` is the RRT dialect's spelling of the same column. Without
+        # this alias such a CSV loads as "no lift column" and the lift is
+        # silently never commanded — harmless at 0 mm, wrong at any other.
+        for r in rows:
+            if 'lift_height' not in r and 'lift_mm' in r:
+                r['lift_height'] = r['lift_mm']
+
         present = [r for r in rows if str(r.get('lift_height', '')).strip()]
         if not present:
             if any('lift_height' in r for r in rows):
@@ -347,6 +414,17 @@ class TaskManager:
     # ==================================================
     def _build_scan_task(self, task_name, rows, scan_mode, joint_rows=None,
                          csv_path="", pose_lookup=None):
+        """Turn CSV rows into task steps + per-tag scan points.
+
+        Two CSV dialects are accepted, distinguished only by which optional
+        columns are present (see `_is_scan_row` / `_work_point_id`):
+
+        * the original one — every row is a work point, identified by
+          `point_id`;
+        * the RRT-planned one (2026-09-11) — rows are path waypoints,
+          `is_task_waypoint` says which are work points and
+          `source_point_id` carries the work-point index.
+        """
 
         task_steps = []
         scan_points_by_tag = defaultdict(list)
@@ -354,18 +432,26 @@ class TaskManager:
         # sort for deterministic execution
         rows.sort(
             key=lambda r: (
-                int(r.get("order", 0)),
-                int(r.get("group_id", 0)),
-                int(r.get("point_id", 0)),
+                _as_int(r.get("order", 0)),
+                _as_int(r.get("group_id", 0)),
+                _as_int(r.get("point_id", 0)),
             )
         )
 
-        # Build joint lookup: (group_id, point_id) -> [q1..q6]
+        # Build joint lookup: (group_id, work-point id) -> [q1..q6]
+        #
+        # ⚠️ The key is `source_point_id` when the CSV has it. An RRT-planned
+        # path renumbers `point_id` along the whole path — transitions
+        # included — and keeps the original work-point index in
+        # `source_point_id`. Pairing on `point_id` instead matched only 77 %
+        # of the 2026-09-11 files (797 of 1035); on `source_point_id` it is
+        # 1035/1035. Files without the column are unaffected.
         joint_lookup = {}
         if joint_rows:
             for jr in joint_rows:
-                key = (int(jr["group_id"]), int(jr["point_id"]))
-                joint_lookup[key] = [
+                if not _is_scan_row(jr):
+                    continue          # transitions have no work-point identity
+                joint_lookup[(_as_int(jr["group_id"]), _work_point_id(jr))] = [
                     float(jr["q1"]), float(jr["q2"]), float(jr["q3"]),
                     float(jr["q4"]), float(jr["q5"]), float(jr["q6"]),
                 ]
@@ -373,7 +459,7 @@ class TaskManager:
         prev_gid = None
 
         for r in rows:
-            gid = int(r["group_id"])
+            gid = _as_int(r["group_id"])
 
             # ---- task step ----
             if gid != prev_gid:
@@ -386,9 +472,8 @@ class TaskManager:
             speed = float(r.get("speed", 80))
 
             # ---- metadata from CSV ----
-            pid = int(r.get("point_id", 0))
-            is_disc_val = str(r.get("is_discontinuous", "0")).strip()
-            is_disc = int(is_disc_val) if is_disc_val else 0
+            pid = _as_int(r.get("point_id", 0))
+            is_disc = _as_int(r.get("is_discontinuous", 0))
 
             # ---- scan point ----
             if scan_mode == "joint":
@@ -403,10 +488,16 @@ class TaskManager:
                     "group_id": gid,
                     "csv_path": csv_path,
                     "is_discontinuous": is_disc,
+                    # False = drive through it, do not scan (see _is_scan_row)
+                    "scan": _is_scan_row(r),
                 }
-                # Attach world (x, y, z) from paired pose CSV — used for Ra map output
-                if pose_lookup is not None:
-                    xyz = pose_lookup.get((gid, pid))
+                # Attach world (x, y, z) from paired pose CSV — used for Ra map
+                # output. Keyed on the WORK-POINT id, same reason as the joint
+                # lookup above. Scan rows only: a transition has no
+                # source_point_id, so the key would fall back to its path
+                # `point_id` and collide with an unrelated work point.
+                if pose_lookup is not None and point["scan"]:
+                    xyz = pose_lookup.get((gid, _work_point_id(r)))
                     if xyz is not None:
                         point["x"], point["y"], point["z"] = xyz
                 scan_points_by_tag[gid].append(point)

@@ -181,19 +181,28 @@ pull + `catkin_make` before anything below.
    `path_tag_locator/scripts/error_budget.py` (assumed 0.2° today; the
    xy budget is dominated by yaw × the A→B lever).
 
-### 2-1. 🛑 Every scan CSV is invalid — the cell was replaced 2026-08-21
+### 2-1. ✅ Scan CSVs re-solved for the new cell (2026-09-11) — line 2 still open
 
-- `map.yaml` is the new cell (72 tags, origin at the centre of 정반 1).
-  Every `task/csv/*` still encodes the OLD cell: joint-mode angles were
-  solved for the old arm-over-plate geometry and an arm base 373 mm higher
-  than today's 0.652 — a drop the whole 343 mm lift stroke cannot cover —
-  and pose-mode grids still describe the old workpiece position.
-- `_exec_joint` is a bare `MoveJ` with no reachability or collision check.
-  **Running `scan_joints_line*` on the new cell is a collision path.**
-- Fix: re-solve every joint CSV; regenerate the grid CSVs for the new
-  workpiece. No transform or `lift_height` value rescues the old files.
-- Side effect: `scan_full_joints` is unregistered (line1 300 mm vs line2
-  150 mm) until both CSVs agree.
+- The pre-cell-swap CSVs are **deleted**. They were solved for the retired
+  base and the old cell; `_exec_joint` is a bare `MoveJ` with no
+  reachability or collision check, so running them was a collision path.
+- Replaced by the 2026-09-11 RRT set: `base_height_mm` 652, `lift_mm` 0,
+  three standoffs registered separately as
+  **`scan_rrt_standoff{010,030,050}`** (joint, replays the planned path)
+  and **`scan_grid_standoff{010,030,050}`** (pose, IK from the world
+  points). Old task names no longer exist.
+- ⚠️ The joint files are PATHS: ~30 % of rows are transition/home
+  waypoints the arm drives through but must not scan. Handled via
+  `is_task_waypoint` → a `scan` flag; pairing with the pose file is on
+  `source_point_id`, not `point_id` (that matches only 77 %).
+- 🛑 **target_line 2 (groups 118/119/120) is not trustworthy.** Its work
+  points sit 3.7–4.6 m from the arm base of the zone-C tags they are
+  assigned to — i.e. in zone B's region. Line 1 (104–107) is 0.6–2.0 m,
+  matching the known-good older files. **Run line 1 first.** Pose mode
+  fails IK on line 2 (safe); joint mode drives a valid planned trajectory
+  to the wrong place. Needs the generator's author.
+- Not yet run on hardware — offline registration only (6 tasks, 0 errors,
+  routing verified from `START_TAG` 500).
 
 ### 2-2. Tag installation and calibration of the new cell
 
