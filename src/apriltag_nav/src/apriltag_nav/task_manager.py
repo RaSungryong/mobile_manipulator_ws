@@ -93,54 +93,77 @@ class TaskManager:
     TASK_DEFS = {
 
         # ---------------- scan: RRT-planned, 2026-09-11 ----------------
-        # Re-solved for the REPLACEMENT base (every file carries
-        # base_height_mm 652 and lift_mm 0) after the 2026-08-21 cell swap
-        # invalidated everything before them. Three standoffs, registered
-        # separately because the standoff changes which tags each work point
-        # is assigned to, not just the offset.
+        # Re-solved for the REPLACEMENT base (base_height_mm 652, lift_mm 0)
+        # after the 2026-08-21 cell swap invalidated everything before them.
+        # Three standoffs, registered separately because the standoff changes
+        # which tag each work point is assigned to, not just the offset.
         #
-        # The rrt_final_path_* files are PATHS, not point lists: ~30 % of
-        # their rows are `transition`/`home` waypoints the arm drives through
-        # without scanning (is_task_waypoint 0). The assigned_workpoints_*
-        # file of the SAME standoff supplies the world (x, y, z) for the Ra
-        # map, paired on source_point_id -> point_id.
+        # 🛑 THE JOINT TASKS ARE DISABLED — the group -> tag assignment in
+        # these files does not survive checking, and replaying an RRT
+        # trajectory from the wrong base position is a COLLISION path, not a
+        # bad-data one. Joint angles are relative to the arm base: if the base
+        # is not where the planner assumed, the arm's shape is unchanged but
+        # its absolute position in the cell is offset by that error, so
+        # "collision-free" does not transfer. _exec_joint is a bare MoveJ with
+        # no reachability or collision check, and the Keyence loop only runs
+        # after the move lands, so nothing downstream can intervene.
         #
-        # 🛑 line 2 (target_line 2) is NOT trustworthy yet — its work points
-        # sit 3.7-4.6 m from the arm base of the zone-C tags they are
-        # assigned to, i.e. in zone B's region. line 1 measures 0.6-2.0 m,
-        # matching the known-good older files. Run line 1 first and treat a
-        # line-2 group that fails IK or reports nonsense as expected until
-        # the generator's author has confirmed the assignment.
+        # The evidence (2026-09-11, offline): every group's work points are
+        # nearest to a DIFFERENT tag than the one it is assigned to, and all
+        # of them cluster around tags 102-104 --
+        #
+        #   group   assigned   max dist   nearest tag   max dist
+        #     104        104      1.00 m          104     1.00 m   ok
+        #     105        105      1.29 m          103     0.92 m
+        #     106        106      1.48 m          103     0.72 m
+        #     107        107      1.72 m          103     0.16 m
+        #     118        118      4.80 m          102     0.94 m
+        #     119        119      4.55 m          103     0.94 m
+        #
+        # The work points span only ~0.9 x 0.8 m in total and the per-group
+        # bounding boxes overlap heavily, i.e. this is ONE area subdivided,
+        # yet the groups place it across tags up to 6.4 m apart. Distances use
+        # the robot's STOP pose (tag - 0.55 m camera_offset), not the tag.
+        #
+        # The POSE tasks below stay enabled: they solve IK per point, so a
+        # mis-assigned group fails the move and reports it instead of driving
+        # somewhere planned for a different base position.
+        #
+        # To re-enable once the generator's author has confirmed the
+        # assignment: uncomment the three entries. Nothing else changes --
+        # the loader already handles the dialect.
 
-        "scan_rrt_standoff010": {
-            "file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "joint",
-            "result_name": "scan_rrt_standoff010_ra_map.csv",
-        },
+        # "scan_rrt_standoff010": {
+        # "file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
+        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
+        # "type": "scan",
+        # "scan_mode": "joint",
+        # "result_name": "scan_rrt_standoff010_ra_map.csv",
+        # },
 
-        "scan_rrt_standoff030": {
-            "file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
-            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "joint",
-            "result_name": "scan_rrt_standoff030_ra_map.csv",
-        },
+        # "scan_rrt_standoff030": {
+        # "file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
+        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
+        # "type": "scan",
+        # "scan_mode": "joint",
+        # "result_name": "scan_rrt_standoff030_ra_map.csv",
+        # },
 
-        "scan_rrt_standoff050": {
-            "file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
-            "pose_file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "joint",
-            "result_name": "scan_rrt_standoff050_ra_map.csv",
-        },
+        # "scan_rrt_standoff050": {
+        # "file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
+        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
+        # "type": "scan",
+        # "scan_mode": "joint",
+        # "result_name": "scan_rrt_standoff050_ra_map.csv",
+        # },
 
-        # ---------------- scan: pose mode, same three ----------------
-        # IK-solved from the world points instead of replaying the planned
-        # joints. No RRT transitions here, so the arm takes the direct route
-        # between work points — use the joint tasks above unless you
-        # specifically want pose mode.
+        # ---------------- scan: pose mode (the only enabled ones) -------
+        # IK-solved per point from the world coordinates. This is what makes
+        # them safe to leave registered while the group assignment is in
+        # doubt: an unreachable point FAILS the move and says so, rather than
+        # executing a trajectory planned for a base that is somewhere else.
+        # Expect group 104 to work (max 1.00 m from its stop) and 105 onward
+        # to fail progressively — that failure IS the diagnostic.
 
         "scan_grid_standoff010": {
             "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",

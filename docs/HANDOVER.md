@@ -187,20 +187,38 @@ pull + `catkin_make` before anything below.
   base and the old cell; `_exec_joint` is a bare `MoveJ` with no
   reachability or collision check, so running them was a collision path.
 - Replaced by the 2026-09-11 RRT set: `base_height_mm` 652, `lift_mm` 0,
-  three standoffs registered separately as
-  **`scan_rrt_standoff{010,030,050}`** (joint, replays the planned path)
-  and **`scan_grid_standoff{010,030,050}`** (pose, IK from the world
-  points). Old task names no longer exist.
+  three standoffs. Old task names no longer exist.
+- 🛑 **Only the POSE tasks are registered**:
+  `scan_grid_standoff{010,030,050}`. The joint ones
+  (`scan_rrt_standoff*`) are commented out in TASK_DEFS — see below.
 - ⚠️ The joint files are PATHS: ~30 % of rows are transition/home
   waypoints the arm drives through but must not scan. Handled via
   `is_task_waypoint` → a `scan` flag; pairing with the pose file is on
   `source_point_id`, not `point_id` (that matches only 77 %).
-- 🛑 **target_line 2 (groups 118/119/120) is not trustworthy.** Its work
-  points sit 3.7–4.6 m from the arm base of the zone-C tags they are
-  assigned to — i.e. in zone B's region. Line 1 (104–107) is 0.6–2.0 m,
-  matching the known-good older files. **Run line 1 first.** Pose mode
-  fails IK on line 2 (safe); joint mode drives a valid planned trajectory
-  to the wrong place. Needs the generator's author.
+- 🛑 **The group → tag assignment does not survive checking.** Measured
+  from the robot's STOP pose (tag − 0.55 m), every group's work points are
+  nearest to a DIFFERENT tag than the one it is assigned to, and all of
+  them cluster near tags 102–104:
+
+  | group | assigned, max dist | nearest tag, max dist |
+  |---|---|---|
+  | 104 | 104, 1.00 m | 104, 1.00 m ✓ |
+  | 105 | 105, 1.29 m | 103, 0.92 m |
+  | 106 | 106, 1.48 m | 103, 0.72 m |
+  | 107 | 107, 1.72 m | 103, 0.16 m |
+  | 118 | 118, 4.80 m | 102, 0.94 m |
+  | 119 | 119, 4.55 m | 103, 0.94 m |
+
+  The work points span only ~0.9 × 0.8 m in total with heavily overlapping
+  per-group boxes — ONE area, spread across tags up to 6.4 m apart.
+  **Only group 104 is reachable.** Needs the generator's author.
+- ⚠️ **Why the joint tasks are disabled and the pose ones are not.** Joint
+  angles are relative to the arm base: replay them from a base that is not
+  where the planner assumed and the arm's shape is unchanged but its
+  absolute position is offset, so "collision-free" does not transfer.
+  `_exec_joint` is a bare `MoveJ` with no checks. Pose mode solves IK per
+  point, so a mis-assigned group fails the move and reports it — that
+  failure is the diagnostic, not a hazard.
 - Not yet run on hardware — offline registration only (6 tasks, 0 errors,
   routing verified from `START_TAG` 500).
 

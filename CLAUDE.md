@@ -138,15 +138,33 @@ joint mode, for the IK seed in pose mode. Pairing on `point_id` instead
 matches only 797 of 1035 rows and silently drops the rest. Note the pose file
 has no `source_point_id` at all: there, `point_id` IS the work-point id.
 
-### 🛑 target_line 2 is not trustworthy yet
+### 🛑 The group → tag assignment does not survive checking
 
-Both target lines are registered, but line 2's work points (groups
-**118 / 119 / 120**) sit **3.7–4.6 m** from the arm base of the zone-C tags
-they are assigned to — they are in zone B's region. Line 1 (104–107) measures
-0.6–2.0 m, matching the known-good older files. **Run line 1 first.** A line-2
-group fails IK in pose mode (safe); in joint mode it drives a valid planned
-trajectory to the wrong place — no collision, but the data is meaningless.
-Needs the generator's author.
+Measured from the robot's **STOP pose** (tag − 0.55 m `camera_offset`, which
+is what `/robot_pose` reports — not the tag position), every group's work
+points are nearest to a DIFFERENT tag than the one it is assigned to, and
+all of them cluster near tags 102–104:
+
+| group | assigned, max dist | nearest tag, max dist |
+|---|---|---|
+| 104 | 104, 1.00 m | 104, 1.00 m ✓ |
+| 105 | 105, 1.29 m | 103, 0.92 m |
+| 106 | 106, 1.48 m | 103, 0.72 m |
+| 107 | 107, 1.72 m | 103, 0.16 m |
+| 118 | 118, 4.80 m | 102, 0.94 m |
+| 119 | 119, 4.55 m | 103, 0.94 m |
+
+The work points span only **~0.9 × 0.8 m in total** with heavily overlapping
+per-group bounding boxes — one area, spread across tags up to 6.4 m apart.
+**Only group 104 is reachable.** Needs the generator's author.
+
+⚠️ **Only the POSE tasks are registered.** `scan_rrt_standoff*` are commented
+out in TASK_DEFS: joint angles are relative to the arm base, so replaying an
+RRT trajectory from a base that is not where the planner assumed leaves the
+arm's shape unchanged but its absolute position offset — "collision-free"
+does not transfer, and `_exec_joint` is a bare `MoveJ` with no checks. Pose
+mode solves IK per point, so a mis-assigned group fails the move and says so.
+That failure is the diagnostic, not a hazard.
 
 ⚠️ **The pre-cell-swap CSVs were deleted 2026-09-11** —
 `optimized_joints_line{1,2,3}*`, `grid_path_line{1,2}*` and the
