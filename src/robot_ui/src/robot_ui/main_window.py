@@ -784,16 +784,27 @@ class MainWindow(QMainWindow):
         form.addWidget(note)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel('Plate:'))
+        row.addWidget(QLabel('Plan:'))
         self.combo_calib_plate = QComboBox()
         self.combo_calib_plate.addItems(
             ['정반 1  (zones B+C, 26 tags)',
-             '정반 2  (zones D+E, 25 tags)'])
+             '정반 2  (zones D+E, 25 tags)',
+             '정반 1  YAW SWEEP  (hand-eye vs front_cam, 6 entries)',
+             '정반 2  YAW SWEEP  (hand-eye vs front_cam, 6 entries)'])
+        self.combo_calib_plate.currentIndexChanged.connect(
+            self._refresh_calib_plan_note)
         row.addWidget(self.combo_calib_plate, 1)
         self.chk_calib_dry = QCheckBox('dry run')
         self.chk_calib_dry.setChecked(True)
         row.addWidget(self.chk_calib_dry)
         form.addLayout(row)
+
+        # The diagnostic plans are NOT calibration runs — same service,
+        # same buttons, completely different meaning — so say so where the
+        # operator is looking rather than only in the doc.
+        self.lbl_calib_plan_note = QLabel('')
+        self.lbl_calib_plan_note.setWordWrap(True)
+        form.addWidget(self.lbl_calib_plan_note)
 
         self.lbl_calib_nodes = QLabel('nodes: checking…')
         form.addWidget(self.lbl_calib_nodes)
@@ -853,6 +864,7 @@ class MainWindow(QMainWindow):
         self._calib_node_timer.timeout.connect(self._poll_calib_nodes)
         self._calib_node_timer.start(3000)
         self._poll_calib_nodes()
+        self._refresh_calib_plan_note()
         return tab
 
     def _poll_calib_nodes(self):
@@ -871,14 +883,45 @@ class MainWindow(QMainWindow):
             self.lbl_calib_nodes.setStyleSheet(
                 'color:#b02020; font-weight:bold;')
 
+    # (plan file, ref file, kind). The ref file ALWAYS
+    # travels with the plan: both plates carry cross tags with the same ids
+    # 0-5, so a mixed pair shifts every result by 3.89 m.
+    # (plan file, ref file, kind). The ref file ALWAYS travels with the
+    # plan: both plates carry cross tags with the same ids 0-5, so a mixed
+    # pair shifts every result by 3.89 m.
+    _CALIB_PLANS = (
+        ('calibration_plan_plate1.yaml', 'reference_tags.yaml', ''),
+        ('calibration_plan_plate2.yaml', 'reference_tags_plate2.yaml', ''),
+        ('calibration_plan_plate1_yawsweep.yaml',
+         'reference_tags.yaml', 'sweep'),
+        ('calibration_plan_plate2_yawsweep.yaml',
+         'reference_tags_plate2.yaml', 'sweep'),
+    )
+
     def _calib_paths(self):
-        plate = 1 + self.combo_calib_plate.currentIndex()
+        plan, ref, _ = self._CALIB_PLANS[self.combo_calib_plate.currentIndex()]
         base = '$(find path_tag_locator)/config/'
-        if plate == 1:
-            return (base + 'calibration_plan_plate1.yaml',
-                    base + 'reference_tags.yaml')
-        return (base + 'calibration_plan_plate2.yaml',
-                base + 'reference_tags_plate2.yaml')
+        return base + plan, base + ref
+
+    def _calib_kind(self):
+        """'' = real calibration, 'sweep' = a diagnostic whose map_world
+        output is NOT a result."""
+        return self._CALIB_PLANS[self.combo_calib_plate.currentIndex()][2]
+
+    _CALIB_NOTES = {
+        'sweep': (
+            '⚠️ NOT a calibration — a DIAGNOSTIC. One tag, one cross tag, 6 '
+            'camera yaws; the base must not move. front_cam cancels by '
+            'construction, so the spread is arm-side only: large ⇒ HAND-EYE '
+            'is wrong, ~0 ⇒ front_cam is. Analyse with:  rosrun '
+            'path_tag_locator analyse_yaw_sweep.py <session_dir>'),
+    }
+
+    def _refresh_calib_plan_note(self):
+        note = self._CALIB_NOTES.get(self._calib_kind(), '')
+        self.lbl_calib_plan_note.setText(note)
+        self.lbl_calib_plan_note.setStyleSheet(
+            'color:#b06000; font-weight:bold;' if note else '')
 
     def _on_calib_start(self):
         if self._calib_running:
@@ -892,6 +935,7 @@ class MainWindow(QMainWindow):
             return
         plan_path, ref_path = self._calib_paths()
         dry = self.chk_calib_dry.isChecked()
+        kind = self._calib_kind()
         self._calib_running = True
         self._calib_counts = {'ok': 0, 'fail': 0, 'degraded': 0}
         self._refresh_calib_labels()
@@ -912,6 +956,16 @@ class MainWindow(QMainWindow):
             if report.get('output_yaml_path'):
                 self.append_log('[calib] output: %s'
                                 % report['output_yaml_path'])
+            if kind and not dry:
+                # The per-attempt records are what the analysers read —
+                # map_world upserts per tag, and in a sweep EVERY entry is
+                # the same tag, so it would keep only the last one and
+                # destroy the whole measurement. Point at the session dir.
+                self.append_log(
+                    '[calib] %s session recorded under '
+                    '~/.ros/path_tag_locator/calibrate/<newest>/  — analyse '
+                    'with:  rosrun path_tag_locator analyse_yaw_sweep.py '
+                    '<that dir>' % kind)
 
         self._run(self.bridge.run_map_calibration,
                   dry_run=dry, plan_path=plan_path, ref_tags_path=ref_path,

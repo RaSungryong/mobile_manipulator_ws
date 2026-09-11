@@ -25,6 +25,18 @@ path_tag_locator:
   detector:
     hand_cam_tag_size_m:  0.090
     front_cam_tag_size_m: 0.090
+    # ⚠️ Keep TRUE while robot.yaml robot_camera.ground_plane.front_cam is
+    # enabled. That correction makes front_cam's published pose fields
+    # navigation-shaped — pose_x/y are ground coordinates relative to the
+    # lens nadir, pose_z is the CONFIGURED lens height (the measured depth
+    # is gone) and the orientation is dt_apriltags' RAW, uncorrected value.
+    # Feeding that to the chain as T_fc2B mixes a corrected position with an
+    # uncorrected rotation and an asserted depth. The corrected CORNERS are
+    # published too, and they are a level distortion-free virtual camera's
+    # pixels at the same K, so the honest 6-DOF pose is re-solved from them
+    # here (detections.pose_from_corners). robot_camera_node and the
+    # on-robot-verified navigation behaviour are untouched.
+    front_cam_repose_from_corners: true
 
   # arm_node proxy (replaces the old direct-SDK robot: block — this package
   # opens no Fairino RPC connection; arm_node owns the arm).
@@ -57,9 +69,9 @@ path_tag_locator:
   # hand-cam image with the camera optical axis perpendicular to the tag.
   align:
     target_distance_m:     0.0     # 0 => keep current depth (z) from tag
-    max_iterations:        5       # set to 1 for one-shot
-    position_tol_m:        0.005   # convergence: tag x-y offset in cam frame
-    angle_tol_deg:         1.0     # convergence: tilt between cam +z and tag +z
+    max_iterations:        10       # set to 1 for one-shot
+    position_tol_m:        0.001   # convergence: tag x-y offset in cam frame
+    angle_tol_deg:         0.5     # convergence: tilt between cam +z and tag +z
     max_step_m:            0.10    # per-iteration translation clamp
     max_step_deg:          15.0    # per-iteration rotation clamp
     max_initial_step_m:    0.80    # clamp on ONE step of the initial move

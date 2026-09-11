@@ -71,6 +71,17 @@
         <param name="save_images"           value="true"/>
         <param name="output_dir"            value="$(env HOME)/scan_results"/>
 
+        <!-- Lift compensation for POSE-mode IK (2026-09-11). arm_base_z is
+             measured at the lift origin, so the live /lifter/height has to be
+             subtracted or a raised lift puts the TCP that far ABOVE the
+             target. Joint mode is unaffected (no transform reads it).
+             require_lift_height = what to do when lifter_node has never
+             published: false assumes the origin (the old behaviour, logged at
+             error level), true fails the move. Set true for unattended runs —
+             a failed task beats a silently-wrong scan. -->
+        <param name="lift_height_topic"     value="/lifter/height"/>
+        <param name="require_lift_height"   value="false"/>
+
         <param name="keyence_tol"           value="0.2"/>
         <!-- MEASURED 2026-08-05 (tools/measure_keyence_angle.py): the reading
              GROWS as the tool moves +Z, i.e. toward the surface, so a positive

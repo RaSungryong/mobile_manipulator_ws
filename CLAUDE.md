@@ -138,11 +138,11 @@ principle (`arm_transform` follows `/robot_pose`) but its grid CSVs still
 describe the old workpiece position.
 
 🛑 **And the lift cannot make up the difference — the arithmetic forecloses
-it.** The angles were solved with `arm_base_z` = **1.025** (the retired base).
-The new base is **0.652**, a 373 mm drop, while the whole lift stroke is only
-**343.35 mm**. So even at `soft_max_counts` the arm base reaches 0.995 m and is
-still **30 mm short** of the height those angles assume; at line1's 300 mm it
-is 73 mm short, and at line2's 150 mm, 223 mm short. No `lift_height` value
+it.** Those angles assume an arm base **373 mm higher** than today's 0.652
+(they were solved on the retired base), while the whole lift stroke is only
+**343.35 mm**. So even at `soft_max_counts` the arm base reaches 0.995 m and
+is still **30 mm short** of the height they assume; at line1's 300 mm it is
+73 mm short, and at line2's 150 mm, 223 mm short. No `lift_height` value
 exists that makes an old joint CSV correct. Stop looking for one.
 
 ⚠️ **`_exec_joint` (`arm_controller.py:494`) is a bare `MoveJ(joints_deg)`** —
@@ -1098,10 +1098,48 @@ record in `docs/keyence_scan_chain.md`:
   FINE step and the adaptive gain backs it up, but don't raise it without
   reading the open-issues section of the doc.
 
-⚠️ **The lift breaks the constant `arm_base_z`.** Pose-mode IK is silently
-offset by the lift travel. Joint-mode tasks are unaffected. Transform code is
-unchanged so far — see `docs/lift_arm_base_z_analysis.md` and the
-`scan_height_guard` in `robot.yaml`.
+### ✅ The lift no longer breaks `arm_base_z` (2026-09-11)
+
+`arm_base_z` is still measured at the lift origin, but pose-mode IK now
+subtracts the live extension: `transform_world_to_arm(g, msg, lift_m)`,
+fed by `_exec_pose` from `lift_height.LiftHeightListener` on the latched
+`/lifter/height`. Before this, a pose-mode scan at a raised lift was
+silently offset by the full travel.
+
+**Direction, because it is not guessable and it changes how alarming this
+was:** the mount has no tilt, so `R_AW` is a pure z-rotation and
+`p_arm[2] = z_world − arm_base_z`. Omitting the lift makes that term
+`lift_m` too LARGE, and the arm — whose base really is that much higher —
+puts the TCP `lift_m` **ABOVE** the target. So the old behaviour scanned
+too high, *away* from the plate: a wrong measurement, not a collision. It
+is not self-correcting either, because the Keyence standoff loop is
+clamped to `keyence_max_step_mm` (1.0 mm) per step and cannot close a
+150–300 mm gap.
+
+- **Reading only.** `LiftHeightListener` is a separate, read-only class
+  rather than the existing `LiftClient`, which also exposes `height_mm`:
+  `LiftClient` is the COMMAND proxy (it publishes `/lifter/height_cmd` and
+  holds home/stop proxies) and `arm_node` has no business being able to
+  move the lift. `lifter_node` stays the sole writer; reading is open.
+- **Unknown ≠ origin.** `height_m()` returns None before the first
+  message instead of 0.0, and `arm_node`'s `~require_lift_height` decides:
+  false (default) assumes the origin — today's convention, since every
+  task ends with lift origin homing and pose-mode CSVs carry no
+  `lift_height` — but logs it at **error** level each time, because it is
+  an assumption. true fails the move instead; set it for unattended runs.
+- **`lift_m = 0` is bit-for-bit the old result**, so nothing that runs at
+  the origin changed.
+- Joint mode is untouched: those CSVs are absolute joint angles fed to
+  `MoveJ` and no transform reads them.
+- ⚠️ `tools/arm_controller_sdk.py` holds a SECOND copy of this geometry
+  (`_transform_pose`) that did **not** get the fix — flagged in its
+  docstring, alongside the scipy-compat work it already needed.
+
+`tools/check_lift_compensation.py` (14 checks) pins the sign, that only z
+moves, and the unknown-height policy. See also
+`docs/lift_arm_base_z_analysis.md` and the `scan_height_guard` in
+`robot.yaml` — the *guard* is still the thing that stops a joint-mode task
+from scanning at an unexpected height.
 
 ## Vision-Triggered Soft Stop (front_cam)
 
@@ -1156,9 +1194,26 @@ Manipulator Frame (/robot_pose msg: x, y, theta°)
 Arm base_link (IK input: mm+deg for Fairino SDK)
 ```
 
-CSV orientation: **ZYX** intrinsic euler (radians). Target orientation for
-IK comes directly from CSV (through `process_transforms`) — EE orientation
-barely changes across a scan, so the CSV quat is reliable.
+⚠️ **CSV orientation is NOT "ZYX intrinsic"** — this line said so until
+2026-09-11 and it was wrong. `arm_transform.py` encodes it as
+`from_euler('zyx', [rx, ry, rz])`, i.e. scipy LOWERCASE = **extrinsic**
+= `XYZ`-intrinsic(rz, ry, rx). **The code is right and the old doc was
+wrong**, settled physically rather than by convention-lawyering: on
+`grid_path_line1.csv` the code puts the tool z-axis at
+(−0.089, −0.037, **−0.995**) — pointing down at the plate, which is the
+only way a scan works — while reading the columns as ZYX-intrinsic gives
+(0.036, **0.999**, −0.003), horizontal. The two differ by **116–124°**
+across that file. Anyone generating a new CSV or a new world-point command
+from the old wording would get a completely wrong wrist pose.
+
+Target orientation for IK comes directly from CSV (through
+`process_transforms`) — EE orientation barely changes across a scan, so the
+CSV quat is reliable.
+
+⚠️ **`transform_world_to_arm` takes `lift_m` since 2026-09-11** and
+`_exec_pose` feeds it the live `/lifter/height`. Omitting it (or leaving it
+0 while the lift is raised) puts the TCP exactly the lift extension **ABOVE**
+the world target — see the lift section below.
 
 ## Transform Parameters (4-DOF physical model)
 
@@ -1191,19 +1246,23 @@ blocker below.
 
 All parameters overridable via ROS `~` private params.
 
-⚠️ **`arm_base_z` is 0.652 as of 2026-08-23 — the mobile base was replaced.**
-It was 1.025 on the old base, so every `arm_base_z` figure in Work Log entries
-before 2026-08-13 is against different hardware and is not a discrepancy to
-chase. (It read **0.651** between 2026-08-13 and 2026-08-23, when it was
-corrected by 1 mm to match the cell design record's 652 — see §3 of the parent
-directory's CLAUDE.md. Work Log entries citing 651 predate that correction.) In particular the old "655-point fit says 0.9541, extrinsics says 1.025,
-71 mm apart" open item is **closed by obsolescence**: both numbers describe the
-retired base. The 12 mm mean-residual figure is gone with them.
+**`arm_base_z` is 0.652.** It read **0.651** between 2026-08-13 and
+2026-08-23, when it was corrected by 1 mm to match the cell design record's
+652 — see §3 of the parent directory's CLAUDE.md. Work Log entries citing
+651 predate that correction.
 
-⚠️ **The value is measured with the lift at its origin**, and it is a constant
-that does not track the lift. At the top of the stroke the arm base is at
-0.995 m — a 343 mm error if a pose-mode scan runs there. Joint-mode tasks are
-unaffected. See `docs/lift_arm_base_z_analysis.md`.
+⚠️ Anything older than 2026-08-13 describes the **retired** mobile base and
+is not a discrepancy to chase — the base was replaced, not re-measured.
+
+**The value is measured with the lift at its origin** and it is still a
+constant — but since 2026-09-11 pose-mode IK **adds the live lift extension
+on top of it** (`transform_world_to_arm`'s `lift_m`, from
+`/lifter/height`), so the arm base is tracked to its real height of up to
+0.995 m at the top of the stroke. The old 343 mm pose-mode error is closed;
+see *The lift no longer breaks `arm_base_z`* above for the direction and
+the unknown-height policy. Joint-mode tasks were never affected.
+`docs/lift_arm_base_z_analysis.md` still holds the background (its §4.2 is
+now obsolete).
 
 `T_mb2fc` front_cam translation is **(0.55, 0, 0.300)** as of 2026-08-21 (was
 `(0.547, 0, 0.300)` from 2026-08-13, and `(0.45, 0, 0.293)` before that). The
@@ -1348,6 +1407,230 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-11 — Pose-mode IK finally tracks the lift; and the CSV euler convention was documented backwards
+
+Second half of the day. Asked what still limits driving the arm to a WORLD
+point now that navigation is good. Answer had four parts, of which this
+entry does the one that was an outright bug.
+
+**`arm_base_z` now tracks the lift.** `transform_world_to_arm(g, msg,
+lift_m)`; `_exec_pose` feeds it `/lifter/height` through a new read-only
+`lift_height.LiftHeightListener`. Detail promoted to its own section above.
+
+Three decisions inside it worth keeping:
+
+- **Read-only listener, not `LiftClient`.** `LiftClient` already exposes
+  `height_mm`, but it is the COMMAND proxy — it publishes
+  `/lifter/height_cmd` and holds home/stop service proxies. Handing
+  `arm_node` the ability to move the lift to answer "how high is it" is
+  more authority than the question needs, and CLAUDE.md's rule is that
+  reading stays open while `lifter_node` is the sole writer.
+- **Unknown ≠ origin.** `height_m()` returns None before the first
+  message. `~require_lift_height` picks the policy: default false keeps
+  today's assume-the-origin behaviour (correct by convention — every task
+  ends with lift origin homing and pose CSVs carry no `lift_height`) but
+  logs it at **error** level; true fails the move, for unattended runs.
+  Defaulting to false was deliberate: with `lifter_node` in the launch the
+  unknown case is degenerate, and introducing a new way to fail a working
+  task was not worth it.
+- **The direction is the opposite of what "the arm will crash" intuition
+  says.** No mount tilt ⇒ `R_AW` is a pure z-rotation ⇒ omitting the lift
+  makes `p_arm[2]` too LARGE and the TCP lands `lift_m` **ABOVE** target,
+  away from the plate. Wrong measurement, not collision — and not
+  self-correcting, since the Keyence loop is clamped to 1 mm/step and
+  cannot close 150–300 mm.
+
+⚠️ **Found while reading that code: the CSV euler convention is documented
+backwards, and the CODE is the correct one.** `arm_transform.py` uses
+`from_euler('zyx', [rx, ry, rz])` — scipy lowercase, i.e. extrinsic, i.e.
+`XYZ`-intrinsic(rz, ry, rx) — while this file and the module docstring both
+claimed "ZYX intrinsic". Settled physically, not by argument: over
+`grid_path_line1.csv` the code's reading puts the tool z-axis at
+(−0.089, −0.037, −0.995), down at the plate, and the documented reading
+gives (0.036, 0.999, −0.003), horizontal — **116–124° apart across the
+file**. Docs fixed at both sites with a "do not 'fix' this line to match a
+doc" note. Nobody has been bitten yet because the only consumers are CSVs
+generated by the same convention; the trap is for the NEXT generator or a
+hand-written world-point command.
+
+**Verified offline; nothing ran on hardware.** New
+`tools/check_lift_compensation.py`, 14 checks: `lift_m=0` reproduces the
+old result bit-for-bit (max diff exactly 0); only arm-frame z moves and by
+exactly the height (x/y 0.0, orientation 0.0); the compensated TCP lands on
+the requested world z to 7e-14 mm across four base poses × four targets ×
+five heights, while the uncompensated one is off by the full 343.35 mm
+stroke; a flipped sign would be 2× the lift off, so the sign is genuinely
+tested rather than assumed; the unknown-height policy in both directions.
+The three other suites plus the morning's still pass (ground_plane 15,
+nav_sequencing 14, charging 14, repose_from_corners 10).
+
+Not done, and the reason: `tools/arm_controller_sdk.py` holds a second copy
+of this geometry that did not get the fix. It is a variant `arm_node` can
+be pointed at but already needed scipy-compat work before any such switch,
+so it got a docstring warning listing both rather than a silent divergence.
+
+**What this does NOT fix**, from the same question — the remaining error in
+driving the arm to a world point, roughly ranked:
+1. `/robot_pose` is anchored to **map.yaml's** tag coordinate
+   (`calculate_robot_pose` reads `tag_info['x'/'y']`), so navigation being
+   accurate relative to a tag does not make the reported WORLD coordinate
+   accurate. The arm inherits map.yaml-vs-reality 1:1. Blocked on the
+   calibration work in the entry below.
+2. align converges to 0.2°, which over a 0.7–1.2 m arm reach is 2.4–4.2 mm.
+3. `camera_offset` 0.55 vs the 0.547 tape measure, still unreconciled.
+4. arm absolute accuracy + the vision_tip TCP — repeatability (±0.05 mm) is
+   not accuracy, and neither has been measured on this robot.
+
+### 2026-09-11 — front_cam's pose fields are not a 6-DOF measurement; the locator chain now re-solves from the corners
+
+Started from "how do I make map calibration more accurate". Answered from
+the 9 archived plate-1 sessions (09-08/09-09, 25–26 tags each) rather than
+by reasoning, and the answer moved twice.
+
+**Random error is not the bottleneck.** Session-to-session repeatability is
+sd_xy median **2.9 mm** (P95 4.3), sd_yaw 0.09°. The 0.5 m view height and
+the 5-frame mean are doing their job; tuning detection further buys little.
+
+**The dominant term is a ~2.5–3.3° ROTATION error, and the world frame is
+cleanly ruled out.** Expressing each tag's normal error as a vector in
+three candidate frames and asking which one holds it constant:
+
+| frame | explains |
+|---|---|
+| **world** (sloped floor / tilted ref tag) | **0.2 %** |
+| hand-cam (hand-eye rotation) | 85.0 % |
+| mobile-base (front_cam / T_ab2mb) | 87.8 % |
+
+So `reference_tags.yaml`'s face-up assumption is **confirmed** (its
+*positions* are still unverified). But hand-eye vs base frame is 85 vs 88 —
+**undecidable from this data**, because a calibration session only ever
+spins the camera about its own optical axis, and that is precisely the
+motion a vertical-tilt signature cannot see. Corroborating signature: the
+400 mm spacing error is a clean function of the plan's per-entry camera
+yaw (Δyaw +45° → −7.3 ± 0.5 mm, n=4, consistent across zones B and C;
+r = −0.81), and it is repeatable to 0.4–1.3 mm across the 9 sessions.
+
+⚠️ **An offline hand-eye refit was built, validated and NOT applied.** It
+fits well (three independent subsets agree to 0.1° in rx, condition number
+3.9 after re-parameterising in the CAMERA frame, held-out tilt 3.29 → 1.57°
+and spacing rms 4.78 → 2.40 mm) — and it still makes the **absolute**
+position worse in every variant (zone B/C differential dx +6.6 → +15.6 mm,
+z −63 → −109 against a design −80). That is the fit being forced to
+attribute 3.1° to one of two frames the data cannot separate. Shipping it
+would have looked like an improvement on exactly the metrics it was fitted
+to. Scripts are in the session scratchpad, not the repo.
+
+**Then the real defect surfaced, and it is upstream of all of that.**
+`robot_camera_node` with `robot_camera.ground_plane.front_cam` enabled
+publishes a **navigation-shaped** detection: `pose_x/pose_y` are ground
+coordinates relative to the lens nadir, `pose_z` is the **configured lens
+height** (the measured depth is discarded), and the orientation fields keep
+dt_apriltags' **raw, uncorrected** values. `detection_to_T_cam2tag` was
+consuming that as `T_fc2B` — corrected position + uncorrected rotation +
+an asserted depth.
+
+Confirmed from the archive, not inferred: front_cam `pose_z` has 25 distinct
+values per session on 09-08 (sd 1.26 mm) and is **exactly 0.302000, one
+value, 25 times** on 09-09. So the five 09-09 sessions ran on a corrupted
+`T_fc2B`; 09-08 is the methodologically clean set (it gives the same
+picture: 2.68° tilt, world frame 0.8 %).
+
+⚠️ **This is structural, not a coding slip** — `GroundPlane.to_ground()`
+intersects every ray with the floor plane, so depth is an *input
+assumption* and no 3D rotation is ever formed. The module is a 2D floor
+rectifier for navigation and **cannot** produce a 6-DOF pose. It is right
+for `mobile_controller`, which works in pixels with `z / fx`; it was never
+meant to be metrology. The navigation result it was built for stands
+(108 hops, lateral +8.8/−11.6 → +1.9/−3.3 mm).
+
+**Fix: the consumer re-solves.** The *corrected corners* are published, and
+they are a level, distortion-free virtual camera's pixels at the SAME `K`,
+so `detections.pose_from_corners()` (cv2 `solvePnP`) recovers the honest
+6-DOF pose. `detection_to_T_cam2tag(..., camera_K=)` routes to it;
+`detector.front_cam_repose_from_corners` (default true) plus the existing
+`front_cam_info` topic drive it, K fetched once per session and cached. A
+missing CameraInfo degrades to the old path with a loud warning rather than
+failing a session.
+
+Deliberately NOT done: changing `robot_camera_node`, the `.msg`, or the
+navigation fields. That keeps a verified-on-hardware path untouched, needs
+no `catkin_make`, and puts the metrology where the metrology consumer is.
+hand_cam is unaffected (no ground_plane) and keeps the euler path.
+
+⚠️ **The corner ordering is the whole correctness argument** and was
+established empirically, not read off a doc: the object points must be
+`(-h,+h), (+h,+h), (+h,-h), (-h,-h)`. The mirrored ordering is **42–180°**
+out, not subtly wrong — it would have silently corrupted every calibrated
+position. `scripts/check_repose_from_corners.py` (10 checks) pins it,
+including against dt_apriltags itself via a rendered `cv2.aruco`
+36h11 tag: the re-solve reproduces the library's own pose from the
+library's own corners to **0.070° / 0.040 mm**, i.e. it is not worse than
+the library.
+
+**Verified offline; nothing ran on hardware.** New check 10/10; the three
+existing suites still pass (ground_plane 15, nav_sequencing 14, charging
+14); config loads with and without the new key (old configs default to
+true); end-to-end through the real `detection_to_T_cam2tag` on a
+synthetic-but-exact tilted-front_cam scene, the old path leaves a constant
+**1.327°** false tag tilt in `T_fc2B` and the new path leaves **0.000°**.
+
+**Falsifiable prediction for the next on-robot session:** the base-frame
+tilt should drop by ~1.33° (≈2.5° → ≈1.2°). If it does, the remainder is
+hand-eye and the 85/88 ambiguity is resolved by subtraction — i.e. this fix
+doubles as the disambiguating experiment. If it does not, `T_mb2fc` itself
+is wrong by more than the ground-plane fit says.
+
+### 2026-09-11 — Chain-error diagnosis: a camera-yaw sweep; dual-anchor built then removed
+
+Third part of the day. Question was "how do I decide whether the ~2.5-3.3 deg
+rotation error is hand-eye or front_cam" — 79.6 % vs 82.3 % on the clean
+09-08 data, a tie, with both fixes expensive.
+
+**The answer is a CAMERA-YAW SWEEP**: one path tag, one ref tag, N camera
+yaws, base stationary. `T_ab2mb @ T_mb2fc @ T_fc2B` is then identical in
+every entry and cancels, so front_cam CANNOT appear in the variation; a
+hand-eye error is fixed in the EE frame and the yaw rotates the EE, so the
+computed position traces a circle whose RADIUS is the arm-side error and
+needs no ground truth. Forward-modelled through the real chain: front_cam
+rotation 2 deg -> 0.00 mm of spread, hand-eye rotation 2 deg -> 22.20, and
+hand-eye translation 20 mm -> 21.79. Plans + `analyse_yaw_sweep.py` (circle
+fit, verdict, 4/4 self-test through the real chain), robot_ui plan selector.
+
+⚠️ **A DUAL-ANCHOR design was built first, then removed the same day** —
+same tag from two ref tags at a PINNED camera yaw. It was right for the
+premise it was designed under (the cross tags were the suspect, so pin the
+yaw to cancel the chain and expose the anchors) and **exactly backwards**
+once the user said the cross tags are embedded in precision-machined slots
+and the CHAIN became the target: the pinned yaw cancels the very thing being
+measured. Measured on the same forward model it moves 0.47 mm for a 2 deg
+hand-eye error and 0.00 for hand-eye translation. Deleted along with
+`solve_reference_yaws.py`, `fit_reference_tags.py` and the hand-survey doc;
+git has them if the cross tags turn out to be printed inserts (registration
+gives ±0.13 deg of ref yaw, which dual-anchor sees and the sweep cannot).
+
+**The lesson, since it cost three wrong turns in one day:** I carried a
+design across a premise change without re-deriving it. The same session also
+produced a wrong gauge-freedom claim (a common in-place spin of a ref column
+IS observable — the anchors sit in different places) and a "negligible"
+verdict computed from the MEAN of a displacement vector that the varying
+camera yaw had cancelled to ~zero. All three were caught by simulating the
+real chain rather than reasoning; that is the habit worth keeping.
+
+⚠️ **`install(PROGRAMS)` did not list the scripts the docs tell operators to
+`rosrun`** — `analyse_yaw_sweep.py` was named in the plan headers and in the
+robot_ui note while not being installed, and `error_budget.py` /
+`update_plan_seeds_from_session.py` had the same pre-existing gap. Fixed,
+with a comment at the list saying why it has to stay in step.
+
+Also quantified, for whoever chases the open 17 mm z: `pose_t` is linear in
+tag size, so **1 % of hand_cam scale = 4.75 mm of path-tag z**, and −80
+needs 0.9658 (a 86.9 mm black border, or fx 3.54 % off) — a ten-minute
+check. And hand_cam's principal point is **0.79 mm of path-tag error per
+pixel**, 1:1, which shows up as per-tag SCATTER rather than bias because the
+camera yaw rotates it differently per entry: invisible to any mean-deviation
+check and to session repeatability. Reasoning and procedure in
+`path_tag_locator/docs/chain_error_diagnosis.md`.
 
 ### 2026-09-09 — Charging manager: 85 % undock, 20 % return, return after every task, /crevis/charging true after docking
 

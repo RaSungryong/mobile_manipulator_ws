@@ -48,6 +48,14 @@ class DetectorCfg:
     observations are rescaled from these to the actual tag sizes above."""
     hand_cam_tag_size_m: float
     front_cam_tag_size_m: float
+    # Solve front_cam's tag pose from the published CORNERS instead of its
+    # pose_x/y/z + rpy fields. Required whenever robot.yaml
+    # robot_camera.ground_plane.front_cam is enabled: those fields are then
+    # ground coordinates + a CONSTANT depth + an UNCORRECTED rotation, which
+    # is right for navigation and is not a 6-DOF measurement. See
+    # detections.py's module docstring. Harmless when the correction is off
+    # (the re-solve matches dt_apriltags' own estimate to ~0.2 deg).
+    front_cam_repose_from_corners: bool = True
 
 
 @dataclass

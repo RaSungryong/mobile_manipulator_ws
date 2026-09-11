@@ -17,6 +17,28 @@ The shared detector runs one size per camera (robot.yaml
 (reference_tags.yaml ``size_m``). Since translation is linear in size,
 ``t_actual = t_detected * (actual_size / detector_size)`` recovers the
 true translation without a re-detection; rotation is size-independent.
+
+⚠️ front_cam's pose fields are NOT a 6-DOF measurement
+------------------------------------------------------
+With the ground-plane correction on (robot.yaml
+``robot_camera.ground_plane.front_cam``, 2026-09-08) ``robot_camera_node``
+publishes a NAVIGATION-shaped detection: ``pose_x/pose_y`` are ground
+coordinates relative to the lens nadir, ``pose_z`` is the CONFIGURED lens
+height (a constant — the measured depth is gone), and the orientation
+fields keep dt_apriltags' RAW, uncorrected values. That is correct for
+`mobile_controller`, which works in pixels with ``z / fx`` scaling, but it
+is not a pose: the chain would get corrected position + uncorrected
+rotation + an asserted depth.
+
+This is structural, not a coding slip — ``GroundPlane.to_ground()``
+intersects every ray with the floor plane, so depth is an INPUT
+assumption and no 3D rotation is ever formed.
+
+The corrected CORNERS, however, *are* published, and they are the pixels
+of a level, distortion-free virtual camera with the SAME intrinsics. So
+the honest 6-DOF pose is recovered here, by the consumer that needs it,
+with :func:`pose_from_corners` — leaving robot_camera_node and the
+verified navigation behaviour untouched.
 """
 import threading
 
@@ -25,6 +47,11 @@ import rospy
 from scipy.spatial.transform import Rotation as _Rot
 
 from robot_msgs.msg import AprilTagDetectionArray
+
+try:
+    import cv2
+except ImportError:            # the euler path still works without it
+    cv2 = None
 
 
 def wait_for_tag_detection(topic: str, tag_id: int, timeout: float = 3.0):
@@ -142,10 +169,56 @@ def mean_detection(dets):
     return out
 
 
+# AprilTag's tag frame, in the corner order dt_apriltags reports:
+# corner0 = (-h, +h), then +x, then -y — established EMPIRICALLY against
+# the library (scratch t_convention.py: this ordering reproduces
+# dt_apriltags' own pose_R/pose_t from its own corners to 0.53 deg /
+# 0.15 mm, while the other candidate ordering is 42-180 deg out). Against
+# a rendered ground truth both agree to 0.23 deg / 0.11 mm, i.e. the
+# re-solve is as accurate as the library's own estimate.
+_CORNER_ORDER = np.array([[-1.0, +1.0], [+1.0, +1.0],
+                          [+1.0, -1.0], [-1.0, -1.0]])
+
+
+def pose_from_corners(corners, tag_size_m: float, K, dist=None) -> np.ndarray:
+    """T_cam2tag (4x4, metres) solved from the four image corners.
+
+    ``corners`` is the flat 8-vector (or (4,2)) carried by
+    AprilTagDetection, ``K`` the 3x3 intrinsics. With the ground-plane
+    correction on, the corners are the level virtual camera's pixels and
+    that camera has the SAME K and ZERO distortion, so ``dist`` must stay
+    None; pass the real D only when re-solving RAW corners.
+
+    Unlike the euler path this needs no size rescale — the tag's actual
+    size goes straight into the object points.
+    """
+    if cv2 is None:
+        raise RuntimeError("pose_from_corners needs cv2")
+    img = np.asarray(corners, dtype=np.float64).reshape(4, 2)
+    obj = np.zeros((4, 3), dtype=np.float64)
+    obj[:, :2] = _CORNER_ORDER * (float(tag_size_m) / 2.0)
+    ok, rvec, tvec = cv2.solvePnP(obj, img, np.asarray(K, dtype=np.float64),
+                                  None if dist is None else np.asarray(dist, float),
+                                  flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:
+        raise RuntimeError("solvePnP failed on the tag corners")
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = cv2.Rodrigues(rvec)[0]
+    T[:3, 3] = np.asarray(tvec, dtype=np.float64).ravel()
+    return T
+
+
 def detection_to_T_cam2tag(det,
                            actual_size_m: float,
-                           detector_size_m: float) -> np.ndarray:
+                           detector_size_m: float,
+                           camera_K=None) -> np.ndarray:
     """Reconstruct T_cam2tag (4x4, metres) from an AprilTagDetection.
+
+    ``camera_K`` given -> the pose is SOLVED FROM THE CORNERS
+    (:func:`pose_from_corners`), which is the only correct route for
+    front_cam once the ground-plane correction is on (see the module
+    docstring). ``camera_K`` None -> the legacy euler path below, still
+    right for any camera whose pose fields are a real measurement.
 
     robot_camera_node encodes ``pose_R`` as
     ``as_euler('zyx', degrees=True)[::-1]`` (scipy LOWERCASE 'zyx', i.e.
@@ -159,6 +232,8 @@ def detection_to_T_cam2tag(det,
     Translation is rescaled from the detector's tag size to the tag's
     actual size (see module docstring).
     """
+    if camera_K is not None:
+        return pose_from_corners(det.corners, actual_size_m, camera_K)
     scale = float(actual_size_m) / float(detector_size_m)
     rot = _Rot.from_euler(
         'zyx', [float(det.yaw), float(det.pitch), float(det.roll)],

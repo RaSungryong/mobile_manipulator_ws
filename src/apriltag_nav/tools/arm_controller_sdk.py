@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Alternate ArmController variant `arm_node` can be pointed at.
+
+⚠️ Two things to fix BEFORE switching to it, both already true of the file
+you would be switching away from:
+  * scipy calls here are bare `as_matrix()`/`from_matrix()`; make them
+    COMPAT (see CLAUDE.md Coding Conventions) — the system scipy is 1.3.3.
+  * `_transform_pose` below is a SEPARATE copy of the world->arm geometry
+    and it has NO lift term, so pose-mode targets are off by the live lift
+    extension (up to ~343 mm). `arm_transform.transform_world_to_arm` grew
+    a `lift_m` argument on 2026-09-11; this copy did not.
+"""
 
 import rospy
 import sys

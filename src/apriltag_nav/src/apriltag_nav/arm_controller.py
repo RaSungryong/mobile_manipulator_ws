@@ -32,6 +32,7 @@ from scipy.spatial.transform import Rotation as R
 from apriltag_nav import paths
 from apriltag_nav.paths import load_yaml_block
 from apriltag_nav.arm_transform import transform_world_to_arm
+from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.scan_results import ScanResultWriter
 from apriltag_nav.keyence_standoff import StandoffConfig, StandoffController
@@ -70,6 +71,23 @@ class ArmController:
         # early, since the loop returns immediately.
         self.cancel_attempts = int(rospy.get_param('~cancel_attempts', 10))
         self.cancel_retry_s = float(rospy.get_param('~cancel_retry_s', 0.02))
+
+        # ---------- lift compensation for POSE-mode IK ----------
+        # arm_base_z is measured at the lift origin; the lift adds up to
+        # ~343 mm. Read-only listener — arm_node must not be able to COMMAND
+        # the lift (lifter_node is the sole writer; reading is open).
+        # `require_lift_height` is the policy for "lifter_node has never
+        # published": false (default) keeps the pre-2026-09-11 behaviour of
+        # assuming the origin, which is right in practice because every task
+        # ends with lift origin homing and pose-mode CSVs carry no
+        # lift_height — but it is an ASSUMPTION, so it is logged at error
+        # level each time it is used. true refuses the move instead; set it
+        # for unattended runs, where a silently-wrong scan is worse than a
+        # failed task.
+        self.lift_listener = LiftHeightListener(
+            rospy.get_param('~lift_height_topic', '/lifter/height'))
+        self.require_lift_height = bool(
+            rospy.get_param('~require_lift_height', False))
 
         # ---------- Fairino ----------
         rospy.loginfo("[Arm REAL] Connecting to Fairino robot...")
@@ -574,8 +592,30 @@ class ArmController:
     # --------------------------------------------------
     # POSE MOTION (IK → MoveJ)
     # --------------------------------------------------
+    def _pose_lift_m(self):
+        """Live lift extension for pose-mode IK, in metres.
+
+        Raises when the height is unknown and `require_lift_height` is set.
+        Otherwise returns 0.0 — the pre-2026-09-11 assumption — and says so
+        at error level, because that assumption silently puts the TCP the
+        lift's height ABOVE the target when it is wrong.
+        """
+        lift_m = self.lift_listener.height_m()
+        if lift_m is None:
+            msg = (f"no {self.lift_listener.topic} yet — lift extension "
+                   f"unknown. Pose-mode IK needs it: arm_base_z is measured "
+                   f"at the lift origin, so a raised lift puts the TCP that "
+                   f"far above the target. Is lifter_node running?")
+            if self.require_lift_height:
+                raise RuntimeError(msg)
+            rospy.logerr_throttle(10.0, "[Arm REAL] " + msg +
+                                  " Assuming the lift is at its origin.")
+            return 0.0
+        return lift_m
+
     def _exec_pose(self, p):
-        pos, rpy = transform_world_to_arm(p, self.current_pose_msg)
+        lift_m = self._pose_lift_m()
+        pos, rpy = transform_world_to_arm(p, self.current_pose_msg, lift_m)
         target = [pos[0], pos[1], pos[2], rpy[0], rpy[1], rpy[2]]
         rospy.loginfo(f"[Arm REAL] IK target: {target}")
 

@@ -84,6 +84,52 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    parts of `robot.yaml` / `CLAUDE.md`) are another session's
    UNCOMMITTED changes in this checkout — leave them alone.
 
+### 2-0a. ▶ NEXT ON-ROBOT SESSION — calibration accuracy (2026-09-11, dev side)
+
+Read the 2026-09-11 Work Log entry for the evidence; the checklist:
+
+1. **Restart `path_tag_locator` / `map_calibrator`** to pick up the corner
+   re-solve. The log must show `front_cam pose solved from corners` once
+   per session. If it warns about missing CameraInfo instead, the run
+   silently falls back to the broken path — stop and fix the topic.
+2. 🛑 **Do NOT trust the five 09-09 `map_world_*.yaml`.** They ran with
+   front_cam's ground-plane correction on and the OLD consumer, so their
+   `T_fc2B` was a corrected position + an UNCORRECTED rotation + a
+   constant asserted depth (`pose_z` is literally `0.302000` on all 25
+   entries). The four 09-08 files are the clean ones. Nothing before
+   today is free of the 1.33° false tag tilt.
+3. **Re-run one plate-1 session and check the prediction**: the
+   base-frame component of the tag-normal tilt should fall ~1.33°
+   (≈2.5° → ≈1.2°). Whatever remains is hand-eye, which resolves the
+   open 85 %-vs-88 % attribution by subtraction — this run IS the
+   disambiguating experiment, so do it before any hand-eye work.
+4. Accuracy context, so effort goes to the right place: repeatability is
+   already **sd_xy 2.9 mm**; the error is systematic, not noise. An
+   offline hand-eye refit was built and **deliberately not applied** —
+   it improves the metrics it is fitted to and degrades absolute
+   position, because a session only spins the camera about its own
+   optical axis and so cannot separate hand-eye from front_cam.
+5. ✅ **The six cross tags are NOT a suspect** — they are embedded in
+   **precision-machined slots in the 정반**, so `reference_tags.yaml`'s
+   ±0.600 / 0, ±1.200 is machined geometry. The face-up orientation is
+   separately confirmed from the data (world-frame tilt explains 0.2 %).
+   ⚠️ The one term machining does not cover is **print registration** —
+   ±0.2 mm on a 90 mm tag is ±0.13° of yaw (~2.8 mm at the lever). Check
+   whether the tags are printed inserts or etched.
+   **Consequence: the 4–8 mm that re-anchored tags move is CHAIN error**,
+   which corroborates the rotation finding and raises the priority of
+   step 3.
+6. **The tie-breaker is a CAMERA-YAW SWEEP** — one tag, one cross tag, 6
+   yaws, base stationary. front_cam cancels by construction, so the
+   circle radius is arm-side only: large ⇒ hand-eye, ~0 ⇒ front_cam.
+   ~4 min. robot_ui → Calibration → Plan = `정반 1 YAW SWEEP`, then
+   `rosrun path_tag_locator analyse_yaw_sweep.py <session_dir>`.
+   Full reasoning: **`path_tag_locator/docs/chain_error_diagnosis.md`**.
+7. Two cheap checks that may close the 17 mm z: measure the cross tag's
+   black border against `tag_a_size_m: 0.090` (1 % scale = 4.75 mm of z;
+   −80 needs 86.9 mm), and `rostopic echo -n1
+   /hand_cam/color/camera_info` for a stale fx after a resolution change.
+
 ### 2-0b. ▶ NEXT ON-ROBOT SESSION — calibration (written 2026-09-03, dev side; still open)
 
 The user asked to be reminded of this when back on the robot. Commit
@@ -139,9 +185,9 @@ pull + `catkin_make` before anything below.
 
 - `map.yaml` is the new cell (72 tags, origin at the centre of 정반 1).
   Every `task/csv/*` still encodes the OLD cell: joint-mode angles were
-  solved for the old arm-over-plate geometry and the old base height
-  (1.025 vs 0.652 — the 373 mm drop exceeds the whole 343 mm lift stroke),
-  pose-mode grids still describe the old workpiece position.
+  solved for the old arm-over-plate geometry and an arm base 373 mm higher
+  than today's 0.652 — a drop the whole 343 mm lift stroke cannot cover —
+  and pose-mode grids still describe the old workpiece position.
 - `_exec_joint` is a bare `MoveJ` with no reachability or collision check.
   **Running `scan_joints_line*` on the new cell is a collision path.**
 - Fix: re-solve every joint CSV; regenerate the grid CSVs for the new
@@ -184,6 +230,12 @@ pull + `catkin_make` before anything below.
   robot; it was spun by 180° as a stop-gap. Re-run `handeye_calib` on this
   robot (`path_tag_locator.launch use_handeye_calib:=true`, 15–30 captures)
   before trusting calibrated positions to better than a few cm.
+  ⚠️ Its **out-of-plane tilt is still exactly May's 1.312°** — neither the
+  180° spin nor the 2026-09-02 4-parameter fit (translation + yaw only)
+  ever touched that component, and it is a prime suspect for the residual
+  rotation error. Do §2-0a step 3 first: it tells you how much of the
+  ~2.5° is hand-eye rather than front_cam, which decides whether a
+  `handeye_calib` run is the right fix at all.
 
 ### 2-3. Navigation defects known since 2026-08-12
 

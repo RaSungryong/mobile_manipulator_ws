@@ -996,15 +996,10 @@ arm_calibration:
   # extrinsics.yaml T_ab2mb and to the fallback in arm_transform.py — three
   # sites, change them together.
   #
-  # Superseded values (kept for the record — all belong to the OLD mobile base,
-  # which was replaced 2026-08-13):
-  #   arm_base_z 1.025 — the old base's measured height, and what every earlier
-  #   note in this file and in CLAUDE.md was written against.
-  #   arm_base_z 1.0076 + tilts -0.02248/+0.02639 — derived from the USD sim
-  #   scene; the tilts do not exist on the real platform.
-  #   The 655-point fit's arm_base_z was 0.9541. That fit is old-base data and
-  #   no longer comparable to the value below; the "71 mm discrepancy" it used
-  #   to raise is moot.
+  # ⚠️ Ignore any arm_base_z from before 2026-08-13: the mobile base was
+  # REPLACED that day, so older figures describe different hardware and are
+  # not discrepancies to reconcile. (The USD-derived mount tilts from the
+  # same era do not exist on the real platform either — see arm_tilt_* below.)
   arm_body_offset_x: 0.0       # arm mount in body frame X (m)
   # Moved 100 mm toward the wall (body -Y, the side_cam side) on 2026-08-13 to
   # cancel the 100 mm the wider 0.70 m body pushes the robot centre away from

@@ -35,7 +35,7 @@ from ..detections import (detection_to_T_cam2tag, mean_detection,
                           wait_for_tag_detections)
 from ..geometry import rot2rpy_deg
 from ..persistence import save_locate_failure, save_locate_run
-from ..ros_image import grab_image
+from ..ros_image import grab_image, grab_K
 from .session_log import SessionRecorder
 from .map_io import (
     atomic_write,
@@ -83,6 +83,12 @@ class OrchestratorCfg:
     # best-effort; empty string disables)
     hand_cam_image_topic: str = ""
     front_cam_image_topic: str = ""
+    # Solve front_cam's tag pose from its published CORNERS rather than its
+    # pose/rpy fields — mandatory while the ground-plane correction is on,
+    # which makes those fields navigation-shaped rather than a 6-DOF
+    # measurement (detections.py module docstring). Needs the info topic.
+    front_cam_info_topic: str = ""
+    front_cam_repose_from_corners: bool = True
     # Metadata only (the shared detector owns the actual family setting)
     tag_family: str = "tag36h11"
     # Behavior
@@ -130,6 +136,9 @@ class CalibrationOrchestrator:
         self._cancel_check = cancel_check   # callable -> bool, or None
         self._progress_pub = progress_pub
         self._target_pub = target_pub
+
+        # front_cam intrinsics, fetched once on first use (see _front_cam_K).
+        self._fc_K = None
 
         # Eager loads — any schema error surfaces before the first move.
         self.ref_tags: Dict[int, RefTag] = load_reference_tags(cfg.ref_tags_yaml)
@@ -223,6 +232,43 @@ class CalibrationOrchestrator:
     def _resolve_ref_size(self, ref: RefTag) -> float:
         return (ref.size_m if ref.size_m is not None
                 else self.cfg.tag_a_size_m_default)
+
+    def _front_cam_K(self):
+        """front_cam intrinsics, or None to keep the legacy euler path.
+
+        Fetched once and cached — CameraInfo is constant for a session and
+        a wait_for_message per entry would add latency for nothing. A
+        failure here must NOT abort the session: it falls back to the old
+        path with a loud warning, because a degraded observation beats no
+        calibration at all. The warning matters — with the ground-plane
+        correction on, that fallback is the mixed-frame pose this option
+        exists to avoid (detections.py module docstring).
+        """
+        if not getattr(self.cfg, "front_cam_repose_from_corners", False):
+            return None
+        if self._fc_K is None:
+            topic = getattr(self.cfg, "front_cam_info_topic", "") or ""
+            if not topic:
+                rospy.logwarn(
+                    "[MapCalib] front_cam_repose_from_corners is on but no "
+                    "front_cam_info topic is configured — falling back to the "
+                    "pose/rpy fields, which are NOT a 6-DOF measurement while "
+                    "the ground-plane correction is enabled.")
+                return None
+            try:
+                self._fc_K = grab_K(topic, timeout=5.0)
+                rospy.loginfo(
+                    "[MapCalib] front_cam pose solved from corners "
+                    "(fx=%.1f fy=%.1f cx=%.1f cy=%.1f)",
+                    self._fc_K[0, 0], self._fc_K[1, 1],
+                    self._fc_K[0, 2], self._fc_K[1, 2])
+            except Exception as e:
+                rospy.logwarn(
+                    "[MapCalib] no CameraInfo on %s (%s) — falling back to the "
+                    "pose/rpy fields, which are NOT a 6-DOF measurement while "
+                    "the ground-plane correction is enabled.", topic, e)
+                return None
+        return self._fc_K
 
     @staticmethod
     def is_seed_failure(error) -> bool:
@@ -720,7 +766,8 @@ class CalibrationOrchestrator:
             n_samp, timeout=self.cfg.detection_wait_timeout_s))
         T_fc2B = detection_to_T_cam2tag(
             det_b, self.cfg.tag_b_size_m,
-            self.cfg.front_cam_detector_size_m)
+            self.cfg.front_cam_detector_size_m,
+            camera_K=self._front_cam_K())
         tcp_pose = self.tcp_client.get_tcp_pose()
         # Remember how far the aligned pose sits from the plan seed, so a
         # later entry whose seed misses its tag can be re-seeded from the

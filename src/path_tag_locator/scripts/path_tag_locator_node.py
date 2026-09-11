@@ -43,7 +43,7 @@ from path_tag_locator.geometry import (
 from path_tag_locator.hand_eye import load_T_hc2ee
 from path_tag_locator.lift_listener import LiftHeightListener
 from path_tag_locator.persistence import save_locate_failure, save_locate_run
-from path_tag_locator.ros_image import grab_image
+from path_tag_locator.ros_image import grab_image, grab_K
 from path_tag_locator.srv import (
     LocatePathTag,
     LocatePathTagResponse,
@@ -115,6 +115,9 @@ class PathTagLocatorNode:
         # T_ab2mb is measured with the lift at origin; compensate the
         # chain by the live lift extension (see chain.compensate_T_ab2mb).
         self.lift = LiftHeightListener()
+
+        # front_cam intrinsics, fetched on first use (see _front_cam_K).
+        self._fc_K = None
 
         # Publisher (latched) and service
         self.pub = rospy.Publisher("~tag_world_pose", PoseStamped,
@@ -188,7 +191,8 @@ class PathTagLocatorNode:
                 tag_b_id, n_samp, timeout=timeout))
             T_fc2B = detection_to_T_cam2tag(
                 det_b, float(self.cfg.tag.tag_b_size_m),
-                float(self.cfg.detector.front_cam_tag_size_m))
+                float(self.cfg.detector.front_cam_tag_size_m),
+                camera_K=self._front_cam_K())
 
             lift_height_m = self.lift.height_m()
             if lift_height_m:
@@ -350,6 +354,39 @@ class PathTagLocatorNode:
             return grab_image(image_topic, timeout=1.0)
         except Exception:
             return None
+
+    def _front_cam_K(self):
+        """front_cam intrinsics (cached), or None to keep the euler path.
+
+        With the ground-plane correction on, front_cam's pose/rpy fields are
+        navigation-shaped rather than a 6-DOF measurement, so the pose must
+        be re-solved from the published corners — see detections.py. A
+        missing CameraInfo degrades to the old path with a warning instead
+        of failing the locate call.
+        """
+        if not getattr(self.cfg.detector, "front_cam_repose_from_corners",
+                       False):
+            return None
+        if getattr(self, "_fc_K", None) is None:
+            topic = self.cfg.topics.front_cam_info or ""
+            if not topic:
+                rospy.logwarn_once(
+                    "path_tag_locator: front_cam_repose_from_corners is on "
+                    "but topics.front_cam_info is empty — using the pose/rpy "
+                    "fields, which are NOT a 6-DOF measurement while the "
+                    "ground-plane correction is enabled.")
+                return None
+            try:
+                self._fc_K = grab_K(topic, timeout=5.0)
+                rospy.loginfo("path_tag_locator: front_cam pose solved from "
+                              "corners (K from %s)", topic)
+            except Exception as e:
+                rospy.logwarn_once(
+                    "path_tag_locator: no CameraInfo on %s (%s) — using the "
+                    "pose/rpy fields, which are NOT a 6-DOF measurement while "
+                    "the ground-plane correction is enabled.", topic, e)
+                return None
+        return self._fc_K
 
     # ------------------------------------------------------------------
     def _auto_align(self, initial_tcp_mm_deg):

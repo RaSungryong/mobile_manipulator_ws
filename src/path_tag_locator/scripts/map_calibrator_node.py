@@ -244,6 +244,9 @@ class MapCalibratorNode:
                 align_cfg=self.locator_cfg.align,
                 hand_cam_image_topic=self.locator_cfg.topics.hand_cam_image,
                 front_cam_image_topic=self.locator_cfg.topics.front_cam_image,
+                front_cam_info_topic=self.locator_cfg.topics.front_cam_info,
+                front_cam_repose_from_corners=bool(
+                    self.locator_cfg.detector.front_cam_repose_from_corners),
                 tag_family=self.locator_cfg.tag.family,
                 dry_run=bool(req.dry_run),
                 home_before_nav=bool(

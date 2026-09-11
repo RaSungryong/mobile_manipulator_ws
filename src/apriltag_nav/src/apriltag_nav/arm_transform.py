@@ -3,18 +3,35 @@
 """
 World-frame → arm-base-frame pose transform (4-DOF physical model).
 
-Split out of arm_controller.py: this is pure geometry, not motion control,
-and it is exactly the code the lift integration will have to touch —
-`arm_base_z` is a constant here while the new base can move the arm
-vertically. See docs/lift_arm_base_z_analysis.md before changing that.
+Split out of arm_controller.py: this is pure geometry, not motion control.
+
+Lift compensation (2026-09-11)
+------------------------------
+`arm_base_z` is measured with the lift AT ORIGIN. The lift raises the arm
+base by up to ~343 mm on top of that, so `lift_m` must carry the live
+extension (`/lifter/height` via `lift_height.LiftHeightListener`) or the
+result is wrong by exactly that much.
+
+Direction, since it is not guessable: `R_AW` is a pure z-rotation (the
+mount has no tilt), so it does not mix z, and `p_arm[2] = z_world -
+arm_base_z`. Leaving the lift out makes that term `lift_m` too LARGE, and
+the arm — whose base really is `lift_m` higher — puts the TCP `lift_m`
+ABOVE the target. So an uncompensated raised lift scans too HIGH, away
+from the plate: a wrong measurement rather than a collision. It is not
+self-correcting either — the Keyence standoff loop is clamped to
+`keyence_max_step_mm` (1.0 mm) per step and cannot close a 150-300 mm gap.
+
+Joint-mode targets are unaffected: those CSVs are absolute joint angles
+fed straight to MoveJ and no transform reads them.
 
 Calibration source of truth: path_tag_locator/config/extrinsics.yaml
 T_ab2mb — R = Rz(180°) exactly (mount_yaw = π, NO tilt), t = (0, -0.100, -0.652)
-(arm base 652 mm above the mobile-base origin, lift at its origin; measured on
-the replacement base 2026-08-13, the previous base read 1.025). The no-tilt
-claim is independently confirmed by the 655-point real-robot fit
-(task/csv/calib_data_params.yaml, tilt ≈ 0). Earlier USD-derived defaults
-(base_z 1.0076, tilts ±1.5°) are superseded — those tilts do not exist on
+(arm base 652 mm above the mobile-base origin, lift at its origin; measured
+on the replacement base 2026-08-13 — figures from before that swap describe
+different hardware). The no-tilt claim is independently confirmed by the
+655-point real-robot fit (task/csv/calib_data_params.yaml, tilt ≈ 0);
+⚠️ only its TILT carries over, the fit's base_z is old-base data. Earlier
+USD-derived defaults (tilts ±1.5°) are superseded — those tilts do not exist on
 the real platform. Lookup chain per value:
     private ROS param  >  robot.yaml `arm_calibration`  >  hardcoded default
 """
@@ -27,12 +44,26 @@ import rospy
 from apriltag_nav.paths import load_yaml_block
 
 
-def transform_world_to_arm(g, msg):
+def transform_world_to_arm(g, msg, lift_m=0.0):
     """
     World frame (CSV pose frame) → arm base_link.
 
-    g   : dict with x, y, z [m] and rx, ry, rz (ZYX intrinsic, rad)
-    msg : /robot_pose message (x, y [m] manipulator frame; theta [deg])
+    g      : dict with x, y, z [m] and rx, ry, rz (radians)
+    msg    : /robot_pose message (x, y [m] manipulator frame; theta [deg])
+    lift_m : live lift extension above origin [m]. 0.0 reproduces the
+             pre-2026-09-11 behaviour exactly; see the module docstring for
+             why leaving it at 0 while the lift is raised puts the TCP that
+             far ABOVE the target.
+
+    ⚠️ `g`'s rx/ry/rz are NOT the "ZYX intrinsic" the old docstring claimed.
+    The encoding below — `from_euler('zyx', [rx, ry, rz])`, i.e. scipy
+    LOWERCASE = extrinsic = `XYZ`-intrinsic(rz, ry, rx) — is the one that
+    reproduces the physical scan pose: on `grid_path_line1.csv` it puts the
+    tool z-axis at (-0.089, -0.037, -0.995), pointing DOWN at the plate,
+    while reading the columns as ZYX-intrinsic(rz, ry, rx) gives
+    (0.036, 0.999, -0.003) — horizontal, and 116-124 deg away over that
+    file. The code is right; the documentation was wrong. Do not "fix" this
+    line to match a doc.
 
     Returns (pos_mm, rpy_deg) in Fairino SDK units (mm, degrees).
     """
@@ -52,7 +83,7 @@ def transform_world_to_arm(g, msg):
     p_A_W = np.array([
         x_base + c * body_off_x - s * body_off_y,
         y_base + s * body_off_x + c * body_off_y,
-        body_off_z
+        body_off_z + float(lift_m)      # lift raises the arm base, 2026-09-11
     ])
 
     alpha = theta + mount_yaw
@@ -79,6 +110,7 @@ def transform_world_to_arm(g, msg):
     rospy.loginfo(
         f"[Arm REAL] Transform: world=({g['x']:.3f}, {g['y']:.3f}, {g['z']:.3f}) "
         f"-> arm=({pos_mm[0]:.1f}, {pos_mm[1]:.1f}, {pos_mm[2]:.1f}) mm"
+        f"  [lift {float(lift_m) * 1000.0:.1f} mm]"
     )
 
     return pos_mm, rpy_deg
