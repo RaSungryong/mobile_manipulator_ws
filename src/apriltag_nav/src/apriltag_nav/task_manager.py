@@ -189,6 +189,28 @@ class TaskManager:
             "result_name": "scan_grid_standoff050_ra_map.csv",
         },
 
+        # ---------------- single-group bring-up ----------------
+        # Group 104 is the ONE group whose work points are actually within
+        # reach of the tag it is assigned to (max 1.00 m from the stop pose;
+        # every other group is nearest to a different tag — see the table
+        # above). This task exists to exercise the whole chain end to end —
+        # navigate to 104, arm to each point, Keyence standoff, capture,
+        # inference, result CSV — on data that should work, before anyone
+        # tries to interpret a failure from the mis-assigned groups.
+        #
+        # Pose mode on purpose: IK is solved per point, so anything out of
+        # reach fails the move and says so. Expect 182 of 183 points to
+        # solve; the one at 1.41 m is just past the 1.40 m flange reach and
+        # failing there is correct behaviour, not a bug.
+        "scan_g104_standoff010": {
+            "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
+            "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
+            "groups": [104],
+            "type": "scan",
+            "scan_mode": "pose",
+            "result_name": "scan_g104_standoff010_ra_map.csv",
+        },
+
         # ---------------- move-only CSV  --------
         # "move_route_A": {
         #     "file": "move_route_A.csv",
@@ -251,6 +273,24 @@ class TaskManager:
                 if not all_rows:
                     rospy.logwarn(f"[TaskManager] Empty input for '{task_name}'")
                 continue
+
+            # Optional `groups` filter: run only these group_ids from the
+            # CSV. Lets one known-good group be exercised end to end without
+            # copying the file — a derived CSV is a second source of truth
+            # that drifts the moment the original is regenerated.
+            want = cfg.get("groups")
+            if want:
+                want = {int(g) for g in want}
+                kept = [r for r in all_rows if _as_int(r.get("group_id")) in want]
+                if not kept:
+                    rospy.logerr(
+                        f"[TaskManager] Task '{task_name}': groups {sorted(want)} "
+                        f"match no row. Refusing to register.")
+                    continue
+                rospy.loginfo(
+                    f"[TaskManager] Task '{task_name}': groups filter "
+                    f"{sorted(want)} kept {len(kept)} of {len(all_rows)} rows")
+                all_rows = kept
 
             # Lift height for the whole task. A disagreement is fatal for the
             # task, so resolve it before anything gets registered.
