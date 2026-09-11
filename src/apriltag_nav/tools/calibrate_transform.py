@@ -6,8 +6,15 @@ calibrate_transform.py
 Optimizes the 6 transform parameters in _transform_pose using
 calibration data collected by collect_calib_data.py.
 
+⚠️ --calib_csv is effectively REQUIRED. The shipped `task/csv/calib_data*`
+was the 655-point OLD-BASE fit and was deleted 2026-09-11 (the base was
+replaced 2026-08-13, so that data describes different hardware); the
+hardcoded default below also points at another machine's home directory and
+has never resolved here. Collect fresh data with collect_calib_data.py
+first. git has the old files if the methodology is needed as a reference.
+
 Usage:
-    python3 calibrate_transform.py --calib_csv task/csv/calib_data_line1.csv
+    python3 calibrate_transform.py --calib_csv <freshly collected csv>
 
 Input CSV columns (from collect_calib_data.py):
     group_id, point_id,

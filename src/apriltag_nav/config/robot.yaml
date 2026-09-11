@@ -981,8 +981,9 @@ arm_calibration:
   # Source of truth: path_tag_locator/config/extrinsics.yaml T_ab2mb
   # (platform-measured; R = Rz(180°) exactly, t = (0, -0.100, -0.652)).
   # Two independent confirmations that the mount has NO tilt: the extrinsics
-  # measurement, and the 655-point real-robot fit (task/csv/
-  # calib_data_params.yaml) which found tilt_x/y ≈ 0.0001/0.0007 rad.
+  # measurement, and a 655-point real-robot fit which found tilt_x/y ≈
+  # 0.0001/0.0007 rad. That fit's data (task/csv/calib_data*) was old-base
+  # and was deleted 2026-09-11, so the number survives only as this note.
   #
   # ⚠️ arm_base_z is the height WITH THE LIFT AT ITS ORIGIN. The lift adds up
   # to 343 mm on top of it (0.652 -> 0.995 m at 6900 counts) and this value

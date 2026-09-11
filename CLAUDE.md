@@ -1237,10 +1237,12 @@ the world target — see the lift section below.
 
 Source of truth: **`path_tag_locator/config/extrinsics.yaml` `T_ab2mb`**
 (platform-measured; that file explicitly deprecates earlier tunings). The
-mount has **no tilt** — R is exactly Rz(180°) — which the 655-point real-robot
-fit (`task/csv/calib_data_params.yaml`, tilt ≈ 0.0001/0.0007 rad) confirms
-independently. The USD-derived values used before (base_z 1.0076, tilts
--1.3°/+1.5°) are superseded; those tilts do not exist on the real platform.
+mount has **no tilt** — R is exactly Rz(180°) — which a 655-point real-robot
+fit (tilt ≈ 0.0001/0.0007 rad) confirmed independently. ⚠️ That fit's data
+(`task/csv/calib_data*`) was old-base and was **deleted 2026-09-11**, so the
+number survives only as this note; git has the files. The USD-derived values
+used before (base_z 1.0076, tilts −1.3°/+1.5°) are superseded; those tilts do
+not exist on the real platform.
 
 ```yaml
 arm_body_offset_x:  0.0       # arm mount in body frame X (m)
@@ -1399,6 +1401,8 @@ of editing the guide.
 | line 704 Appendix / §7 | `arm_base_z` is **0.652 m**, not 1.025 — the mobile base was replaced 2026-08-13, and the value was corrected 0.651 → 0.652 on 2026-08-23. Joint-mode scans therefore sit at 652 + 150 = **802 mm**. |
 | line 1070 open-issues table | drop the "`arm_base_z` 1.025 vs 0.9541 (71 mm)" row entirely; both figures belong to the retired base. |
 | Appendix A | missing the `lifter:` and `task_flow:` blocks of `robot.yaml`. |
+| Wherever the 655-point fit appears | its data (`task/csv/calib_data*`) was **deleted 2026-09-11** — old-base, and the base was replaced 2026-08-13. The tilt ≈ 0.0001/0.0007 rad number survives as a note in `robot.yaml` / `arm_transform.py`; do not point readers at the files. |
+| Task list / §5 | every `scan_joints_line*` / `scan_grid_line*` / `scan_full_*` task and CSV was deleted 2026-09-11. Current tasks are `scan_grid_standoff{010,030,050}` and `scan_g104_standoff010` (pose mode); the RRT joint tasks are commented out pending a group→tag fix. |
 | Appendix B checklist | predates `lifter_node`. (The "`mm_calibrated` is false" caveat it was missing is now moot — measured 2026-08-13, it is true.) |
 | Throughout | "homing" is still used for both senses. The workspace now separates **리프트 원점복귀** (lift origin homing) from **매니퓰레이터 홈 자세** (arm home pose). |
 | Missing entirely | the `lift_height` CSV column and the task flow it drives; that a task ends with lift origin homing and then **stays put** (`go_home` is a separate task); that absolute lift moves are refused before origin homing. |

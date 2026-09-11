@@ -28,11 +28,12 @@ Calibration source of truth: path_tag_locator/config/extrinsics.yaml
 T_ab2mb — R = Rz(180°) exactly (mount_yaw = π, NO tilt), t = (0, -0.100, -0.652)
 (arm base 652 mm above the mobile-base origin, lift at its origin; measured
 on the replacement base 2026-08-13 — figures from before that swap describe
-different hardware). The no-tilt claim is independently confirmed by the
-655-point real-robot fit (task/csv/calib_data_params.yaml, tilt ≈ 0);
-⚠️ only its TILT carries over, the fit's base_z is old-base data. Earlier
-USD-derived defaults (tilts ±1.5°) are superseded — those tilts do not exist on
-the real platform. Lookup chain per value:
+different hardware). The no-tilt claim was independently confirmed by a
+655-point real-robot fit which found tilt ≈ 0.0001/0.0007 rad; that fit's
+data (`task/csv/calib_data*`) was old-base and has been deleted, so the
+number survives only as this note. Earlier USD-derived defaults (tilts
+±1.5°) are superseded — those tilts do not exist on the real platform.
+Lookup chain per value:
     private ROS param  >  robot.yaml `arm_calibration`  >  hardcoded default
 """
 
