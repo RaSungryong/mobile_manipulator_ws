@@ -14,6 +14,15 @@
     <!-- EXEC/EVAL debug channel on /task_command. See the node below. -->
     <arg name="debug_mode" default="false"/>
 
+    <!-- rosbridge (WebSocket <-> ROS JSON bridge) for external computers.
+         Since 2026-09-14 the operator's Windows PC reaches this stack through
+         it: ws://<phoenix AP bridge WLAN addr>:9090, port-forwarded by the
+         Phoenix Contact bridge to this PC's 192.168.1.100:9090. Native ROS
+         networking cannot cross that NAT hop (every node would need a
+         reverse connection), so this is the only external path. -->
+    <arg name="use_rosbridge"  default="true"/>
+    <arg name="rosbridge_port" default="9090"/>
+
     <!-- front_cam colour resolution. The Femto Bolt's default (0 = let the
          driver pick) is 1920x1080 MJPG, which measured 140 ms of latency
          inside the driver alone and held AprilTag detection to 17 Hz against
@@ -269,6 +278,34 @@
              linger on the master and silently re-open the channel. -->
         <param name="debug_mode" value="$(arg debug_mode)"/>
     </node>
+
+    <!-- rosbridge_websocket (+ its rosapi helper) — the external interface.
+         OPTIONAL: nothing in the stack talks through it; it exists so a
+         computer WITHOUT ROS (the Windows operator PC, a browser) can
+         publish /task_command, subscribe /task_state, /arm/state,
+         /arm/scan_progress, /mobile/state, /lifter/state, /bms/state and
+         call the /arm/*, /mobile/*, /lifter/* services as JSON over one TCP
+         port. It is one ROS node registered on the master, one WebSocket
+         per client, so it adds nothing to the 11311 fd load that bit
+         2026-08-14.
+         ⚠️ It exposes EVERY topic and service (topics_glob [*]) with no
+         authentication: keep port 9090 inside the site LAN, never on the
+         internet. External clients must obey the same ownership rules as
+         local code — never publish /cmd_vel or /lift/* (mobile_node and
+         lifter_node are the sole writers, and there is no arbitration below
+         them); use the owner nodes' interfaces. Restrict with e.g.
+         topics_glob:="[/task_command, /task_state, /arm/*]" if that rule
+         ever needs enforcing rather than trusting.
+         ⚠️ Images: do NOT subscribe raw image topics through it — a Basler
+         frame becomes ~27 MB of base64 JSON; use web_video_server or a
+         /compressed topic instead.
+         A rosbridge started by hand (roslaunch rosbridge_server ...) must be
+         stopped before this launch, or the second one fails to bind 9090. -->
+    <include file="$(find rosbridge_server)/launch/rosbridge_websocket.launch"
+             if="$(arg use_rosbridge)">
+        <arg name="port"    value="$(arg rosbridge_port)"/>
+        <arg name="address" value="0.0.0.0"/>
+    </include>
 
     <!-- path_tag_locator's calibration nodes are NOT started here — they
          have their own path_tag_locator.launch, run alongside this stack

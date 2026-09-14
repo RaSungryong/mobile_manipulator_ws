@@ -70,6 +70,7 @@ detail and the reasoning; HANDOVER.md holds the checklist.
 ```bash
 catkin_make && source devel/setup.bash
 roslaunch apriltag_nav mobile_manipulator.launch   # starts all nine nodes
+                                                   # + rosbridge on :9090 (use_rosbridge:=false to skip)
 ```
 
 The Navifra systemd service already runs `roscore` — do not start one.
@@ -281,6 +282,28 @@ cameras now). Seven are required; the optional one owns no device:
 `inference_node` (the TASK scan path scores frames in-process through
 `inference_interface.py`, so only `robot_ui`'s on-demand Ra needs the node —
 both paths share `RaPredictor` and return bit-identical values).
+
+**Since 2026-09-14 the launch also starts `rosbridge_websocket` (+ `rosapi`)
+on port 9090** (`use_rosbridge`, `rosbridge_port`): the external interface
+for computers WITHOUT ROS — the operator's Windows PC reaches it as
+`ws://192.168.0.20:9090`, the Phoenix Contact AP bridge's WLAN address,
+which the bridge port-forwards to this PC's `192.168.1.100:9090` (the
+bridge is a NAT router between 192.168.1.x and the site's 192.168.0.x, so
+native ROS networking cannot cross it). Clients speak the rosbridge JSON
+protocol (`roslibpy`, `roslib.js`, or a bare websocket): publish
+`/task_command`, subscribe `/task_state` / `/arm/state` /
+`/arm/scan_progress` / `/mobile/state` / `/lifter/state` / `/bms/state`,
+call the `/arm/*` / `/mobile/*` / `/lifter/*` services. Nothing in the
+stack depends on it. Rules for external clients are the local ones:
+**never publish `/cmd_vel` or `/lift/*`** (sole owners, no arbitration),
+**no raw image topics through it** (a Basler frame is ~27 MB of base64;
+use `web_video_server` / `/compressed`), and it has **no authentication**
+— keep 9090 inside the site LAN. A hand-started
+`roslaunch rosbridge_server rosbridge_websocket.launch` must be stopped
+before the stack launch or the second one fails to bind the port.
+Connection check from any machine (no ROS, no stack needed):
+`{"op":"call_service","service":"/rosapi/topics"}` over the websocket
+returns the topic list.
 
 The calibration nodes (`path_tag_locator` + `map_calibrator`, plus
 `handeye_calib` behind `use_handeye_calib:=false`) live in a SEPARATE
@@ -1494,6 +1517,41 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-14 — rosbridge in the launch: the Windows PC reaches the stack over WebSocket through the Phoenix AP bridge
+
+User: "rosbridge, 웹소켓으로 로봇PC와 외부 컴퓨터를 연결하고 싶은데 방법을
+모르겠어" — then, once it worked by hand, "rosbridge를
+mobile_manipulator.launch에 넣어줘". Topology found by probing from this
+PC (read-only): default route → the Phoenix Contact AP bridge at
+192.168.1.10, which is a **NAT router** between LAN 4 (192.168.1.x) and
+the site router's 192.168.0.x — it holds 192.168.0.20 on its WLAN side,
+and 192.168.0.1 answers pings from here while nothing from 192.168.0.x
+can reach 192.168.1.100 unaided. Native ROS (`ROS_MASTER_URI`) is
+therefore impossible from the Windows PC (each node needs a reverse
+TCPROS connection); rosbridge is one inbound TCP port. Steps that
+worked: `ros-noetic-rosbridge-server` was already installed; ufw is
+inactive; a hand-launched `rosbridge_websocket` answered
+`/rosapi/topics` (80 topics) and `/odom` locally; the user added the
+bridge's port forward WLAN 9090 → 192.168.1.100:9090 and the Windows
+client (`python -m pip install roslibpy websocket-client`; `pip` itself
+is not on PATH with python.org's 3.14) connected to
+`ws://192.168.0.20:9090` and listed the topics. A first local test that
+subscribed `/task_state` "printed nothing" — `task_executor` was not
+running, so the latched topic had no publisher; use `/rosapi/topics` as
+the liveness check, not a stack topic.
+
+Landed: `use_rosbridge` (true) / `rosbridge_port` (9090) args and the
+`rosbridge_websocket.launch` include at the end of
+`mobile_manipulator.launch`, `rosbridge_server` as an `exec_depend`,
+`/rosbridge_websocket` + `/rosapi` as optional nodes in
+`test_all_devices.py`, and the *External access* paragraph in the
+Architecture section (ownership rules apply to external clients too; no
+images; no auth). Verified: `roslaunch --nodes` resolves the include and
+lists both nodes, `use_rosbridge:=false` drops them, `rosbridge_port`
+reaches the node's `~port`; XML and Python parse. Not yet launched as
+part of the stack — the hand-started rosbridge in the user's terminal
+must be Ctrl-C'd first or the launch's copy fails to bind 9090.
 
 ### 2026-09-14 — CHARGE / UNDOCK: dock-and-charge as an operator command, with robot_ui buttons
 

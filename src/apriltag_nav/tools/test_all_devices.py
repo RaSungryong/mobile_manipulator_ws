@@ -106,6 +106,8 @@ EXPECTED_NODES = [
     ('/lifter_node',               True),
     ('/camera_viewer_node',        False),   # not in the launch since 2026-09-04 (robot_ui replaces it); rosrun on demand
     ('/inference_node',            False),   # on-demand Ra for robot_ui; TASK scans score in-process
+    ('/rosbridge_websocket',       False),   # external WebSocket/JSON access (Windows PC via the Phoenix AP bridge), launch arg use_rosbridge
+    ('/rosapi',                    False),   # rosbridge's helper node (topic/service listing for clients)
 ]
 
 EXPECTED_SERVICES = [
