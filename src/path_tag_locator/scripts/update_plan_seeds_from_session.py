@@ -5,7 +5,7 @@ update_plan_seeds_from_session.py — rewrite a calibration plan's
 ``arm_view_tcp_mm_deg`` seeds from a recorded session.
 
     rosrun path_tag_locator update_plan_seeds_from_session.py \
-        ~/.ros/path_tag_locator/calibrate/20260904_153218 \
+        log/path_tag_locator/calibrate/20260904_153218 \
         $(find path_tag_locator)/config/calibration_plan_plate1.yaml [--apply]
 
 For every plan entry:

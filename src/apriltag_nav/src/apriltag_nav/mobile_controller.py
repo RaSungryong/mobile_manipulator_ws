@@ -22,6 +22,7 @@ from std_msgs.msg import Bool
 # CvBridge / dt_apriltags went with the detector it used to run.
 from robot_msgs.msg import Pose2DWithFlag  # Custom message
 from robot_msgs.msg import AprilTagDetectionArray
+from apriltag_nav import paths as _paths
 
 
 def tag_edge_angle_deg(corners):
@@ -412,8 +413,11 @@ class MobileController:
         # One yaml PER TASK COMMAND under this directory (see
         # begin_nav_session); the old single alignment_result_path file,
         # which overwrote per tag, is gone.
+        # Default and the robot.yaml value both live INSIDE the workspace
+        # (<ws>/log/apriltag_nav/nav_log, 2026-09-14); `${MM_WS}` in the
+        # yaml resolves through apriltag_nav.paths.
         self.nav_log_dir = pred_cfg.get(
-            'alignment_result_dir', '~/.ros/apriltag_nav/nav_log')
+            'alignment_result_dir', _paths.NAV_LOG_DIR)
         self._nav_session = None        # dict being appended to
         self._nav_session_path = None
         self._nav_seq = 0
@@ -432,11 +436,13 @@ class MobileController:
                 int(tag_id) in self.temp_missing_tag_ids)
 
     def _expand_path(self, path):
-        return os.path.expandvars(os.path.expanduser(str(path)))
+        return _paths.expand_path(path)
 
     def _latest_map_world_path(self):
+        # map_calibrator writes map_world_<ts>.yaml under the workspace's
+        # log/path_tag_locator (was ~/.ros/path_tag_locator until 2026-09-14).
         files = sorted(
-            glob.glob(self._expand_path("~/.ros/path_tag_locator/map_world_*.yaml")),
+            glob.glob(os.path.join(_paths.PTL_LOG_DIR, "map_world_*.yaml")),
             reverse=True)
         return files[0] if files else None
 

@@ -1,0 +1,12 @@
+# Sourced by <ws>/devel/setup.bash (catkin env hook, see CMakeLists.txt).
+#
+# Every run output of this workspace lives INSIDE the workspace since
+# 2026-09-14 (user rule): records under <ws>/log, results under <ws>/results.
+# `MM_WS` is the workspace root the yaml configs reference as `${MM_WS}`
+# (apriltag_nav.paths and path_tag_locator derive the same value when the
+# shell did not set it). ROS_LOG_DIR is the one thing only the environment
+# can decide: roslaunch and rospy read it at start, so node logs go to
+# <ws>/log/ros/<run_id>/ instead of ~/.ros/log. The navifra driver's own
+# systemd service does not source this file and keeps ~/.ros/log.
+export MM_WS="$(cd "@CATKIN_DEVEL_PREFIX@/.." && pwd)"
+export ROS_LOG_DIR="$MM_WS/log/ros"

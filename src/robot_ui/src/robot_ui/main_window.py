@@ -1139,7 +1139,7 @@ class MainWindow(QMainWindow):
                 # destroy the whole measurement. Point at the session dir.
                 self.append_log(
                     '[calib] %s session recorded under '
-                    '~/.ros/path_tag_locator/calibrate/<newest>/  — analyse '
+                    '<ws>/log/path_tag_locator/calibrate/<newest>/  — analyse '
                     'with:  rosrun path_tag_locator analyse_yaw_sweep.py '
                     '<that dir>' % kind)
 

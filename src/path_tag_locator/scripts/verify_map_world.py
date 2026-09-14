@@ -32,9 +32,11 @@ from pathlib import Path
 
 import yaml
 
+from path_tag_locator import LOG_ROOT
+
 
 def _latest_map_world():
-    root = Path("~/.ros/path_tag_locator").expanduser()
+    root = Path(LOG_ROOT)
     if not root.exists():
         return None
     files = sorted(root.glob("map_world_*.yaml"), reverse=True)
@@ -117,7 +119,7 @@ def main():
     )
     ap.add_argument("--map-world", default=None,
                     help="path to map_world_*.yaml "
-                         "(default: latest in ~/.ros/path_tag_locator/)")
+                         "(default: latest in <ws>/log/path_tag_locator/)")
     ap.add_argument("--map-yaml", default=None,
                     help="path to apriltag_nav-style map.yaml "
                          "(default: package's config/map.yaml)")

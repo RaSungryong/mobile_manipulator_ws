@@ -4,7 +4,7 @@
     python3 src/apriltag_nav/tools/check_ground_plane.py [snapshot_dir]
 
 Uses front_cam's fitted numbers (robot.yaml robot_camera.ground_plane) and
-CameraInfo of 2026-09-08. With `snapshot_dir` (e.g. ~/calib_pair, raw
+CameraInfo of 2026-09-08. With `snapshot_dir` (e.g. <ws>/log/apriltag_nav/calib_pair, raw
 tag-pair snapshots `scan_*.txt` with tags 15/16 laid 0.150 m apart) it
 also checks the correction against real data. Exit status 1 on failure.
 """
@@ -18,6 +18,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from apriltag_nav.ground_plane import GroundPlane  # noqa: E402
+from apriltag_nav import paths  # noqa: E402
 
 FX, FY, CX, CY = 750.2402, 749.7717, 638.1971, 352.9817
 D = [0.08307457715272903, -0.1101505309343338, 5.2812414651270956e-05, -0.0003344604920130223, 0.045477673411369324]
@@ -105,7 +106,8 @@ def main():
           abs(mx[int(round(v)), int(round(u))] - raw_pt[0]) < 1.5 and abs(my[int(round(v)), int(round(u))] - raw_pt[1]) < 1.5)
 
     # 6. real snapshots (optional): tag 16's corrected edge vs the pair's centre line
-    sdir = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser('~/calib_pair')
+    sdir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+        paths.LOG_DIR, 'apriltag_nav', 'calib_pair')  # moved from ~/calib_pair 2026-09-14
     files = sorted(glob.glob(os.path.join(sdir, 'scan_*.txt')))
     if files:
         def parse(fn):

@@ -130,7 +130,7 @@ rosservice call /handeye_calib/compute     "{}"   # writes T_hc2ee.npz
 
 **Reusing previous samples.** Restarting the node clears in-memory
 samples but disk archives under
-`~/.ros/path_tag_locator/handeye_calib/run_*/` are preserved. Two ways
+`$MM_WS/log/path_tag_locator/handeye_calib/run_*/` are preserved. Two ways
 to re-feed them into `/compute`:
 
 ```bash
@@ -254,7 +254,7 @@ rostopic echo /map_calibrator/current_target_tag
 The service response carries `num_succeeded`, `num_failed`, and the
 `output_yaml_path`. Failed entries do **not** abort the session; they are simply absent
 from the output's `tags:` (map.yaml itself is never written), and a
-`run_*_FAILED/` directory under `~/.ros/path_tag_locator/locate/` holds
+`run_*_FAILED/` directory under `$MM_WS/log/path_tag_locator/locate/` holds
 the error and request echo.
 
 #### Per-entry execution (what happens for each plan row)
@@ -428,12 +428,12 @@ Inside, for that one entry:
 
 ```bash
 # The yaml output:
-ls -lt ~/.ros/path_tag_locator/map_world_*.yaml | head -1
+ls -lt $MM_WS/log/path_tag_locator/map_world_*.yaml | head -1
 cat <that file>
 # Expect tag 101 with position_m / rpy_deg, ref_tag_id=0, map_xy from map.yaml.
 
 # Per-tag archive (raw images for sanity check):
-ls ~/.ros/path_tag_locator/locate/$(date +%Y%m%d)/run_*_tag101/
+ls $MM_WS/log/path_tag_locator/locate/$(date +%Y%m%d)/run_*_tag101/
 # hand_cam.png: ref tag 0 should be near image center, tilt < ~5°
 # front_cam.png: path tag 101 should be clearly visible
 ```
@@ -583,11 +583,11 @@ rosrun path_tag_locator visualize_map_world.py
 ```
 
 Inspect failure cases by opening the per-tag archive:
-`~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/{hand_cam,front_cam}.png`.
+`$MM_WS/log/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/{hand_cam,front_cam}.png`.
 
 #### Output
 
-- `~/.ros/path_tag_locator/map_world_<ts>.yaml` (**world-frame** output;
+- `$MM_WS/log/path_tag_locator/map_world_<ts>.yaml` (**world-frame** output;
   schema explicitly different from `map.yaml`, with a `frame: world`
   banner and a `note:` warning against using it as a map.yaml
   replacement). Each calibrated tag has:
@@ -614,7 +614,7 @@ Every `locate_path_tag` call writes a self-contained run directory so
 that the result can be reproduced offline:
 
 ```
-~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
+$MM_WS/log/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
     hand_cam.png            BGR image fed to detector
     front_cam.png           BGR image fed to detector
     K_hc.npz / K_fc.npz     intrinsics actually used
@@ -623,7 +623,7 @@ that the result can be reproduced offline:
                             position_m, rpy_deg
     result.yaml             human-readable summary (incl. auto_align report)
     request.yaml            full service request echo
-~/.ros/path_tag_locator/locate/locate_log.csv   append-only index
+$MM_WS/log/path_tag_locator/locate/locate_log.csv   append-only index
 ```
 
 Failed calls land in `..._FAILED/` directories with `result.yaml`
@@ -633,7 +633,7 @@ log row carries `success=0`.
 Hand-eye calibration archives each capture as it happens:
 
 ```
-~/.ros/path_tag_locator/handeye_calib/run_<ts>/
+$MM_WS/log/path_tag_locator/handeye_calib/run_<ts>/
     samples/0000_image.png    samples/0000_pose.npz  (tcp_pose, K)
     samples/0001_image.png    ...
     samples_index.csv         row per capture (tcp, file paths)

@@ -16,6 +16,11 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_python_setup()
 
+# Exports MM_WS (workspace root) and ROS_LOG_DIR=<ws>/log/ros into every
+# shell that sources devel/setup.bash — run output lives in the workspace
+# (2026-09-14). Re-run catkin_make after editing env-hooks/.
+catkin_add_env_hooks(50.apriltag_nav SHELLS sh DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/env-hooks)
+
 catkin_package(
   CATKIN_DEPENDS
     rospy

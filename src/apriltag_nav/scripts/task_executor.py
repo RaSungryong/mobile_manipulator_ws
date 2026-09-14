@@ -39,7 +39,7 @@ class MobileManipulatorState(Enum):
 # ============================================================
 # PATHS — resolved centrally, see apriltag_nav/paths.py
 # ============================================================
-from apriltag_nav.paths import CONFIG_PATH, TASK_DIR
+from apriltag_nav.paths import CONFIG_PATH, TASK_DIR, RA_MAP_DIR
 
 # Tasks the charging manager queues for itself (2026-09-09). They run through
 # the ordinary task machinery (preempt, safety gate, /task_state, lamp) but
@@ -63,7 +63,7 @@ class MobileManipulatorTaskExecutor:
         # ---------- Managers ----------
         # The tag map is not here any more: path finding belongs to whoever
         # drives, and that is mobile_node.
-        self.task_mgr = TaskManager(TASK_DIR)
+        self.task_mgr = TaskManager(TASK_DIR, result_dir=RA_MAP_DIR)
 
         # ---------- State ----------
         # Declared before the controllers: NavifraDevices' on_estop callback
@@ -245,7 +245,7 @@ class MobileManipulatorTaskExecutor:
                          "or pending. STOP it first.")
             return False
         try:
-            new_mgr = TaskManager(TASK_DIR)
+            new_mgr = TaskManager(TASK_DIR, result_dir=RA_MAP_DIR)
         except Exception as e:
             rospy.logerr(f"[Executor] RELOAD_TASKS failed, keeping the old "
                          f"task set: {e}")

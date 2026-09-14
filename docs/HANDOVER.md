@@ -443,6 +443,12 @@ pull + `catkin_make` before anything below.
 7. All tuning in `config/robot.yaml` (manipulator) / `~/navifra/param.yaml`
    (base); a `~param` in `mobile_manipulator.launch` overrides `robot.yaml`
    (`soft_max_counts` is one — change both).
+8. **Every result and record lives in the workspace (2026-09-14):**
+   `results/ra_maps`, `results/scan_images/<run>/`, `log/apriltag_nav/
+   nav_log`, `log/path_tag_locator/…`, `log/ros` (node logs — needs a shell
+   that sourced `devel/setup.bash` AFTER the 2026-09-14 `catkin_make`, which
+   exports `MM_WS` / `ROS_LOG_DIR`). Nothing goes to `~/.ros`, `/tmp` or
+   `$HOME`; `~/.ros/log` is the navifra driver's own and stays.
 
 ---
 
@@ -457,6 +463,8 @@ pull + `catkin_make` before anything below.
 | `docs/keyence_scan_chain.md` | Keyence standoff loop record |
 | `docs/lift_arm_base_z_analysis.md` | lift-vs-transform analysis |
 | `docs/architecture_slides_kr.md` | presentation material |
+| `results/` (`README.md` there) | Ra maps (versioned), per-run scan frames, robot_ui captures |
+| `log/` | nav records, calibration sessions / locate runs / hand-eye runs, `ros/<run_id>` node logs, `apriltag_nav/calib_pair` |
 | `docs/all_tags_position.csv` | generated design positions for all 78 tags |
 | `src/path_tag_locator/docs/{USAGE_kr,TROUBLESHOOTING_kr,CALIBRATION_GUIDE_kr}.md` | tag-calibration tool docs |
 | `src/path_tag_locator/config/extrinsics.yaml` | measured truth for `T_ab2mb` / `T_mb2fc` (lift at origin) |

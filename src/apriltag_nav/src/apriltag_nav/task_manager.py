@@ -196,7 +196,12 @@ class TaskManager:
     # ==================================================
     # INIT
     # ==================================================
-    def __init__(self, task_dir: str):
+    def __init__(self, task_dir: str, result_dir: str = None):
+        # result_dir: where <task>_ra_map_<ts>.csv is written. None keeps the
+        # old behaviour (next to the input CSVs); task_executor passes
+        # paths.RA_MAP_DIR (<ws>/results/ra_maps, 2026-09-14) so results never
+        # sit in the directory the task discovery scans.
+        self.result_dir = result_dir or task_dir
 
         self.task_dir = task_dir
 
@@ -292,10 +297,10 @@ class TaskManager:
             # Output path: explicit `result_name` or `{first_input_stem}_result.csv`
             result_name = cfg.get("result_name")
             if result_name:
-                result_csv_path = os.path.join(self.task_dir, result_name)
+                result_csv_path = os.path.join(self.result_dir, result_name)
             else:
                 base, ext = os.path.splitext(input_files[0])
-                result_csv_path = os.path.join(self.task_dir, f"{base}_result{ext}")
+                result_csv_path = os.path.join(self.result_dir, f"{base}_result{ext}")
 
             task_type = cfg["type"]
 

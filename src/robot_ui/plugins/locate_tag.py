@@ -41,4 +41,4 @@ def run(ctx):
     if result.get('align_iterations'):
         ctx.log(f"auto-align converged in {result['align_iterations']} "
                 f'iteration(s)')
-    ctx.log('full record saved under ~/.ros/path_tag_locator/locate/')
+    ctx.log('full record saved under <ws>/log/path_tag_locator/locate/')

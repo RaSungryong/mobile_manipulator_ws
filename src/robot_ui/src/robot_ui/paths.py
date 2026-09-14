@@ -32,7 +32,11 @@ UI_DIR = os.path.join(PKG_DIR, 'ui')
 # site can keep its own collection outside the package.
 PLUGIN_DIR = os.path.join(PKG_DIR, 'plugins')
 
-# Default place captures land. /tmp on purpose: an operator who never sets a
-# path should not silently fill the package directory, and losing an unnamed
-# throwaway capture on reboot is the lesser harm.
-DEFAULT_SAVE_DIR = '/tmp/robot_ui_captures'
+# Workspace root: every result lives INSIDE the workspace (user rule,
+# 2026-09-14). Same derivation as apriltag_nav.paths.WS_DIR — PKG_DIR is
+# <ws>/src/robot_ui in a devel-space build — with the MM_WS env override.
+WS_DIR = os.path.abspath(os.environ.get('MM_WS')
+                         or os.path.join(PKG_DIR, os.pardir, os.pardir))
+
+# Default place Collect-tab captures land (was /tmp/robot_ui_captures).
+DEFAULT_SAVE_DIR = os.path.join(WS_DIR, 'results', 'captures')

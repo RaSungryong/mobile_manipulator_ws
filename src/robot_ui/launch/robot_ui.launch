@@ -7,7 +7,10 @@
        inference_node is NOT started here either — it belongs to apriltag_nav
        and is shared with anything else wanting Ra, not owned by the UI. -->
   <arg name="plugin_dir" default="$(find robot_ui)/plugins"/>
-  <arg name="save_dir"   default="/tmp/robot_ui_captures"/>
+  <!-- Captures go into the workspace (2026-09-14): <ws>/results/captures,
+       the workspace being MM_WS (catkin env hook) or three levels above this
+       file. Same rule as mobile_manipulator.launch's ws_dir. -->
+  <arg name="save_dir"   default="$(eval optenv('MM_WS', dirname() + '/../../..') + '/results/captures')"/>
 
   <!-- Which X display the window opens on.
        This needs saying because the failure is misleading: a shell with no

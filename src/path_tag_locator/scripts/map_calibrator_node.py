@@ -28,6 +28,7 @@ import rospkg
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger, TriggerResponse
 
+from path_tag_locator import LOG_ROOT
 from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.base_interface import BaseInterface
 from path_tag_locator.calibration.orchestrator import (
@@ -60,8 +61,7 @@ def _resolve_ros_path(p: str) -> str:
 
 def _default_map_out_path() -> str:
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return str(Path("~/.ros/path_tag_locator").expanduser() /
-               f"map_world_{ts}.yaml")
+    return str(Path(LOG_ROOT) / f"map_world_{ts}.yaml")
 
 
 class MapCalibratorNode:

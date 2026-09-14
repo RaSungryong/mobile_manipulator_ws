@@ -25,10 +25,19 @@ __pycache__/
 *.pth
 *.pdf
 
-# Runtime / backup output
-*_result_*.csv
-# scan results since 2026-09-14 are named <task>_ra_map_<timestamp>.csv
-*_ra_map_*.csv
+# Runtime / backup output. Result CSVs are written to results/ra_maps/
+# since 2026-09-14 and ARE versioned there (the deliverable, ~100 KB each);
+# a stray copy next to the input path files in task/csv is not.
+src/apriltag_nav/task/csv/*_result_*.csv
+src/apriltag_nav/task/csv/*_ra_map_*.csv
+# The bulk that goes with them is not versioned (gitignore has no trailing
+# comments — keep each pattern on its own line):
+#   results/scan_images/  wrist-camera frames, ~10 MB each (ra_maps/ holds the numbers)
+#   results/captures/     robot_ui Collect-tab captures
+#   log/ros/              roslaunch / node logs (ROS_LOG_DIR, set by the env hook)
+results/scan_images/
+results/captures/
+log/ros/
 *.bak
 
 # External camera driver source trees are upstream repositories.
@@ -63,6 +72,10 @@ token
 log/**/*.mp4
 log/**/*.webm
 log/**/*.png
+# …except the hand-eye samples: they are the INPUT the calibration is
+# recomputed from (calibrate() re-detects over the archive), ~0.4 MB each,
+# not re-checkable evidence like the front_cam snapshots above.
+!log/path_tag_locator/handeye_calib/**/*.png
 log/*.mp4
 log/*.webm
 log/**/*.tmp

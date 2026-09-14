@@ -387,7 +387,11 @@ robot:
     # numbers are always recorded; the latest map_world_*.yaml, when present,
     # only adds a world-frame reference and is never modified.
     record_alignment_result: true
-    alignment_result_dir: "~/.ros/apriltag_nav/nav_log"
+    # Inside the workspace since 2026-09-14 (user rule: every result and
+    # record lives in the ws). ${MM_WS} = the workspace root, exported by the
+    # catkin env hook and defaulted by apriltag_nav.paths when unset.
+    # (was ~/.ros/apriltag_nav/nav_log; the 2026-09-02..14 records were moved.)
+    alignment_result_dir: "${MM_WS}/log/apriltag_nav/nav_log"
 
   # Alignment Tuning — align_to_tag() runs after EVERY hop (forward,
   # backward AND pivot, 2026-09-02): base stops, then rotates in place until

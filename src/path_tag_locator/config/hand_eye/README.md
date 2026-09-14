@@ -2,7 +2,7 @@
 
 > ✅ **2026-09-14 — `T_hc2ee.npz` IS a real calibration of this robot.**
 > Produced by `handeye_calib_node`'s automatic sweep (run
-> `~/.ros/path_tag_locator/handeye_calib/run_20260914_183840`, 23 samples,
+> `$MM_WS/log/path_tag_locator/handeye_calib/run_20260914_183840`, 23 samples,
 > tilts 0/12/22°, spins ±30°, three distances; DANIILIDIS, AX=XB residual
 > 0.0173). Checked two ways: the fixed cross tag 0 re-projected through
 > all 23 poses scatters **2.1 mm rms / 3.2 mm max** (the 09-02 file gave

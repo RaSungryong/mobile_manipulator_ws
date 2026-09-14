@@ -43,6 +43,7 @@ import rospy
 import rospkg
 import yaml
 
+from path_tag_locator import LOG_ROOT
 from path_tag_locator.calibration.view_pose import (
     compute_T_world2mb_from_chain,
     compute_view_tcp,
@@ -70,7 +71,7 @@ def _resolve_ros_path(p):
 
 
 def _latest_map_world():
-    root = Path("~/.ros/path_tag_locator").expanduser()
+    root = Path(LOG_ROOT)
     files = sorted(root.glob("map_world_*.yaml"), reverse=True)
     return str(files[0]) if files else None
 

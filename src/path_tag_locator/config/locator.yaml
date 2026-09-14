@@ -61,7 +61,10 @@ path_tag_locator:
     # The service request can override the path per-call; the
     # ``save_result`` flag in the request is now informational only —
     # results are always written (observations + transforms + CSV).
-    default_save_dir:   "~/.ros/path_tag_locator"
+    # Inside the workspace since 2026-09-14 (was ~/.ros/path_tag_locator;
+    # the 2026-09-02..09 sessions were moved). ${MM_WS} = workspace root,
+    # exported by apriltag_nav's env hook / defaulted by the package import.
+    default_save_dir:   "${MM_WS}/log/path_tag_locator"
 
   # Auto-align parameters used when the LocatePathTag service request has
   # auto_align=true. Before computing T_B_world, the arm moves to the

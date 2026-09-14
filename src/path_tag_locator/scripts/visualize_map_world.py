@@ -39,6 +39,7 @@ from geometry_msgs.msg import Point, Pose, Quaternion, Vector3
 from std_msgs.msg import ColorRGBA, Header
 from visualization_msgs.msg import Marker, MarkerArray
 
+from path_tag_locator import LOG_ROOT
 from path_tag_locator.calibration.plan_io import load_reference_tags
 from path_tag_locator.geometry import R_to_quat_xyzw, rpy_deg_to_R
 
@@ -58,7 +59,7 @@ def _resolve_ros_path(p):
 
 
 def _latest_map_world():
-    root = Path("~/.ros/path_tag_locator").expanduser()
+    root = Path(LOG_ROOT)
     if not root.exists():
         return None
     files = sorted(root.glob("map_world_*.yaml"), reverse=True)

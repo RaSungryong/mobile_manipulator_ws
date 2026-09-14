@@ -60,7 +60,7 @@ print('||t|| =', np.linalg.norm(T[:3,3]), 'm')
 # 마지막 호출의 result.npz에서 실제 사용된 T_hc2ee 비교
 python3 -c "
 import numpy as np, glob, os
-runs = sorted(glob.glob(os.path.expanduser('~/.ros/path_tag_locator/locate/*/run_*/result.npz')))
+runs = sorted(glob.glob(os.path.expandvars('$MM_WS/log/path_tag_locator/locate/*/run_*/result.npz')))
 T = np.load(runs[-1])['T_hc2ee']
 print('used in last run:', T[:3,3], '||t||=', np.linalg.norm(T[:3,3]))
 "
@@ -177,7 +177,7 @@ grep -n "GetInverseKinRef\|GetInverseKin\|MoveJ" \
 
 ```bash
 # 마지막 실패한 호출의 hand_cam.png 위치
-ls ~/.ros/path_tag_locator/locate/*/run_*FAILED/hand_cam.png 2>/dev/null | tail -1
+ls $MM_WS/log/path_tag_locator/locate/*/run_*FAILED/hand_cam.png 2>/dev/null | tail -1
 ```
 
 ### 1.5 `T_A_world is identity` (월드 좌표 안 잡힘)
@@ -215,7 +215,7 @@ rosservice call /path_tag_locator/locate_path_tag "{
 
 ```bash
 # 최근 보정 결과 잔차 확인
-cat $(ls -1dt ~/.ros/path_tag_locator/handeye_calib/run_*/result.yaml | head -1)
+cat $(ls -1dt $MM_WS/log/path_tag_locator/handeye_calib/run_*/result.yaml | head -1)
 ```
 
 | residual | 평가 |
@@ -256,7 +256,7 @@ print('disk T_hc2ee t (m):', T[:3,3])
 # 노드가 마지막에 사용한 T_hc2ee (result.npz)
 python3 -c "
 import numpy as np, glob, os
-runs = sorted(glob.glob(os.path.expanduser('~/.ros/path_tag_locator/locate/*/run_*/result.npz')))
+runs = sorted(glob.glob(os.path.expandvars('$MM_WS/log/path_tag_locator/locate/*/run_*/result.npz')))
 if runs:
     T = np.load(runs[-1])['T_hc2ee']
     print('used (last run):', T[:3,3])
@@ -298,7 +298,7 @@ print('REACH 경계' if d > 0.85 else 'OK')
 ### 2.4 latest run 요약
 
 ```bash
-LATEST=$(ls -1dt ~/.ros/path_tag_locator/locate/*/run_*/ 2>/dev/null | head -1)
+LATEST=$(ls -1dt $MM_WS/log/path_tag_locator/locate/*/run_*/ 2>/dev/null | head -1)
 echo "$LATEST"
 cat "$LATEST/result.yaml"
 echo "---"
@@ -308,7 +308,7 @@ cat "$LATEST/request.yaml"
 ### 2.5 최근 보정 결과
 
 ```bash
-cat $(ls -1dt ~/.ros/path_tag_locator/handeye_calib/run_*/result.yaml 2>/dev/null | head -1)
+cat $(ls -1dt $MM_WS/log/path_tag_locator/handeye_calib/run_*/result.yaml 2>/dev/null | head -1)
 ```
 
 ### 2.6 서비스 살아있나 확인
@@ -356,7 +356,7 @@ rosservice info /path_tag_locator/locate_path_tag
 
 ### 3.5 노드 시작 시점 컨피그 캐시
 
-`rospy.get_param("~", {})` 으로 1회 읽음. `~/.ros/...` 에 별도 저장된 yaml이나 디스크의 npz를 갱신해도 자동 반영 안 됨. **무조건 재시작**.
+`rospy.get_param("~", {})` 으로 1회 읽음. `$MM_WS/log/...` 에 별도 저장된 yaml이나 디스크의 npz를 갱신해도 자동 반영 안 됨. **무조건 재시작**.
 
 ### 3.6 `extrinsics.yaml` 규약
 
@@ -483,7 +483,7 @@ yq eval-all '. as $item ireduce ({}; . * $item)' \
 1. **ref tag 측정값이 정확한가** — `reference_tags.yaml` 의 (x, y, z, rpy)
    를 줄자로 재확인. 보통 이게 원인.
 2. **그 entry 의 hand-cam 이 다른 tag 를 본 게 아닌가** —
-   `~/.ros/path_tag_locator/locate/<date>/run_*_tag<id>/hand_cam.png` 를 열어
+   `$MM_WS/log/path_tag_locator/locate/<date>/run_*_tag<id>/hand_cam.png` 를 열어
    진짜로 ref_tag_id 만 보이는지 확인.
 3. **T_A_world rpy_deg 의 회전 부호** — 같은 (x, y, z) 라도 yaw 가 90° 잘못
    되면 path tag 결과가 회전 방향으로 멀리 튐.

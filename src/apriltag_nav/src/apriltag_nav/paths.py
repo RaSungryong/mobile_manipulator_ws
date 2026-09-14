@@ -63,6 +63,41 @@ FAIRINO_SDK_PATH = os.path.join(
     SRC_SPACE, 'fairino_sdk', 'fairino-python-sdk', 'Linux')
 
 
+# ---------------------------------------------------------------------------
+# Run output lives INSIDE the workspace (user rule, 2026-09-14): results and
+# records under <ws>/results and <ws>/log, never ~/.ros or /tmp or $HOME.
+#
+# The workspace root is the parent of the catkin source space (PKG_DIR is
+# <ws>/src/apriltag_nav in a devel-space build). `MM_WS` overrides it and is
+# also what the yaml configs use (`${MM_WS}/log/...`), so it is exported into
+# this process's environment here when the shell did not set it — the catkin
+# env hook (env-hooks/50.apriltag_nav.sh.in) sets it, plus ROS_LOG_DIR, for
+# a sourced shell; an unsourced `python3 tool.py` still gets the same answer.
+# ---------------------------------------------------------------------------
+WS_DIR = os.path.abspath(os.environ.get('MM_WS') or os.path.dirname(SRC_SPACE))
+os.environ.setdefault('MM_WS', WS_DIR)
+
+LOG_DIR = os.path.join(WS_DIR, 'log')
+RESULTS_DIR = os.path.join(WS_DIR, 'results')
+
+# mobile_controller: one yaml per TASK / GOTO command, <day>/<ts>_<cmd>.yaml
+NAV_LOG_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'nav_log')
+# path_tag_locator's calibrate/ locate/ handeye_calib/ map_world_*.yaml root
+# (that package derives the same path itself; both must agree).
+PTL_LOG_DIR = os.path.join(LOG_DIR, 'path_tag_locator')
+# roslaunch / node logs (ROS_LOG_DIR, set by the env hook): <run_id>/*.log
+ROS_LOG_DIR = os.path.join(LOG_DIR, 'ros')
+# task_manager: <task>_ra_map_<ts>.csv (versioned — the deliverable)
+RA_MAP_DIR = os.path.join(RESULTS_DIR, 'ra_maps')
+# arm_node save_images: <ra_map stem>/point_<id>_sample_<n>_ra_<x>.png
+SCAN_IMAGE_DIR = os.path.join(RESULTS_DIR, 'scan_images')
+
+
+def expand_path(path):
+    """`~` and `${VAR}` expansion with MM_WS guaranteed to resolve."""
+    return os.path.expandvars(os.path.expanduser(str(path)))
+
+
 def add_fairino_sdk_to_path():
     """Put the Fairino SDK on sys.path. Idempotent; returns True if present."""
     import sys

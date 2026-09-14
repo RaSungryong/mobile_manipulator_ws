@@ -77,6 +77,47 @@ The Navifra systemd service already runs `roscore` — do not start one.
 `rosrun apriltag_nav task_executor.py` starts *only* the orchestrator and is a
 debug path, not the way to bring the stack up.
 
+## Where run output lives — inside the workspace (2026-09-14)
+
+**User rule: every result and every record a run produces is stored in
+this workspace, never in `~/.ros`, `/tmp` or `$HOME`.** The pre-existing
+output (2026-09-02..14) was moved in the same session; what was not worth
+keeping was deleted (see the Work Log entry).
+
+```
+<ws>/results/ra_maps/<task>_ra_map_<ts>.csv        task_manager result_dir   (versioned)
+<ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored)
+<ws>/results/captures/                              robot_ui Collect tab       (ignored)
+<ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
+<ws>/log/apriltag_nav/calib_pair/                   the 2026-09-08 front_cam tilt-fit snapshots
+<ws>/log/path_tag_locator/{calibrate,locate,handeye_calib}/, map_world_*.yaml
+                                                    locator default_save_dir / handeye run_root / map_out
+<ws>/log/ros/<run_id>/                              roslaunch + node logs, ROS_LOG_DIR (ignored)
+```
+
+How the root is found, three ways that must agree: **`MM_WS`** is exported
+by the catkin env hook `apriltag_nav/env-hooks/50.apriltag_nav.sh.in`
+(sourced by `devel/setup.bash`, together with `ROS_LOG_DIR=$MM_WS/log/ros`
+— the ONE thing only the environment can decide, since roslaunch reads it
+at start); `apriltag_nav.paths.WS_DIR` / `path_tag_locator.WS_DIR` /
+`robot_ui.paths.WS_DIR` take `MM_WS` or derive the parent of the source
+space and `setdefault` it into the process environment, so `${MM_WS}` in
+`robot.yaml` / `locator.yaml` / `handeye_calib.yaml` resolves in an
+unsourced `python3 tool.py` too; the launch files use
+`$(eval optenv('MM_WS', dirname() + '/../../..'))`. ⚠️ Not
+`$(find apriltag_nav)/../..` — that substitution also matches
+`<ws>/devel/share/apriltag_nav` and resolved to `devel/` when tried.
+Re-run `catkin_make` after touching the env hook; a shell sourced before
+that has no `MM_WS` and its roslaunch still logs to `~/.ros/log`.
+
+The navifra driver's systemd service does not source this workspace and
+keeps writing `~/.ros/log/<run_id>/` — leave that directory alone; only
+this workspace's runs moved. `.gitignore`: `results/ra_maps` and every
+yaml / csv / npz record under `log/` are versioned, plus the hand-eye
+`samples/*.png` (the input `calibrate()` re-detects over — `!log/path_tag_
+locator/handeye_calib/**/*.png`); frames, captures, other png, video and
+`log/ros` are not.
+
 ## Task Commands
 
 ```
@@ -113,7 +154,7 @@ UNDOCK                     # /crevis/charging false → 0.10 m forward; no
                            # automatic return until the next task
 GOTO <tag_id>              # Navigate to AprilTag
                            # Every TASK / GOTO gets exactly ONE camera-centre-vs-tag
-                           # record: ~/.ros/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
+                           # record: log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
                            # (Work Log 2026-09-02/04) — never overwritten, created
                            # at the first arrival (no file if nothing arrived)
 TEST_POSE x y z [rx ry rz] # Test pose control (debug)
@@ -1501,6 +1542,7 @@ of editing the guide.
 | Missing entirely | the `lift_height` CSV column and the task flow it drives; that a task ends with lift origin homing and then **stays put** (`go_home` is a separate task); that absolute lift moves are refused before origin homing. |
 | Everywhere | **node names renamed 2026-08-11**: `arm_controller_node` → `arm_node`, `base_lifter_node` → `lifter_node`. Also `robot_controller.py` → `mobile_controller.py` and `RobotController` → `MobileController`. Affects §2.1, §2.4 (line 268 sample output), §5, §7 topic/service tables and the troubleshooting table. |
 | Everywhere | **`/base_lifter/*` → `/lifter/*`** in the same pass, and `robot.yaml`'s `base_lifter:` block key is now `lifter:`. Appendix A must follow. |
+| Wherever output paths appear | **Every result / record lives in the workspace since 2026-09-14**: `results/ra_maps`, `results/scan_images/<run>/`, `log/apriltag_nav/nav_log`, `log/path_tag_locator/…`, `log/ros` (`ROS_LOG_DIR`). `~/.ros/…`, `~/scan_results`, `/tmp/robot_ui_captures` and result CSVs in `task/csv` are all gone. |
 | §2.1 node table + line 295 | node count is now **8개 중 7개 필수** — `mobile_node` was added 2026-08-11 and is required. |
 | §7 topic tables | `/cmd_vel` and `/robot_pose` are published by **`mobile_node`**, not `mobile_manipulator_system`. New: `/mobile/goto_tag`, `/mobile/state`, `/mobile/busy` and the `/mobile/{stop,cancel,clear_stop}` services. |
 | Missing entirely | that `task_executor` now owns **no device at all** — drive, lift and arm are each reached through a client proxy. Worth a short section; it is the main structural change since the guide was written. |
@@ -1522,6 +1564,58 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-14 — Run output moved into the workspace; old output kept or deleted
+
+User: "이제부터 결과물 파일 그리고 로그 다 워크스페이스에 저장, 이전 거도
+필요한 거는 남기고 나머지 지우기". Until now the writers were scattered:
+Ra maps into `task/csv` next to the INPUT path files (the `_ra_map` stem
+filter existed only to keep them from being re-read as tasks), frames
+into `$HOME/scan_results` (flat — 1273 frames of three runs in one
+folder), nav records and every calibration artifact into `~/.ros/…`,
+robot_ui captures into `/tmp`, node logs into `~/.ros/log` (1710 entries
+since July). The 2026-09-09 `log/` copy of `~/.ros` had already diverged
+(today's nav records, three hand-eye runs, one 09-09 file cut mid-command).
+
+Landed — standing section *Where run output lives* has the layout:
+`paths.WS_DIR / LOG_DIR / RESULTS_DIR / …` in apriltag_nav (+ the same in
+`path_tag_locator/__init__.py` and `robot_ui/paths.py`), the catkin env
+hook exporting `MM_WS` + `ROS_LOG_DIR`, `${MM_WS}` in the three yaml
+configs, `ws_dir` in the launch, `TaskManager(result_dir=)`, and
+`arm_node` saving frames into one `<ra_map stem>/` folder per run
+(`_image_dir_base`). Docs: README, HANDOVER, ROSBRIDGE_kr, the
+path_tag_locator README / USAGE / TROUBLESHOOTING / CALIBRATION guides.
+
+Data, with `diff -rq` before every delete: **kept (moved in)** today's
+nav records + the complete 09-09 `GOTO_500` file, the three hand-eye runs
+(12 MB), `~/calib_pair` (the tilt-fit inputs), the three Ra maps of the day
+(→ `results/ra_maps`, now tracked), today's 1273 frames / 12.8 GB (→
+`results/scan_images/20260914_flat_three_runs/`, unattributable, README
+inside), the 10 September roslaunch runs + 190 loose node logs (→
+`log/ros`, 188 MB). **Deleted:** `~/.ros/apriltag_nav` and
+`~/.ros/path_tag_locator` (byte-identical to `log/`), 214 frames / 1.1 GB
+of 2026-08-05..24 (retired base, old cell, pre-crop Ra), 146 roslaunch runs
++ 1363 loose logs of 2026-07-13..08-28, `~/.ros/Log` (08-05 orbbec crash
+traces). Disk: 89 → 88 GB used.
+
+⚠️ **Two live writers were left in place**: the stack and the calibration
+nodes were RUNNING (a `GOTO 102` record was growing and hand-eye run
+`run_20260914_185621` was open), so `~/.ros/apriltag_nav/nav_log/20260914/`
+and `~/.ros/path_tag_locator/handeye_calib/run_20260914_185621/` still
+exist and receive that session's output until the next relaunch. After
+it: `cp -a ~/.ros/apriltag_nav/nav_log/. log/apriltag_nav/nav_log/ &&
+cp -a ~/.ros/path_tag_locator/handeye_calib/. log/path_tag_locator/
+handeye_calib/ && rm -rf ~/.ros/apriltag_nav ~/.ros/path_tag_locator`.
+
+Verified: `catkin_make` clean, the hook exports both variables in a fresh
+shell, every new path resolves to the workspace with and without `MM_WS`,
+`roslaunch --dump-params` shows `output_dir` / `save_dir` under the ws,
+suites 37 / 19 / 42 / 36 / 12 pass; `check_task_discovery.py` 47 ok, 1 fail
+— pre-existing, it assumes three file pairs and the user added a `_plate2`
+pair today. Not yet run on the robot: the running stack predates every
+change, restart required (`arm_node`, `mobile_node`, `task_executor`, the
+three calibration nodes, robot_ui — i.e. everything, in a freshly sourced
+shell so `ROS_LOG_DIR` is set).
 
 ### 2026-09-14 — Hand-eye calibration from robot_ui, with an automatic sample sweep
 

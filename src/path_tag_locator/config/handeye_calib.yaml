@@ -23,7 +23,8 @@ handeye_calib:
     # Archive every capture (image + TCP + K) and the final result here.
     # Each invocation of the node (and each /reset) starts a fresh
     # run_<timestamp>/ subdirectory.
-    run_root:           "~/.ros/path_tag_locator"
+    # Inside the workspace since 2026-09-14 (was ~/.ros/path_tag_locator).
+    run_root:           "${MM_WS}/log/path_tag_locator"
 
     # Optional: list of previously-saved run directories to preload as
     # samples at node startup (so /compute can be called without first
@@ -32,7 +33,7 @@ handeye_calib:
     # ``$(find pkg)`` and ``~`` are expanded.
     # Example:
     #   load_samples_dirs:
-    #     - "~/.ros/path_tag_locator/handeye_calib/run_20260521_133900"
+    #     - "${MM_WS}/log/path_tag_locator/handeye_calib/run_20260914_183840"
     load_samples_dirs:  []
 
   # --- automatic sample collection (~auto_sample, 2026-09-14) ----------

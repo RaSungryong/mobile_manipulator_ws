@@ -20,6 +20,7 @@ current_pose_msg / publish_done / is_busy / shutdown. arm_node.py
 wraps this class; nothing else instantiates it.
 """
 
+import os
 import threading
 import queue
 import json
@@ -37,6 +38,7 @@ from apriltag_nav.arm_transform import transform_world_to_arm
 from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.scan_results import ScanResultWriter
+from apriltag_nav import paths as _paths
 from apriltag_nav.keyence_standoff import StandoffConfig, StandoffController
 
 # ================= Fairino SDK =================
@@ -143,7 +145,7 @@ class ArmController:
             num_samples=rospy.get_param('~num_samples', 1),
             delay_between_samples=rospy.get_param('~delay_between_samples', 0.2),
             save_images=rospy.get_param('~save_images', False),
-            output_dir=rospy.get_param('~output_dir', '/tmp/scan_results'),
+            output_dir=rospy.get_param('~output_dir', _paths.SCAN_IMAGE_DIR),
             model_path=model_path,
         )
 
@@ -390,6 +392,24 @@ class ArmController:
 
         # Register queued points so the CSV is seeded on first write
         self.results_writer.begin(scan_points)
+
+        # Saved frames go into ONE SUBDIRECTORY PER RUN, named after the
+        # run's Ra map CSV (<task>_ra_map_<ts>), under the configured
+        # output_dir (2026-09-14). Before this every run dumped flat
+        # point_<id>_… files into one folder, so 1273 frames of three runs
+        # in a day could not be told apart. csv_path is the same for every
+        # point of a scan; a scan without one keeps the flat folder.
+        base_dir = getattr(self, '_image_dir_base', None)
+        if base_dir is None:
+            base_dir = self._image_dir_base = getattr(
+                self.pipeline, 'output_dir', None)
+        if base_dir:
+            run_csv = next((p.get("csv_path") for p in scan_points
+                            if p.get("csv_path")), "")
+            self.pipeline.output_dir = (
+                os.path.join(base_dir,
+                             os.path.splitext(os.path.basename(run_csv))[0])
+                if run_csv else base_dir)
 
         self.busy = True
         self.cancel_requested = False

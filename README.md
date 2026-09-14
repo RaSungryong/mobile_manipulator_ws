@@ -214,8 +214,8 @@ rostopic echo /map_calibrator/current_target_tag
 결과 확인:
 
 ```bash
-ls -lt ~/.ros/path_tag_locator/map_world_*.yaml | head -1
-ls -lt ~/.ros/path_tag_locator/tag_alignment_results.yaml
+ls -lt $MM_WS/log/path_tag_locator/map_world_*.yaml | head -1
+ls -lt $MM_WS/log/apriltag_nav/nav_log/$(date +%Y%m%d)/   # one yaml per TASK / GOTO command
 ```
 
 ## Path Tag Locator

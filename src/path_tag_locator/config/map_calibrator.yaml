@@ -14,7 +14,7 @@ map_calibrator:
   # map.yaml copy was deleted with the standalone-mode refactor — base
   # navigation now goes through mobile_node, which loads this same file.
   map_in_path:    "$(find apriltag_nav)/config/map.yaml"
-  # Empty -> ~/.ros/path_tag_locator/map_world_<ts>.yaml
+  # Empty -> <ws>/log/path_tag_locator/map_world_<ts>.yaml (2026-09-14; was ~/.ros)
   map_out_path:   ""
 
   # Fixed lift height for the whole calibration session (mm above origin).

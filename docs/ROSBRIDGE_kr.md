@@ -188,7 +188,7 @@ ws.close()
 | 로봇 PC에서 9090이 안 보임 | `rosnode list \| grep rosbridge` | 수동 rosbridge와 충돌 → `pkill -f rosbridge_websocket` 후 스택 재launch |
 | `sub /task_state` 가 아무것도 안 찍음 | `python robot_cmd.py sub /odom` | `/odom`은 되면 연결은 정상, `task_executor`가 안 떠 있는 것 |
 | `"GOTO 105"` 보냈는데 `state:` 줄이 안 나옴 | `python robot_cmd.py state` | 명령은 갔음. 상태가 5 s 안에 안 바뀌었을 뿐 |
-| `CHARGE` 후 `no charging current within 15s` | 로봇 PC `grep '\[Charge\]' ~/.ros/log/latest/mobile_manipulator_system*.log` | 릴레이는 켜졌는데 전류가 없음. 충전기 표시등·접점 확인, `UNDOCK` → `CHARGE`로 재도킹 |
+| `CHARGE` 후 `no charging current within 15s` | 로봇 PC `grep '\[Charge\]' $MM_WS/log/ros/latest/mobile_manipulator_system*.log` | 릴레이는 켜졌는데 전류가 없음. 충전기 표시등·접점 확인, `UNDOCK` → `CHARGE`로 재도킹 |
 | `pip` 인식 안 됨 | | `python -m pip …` |
 
 ⚠️ **스택을 Ctrl-C로 끄면 충전 릴레이도 꺼진다** (`task_executor` 종료 루틴의

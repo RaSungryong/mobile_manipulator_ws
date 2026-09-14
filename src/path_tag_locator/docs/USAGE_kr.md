@@ -77,7 +77,7 @@ roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
 암을 태그가 보이는 다양한 자세로 옮기면서 (각도/거리를 분산시킬수록 좋음), 매번:
 
 ```bash
-# 1회 캡처 — 즉시 디스크 아카이브 (~/.ros/path_tag_locator/handeye_calib/run_<ts>/) 됨
+# 1회 캡처 — 즉시 디스크 아카이브 ($MM_WS/log/path_tag_locator/handeye_calib/run_<ts>/) 됨
 rosservice call /handeye_calib/capture "{}"
 
 # 진행 상황 확인
@@ -121,8 +121,8 @@ rosservice call /handeye_calib/compute "{}"   # 바로 보정
 handeye_calib:
   io:
     load_samples_dirs:
-      - "~/.ros/path_tag_locator/handeye_calib/run_20260521_133900"
-      - "~/.ros/path_tag_locator/handeye_calib/run_20260521_142500"   # 여러 세션 합치기 가능
+      - "$MM_WS/log/path_tag_locator/handeye_calib/run_20260521_133900"
+      - "$MM_WS/log/path_tag_locator/handeye_calib/run_20260521_142500"   # 여러 세션 합치기 가능
 ```
 
 노드 시작 시 자동으로 메모리에 적재됩니다. 각 항목은 `run_<ts>/` 디렉터리 또는 그 아래의 `samples/` 디렉터리 모두 지원합니다.
@@ -262,7 +262,7 @@ rosservice call /path_tag_locator/locate_path_tag "{
 
 `align_initial_tcp_mm_deg` 단위는 `mm, mm, mm, deg, deg, deg` (FR5 ZYX). hand-cam 이 태그 A 를 볼 수 있는 대략적인 위치만 주면 됨. 응답의 `align_iterations_used`, `align_final_xy_offset_m`, `align_final_tilt_deg` 로 정렬 결과를 확인.
 
-저장되는 `result.yaml`(`~/.ros/path_tag_locator/locate/<날짜>/run_*/`)에는 **카메라 좌표계 기준** 오차가 기록된다
+저장되는 `result.yaml`(`$MM_WS/log/path_tag_locator/locate/<날짜>/run_*/`)에는 **카메라 좌표계 기준** 오차가 기록된다
 (2026-09-02). `observations:` 블록에 hand_cam→태그 A, front_cam→태그 B 각각의 `position_m` (x=영상 오른쪽,
 y=영상 아래, z=광축 방향 거리) 와 `rpy_deg` 가 들어가고, `auto_align: true` 였으면 `auto_align.tag_in_cam` (최종)
 과 `auto_align.history` (반복마다) 가 추가된다. 축 정의는 파일 상단 `camera_frame_note` 에 적혀 있다.
@@ -290,7 +290,7 @@ y=영상 아래, z=광축 방향 거리) 와 `rpy_deg` 가 들어가고, `auto_a
 | (map.yaml 로컬 복사본 삭제됨) | `$(find apriltag_nav)/config/map.yaml` 이 단일 기준 (map_calibrator.yaml) |
 | `config/map_calibrator.yaml` | 오케스트레이터의 기본 파일 경로들 (service call 시 override 가능). |
 
-**세션 기록 (2026-09-02):** 세션마다 `~/.ros/path_tag_locator/calibrate/<YYYYMMDD_HHMMSS>/` 폴더가
+**세션 기록 (2026-09-02):** 세션마다 `$MM_WS/log/path_tag_locator/calibrate/<YYYYMMDD_HHMMSS>/` 폴더가
 새로 생기고, **시도(attempt)마다** `entries/001_tag105_attempt1_fail.yaml`, `002_tag105_attempt2_ok.yaml`,
 `003_tag106_attempt1_ok.yaml` … 처럼 실행 순서대로 번호가 붙은 파일이 남는다. 재시도도 새 번호를 받고,
 실패한 시도도 거기까지 진행된 내용(nav, view pose, 정렬 보고, 오류)을 그대로 담는다. 아무것도 덮어쓰지
@@ -330,7 +330,7 @@ rostopic echo /map_calibrator/current_target_tag
 서비스 응답: `success` (= num_failed==0), `message`, `num_succeeded`,
 `num_failed`, `output_yaml_path`. 실패한 entry 가 있어도 세션이
 중단되지 않고 다음 entry 로 진행한다 — 실패 tag 는 `map_updated.yaml`
-에서 원래 (x, y) 를 유지하며, `~/.ros/path_tag_locator/locate/.../`
+에서 원래 (x, y) 를 유지하며, `$MM_WS/log/path_tag_locator/locate/.../`
 아래 `run_*_FAILED/` 디렉터리에 에러와 request echo 가 보존된다.
 
 ### 5c. 항목 1개당 실행 흐름
@@ -495,12 +495,12 @@ rosservice call /map_calibrator/run_calibration "{
 
 ```bash
 # yaml 출력
-ls -lt ~/.ros/path_tag_locator/map_world_*.yaml | head -1
+ls -lt $MM_WS/log/path_tag_locator/map_world_*.yaml | head -1
 cat <그 파일>
 # 기대: tag 101 의 position_m / rpy_deg, ref_tag_id=0, map_xy
 
 # Per-tag 아카이브 (원본 이미지 확인)
-ls ~/.ros/path_tag_locator/locate/$(date +%Y%m%d)/run_*_tag101/
+ls $MM_WS/log/path_tag_locator/locate/$(date +%Y%m%d)/run_*_tag101/
 # hand_cam.png: ref tag 0 이 중앙 근처, 기울기 < ~5°
 # front_cam.png: path tag 101 이 선명히 보임
 ```
@@ -610,7 +610,7 @@ rosrun path_tag_locator verify_arm_pointing.py --all
 rosrun path_tag_locator visualize_map_world.py
 ```
 
-실패한 entry 의 원인 추적: `~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/`
+실패한 entry 의 원인 추적: `$MM_WS/log/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/`
 의 `hand_cam.png` / `front_cam.png` 를 열어 확인.
 
 ### 5f. 좌표계: `map.yaml` ≠ 사용자의 world frame
@@ -629,14 +629,14 @@ rosrun path_tag_locator visualize_map_world.py
 
 ### 5g. 출력
 
-- `~/.ros/path_tag_locator/map_world_<ts>.yaml` — **world frame** 의
+- `$MM_WS/log/path_tag_locator/map_world_<ts>.yaml` — **world frame** 의
   보정 결과. 스키마는 `map.yaml` 과 의도적으로 다르며, `frame: world`
   배너와 "map.yaml 대체용 아님" 경고가 포함된다. 각 항목:
   - `position_m: [x, y, z]` + `rpy_deg: [rx, ry, rz]` (전체 6-DOF)
   - `ref_tag_id` (해당 항목에 쓰인 기준 tag)
   - `map_xy` (원본 map.yaml 에서의 (x, y), 참조용)
   - `type` / `zone` / `name` (map.yaml 에서 복사)
-- 항목별 6-DOF + 원본 영상은 `~/.ros/path_tag_locator/locate/<날짜>/run_*/`
+- 항목별 6-DOF + 원본 영상은 `$MM_WS/log/path_tag_locator/locate/<날짜>/run_*/`
   아래 단일 `locate_path_tag` 호출과 동일한 형식으로 저장.
 
 ---
@@ -653,12 +653,12 @@ rostopic echo -n 1 /path_tag_locator/tag_world_pose
 
 모든 호출 (성공 / 실패) 이 디스크에 기록됨. `save_result` 플래그는 안내용일 뿐 동작에 영향을 주지 않음.
 
-기본 저장 경로: `~/.ros/path_tag_locator/`
+기본 저장 경로: `$MM_WS/log/path_tag_locator/` (워크스페이스 안, 2026-09-14부터. 이전의 ~/.ros/path_tag_locator 기록은 여기로 옮겨졌음)
 
 #### Localization 호출별 디렉터리 구조
 
 ```
-~/.ros/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
+$MM_WS/log/path_tag_locator/locate/<YYYYMMDD>/run_<ts>_tag<id>/
     hand_cam.png            검출기에 입력된 BGR 이미지
     front_cam.png           검출기에 입력된 BGR 이미지
     K_hc.npz / K_fc.npz     호출 시점에 실제 사용된 K
@@ -667,7 +667,7 @@ rostopic echo -n 1 /path_tag_locator/tag_world_pose
                             position_m, rpy_deg
     result.yaml             사람이 읽기 좋은 요약 (auto_align 보고 포함)
     request.yaml            서비스 요청 원본 echo
-~/.ros/path_tag_locator/locate/locate_log.csv   append-only 인덱스
+$MM_WS/log/path_tag_locator/locate/locate_log.csv   append-only 인덱스
 ```
 
 실패한 호출은 `..._FAILED/` 디렉터리에 저장되며 `result.yaml` 에 에러 메시지, CSV 의 `success` 열이 0 으로 기록됨.
@@ -675,7 +675,7 @@ rostopic echo -n 1 /path_tag_locator/tag_world_pose
 #### Hand-eye 캘리브레이션 아카이브
 
 ```
-~/.ros/path_tag_locator/handeye_calib/run_<ts>/
+$MM_WS/log/path_tag_locator/handeye_calib/run_<ts>/
     samples/0000_image.png    samples/0000_pose.npz  (tcp_pose, K)
     samples/0001_image.png    ...
     samples_index.csv         캡처 1건당 1 row (tcp, 파일 경로)
@@ -688,7 +688,7 @@ rostopic echo -n 1 /path_tag_locator/tag_world_pose
 
 ```python
 import numpy as np
-d = np.load('/home/lcl/.ros/path_tag_locator/locate/20260520/run_20260520_173025_tag10/result.npz')
+d = np.load('$MM_WS/log/path_tag_locator/locate/20260520/run_20260520_173025_tag10/result.npz')
 print(d['T_B_world'])   # 4x4
 print(d['T_A2B'])
 print(list(d.files))    # 모든 키 확인
@@ -698,10 +698,10 @@ print(list(d.files))    # 모든 키 확인
 
 ```bash
 # 가장 최근 호출 10건
-tail -n 10 ~/.ros/path_tag_locator/locate/locate_log.csv
+tail -n 10 $MM_WS/log/path_tag_locator/locate/locate_log.csv
 
 # tag_id=12 의 성공한 호출만
-awk -F',' '$2==1 && $3==12' ~/.ros/path_tag_locator/locate/locate_log.csv
+awk -F',' '$2==1 && $3==12' $MM_WS/log/path_tag_locator/locate/locate_log.csv
 ```
 
 ---

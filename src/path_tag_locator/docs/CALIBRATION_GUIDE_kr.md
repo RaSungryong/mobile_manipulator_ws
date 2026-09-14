@@ -125,9 +125,9 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
 
 ## 4. 결과와 검증
 
-- 출력: `~/.ros/path_tag_locator/map_world_<타임스탬프>.yaml`
+- 출력: `$MM_WS/log/path_tag_locator/map_world_<타임스탬프>.yaml`
   (월드 = map.yaml 좌표계, x/y 직접 비교 가능)
-- 호출별 아카이브: `~/.ros/path_tag_locator/locate/`
+- 호출별 아카이브: `$MM_WS/log/path_tag_locator/locate/`
   (관측 행렬, TCP, 리프트 높이, 스냅샷)
 - 오차 예산: `python3 scripts/error_budget.py --entry N` — 모든 오차원을
   경로 태그 **위치 + yaw** 오차로 환산(최적화 설정 기준 sig_xy ≈ 1.1 mm,

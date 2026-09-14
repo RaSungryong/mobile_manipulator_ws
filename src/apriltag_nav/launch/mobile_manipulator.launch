@@ -20,6 +20,13 @@
          Phoenix Contact bridge to this PC's 192.168.1.100:9090. Native ROS
          networking cannot cross that NAT hop (every node would need a
          reverse connection), so this is the only external path. -->
+    <!-- Workspace root: every result / record is written under it
+         (results/, log/ — 2026-09-14). MM_WS from the environment (the catkin
+         env hook exports it), else three levels above this launch file
+         (<ws>/src/apriltag_nav/launch). NOT $(find apriltag_nav)/../..: that
+         substitution also matches <ws>/devel/share/apriltag_nav and resolved
+         to devel/ when tried. Must agree with apriltag_nav.paths.WS_DIR. -->
+    <arg name="ws_dir"         default="$(eval optenv('MM_WS', dirname() + '/../../..'))"/>
     <arg name="use_rosbridge"  default="true"/>
     <arg name="rosbridge_port" default="9090"/>
 
@@ -78,7 +85,9 @@
         <param name="delay_between_samples" value="0.2"/>
         <param name="stabilization_time"    value="0.5"/>
         <param name="save_images"           value="true"/>
-        <param name="output_dir"            value="$(env HOME)/scan_results"/>
+        <!-- Frames land in <output_dir>/<task>_ra_map_<ts>/ per run;
+             the Ra map CSV itself goes to <ws>/results/ra_maps. -->
+        <param name="output_dir"            value="$(arg ws_dir)/results/scan_images"/>
 
         <!-- Lift compensation for POSE-mode IK (2026-09-11). arm_base_z is
              measured at the lift origin, so the live /lifter/height has to be

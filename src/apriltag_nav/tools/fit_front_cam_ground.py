@@ -19,7 +19,7 @@ Snapshots: `rostopic echo -n1 /front_cam/tag_detections > dir/scan_<t>.txt`
 the fit sees already-corrected data). CameraInfo:
 `rostopic echo -n1 /front_cam/color/camera_info > dir/camera_info.txt`.
 
-    rosrun apriltag_nav fit_front_cam_ground.py ~/calib_pair --spacing 0.150 --tags 15 16
+    rosrun apriltag_nav fit_front_cam_ground.py log/apriltag_nav/calib_pair --spacing 0.150 --tags 15 16
 """
 import argparse
 import glob

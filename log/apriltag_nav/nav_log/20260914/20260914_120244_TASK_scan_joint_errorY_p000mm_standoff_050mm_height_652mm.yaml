@@ -1,0 +1,43 @@
+command: TASK scan_joint_errorY_p000mm_standoff_050mm_height_652mm
+started_at: '2026-09-14T12:02:44.909'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1789354966.418242
+  ros_time: 1789354966.4182518
+  stage: aligned
+  tag_id: 500
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 635.1635963534504
+  - 358.09923029636695
+  image_offset_px:
+  - -3.03348616608082
+  - 5.1175408432419545
+  tag_pose_m:
+  - -0.001221092730982582
+  - 0.002061290491332351
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.001221092730982582
+  - -0.002061290491332351
+  camera_center_offset_from_tag_mm:
+  - 1.221092730982582
+  - -2.061290491332351
+  camera_center_offset_from_tag_norm_mm: 2.395826777401836
+  tag_edge_yaw_error_deg: 0.0011914933712375841
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - -1.221
+  - 2.061
+  image_center_offset_norm_mm: 2.396
+  calibrated_reference: null

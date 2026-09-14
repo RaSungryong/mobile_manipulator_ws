@@ -53,6 +53,7 @@ import rospkg
 import rospy
 from std_srvs.srv import Trigger, TriggerResponse
 
+from path_tag_locator import LOG_ROOT
 from path_tag_locator.handeye_calib import (
     CalibSample,
     calibrate,
@@ -102,7 +103,7 @@ class HandeyeCalibNode:
         self.output_path = _resolve_ros_path(root["io"]["output_path"])
         self.min_samples = int(root["io"].get("min_samples", 8))
         self.run_root = _resolve_ros_path(
-            root["io"].get("run_root", "~/.ros/path_tag_locator"))
+            root["io"].get("run_root", LOG_ROOT))
 
         arm = root.get("arm", {})
         # TCP pose from arm_node's /arm/state. The arm is moved ONLY by

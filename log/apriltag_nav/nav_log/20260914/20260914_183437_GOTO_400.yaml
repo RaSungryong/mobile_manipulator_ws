@@ -1,0 +1,219 @@
+command: GOTO 400
+started_at: '2026-09-14T18:34:37.137'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1789378480.6852193
+  ros_time: 1789378480.685225
+  stage: aligned
+  tag_id: 501
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 950.4732444130784
+  - 324.8973410734713
+  image_offset_px:
+  - 312.27616189354717
+  - -28.084348379653704
+  tag_pose_m:
+  - 0.1257029471935941
+  - -0.011312073912745113
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.1257029471935941
+  - 0.011312073912745113
+  camera_center_offset_from_tag_mm:
+  - -125.7029471935941
+  - 11.312073912745113
+  camera_center_offset_from_tag_norm_mm: 126.2109105797233
+  tag_edge_yaw_error_deg: -0.014920839940160135
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - 125.703
+  - -11.312
+  image_center_offset_norm_mm: 126.211
+  calibrated_reference: null
+- seq: 2
+  stamp: 1789378495.0057845
+  ros_time: 1789378495.0057893
+  stage: arrival
+  tag_id: 501
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 637.7049359622525
+  - 477.36023663448543
+  image_offset_px:
+  - -0.4921465572787156
+  - 124.37854718136043
+  tag_pose_m:
+  - -0.00019810757352079498
+  - 0.05009834302919846
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.00019810757352079498
+  - -0.05009834302919846
+  camera_center_offset_from_tag_mm:
+  - 0.19810757352079497
+  - -50.09834302919846
+  camera_center_offset_from_tag_norm_mm: 50.098734723363265
+  tag_edge_yaw_error_deg: 5.282481281545728
+  traveled_m: 0.12503078082879476
+  commanded_speed_at_stop_mps: 0.01
+  direction: forward
+  stop_offset_px: -5.88
+  stop_target_x_px: 632.31
+  tag_offset_from_target_px: 5.39
+  stop_lead_px: 5.5
+  stop_lead_mm: 2.21
+  stop_latency_s: 0.55
+  stop_latency_linear_s: 0.22
+  launch_peak_yaw_err_deg: -0.154
+  tag_age_s: 0.3
+  latency_comp_px: -6.27
+  steer_mode: aim_and_drive
+  reseat: true
+  aim:
+    target_deg: 5.319
+    dist_m: 0.126
+    stop_offset_px: -5.883
+    dpsi_deg: 5.222
+    limited: false
+    b_mm: 11.684
+  launch_ff_applied: true
+  last_align_turn_sign: 1
+  image_center_offset_mm:
+  - -0.198
+  - 50.098
+  image_center_offset_norm_mm: 50.099
+  calibrated_reference: null
+- seq: 3
+  stamp: 1789378498.0097487
+  ros_time: 1789378498.0097544
+  stage: aligned
+  tag_id: 501
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 633.6562404173577
+  - 357.8941622862206
+  image_offset_px:
+  - -4.540842102173542
+  - 4.912472833095592
+  tag_pose_m:
+  - -0.0018278604153542648
+  - 0.00197869129919315
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0018278604153542648
+  - -0.00197869129919315
+  camera_center_offset_from_tag_mm:
+  - 1.8278604153542648
+  - -1.9786912991931502
+  camera_center_offset_from_tag_norm_mm: 2.6937507226025468
+  tag_edge_yaw_error_deg: 0.09850535112380499
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - -1.828
+  - 1.979
+  image_center_offset_norm_mm: 2.694
+  calibrated_reference: null
+- seq: 4
+  stamp: 1789378519.2642355
+  ros_time: 1789378519.2642417
+  stage: arrival
+  tag_id: 400
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 643.2292496140615
+  - 339.89837471994065
+  image_offset_px:
+  - 5.032167094530223
+  - -13.083314733184352
+  tag_pose_m:
+  - 0.0020256372779703497
+  - -0.005269818665000967
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.0020256372779703497
+  - 0.005269818665000967
+  camera_center_offset_from_tag_mm:
+  - -2.0256372779703495
+  - 5.269818665000967
+  camera_center_offset_from_tag_norm_mm: 5.645723615613477
+  tag_edge_yaw_error_deg: -0.6264401370995358
+  traveled_m: 0.5158698974686413
+  commanded_speed_at_stop_mps: 0.01
+  direction: forward
+  stop_offset_px: -0.08
+  stop_target_x_px: 638.12
+  tag_offset_from_target_px: 5.11
+  stop_lead_px: 5.47
+  stop_lead_mm: 2.2
+  stop_latency_s: 0.55
+  stop_latency_linear_s: 0.22
+  launch_peak_yaw_err_deg: -0.506
+  tag_age_s: 0.3
+  latency_comp_px: -7.5
+  steer_mode: aim_and_drive
+  reseat: false
+  aim:
+    target_deg: -0.605
+    dist_m: 0.197
+    stop_offset_px: -0.076
+    dpsi_deg: -0.231
+    limited: false
+    b_mm: -2.876
+  launch_ff_applied: true
+  last_align_turn_sign: -1
+  image_center_offset_mm:
+  - 2.026
+  - -5.27
+  image_center_offset_norm_mm: 5.646
+  calibrated_reference: null
+- seq: 5
+  stamp: 1789378522.187787
+  ros_time: 1789378522.1877913
+  stage: aligned
+  tag_id: 400
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 636.741435143661
+  - 352.63193236978935
+  image_offset_px:
+  - -1.455647375870285
+  - -0.34975708333564626
+  tag_pose_m:
+  - -0.0005859530362867974
+  - -0.0001408783969175229
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0005859530362867974
+  - 0.0001408783969175229
+  camera_center_offset_from_tag_mm:
+  - 0.5859530362867974
+  - 0.1408783969175229
+  camera_center_offset_from_tag_norm_mm: 0.6026505483709179
+  tag_edge_yaw_error_deg: -0.12450114625330855
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - -0.586
+  - -0.141
+  image_center_offset_norm_mm: 0.603
+  calibrated_reference: null
