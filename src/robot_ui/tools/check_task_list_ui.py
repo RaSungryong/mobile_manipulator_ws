@@ -20,6 +20,7 @@ PKG = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(PKG, 'src'))
 
 from PyQt5.QtCore import QObject, Qt, pyqtSignal      # noqa: E402
+from PyQt5.QtTest import QTest                         # noqa: E402
 from PyQt5.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from robot_ui.main_window import MainWindow            # noqa: E402
@@ -37,6 +38,7 @@ class FakeBridge(QObject):
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
     calib_progress = pyqtSignal(dict)
+    handeye_progress = pyqtSignal(dict)
     scan_progress = pyqtSignal(dict)
     tag_ids = pyqtSignal(str, object)
     log = pyqtSignal(str)
@@ -229,6 +231,37 @@ def main():
     check('pt 3 g106' not in log, 'a traverse row does not spam the log')
     check(texts[-1] == 'SCAN done 2 ok / 1 fail (cancelled)', f'finished -> chip {texts[-1]!r}')
     check('[scan] finished (cancelled): 2 ok, 1 failed of 468' in log, 'finished summary logged')
+
+    print('== hand-eye group (Calibration tab)')
+    ctab = win.lbl_handeye_nodes.parentWidget()      # the hand-eye QGroupBox
+    bridge.calls.clear()
+    bridge.handeye_online = lambda: True
+    check(click(ctab, 'Auto-sample (sweep)'), 'Auto-sample button found')
+    app.processEvents(); QTest.qWait(150); app.processEvents()
+    check(('handeye_auto_sample',) in bridge.calls, f'Auto-sample calls handeye_auto_sample {bridge.calls}')
+    check(click(ctab, 'Cancel sweep') and (QTest.qWait(150) or True) and ('handeye_cancel',) in bridge.calls,
+          'Cancel sweep calls handeye_cancel')
+    check(click(ctab, 'Capture here') and (QTest.qWait(150) or True) and ('handeye_capture',) in bridge.calls,
+          'Capture here calls handeye_capture')
+    check(click(ctab, 'Compute && save T_hc2ee') and (QTest.qWait(150) or True) and ('handeye_compute',) in bridge.calls,
+          'Compute calls handeye_compute')
+    for e in [{'phase': 'align', 'iteration': 2, 'xy_mm': 4.2, 'tilt_deg': 0.8, 'n_samples': 0},
+              {'phase': 'start', 'n_planned': 23, 'n_rejected': 1, 'rejected': {'clearance': 1}, 'n_samples': 0},
+              {'phase': 'sample', 'index': 3, 'total': 23, 'label': 'd450 t12 a90 s+30', 'ok': False,
+               'reason': 'tag not seen', 'n_captured': 3, 'n_skipped': 1, 'n_samples': 3},
+              {'phase': 'finished', 'summary': 'sweep: 20 captured, 3 skipped (tag not seen), 0 move failures of 23 planned', 'n_samples': 20}]:
+        bridge.handeye_progress.emit(e)
+        app.processEvents()
+    log = win.log_view.toPlainText()
+    check(win.lbl_handeye_state.text() == 'samples: 20', f'sample count follows progress: {win.lbl_handeye_state.text()!r}')
+    check('[handeye] sweep: 23 views planned, 1 rejected' in log and
+          '[handeye] view 3/23 d450 t12 a90 s+30: tag not seen' in log and
+          '[handeye] sweep: 20 captured' in log, 'sweep start / skipped view / summary reach the log')
+    bridge.handeye_online = lambda: False
+    bridge.calls.clear()
+    click(ctab, 'Auto-sample (sweep)'); app.processEvents()
+    check(('handeye_auto_sample',) not in bridge.calls and 'use_handeye_calib:=true' in win.log_view.toPlainText(),
+          'with the node offline, Auto-sample refuses and names the launch flag')
 
     print('== empty list')
     bridge.task_list.emit({'task_dir': '/x', 'tasks': []})

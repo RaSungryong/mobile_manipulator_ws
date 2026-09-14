@@ -1,6 +1,18 @@
 # Hand-Eye Calibration File
 
-> ⚠️ **2026-09-02 — `T_hc2ee.npz` is an INTERIM value, not a fresh calibration.**
+> ✅ **2026-09-14 — `T_hc2ee.npz` IS a real calibration of this robot.**
+> Produced by `handeye_calib_node`'s automatic sweep (run
+> `~/.ros/path_tag_locator/handeye_calib/run_20260914_183840`, 23 samples,
+> tilts 0/12/22°, spins ±30°, three distances; DANIILIDIS, AX=XB residual
+> 0.0173). Checked two ways: the fixed cross tag 0 re-projected through
+> all 23 poses scatters **2.1 mm rms / 3.2 mm max** (the 09-02 file gave
+> 15.1 / 24.7 on the same samples), and its absolute position in the arm
+> frame, base aligned on tag 102, is (−0.399, 1.010, −0.577) m against
+> map.yaml's prediction (−0.400, 1.010, −0.572): **1 / 0 / 5 mm**. The
+> 09-02 file (git history, commit 68bac0d) was 45 mm / 2.3° away from it.
+> Everything below the line is the history of how it got there.
+>
+> ⚠️ **2026-09-02 — `T_hc2ee.npz` was an INTERIM value, not a fresh calibration.**
 > The file committed 2026-05-27 (kept here as
 > `T_hc2ee_2026-05-27_old_mount.npz`) describes a hand-cam mount that is
 > rotated **180° about the optical axis** relative to the camera as it is

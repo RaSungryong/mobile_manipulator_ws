@@ -197,6 +197,18 @@ pull + `catkin_make` before anything below.
   frame is the FLANGE` and compare a pose point with its joint twin on
   the robot. Do not activate tool 1 on the controller without re-expressing
   the hand-eye and the calibration seeds (CLAUDE.md, Coordinate Frames).
+- **Hand-eye calibration from robot_ui (2026-09-14):** Calibration tab →
+  Hand-eye group. `Auto-sample (sweep)` makes `handeye_calib_node` square
+  up on cross tag 0 and orbit it (24 views, tilt/spin diversity), capturing
+  where the tag is seen, inside clearance / xy-window / reach rules
+  (`handeye_calib.yaml auto:`); `Compute & save` overwrites
+  `config/hand_eye/T_hc2ee.npz`. Needs
+  `path_tag_locator.launch use_handeye_calib:=true`. **Run on the robot
+  2026-09-14 18:41 (base on 102): 23/23 views captured, no skips, no move
+  failures; the result puts cross tag 0 within 1 / 0 / 5 mm of map.yaml's
+  prediction and its scatter over the 23 poses is 2.1 mm rms (was 15 mm
+  with the 09-02 file).** Restart the calibration nodes (they cache the
+  npz) and treat the 2026-09-02 hand-eye caveats as closed.
 - **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
   operator versions of the charging manager's dock-and-charge / undock
   tasks; the charger starts only on the `/crevis/charging true` that

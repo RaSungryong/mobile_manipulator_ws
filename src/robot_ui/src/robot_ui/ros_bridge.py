@@ -82,6 +82,7 @@ class RosBridge(QObject):
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
     calib_progress = pyqtSignal(dict)
+    handeye_progress = pyqtSignal(dict)     # /handeye_calib/progress (sweep events)
     scan_progress = pyqtSignal(dict)    # /arm/scan_progress events (per point)
     tag_ids = pyqtSignal(str, object)   # (camera, [tag ids in latest frame])
     log = pyqtSignal(str)
@@ -186,6 +187,8 @@ class RosBridge(QObject):
         # consumer would look like a live session.
         self._sub('/map_calibrator/progress', String,
                   self._cb_calib_progress, queue_size=64)
+        self._sub('/handeye_calib/progress', String,
+                  self._cb_handeye_progress, queue_size=64)
         # Per-point events from a running scan (arm_node / ArmController):
         # start, move, done, failed, finished. Same event-stream treatment
         # as the calibration progress — not cached, not replayed.
@@ -339,6 +342,15 @@ class RosBridge(QObject):
             self.calib_progress.emit(json.loads(msg.data))
         except Exception as e:
             rospy.logwarn_throttle(10.0, f'[UI] bad calib progress: {e}')
+
+    def _cb_handeye_progress(self, msg):
+        """Event stream (see _cb_calib_progress)."""
+        if not self._alive:
+            return
+        try:
+            self.handeye_progress.emit(json.loads(msg.data))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f'[UI] bad handeye progress: {e}')
 
     def _cb_scan_progress(self, msg):
         """Event stream (see _cb_calib_progress)."""
@@ -734,6 +746,31 @@ class RosBridge(QObject):
 
     def handeye_status(self):
         return self._call_trigger('/handeye_calib/status', 10.0)
+
+    def handeye_auto_sample(self):
+        """Start the automatic sweep (returns at once; progress on
+        handeye_progress). The node moves the arm through /arm/move_cart."""
+        return self._call_trigger('/handeye_calib/auto_sample', 10.0)
+
+    def handeye_cancel(self):
+        return self._call_trigger('/handeye_calib/cancel', 10.0)
+
+    def handeye_reset(self):
+        return self._call_trigger('/handeye_calib/reset', 10.0)
+
+    def handeye_load_latest(self):
+        return self._call_trigger('/handeye_calib/load_latest', 30.0)
+
+    def handeye_online(self):
+        """Master-registry check for the hand-eye node (the launch flag
+        use_handeye_calib:=true), same shape as calib_nodes_online()."""
+        try:
+            import rosgraph
+            master = rosgraph.Master('/robot_ui')
+            master.lookupService('/handeye_calib/capture')
+            return True
+        except Exception:
+            return False
 
     # ==========================================================
     # SERVICE HELPERS

@@ -43,7 +43,14 @@ rosrun path_tag_locator generate_calibration_artifacts.py --lift-mm 150
 ```
 
 - 핸드아이(`T_hc2ee.npz`)는 카메라/마운트를 물리적으로 건드리지 않는
-  한 재보정 불필요.
+  한 재보정 불필요. 재보정 절차(2026-09-14): 베이스를 102/103번에 세우고
+  Arm 탭으로 hand_cam이 크로스 태그 0을 보게 한 뒤, robot_ui →
+  Calibration 탭 → **Hand-eye** 그룹 → "Auto-sample (sweep)". 노드가
+  태그에 정렬한 뒤 태그 주위를 돌며(거리 3단 × 기울기 0/12/22° ×
+  방위 4 × 스핀 −30/0/+30, 24뷰) 태그가 보이는 자세마다 촬영하고
+  시작 자세로 돌아온다(플랜지·비전 팁이 정반 위 12 cm 이상, 시작점
+  반경 30 cm, 도달 1.25 m 이내인 뷰만 실행). 그 뒤 "Compute & save".
+  이후 캘리브레이션 노드 재시작 + `generate_calibration_artifacts.py`.
 
 ## 1. 실행 (순서 고정)
 

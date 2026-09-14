@@ -106,8 +106,21 @@ session and resume later (see "Reusing previous samples" below).
 # output_path, min_samples). Then:
 roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
 
-# Move the arm so the hand-cam sees the calibration tag from a new pose,
-# then capture; repeat ~15-30 times with diverse orientations:
+# EITHER let the node collect the samples (2026-09-14): park the base on
+# tag 102/103, drive the hand-cam over cross tag 0 (robot_ui Arm tab),
+# then — the node squares up on the tag and orbits it (3 distances x
+# tilts 0/12/22 deg x 4 azimuths, spins -30/0/+30 round-robin, 24 views),
+# capturing wherever the tag is seen, and returns to the start pose.
+# Safety rules and the progress topic: path_tag_locator/handeye_sweep.py,
+# config/handeye_calib.yaml `auto:`. robot_ui: Calibration tab, Hand-eye
+# group ("Auto-sample (sweep)").
+rosservice call /handeye_calib/auto_sample "{}"
+rostopic echo /handeye_calib/progress             # align / start / sample / finished
+# rosservice call /handeye_calib/cancel    "{}"   # stop after the current move
+
+# OR move the arm by hand (teach pendant / robot_ui jog) so the hand-cam
+# sees the calibration tag from a new pose, then capture; repeat ~15-30
+# times with diverse orientations:
 rosservice call /handeye_calib/capture     "{}"
 rosservice call /handeye_calib/status      "{}"   # check progress
 rosservice call /handeye_calib/compute     "{}"   # writes T_hc2ee.npz

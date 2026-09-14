@@ -878,6 +878,67 @@ class MainWindow(QMainWindow):
         form.addWidget(self.lbl_calib_last)
         layout.addWidget(box)
 
+        # Hand-eye calibration (2026-09-14): hand_cam <-> FLANGE (what
+        # /arm/state reports). Needs the launch flag use_handeye_calib:=true.
+        he_box = QGroupBox('Hand-eye calibration (hand_cam ↔ flange, tag 0)')
+        he_layout = QVBoxLayout(he_box)
+        he_note = QLabel(
+            'Base on tag 102/103, arm driven so hand_cam sees cross tag 0 '
+            '(Arm tab). Auto-sample squares up on the tag and orbits it '
+            '(tilts, spins, 3 distances) capturing at every view, then '
+            'returns; or capture by hand pose by pose. Compute writes '
+            'config/hand_eye/T_hc2ee.npz — restart the calibration nodes '
+            'afterwards and regenerate the plans.')
+        he_note.setWordWrap(True)
+        he_note.setStyleSheet('color:#888;')
+        he_layout.addWidget(he_note)
+        self.lbl_handeye_nodes = QLabel('hand-eye node: checking…')
+        he_layout.addWidget(self.lbl_handeye_nodes)
+        row = QHBoxLayout()
+        btn_he_auto = QPushButton('Auto-sample (sweep)')
+        btn_he_auto.setToolTip('/handeye_calib/auto_sample — moves the arm')
+        btn_he_auto.clicked.connect(self._on_handeye_auto)
+        row.addWidget(btn_he_auto)
+        btn_he_cancel = QPushButton('Cancel sweep')
+        btn_he_cancel.clicked.connect(
+            lambda: self._run(self.bridge.handeye_cancel, label='handeye-cancel'))
+        row.addWidget(btn_he_cancel)
+        btn_he_cap = QPushButton('Capture here')
+        btn_he_cap.setToolTip('/handeye_calib/capture — one sample at the current pose')
+        btn_he_cap.clicked.connect(
+            lambda: self._run(self.bridge.handeye_capture, label='handeye-capture',
+                              on_done=lambda r: self._refresh_handeye_status()))
+        row.addWidget(btn_he_cap)
+        he_layout.addLayout(row)
+        row = QHBoxLayout()
+        btn_he_compute = QPushButton('Compute && save T_hc2ee')
+        btn_he_compute.clicked.connect(self._on_handeye_compute)
+        row.addWidget(btn_he_compute)
+        btn_he_load = QPushButton('Load latest run')
+        btn_he_load.setToolTip('/handeye_calib/load_latest — re-feed the previous run\'s samples')
+        btn_he_load.clicked.connect(
+            lambda: self._run(self.bridge.handeye_load_latest, label='handeye-load',
+                              on_done=lambda r: self._refresh_handeye_status()))
+        row.addWidget(btn_he_load)
+        btn_he_reset = QPushButton('Reset samples')
+        btn_he_reset.clicked.connect(
+            lambda: self._run(self.bridge.handeye_reset, label='handeye-reset',
+                              on_done=lambda r: self._refresh_handeye_status()))
+        row.addWidget(btn_he_reset)
+        btn_he_status = QPushButton('Status')
+        btn_he_status.clicked.connect(self._refresh_handeye_status)
+        row.addWidget(btn_he_status)
+        he_layout.addLayout(row)
+        self.lbl_handeye_state = QLabel('samples: —')
+        self.lbl_handeye_state.setStyleSheet('font-weight:bold;')
+        he_layout.addWidget(self.lbl_handeye_state)
+        self.lbl_handeye_last = QLabel('—')
+        self.lbl_handeye_last.setWordWrap(True)
+        self.lbl_handeye_last.setStyleSheet('color:#888;')
+        he_layout.addWidget(self.lbl_handeye_last)
+        layout.addWidget(he_box)
+        self._handeye_online = None
+
         loc_box = QGroupBox('Single tag locate (debug)')
         loc_layout = QVBoxLayout(loc_box)
         lnote = QLabel(
@@ -914,7 +975,75 @@ class MainWindow(QMainWindow):
         self._refresh_calib_plan_note()
         return tab
 
+    def _on_handeye_auto(self):
+        if not self.bridge.handeye_online():
+            self.append_log(
+                '[handeye] hand-eye node is NOT running — start it with:  '
+                'roslaunch path_tag_locator path_tag_locator.launch '
+                'use_handeye_calib:=true')
+            return
+        self.lbl_handeye_last.setText('sweep requested…')
+        self._run(self.bridge.handeye_auto_sample, label='handeye-auto')
+
+    def _on_handeye_compute(self):
+        def _done(result):
+            if not (isinstance(result, tuple) and len(result) >= 2):
+                return
+            ok, message = result[0], str(result[1])
+            self.lbl_handeye_last.setText(
+                ('saved: ' if ok else 'compute FAILED: ') + message.split('\n')[0])
+            self._refresh_handeye_status()
+        self.lbl_handeye_last.setText('computing…')
+        self._run(self.bridge.handeye_compute, label='handeye-compute', on_done=_done)
+
+    def _refresh_handeye_status(self):
+        def _done(result):
+            if isinstance(result, tuple) and len(result) >= 2 and result[0]:
+                self.lbl_handeye_state.setText(str(result[1]).split('\n')[0])
+        self._run(self.bridge.handeye_status, label=None, on_done=_done)
+
+    def _on_handeye_progress(self, ev):
+        """Sweep events from /handeye_calib/progress."""
+        phase = ev.get('phase')
+        n = ev.get('n_samples')
+        if n is not None:
+            self.lbl_handeye_state.setText(f'samples: {n}')
+        if phase == 'align':
+            self.lbl_handeye_last.setText(
+                f"squaring up: iteration {ev.get('iteration')}, "
+                f"xy {ev.get('xy_mm', 0):.1f} mm, tilt {ev.get('tilt_deg', 0):.2f}°")
+        elif phase == 'start':
+            self.append_log(
+                f"[handeye] sweep: {ev.get('n_planned')} views planned, "
+                f"{ev.get('n_rejected')} rejected {ev.get('rejected') or ''}")
+            self.lbl_handeye_last.setText(
+                f"sweep: 0/{ev.get('n_planned')} views")
+        elif phase == 'sample':
+            idx, total = ev.get('index', 0), ev.get('total', 0)
+            ok = ev.get('ok')
+            self.lbl_handeye_last.setText(
+                f"sweep: {idx}/{total} {ev.get('label', '')} — "
+                f"{'captured' if ok else 'skipped: ' + str(ev.get('reason', ''))}"
+                f"  (captured {ev.get('n_captured', 0)}, skipped {ev.get('n_skipped', 0)})")
+            if not ok:
+                self.append_log(f"[handeye] view {idx}/{total} {ev.get('label', '')}: "
+                                f"{ev.get('reason', '')}")
+        elif phase == 'finished':
+            self.append_log(f"[handeye] {ev.get('summary', 'sweep finished')}")
+            self.lbl_handeye_last.setText(ev.get('summary', 'sweep finished'))
+
     def _poll_calib_nodes(self):
+        he = self.bridge.handeye_online()
+        if he != self._handeye_online:
+            self._handeye_online = he
+            if he:
+                self.lbl_handeye_nodes.setText('hand-eye node: ONLINE')
+                self.lbl_handeye_nodes.setStyleSheet('color:#2e7d32;')
+            else:
+                self.lbl_handeye_nodes.setText(
+                    'hand-eye node: OFFLINE — run:  roslaunch path_tag_locator '
+                    'path_tag_locator.launch use_handeye_calib:=true')
+                self.lbl_handeye_nodes.setStyleSheet('color:#b02020;')
         online = self.bridge.calib_nodes_online()
         if online == self._calib_online and 'checking' not in \
                 self.lbl_calib_nodes.text():
@@ -1093,6 +1222,7 @@ class MainWindow(QMainWindow):
         self.bridge.camera_state.connect(self._on_camera_state)
         self.bridge.calib_progress.connect(self._on_calib_progress)
         self.bridge.scan_progress.connect(self._on_scan_progress)
+        self.bridge.handeye_progress.connect(self._on_handeye_progress)
         self.bridge.tag_ids.connect(self._on_tag_ids)
         self.bridge.log.connect(self.append_log)
 

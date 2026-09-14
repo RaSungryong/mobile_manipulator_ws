@@ -16,6 +16,17 @@ Services:
   ~status      (Trigger) : print sample count and last result info.
   ~load_latest (Trigger) : append samples from the most recent prior
                            run_*/ directory under run_root.
+  ~auto_sample (Trigger) : (2026-09-14) sweep the camera around the tag
+                           and capture at every view — see
+                           path_tag_locator.handeye_sweep. Starts a
+                           thread and returns; progress streams on
+                           ~progress (String JSON: align / start /
+                           sample / finished); ~cancel stops it after
+                           the current move. Needs the tag in view
+                           from the current pose, robot_camera_node's
+                           hand_cam detector, and the current T_hc2ee
+                           (aims the sweep only).
+  ~cancel      (Trigger) : stop a running auto_sample.
 
 Parameters (under ``~`` namespace, see ``config/handeye_calib.yaml``):
   topics.hand_cam_image, topics.hand_cam_info,
@@ -51,6 +62,14 @@ from path_tag_locator.handeye_calib import (
 from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.persistence import HandeyeRunRecorder, load_handeye_samples
 from path_tag_locator.ros_image import grab_image_and_K
+from path_tag_locator.handeye_sweep import SweepCfg, SweepRunner
+from path_tag_locator.detections import (detection_to_T_cam2tag,
+                                         median_tilt_detection,
+                                         wait_for_tag_detections)
+from path_tag_locator.hand_eye import load_T_hc2ee
+from std_msgs.msg import String
+import json
+import threading
 
 
 _FIND_RE = re.compile(r"\$\(find\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)")
@@ -86,11 +105,34 @@ class HandeyeCalibNode:
             root["io"].get("run_root", "~/.ros/path_tag_locator"))
 
         arm = root.get("arm", {})
-        # Read-only TCP pose from arm_node; this node never moves the arm.
+        # TCP pose from arm_node's /arm/state. The arm is moved ONLY by
+        # ~auto_sample (through /arm/move_cart, like the calibrator);
+        # ~capture never moves it.
         self.tcp_client = ArmInterface(
             state_topic=str(arm.get("state_topic", "/arm/state")),
             move_cart_topic=str(arm.get("move_cart_topic", "/arm/move_cart")),
         )
+
+        # --- automatic sweep (handeye_calib.yaml `auto:`)
+        auto = dict(root.get("auto", {}) or {})
+        self.auto_detections_topic = str(auto.pop("detections_topic", "/hand_cam/tag_detections"))
+        self.auto_detector_size_m = float(auto.pop("detector_tag_size_m", self.tag_size_m))
+        self.auto_hand_eye_npz = _resolve_ros_path(
+            auto.pop("hand_eye_npz", "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"))
+        self.auto_move_vel = float(auto.pop("move_vel", 15.0))
+        self.auto_move_acc = float(auto.pop("move_acc", 20.0))
+        self.auto_settle_s = float(auto.pop("settle_s", 0.5))
+        self.auto_detect_frames = int(auto.pop("detect_frames", 5))
+        self.auto_detect_timeout_s = float(auto.pop("detect_timeout_s", 2.0))
+        known = set(SweepCfg.__dataclass_fields__)
+        unknown = [k for k in auto if k not in known]
+        if unknown:
+            rospy.logwarn("handeye_calib: unknown auto: keys ignored: %s", unknown)
+        self.sweep_cfg = SweepCfg(**{k: v for k, v in auto.items() if k in known})
+        self._sweep_thread = None
+        self._sweep_cancel = threading.Event()
+        self._sample_lock = threading.Lock()
+        self.progress_pub = rospy.Publisher("~progress", String, queue_size=50)
 
         self.samples = []           # list[CalibSample]
         self.last_result = None     # CalibResult | None
@@ -115,6 +157,8 @@ class HandeyeCalibNode:
         rospy.Service("~reset",   Trigger, self._on_reset)
         rospy.Service("~status",  Trigger, self._on_status)
         rospy.Service("~load_latest", Trigger, self._on_load_latest)
+        rospy.Service("~auto_sample", Trigger, self._on_auto_sample)
+        rospy.Service("~cancel", Trigger, self._on_cancel)
 
         rospy.loginfo("handeye_calib: ready. output_path=%s tag_id=%d "
                       "tag_size_m=%.4f min_samples=%d",
@@ -169,30 +213,120 @@ class HandeyeCalibNode:
             return TriggerResponse(success=False, message=str(e))
 
     # ------------------------------------------------------------------
-    def _on_capture(self, _req):
+    def _capture_sample(self):
+        """One (image, K, TCP) sample at the current pose. Returns (ok, msg)."""
         try:
             img, K = grab_image_and_K(self.topic_image, self.topic_info,
                                       timeout=self.image_wait_timeout)
             tcp = self.tcp_client.get_tcp_pose()
-            self.samples.append(CalibSample(image_bgr=img, K=K,
-                                            tcp_pose_mm_deg=tcp))
+            with self._sample_lock:
+                self.samples.append(CalibSample(image_bgr=img, K=K,
+                                                tcp_pose_mm_deg=tcp))
+                n = len(self.samples)
             try:
                 self.recorder.add_sample(img, K, tcp)
             except Exception as save_err:
                 rospy.logwarn("handeye_calib: failed to persist sample: %s",
                               save_err)
-            msg = (f"sample {len(self.samples)} captured "
+            msg = (f"sample {n} captured "
                    f"(tcp_mm_deg={['%.2f' % v for v in tcp]})")
             rospy.loginfo("handeye_calib: %s", msg)
-            return TriggerResponse(success=True, message=msg)
+            return True, msg
         except Exception as e:
             rospy.logwarn("handeye_calib.capture: %s", e)
-            return TriggerResponse(success=False, message=str(e))
+            return False, str(e)
+
+    def _on_capture(self, _req):
+        ok, msg = self._capture_sample()
+        return TriggerResponse(success=ok, message=msg)
+
+    # ------------------------------------------------------------------
+    # automatic sweep
+    # ------------------------------------------------------------------
+    def _sweep_running(self):
+        t = self._sweep_thread
+        return t is not None and t.is_alive()
+
+    def _publish_progress(self, d):
+        try:
+            d = dict(d)
+            d['stamp'] = rospy.get_time()
+            d['n_samples'] = len(self.samples)
+            self.progress_pub.publish(String(data=json.dumps(d, default=str)))
+        except Exception as e:
+            rospy.logwarn("handeye_calib: progress publish failed: %s", e)
+
+    def _detect_T_cam2tag(self):
+        """Median-tilt detection of the calibration tag on the shared
+        hand_cam detector, as T_cam2tag (m); None when not seen."""
+        try:
+            dets = wait_for_tag_detections(self.auto_detections_topic, self.tag_id,
+                                           self.auto_detect_frames,
+                                           timeout=self.auto_detect_timeout_s)
+        except RuntimeError:
+            return None
+        det = median_tilt_detection(dets)
+        return detection_to_T_cam2tag(det, self.tag_size_m, self.auto_detector_size_m)
+
+    def _on_auto_sample(self, _req):
+        if self._sweep_running():
+            return TriggerResponse(success=False, message="a sweep is already running")
+        try:
+            T_hc2ee = load_T_hc2ee(self.auto_hand_eye_npz)
+        except Exception as e:
+            return TriggerResponse(success=False,
+                                   message=f"cannot load the current hand-eye ({e}); "
+                                           "the sweep needs it to aim")
+        ok, why = self.tcp_client.wait_for_node(timeout_s=3.0)
+        if not ok:
+            return TriggerResponse(success=False, message=why)
+        self._sweep_cancel.clear()
+        runner = SweepRunner(
+            self.sweep_cfg,
+            get_tcp=self.tcp_client.get_tcp_pose,
+            move=lambda pose: self.tcp_client.move_j_to_pose(
+                pose, vel=self.auto_move_vel, acc=self.auto_move_acc,
+                settle_s=self.auto_settle_s, linear=True),
+            detect=self._detect_T_cam2tag,
+            capture=self._capture_sample,
+            cancelled=self._sweep_cancel.is_set,
+            log_info=lambda m: rospy.loginfo("handeye_calib: %s", m),
+            log_warn=lambda m: rospy.logwarn("handeye_calib: %s", m),
+            progress=self._publish_progress,
+        )
+
+        def _worker():
+            res = runner.run(T_hc2ee)
+            rospy.loginfo("handeye_calib: %s (samples in memory: %d)",
+                          res.summary(), len(self.samples))
+
+        self._sweep_thread = threading.Thread(target=_worker, name="handeye-sweep",
+                                              daemon=True)
+        self._sweep_thread.start()
+        cfg = self.sweep_cfg
+        return TriggerResponse(
+            success=True,
+            message=(f"sweep started: up to {cfg.max_samples} views, distances "
+                     f"{cfg.distances_m} m, tilts {cfg.tilts_deg} deg, spins "
+                     f"{cfg.spins_deg} deg; progress on "
+                     f"{rospy.resolve_name('~progress')}"))
+
+    def _on_cancel(self, _req):
+        if not self._sweep_running():
+            return TriggerResponse(success=False, message="no sweep running")
+        self._sweep_cancel.set()
+        return TriggerResponse(success=True,
+                               message="cancel requested — stops after the current move")
 
     def _on_compute(self, _req):
+        if self._sweep_running():
+            return TriggerResponse(success=False,
+                                   message="a sweep is running — wait or ~cancel first")
         try:
+            with self._sample_lock:
+                samples = list(self.samples)
             result = calibrate(
-                self.samples,
+                samples,
                 tag_id=self.tag_id,
                 tag_size_m=self.tag_size_m,
                 family=self.tag_family,
@@ -215,6 +349,9 @@ class HandeyeCalibNode:
             return TriggerResponse(success=False, message=str(e))
 
     def _on_reset(self, _req):
+        if self._sweep_running():
+            return TriggerResponse(success=False,
+                                   message="a sweep is running — ~cancel first")
         n = len(self.samples)
         self.samples = []
         self.last_result = None
@@ -230,6 +367,8 @@ class HandeyeCalibNode:
 
     def _on_status(self, _req):
         lines = [f"samples: {len(self.samples)} (min required: {self.min_samples})"]
+        if self._sweep_running():
+            lines.append("auto_sample: RUNNING")
         if self.last_result is not None:
             lines.append(summarize(self.last_result))
         msg = "\n".join(lines)

@@ -15,11 +15,21 @@ from .geometry import apriltag_to_matrix
 _DETECTORS = {}
 
 
+# quad_decimate 1.0, NOT the library default 2.0: the same finding that put
+# robot_camera.quad_decimate.hand_cam at 1.0 (2026-09-02) — the 90 mm ref
+# tag seen from 0.5-0.8 m is ~70-110 px, decimation halves that and the
+# border merges with the plate seams / glare: no detection, or a tilt
+# reading tens of degrees off. This detector re-detects the archived
+# hand-eye samples and verify_arm_pointing's frames, so it must see what
+# robot_camera_node sees.
+QUAD_DECIMATE = 1.0
+
+
 def _get_detector(family: str):
     det = _DETECTORS.get(family)
     if det is None:
         from dt_apriltags import Detector  # lazy import
-        det = Detector(families=family)
+        det = Detector(families=family, quad_decimate=QUAD_DECIMATE)
         _DETECTORS[family] = det
     return det
 

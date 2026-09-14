@@ -34,3 +34,42 @@ handeye_calib:
     #   load_samples_dirs:
     #     - "~/.ros/path_tag_locator/handeye_calib/run_20260521_133900"
     load_samples_dirs:  []
+
+  # --- automatic sample collection (~auto_sample, 2026-09-14) ----------
+  # See path_tag_locator/handeye_sweep.py for the procedure. Precondition:
+  # the operator has the tag in the hand camera's view (Arm tab jog or a
+  # plan seed). The node squares up on the tag at distances_m[0], then
+  # visits every view (distance x tilt x azimuth, spins round-robin),
+  # re-detects and captures. Rotation diversity (tilt, spin) is what
+  # conditions the solve; distance mostly changes the tag's pixel size.
+  auto:
+    detections_topic:     "/hand_cam/tag_detections"   # robot_camera_node (quad_decimate 1.0)
+    detector_tag_size_m:  0.090       # = robot.yaml robot_camera.tag_size.hand_cam
+    # Current estimate, used ONLY to aim the views and evaluate the
+    # clearance rule; the captured samples do not depend on it.
+    hand_eye_npz:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    distances_m:          [0.35, 0.45, 0.55]
+    tilts_deg:            [0.0, 12.0, 22.0]
+    azimuths_deg:         [0.0, 90.0, 180.0, 270.0]
+    spins_deg:            [-30.0, 0.0, 30.0]
+    max_samples:          24
+    # Safety, in the tag plane's frame (the plate IS the tag plane):
+    # flange-frame points (mm) that must stay min_clearance_m above it —
+    # the flange and the vision tip / Keyence bracket, the lowest part of
+    # the tool (= robot.yaml arm_calibration.vision_tip_offset_mm).
+    tool_points_mm:       [[0.0, 0.0, 0.0], [0.0, -253.0, 225.2]]
+    min_clearance_m:      0.12
+    max_xy_from_start_m:  0.30        # flange stays over the plate area the operator chose
+    max_flange_reach_m:   1.25        # FR10 nominal 1.40
+    min_flange_reach_m:   0.25
+    max_step_m:           0.20        # MoveL chunk clamps between views
+    max_step_deg:         30.0
+    return_to_start:      true
+    move_vel:             15.0
+    move_acc:             20.0
+    settle_s:             0.5
+    detect_frames:        5           # median-tilt frame of these
+    detect_timeout_s:     2.0
+    align_max_iterations: 6           # square-up before the sweep
+    align_position_tol_m: 0.003
+    align_angle_tol_deg:  1.0

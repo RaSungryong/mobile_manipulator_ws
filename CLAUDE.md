@@ -1523,6 +1523,93 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-14 — Hand-eye calibration from robot_ui, with an automatic sample sweep
+
+User: "이 기능도 robot ui 추가, 그리고 촬영 포인트로 로봇 이동하고 충돌
+없이 샘플해줘". `handeye_calib_node` (services capture / compute /
+status / reset / load_latest, unchanged) gained **`~auto_sample`**,
+**`~cancel`** and a **`~progress`** JSON stream, implemented in
+`path_tag_locator/handeye_sweep.py` (pure numpy, offline-tested):
+
+- Precondition: the operator has cross tag 0 in the hand camera (base
+  on 102/103, Arm tab jog or a plan seed). The node squares up with the
+  existing align maths (`compute_target_ee_pose`, tag centred, zero
+  tilt, at `distances_m[0]`), takes that as sample 0 and as the frame
+  the sweep is planned in (`T_ab2tag = T_ab2ee · inv(T_hc2ee) ·
+  T_cam2tag`).
+- Views: distance × tilt × azimuth on a sphere around the tag centre,
+  optical axis through it, spins round-robin — 3 × (1 + 2×4) = 27,
+  evenly subsampled to `max_samples` 24. Rotation diversity is the
+  point (a hand-eye solve is blind to pure translations).
+- **Collision rules, evaluated in the tag plane's frame (the plate IS
+  the tag plane):** every `tool_points_mm` point — the flange and the
+  vision tip / Keyence bracket (0, −253, 225.2), the lowest part of the
+  tool — must stay `min_clearance_m` 0.12 above the plate; the flange
+  stays within `max_xy_from_start_m` 0.30 of the start pose (the sweep
+  never leaves the plate area the operator chose) and inside
+  `max_flange_reach_m` 1.25; rejected views are counted by reason.
+  Moves between views are straight `MoveL` chunks of ≤ 0.20 m / 30°
+  (both ends inside a convex safe region ⇒ so is the straight path),
+  nearest-first ordering. Each view: settle, median-of-5 re-detection
+  on robot_camera_node's hand_cam topic → not seen = skipped, never a
+  blind capture; a failed move skips that view; cancel is honoured
+  before every move; the arm returns to the start pose at the end.
+  Compute / reset are refused while a sweep runs.
+- The interim 2026-09-02 hand-eye AIMS the sweep only: an error there
+  mis-centres the tag (caught by the re-detection) and is why the
+  clearance margin is generous. `detect.py`'s own detector now uses
+  `quad_decimate` 1.0 (was the library's 2.0 — the exact setting that
+  made hand_cam miss the 90 mm tag on 2026-09-02; this detector is what
+  `calibrate()` re-runs over the archived samples).
+- robot_ui: Calibration tab → Hand-eye group (node ONLINE/OFFLINE line
+  with the launch flag, Auto-sample / Cancel / Capture here / Compute &
+  save / Load latest / Reset / Status, sample count and a progress
+  line; skipped views and the summary go to the log). Bridge:
+  `handeye_{auto_sample,cancel,reset,load_latest,online}` +
+  `handeye_progress` signal.
+
+Verified offline only: `path_tag_locator/scripts/check_handeye_sweep.py`
+(36 — view geometry: tag on the optical axis at the requested range and
+polar angle, spin leaves the camera position; plan round trip: every
+accepted flange target re-images the tag centred at its tilt, lowest
+tool point 151 mm above the plate, each rule rejects with its reason,
+longest hop 0.32 m; runner against a fake arm + limited-FOV camera:
+squares up, 24 captured incl. the square view, no chunk over the
+clamps, tilts 0/12/22 present, returns to start; a failed move and a
+cancel handled; a 10 cm / 4° WRONG aiming hand-eye still captures 20
+usable samples with nothing under 167 mm; refuses without moving when
+the tag is not in view) and `check_task_list_ui.py` 34 → **42**. Not run
+on the robot: first sweep with a hand on the e-stop, watching
+`handeye_calib: sweep: N views planned` and the per-view lines.
+
+**Run on the robot the same evening (18:38–18:44, base on tag 102, the
+arm driven over cross tag 0 by hand):** the square-up ran its 6
+iterations without reaching the 3 mm tolerance (started 250 mm off at
+z 1.2 m, 0.10 m steps: 250 → 88 mm) — harmless, the views are planned
+from the measured tag pose and re-detected — then **22 views planned
+(2 rejected by the xy window), 23/23 captured, 0 skipped, 0 move
+failures, 2 min**, arm back at the start. `compute`: DANIILIDIS,
+residual 0.0173, `T_hc2ee` t = (+26.3, +165.2, −157.1) mm, rpy
+(+0.45, +0.72, +1.57)°. Quality, measured rather than assumed:
+- **Consistency:** the fixed tag re-projected through all 23 poses
+  scatters **2.1 mm rms / 3.2 mm max**, normal 0.5° rms; the 09-02
+  fitted file gives 15.1 / 24.7 mm on the very same samples, the
+  spun-only one 34 / 50 mm.
+- **Absolute:** tag 0 lands at (−0.399, 1.010, −0.577) m in the arm
+  frame; `transform_world_to_arm` at the tag-102 stop pose predicts
+  (−0.400, 1.010, −0.652 + 0.080 plate datum = −0.572): **1 / 0 / 5 mm.**
+  That is the whole chain — map.yaml, the aligned base pose, `T_ab2mb`,
+  the new hand-eye — agreeing to millimetres.
+- New vs the file in use since 09-02: 45 mm / 2.3°, consistent with the
+  ~2.5–3.3° rotation error the 09-11 analysis attributed to hand-eye or
+  front_cam and could not separate. The 09-02 caveats are closed.
+Follow-ups: restart the calibration nodes (they cache the npz); the
+plate plans' design seeds move ~5 cm with the hand-eye — regenerate
+(`generate_calibration_artifacts.py`) or keep the session-measured
+plate-1 seeds, which are real TCP poses and still valid starting points.
+Square-up tuning: `align_max_iterations` 6 → more, or start the sweep
+from ~0.5 m above the tag.
+
 ### 2026-09-14 — rosbridge in the launch: the Windows PC reaches the stack over WebSocket through the Phoenix AP bridge
 
 User: "rosbridge, 웹소켓으로 로봇PC와 외부 컴퓨터를 연결하고 싶은데 방법을
