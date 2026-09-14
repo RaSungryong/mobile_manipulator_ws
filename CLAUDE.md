@@ -304,6 +304,11 @@ before the stack launch or the second one fails to bind the port.
 Connection check from any machine (no ROS, no stack needed):
 `{"op":"call_service","service":"/rosapi/topics"}` over the websocket
 returns the topic list.
+**Operator tooling: `tools/rosbridge/robot_cmd.py`** (runs on Windows with
+only `websocket-client`; task commands, `/task_state` watch, and generic
+`topics / type / fields / sub / pub / call / param`) and the Korean
+operator guide **`docs/ROSBRIDGE_kr.md`** (reboot procedure for both PCs,
+usage, topic table, rules, troubleshooting).
 
 The calibration nodes (`path_tag_locator` + `map_calibrator`, plus
 `handeye_calib` behind `use_handeye_calib:=false`) live in a SEPARATE
@@ -1552,6 +1557,32 @@ lists both nodes, `use_rosbridge:=false` drops them, `rosbridge_port`
 reaches the node's `~port`; XML and Python parse. Not yet launched as
 part of the stack — the hand-started rosbridge in the user's terminal
 must be Ctrl-C'd first or the launch's copy fails to bind 9090.
+
+**Later the same evening.** Exactly that happened: the user relaunched the
+stack with the hand-started rosbridge still up, the launch's copy looped
+on `Address already in use` and was then shut down by the master as a
+duplicate name, leaving a hung process; killed it and started a
+detached rosbridge by hand for the session (`pkill -f
+rosbridge_websocket` before the next stack launch; moot after a
+reboot). Then the first command from Windows through it: `STATE`
+(answered `[STATE] IDLE`) and **`CHARGE`** — received, `battery_return`
+ran, but `mobile_node` said "Already at target tag 500", no motion, relay
+ON, and **no BMS current within 15 s → `dock_failed`**. Reconstructed
+from the logs: the 16:59 CHARGE (after an UNDOCK) drove 0.095 m onto the
+dock and was confirmed at 46 %; at 17:43:50 the user's Ctrl-C of the
+stack ran `devices.shutdown()`, which **drops the charge relay by
+design**, ending that charge at ~71 %; five restarts followed, the
+manager never resumes charging on restart, and at 18:21 relay-ON alone
+(base unmoved since 16:59) produced no current. Whether that is the
+charger's state after a cut under load or the contacts is not knowable
+from software; the user was told to check the charger and re-dock with
+`UNDOCK` → `CHARGE`. Open decision for the user: keep the relay on at
+shutdown while the BMS confirms charging, or resume `charging` on
+restart when parked on 500 with the relay on — neither changed.
+Delivered on top: `tools/rosbridge/robot_cmd.py` (merged from two
+scratch scripts; every subcommand exercised read-only against the live
+stack, incl. the fix for lowercase `state` being sent as a STATE
+command) and `docs/ROSBRIDGE_kr.md`.
 
 ### 2026-09-14 — CHARGE / UNDOCK: dock-and-charge as an operator command, with robot_ui buttons
 
