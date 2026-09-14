@@ -75,12 +75,14 @@ class RosBridge(QObject):
     image_received = pyqtSignal(str, object)
     arm_state = pyqtSignal(dict)
     task_state = pyqtSignal(dict)
+    task_list = pyqtSignal(dict)        # /task_list: registered tasks (latched)
     lift_state = pyqtSignal(dict)
     mobile_state = pyqtSignal(dict)
     battery_state = pyqtSignal(dict)
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
     calib_progress = pyqtSignal(dict)
+    scan_progress = pyqtSignal(dict)    # /arm/scan_progress events (per point)
     tag_ids = pyqtSignal(str, object)   # (camera, [tag ids in latest frame])
     log = pyqtSignal(str)
 
@@ -164,6 +166,12 @@ class RosBridge(QObject):
         self._sub('/arm/state', ArmState, self._cb_arm, queue_size=1)
         self._sub('/task_state', String, self._cb_json,
                   callback_args=self.task_state, queue_size=5)
+        # The registered tasks (name, mode, tags, point counts), published by
+        # task_executor from the path-data files in task/csv. Latched, cached
+        # and replayed like /task_state, so the Task tab's list is never a
+        # hard-coded copy of TASK_DEFS again.
+        self._sub('/task_list', String, self._cb_json,
+                  callback_args=self.task_list, queue_size=1)
         self._sub('/lifter/state', String, self._cb_json,
                   callback_args=self.lift_state, queue_size=1)
         self._sub('/mobile/state', String, self._cb_mobile, queue_size=1)
@@ -178,6 +186,11 @@ class RosBridge(QObject):
         # consumer would look like a live session.
         self._sub('/map_calibrator/progress', String,
                   self._cb_calib_progress, queue_size=64)
+        # Per-point events from a running scan (arm_node / ArmController):
+        # start, move, done, failed, finished. Same event-stream treatment
+        # as the calibration progress — not cached, not replayed.
+        self._sub('/arm/scan_progress', String,
+                  self._cb_scan_progress, queue_size=64)
         # Latest tag detections per camera, for scripts that need to ask
         # "what does the hand cam see right now" (e.g. the cross-tag
         # survey). Snapshot store only — no signal, poll via
@@ -326,6 +339,15 @@ class RosBridge(QObject):
             self.calib_progress.emit(json.loads(msg.data))
         except Exception as e:
             rospy.logwarn_throttle(10.0, f'[UI] bad calib progress: {e}')
+
+    def _cb_scan_progress(self, msg):
+        """Event stream (see _cb_calib_progress)."""
+        if not self._alive:
+            return
+        try:
+            self.scan_progress.emit(json.loads(msg.data))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f'[UI] bad scan progress: {e}')
 
     def _cb_battery(self, msg):
         if not self._alive:

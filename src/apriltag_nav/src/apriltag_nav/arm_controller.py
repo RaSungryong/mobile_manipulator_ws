@@ -21,11 +21,13 @@ wraps this class; nothing else instantiates it.
 """
 
 import threading
+import queue
+import json
 import time
 import numpy as np
 
 import rospy
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, String
 from robot_msgs.msg import Pose2DWithFlag
 from scipy.spatial.transform import Rotation as R
 
@@ -97,6 +99,19 @@ class ArmController:
         rospy.loginfo(f"[Arm REAL] RobotEnable(1) → {ret}")
         time.sleep(1.0)
 
+        # ---------- which tool frame is the controller actually using? ----------
+        # Pose-mode CSV rows are VISION-TIP coordinates (robot.yaml
+        # arm_calibration.vision_tip_offset_mm, the same numbers
+        # tools/set_tool_tcp.py writes as tool 1). GetInverseKin has no tool
+        # argument: it solves for the controller's ACTIVE tool frame. On
+        # 2026-09-14 that frame was the FLANGE (offset 0), so every tip
+        # target put the flange there — 338.7 mm from where the paired joint
+        # row put the tip. See _probe_tool_frame / _exec_pose.
+        _ac = load_yaml_block('arm_calibration')
+        self._tip_offset_mm = np.array(
+            _ac.get('vision_tip_offset_mm', [0.0, -253.0, 225.2]), dtype=float)
+        self._pose_tip_to_flange = self._probe_tool_frame()
+
         # ---------- Home ----------
         # Source of truth is config/robot.yaml `arm_home.joints_rad`.
         # Hardcoded list remains as fallback for standalone use.
@@ -113,6 +128,11 @@ class ArmController:
         # lamp — basler_camera_node owns both; the pipeline calls its service.
         _camera_cfg = load_yaml_block('camera')
         self.stabilization_time = rospy.get_param('~stabilization_time', 0.5)
+        # Bound on frames waiting for inference (each ~20 MB). A full queue
+        # blocks the scan loop, i.e. a slow model throttles the arm rather
+        # than growing memory without limit.
+        self.infer_queue_max = int(rospy.get_param('~infer_queue_max', 4))
+        self._results_lock = threading.Lock()
         self.pipeline = RaScanPipeline(
             capture_service=rospy.get_param(
                 '~capture_service', _camera_cfg.get('service', '/camera/capture')),
@@ -224,6 +244,20 @@ class ArmController:
         rospy.Subscriber("/robot_pose", Pose2DWithFlag, self.pose_cb, queue_size=1)
         rospy.Subscriber("keyence/value", Float32, self.keyence_cb, queue_size=1)
         self.done_pub = rospy.Publisher("/scan_finished", Bool, queue_size=1)
+        # Per-point scan progress for the operator UI (2026-09-14). JSON
+        # events, one per phase: start / move / done / failed / finished.
+        # Before this the only trace of a failed point was arm_node's rosout
+        # and the result CSV — robot_ui showed nothing while 110 IK failures
+        # went by.
+        self.progress_pub = rospy.Publisher("/arm/scan_progress", String,
+                                            queue_size=50)
+        # Pose snapshot taken by the WORKER thread between its own RPC calls,
+        # so arm_node can keep /arm/state live during a scan (its timer must
+        # not touch the single RPC socket while a motion holds it).
+        self._live_lock = threading.Lock()
+        self._live_pose = None
+        self._live_joints = None
+        self._live_stamp = 0.0
 
         # Clear faults and enter automatic mode, but do NOT move. Bringing the
         # stack up must never command arm motion: whatever pose the arm powered
@@ -361,6 +395,25 @@ class ArmController:
         self.cancel_requested = False
         results = []
         current_csv_path = None
+        n_total = len(scan_points)
+        n_ok = n_fail = 0
+        self._progress('start', index=0, total=n_total,
+                       scan_points=sum(1 for p in scan_points if p.get("scan", True)))
+
+        # Inference + PNG save run OFF the arm's thread (2026-09-14). The arm
+        # only has to be still for the capture (~0.4 s); the ~2.6 s of ONNX
+        # + disk work that used to follow it now overlaps the move to the
+        # next point. One worker, FIFO, so results land in order and the
+        # CPU is never asked to run two inferences at once; the queue is
+        # bounded so a slow inference throttles the arm instead of piling
+        # up 20 MB frames. `results` entries are filled in by the worker
+        # and the CSV is rewritten under _results_lock from both threads.
+        infer_q = queue.Queue(maxsize=getattr(self, 'infer_queue_max', 4))
+        self._results_lock = getattr(self, '_results_lock', None) or threading.Lock()
+        worker = threading.Thread(target=self._infer_worker,
+                                  args=(infer_q, results, n_total),
+                                  name='scan-infer', daemon=True)
+        worker.start()
 
         try:
             for i, p in enumerate(scan_points):
@@ -385,6 +438,8 @@ class ArmController:
                 rospy.loginfo(
                     f"[Arm REAL] {'Execute scan point' if do_scan else 'Traverse'}"
                     f" {i+1}/{len(scan_points)}")
+                self._progress('move', index=i + 1, total=n_total, point_id=pid,
+                               group_id=gid, scan=do_scan, mode=p.get("mode"))
 
                 # Pre-open the camera before the arm starts moving, so the
                 # device-open latency runs in parallel with motion + Keyence
@@ -418,9 +473,13 @@ class ArmController:
                 except Exception as move_err:
                     rospy.logerr(f"[Arm REAL] Move failed at point {pid}: {move_err}")
                     entry["execution_message"] = str(move_err)
-                    results.append(entry)
-                    if current_csv_path:
-                        self.results_writer.save(current_csv_path, results)
+                    n_fail += 1
+                    self._progress('failed', index=i + 1, total=n_total,
+                                   point_id=pid, group_id=gid, scan=do_scan,
+                                   message=str(move_err), n_ok=n_ok, n_fail=n_fail)
+                    with self._results_lock:
+                        results.append(entry)
+                        self._save_results(current_csv_path, results)
                     continue
 
                 # A traverse point is DONE once the move lands: no settle, no
@@ -428,6 +487,10 @@ class ArmController:
                 # loop would chase a reading that means nothing there), no
                 # capture, and no result row — it is not a measurement.
                 if not do_scan:
+                    n_ok += 1          # executed as planned; nothing to measure
+                    self._progress('done', index=i + 1, total=n_total,
+                                   point_id=pid, group_id=gid, scan=False,
+                                   message='traverse', n_ok=n_ok, n_fail=n_fail)
                     continue
 
                 # Wait for arm to stabilize at target point
@@ -440,7 +503,12 @@ class ArmController:
                 standoff = None
                 if not self.cancel_requested:
                     standoff = self._adjust_distance_to_surface()
-                    time.sleep(0.5)
+                    # Settle only if the standoff loop actually moved the
+                    # tool (each of its MoveLs already rests keyence_settle_s;
+                    # this is the extra margin before the shutter). When it
+                    # took no step there is nothing to settle from.
+                    if standoff is not None and standoff.travel_mm > 0.0:
+                        time.sleep(0.5)
                 if standoff is not None:
                     if not standoff.converged and self.keyence_require_converged:
                         entry["success"] = False
@@ -449,33 +517,42 @@ class ArmController:
                         rospy.logerr(
                             f"[Arm REAL] Point {pid}: {standoff.summary()} — "
                             "capture skipped (keyence_require_converged)")
-                        results.append(entry)
-                        if current_csv_path:
-                            self.results_writer.save(current_csv_path, results)
+                        n_fail += 1
+                        self._progress('failed', index=i + 1, total=n_total,
+                                       point_id=pid, group_id=gid, scan=True,
+                                       message=entry["execution_message"],
+                                       n_ok=n_ok, n_fail=n_fail)
+                        with self._results_lock:
+                            results.append(entry)
+                            self._save_results(current_csv_path, results)
                         continue
                     entry["execution_message"] = f"Success ({standoff.summary()})"
 
-                # Capture and infer (delegated — nothing here moves the arm)
+                # Capture while the arm is at rest; inference and the PNG
+                # save go to the worker. `done` is published as soon as the
+                # frames are in hand (the point is measured); the Ra follows
+                # in a separate `result` event when the worker finishes it.
+                frames = []
                 if not self.cancel_requested:
-                    scan_result = self.pipeline.scan_point(
+                    frames = self.pipeline.capture(
                         point_id=pid,
                         cancelled=lambda: self.cancel_requested,
                     )
-                    if scan_result:
-                        entry["ra_mean"]     = scan_result["ra_mean"]
-                        entry["ra_std"]      = scan_result["ra_std"]
-                        entry["ra_min"]      = scan_result["ra_min"]
-                        entry["ra_max"]      = scan_result["ra_max"]
-                        entry["num_samples"] = scan_result["num_samples"]
+                if not frames:
+                    entry["execution_message"] += " (no frames captured)"
 
-                results.append(entry)
-
-                # Incremental CSV save (preserves results even if cancelled mid-scan)
-                if current_csv_path:
-                    try:
-                        self.results_writer.save(current_csv_path, results)
-                    except Exception as csv_err:
-                        rospy.logerr(f"[Arm REAL] Failed to save results: {csv_err}")
+                n_ok += 1
+                self._refresh_live_pose()
+                self._progress('done', index=i + 1, total=n_total, point_id=pid,
+                               group_id=gid, scan=True,
+                               message=entry["execution_message"],
+                               n_ok=n_ok, n_fail=n_fail)
+                with self._results_lock:
+                    results.append(entry)
+                    # Incremental CSV save (preserves results even if cancelled mid-scan)
+                    self._save_results(current_csv_path, results)
+                if frames:
+                    infer_q.put((i + 1, pid, gid, entry, frames, current_csv_path))
 
             if not self.cancel_requested:
                 rospy.loginfo("[Arm REAL] Scan finished → Home")
@@ -488,9 +565,105 @@ class ArmController:
             # Scan over (finished or cancelled) — let the camera close now
             # rather than idling warm for idle_close_sec.
             self.pipeline.release()
+            # Every captured frame still gets its Ra: the worker drains the
+            # queue (a cancel only stops the ARM; frames already taken are
+            # cheap to finish and the CSV must not end with blank rows for
+            # points that were measured). The home move above overlapped
+            # the last inference, so this join is usually short.
+            infer_q.put(None)
+            worker.join()
+            self._progress('finished', index=len(results), total=n_total,
+                           n_ok=n_ok, n_fail=n_fail,
+                           cancelled=bool(self.cancel_requested))
             # Always publish done so task_executor never hangs
             self.publish_done()
             self.busy = False
+
+    # --------------------------------------------------
+    # BACKGROUND INFERENCE (one worker per scan)
+    # --------------------------------------------------
+    def _infer_worker(self, infer_q, results, n_total):
+        """Consume (index, pid, gid, entry, frames, csv_path) until None.
+
+        Fills the entry's ra_* fields in place, rewrites the CSV under
+        _results_lock and publishes a `result` progress event. Never lets
+        an exception escape — a failed inference is recorded on its row
+        and the next frame is processed.
+        """
+        while True:
+            item = infer_q.get()
+            if item is None:
+                return
+            index, pid, gid, entry, frames, csv_path = item
+            try:
+                scan_result = self.pipeline.process(pid, frames)
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] Inference failed at point {pid}: {e}")
+                scan_result = None
+            with self._results_lock:
+                if scan_result:
+                    entry["ra_mean"]     = scan_result["ra_mean"]
+                    entry["ra_std"]      = scan_result["ra_std"]
+                    entry["ra_min"]      = scan_result["ra_min"]
+                    entry["ra_max"]      = scan_result["ra_max"]
+                    entry["num_samples"] = scan_result["num_samples"]
+                else:
+                    entry["execution_message"] += " (no Ra)"
+                self._save_results(csv_path, results)
+            self._progress('result', index=index, total=n_total, point_id=pid,
+                           group_id=gid, scan=True,
+                           ra_mean=entry["ra_mean"], ra_std=entry["ra_std"],
+                           num_samples=entry["num_samples"],
+                           message=entry["execution_message"])
+
+    def _save_results(self, csv_path, results):
+        """Rewrite the Ra map. Caller holds _results_lock."""
+        if not csv_path:
+            return
+        try:
+            self.results_writer.save(csv_path, results)
+        except Exception as csv_err:
+            rospy.logerr(f"[Arm REAL] Failed to save results: {csv_err}")
+
+    # --------------------------------------------------
+    # PROGRESS EVENTS + LIVE POSE (for the operator UI)
+    # --------------------------------------------------
+    def _progress(self, phase, **fields):
+        """Publish one /arm/scan_progress event. Never raises."""
+        try:
+            payload = {'phase': phase, 'stamp': rospy.get_time()}
+            payload.update(fields)
+            pose = self.live_pose()
+            if pose is not None:
+                payload['tcp_pose'] = [round(float(v), 2) for v in pose[0]]
+            self.progress_pub.publish(String(json.dumps(payload, default=str)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Arm REAL] progress publish failed: {e}")
+
+    def _refresh_live_pose(self):
+        """Snapshot pose + joints from the worker thread (between its own RPC
+        calls, so it cannot collide with a held motion). arm_node's state
+        timer serves it while it cannot take the executor lock."""
+        pose = self.get_tcp_pose()
+        joints = self.get_joints_deg()
+        if pose is None and joints is None:
+            return
+        with self._live_lock:
+            if pose is not None:
+                self._live_pose = pose
+            if joints is not None:
+                self._live_joints = joints
+            self._live_stamp = time.time()
+
+    def live_pose(self):
+        """(tcp_pose, joints, age_s) of the last worker-thread snapshot, or
+        None when there has never been one."""
+        with self._live_lock:
+            if self._live_pose is None and self._live_joints is None:
+                return None
+            return (list(self._live_pose or [0.0] * 6),
+                    list(self._live_joints or [0.0] * 6),
+                    time.time() - self._live_stamp)
 
     # --------------------------------------------------
     # KEYENCE DISTANCE ADJUSTMENT
@@ -550,6 +723,7 @@ class ArmController:
         if ret != 0:
             rospy.logerr(f"[Arm REAL] MoveL failed during standoff adjustment: {ret}")
             return False
+        self._refresh_live_pose()
         time.sleep(self.keyence_settle_s)
         return True
 
@@ -599,15 +773,83 @@ class ArmController:
     # --------------------------------------------------
     # JOINT MOTION
     # --------------------------------------------------
+    # ⚠️ _exec_joint / _exec_pose RAISE on any failure (2026-09-14). They
+    # used to log and return, and execute_scan_points then marked the point
+    # "Success" and went on to the Keyence loop and the capture at whatever
+    # pose the arm was left in. On the robot the only reason 110 IK failures
+    # were recorded as failures at all was an unrelated TypeError (the SDK
+    # returns a bare int when IK has no solution, and `ret, joints = ...`
+    # blew up on it). The caller's per-point `except` is the contract: a
+    # raise here fails THAT point with the message in the CSV and on
+    # /arm/scan_progress, and the scan continues.
     def _exec_joint(self, joints_rad):
         if len(joints_rad) != 6:
-            rospy.logerr("[Arm REAL] Joint goal must have 6 values")
-            return
+            raise ValueError("joint goal must have 6 values")
         joints_deg = [np.degrees(j) for j in joints_rad]
         rospy.loginfo(f"[Arm REAL] MoveJ (deg) → {joints_deg}")
         ret = self.robot.MoveJ(joints_deg, tool=TOOL_ID, user=0)
         if ret != 0:
-            rospy.logerr(f"[Arm REAL] MoveJ failed: {ret}")
+            raise RuntimeError(f"MoveJ failed (code {ret})")
+        self._refresh_live_pose()
+
+    def _probe_tool_frame(self):
+        """Read the controller's active TCP offset and decide how a pose-mode
+        target (vision-tip coordinates) reaches IK.
+
+        Returns True  — active tool is the FLANGE: convert tip -> flange;
+                False — active tool IS the vision tip: send as is;
+                None  — unknown / something else: pose mode is REFUSED
+                        (a scan at the wrong tool frame is a wrong map, not
+                        an error anyone would notice).
+        Never raises; the decision is logged at startup.
+        """
+        try:
+            ret, off = self._ik_result(self.robot.GetTCPOffset())
+        except Exception as e:
+            ret, off = -1, None
+            rospy.logerr(f"[Arm REAL] GetTCPOffset raised: {e}")
+        if ret != 0 or off is None or len(off) < 6:
+            rospy.logerr(
+                f"[Arm REAL] Active tool offset unknown (GetTCPOffset -> {ret}, "
+                f"{off}). POSE mode is refused until it can be read.")
+            return None
+        t = np.array(off[:3], dtype=float)
+        rot = np.array(off[3:6], dtype=float)
+        tip = self._tip_offset_mm
+        if np.linalg.norm(t) < 1.0 and np.max(np.abs(rot)) < 0.5:
+            rospy.logwarn(
+                f"[Arm REAL] Active tool frame is the FLANGE (offset {t.round(1).tolist()} mm). "
+                f"Pose-mode tip targets will be converted to flange targets "
+                f"(tip offset {tip.round(1).tolist()} mm in the flange frame) before IK.")
+            return True
+        if np.linalg.norm(t - tip) < 1.0 and np.max(np.abs(rot)) < 0.5:
+            rospy.loginfo(
+                f"[Arm REAL] Active tool frame is the vision tip {t.round(1).tolist()} mm; "
+                "pose-mode targets go to IK as they are.")
+            return False
+        rospy.logerr(
+            f"[Arm REAL] Active tool offset {np.round(off, 2).tolist()} is neither the "
+            f"flange nor the vision tip {tip.round(1).tolist()}. POSE mode is refused — "
+            "run tools/set_tool_tcp.py or fix arm_calibration.vision_tip_offset_mm.")
+        return None
+
+    def _tip_to_flange(self, pos_tip_mm, rpy_deg):
+        """Flange position for a vision-tip target: the tip is a pure
+        translation in the flange frame, so flange = tip - R(rpy) @ offset."""
+        r = R.from_euler('xyz', rpy_deg, degrees=True)
+        rm = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
+        return np.asarray(pos_tip_mm, dtype=float) - rm @ self._tip_offset_mm
+
+    @staticmethod
+    def _ik_result(res):
+        """Normalise a Fairino IK return: (code, joints) on success, a bare
+        int error code when there is no solution."""
+        if isinstance(res, (tuple, list)) and len(res) == 2:
+            return int(res[0]), res[1]
+        try:
+            return int(res), None
+        except (TypeError, ValueError):
+            return -1, None
 
     # --------------------------------------------------
     # POSE MOTION (IK → MoveJ)
@@ -635,7 +877,18 @@ class ArmController:
 
     def _exec_pose(self, p):
         lift_m = self._pose_lift_m()
-        pos, rpy = transform_world_to_arm(p, self.current_pose_msg, lift_m)
+        pos_tip, rpy = transform_world_to_arm(p, self.current_pose_msg, lift_m)
+        if self._pose_tip_to_flange is None:
+            raise RuntimeError(
+                "pose mode refused: the controller's active tool frame is not "
+                "the flange or the vision tip (see the startup log)")
+        if self._pose_tip_to_flange:
+            pos = self._tip_to_flange(pos_tip, rpy)
+            rospy.loginfo(
+                f"[Arm REAL] tip target {np.round(pos_tip, 1).tolist()} -> flange "
+                f"target {np.round(pos, 1).tolist()} (active tool = flange)")
+        else:
+            pos = np.asarray(pos_tip, dtype=float)
         target = [pos[0], pos[1], pos[2], rpy[0], rpy[1], rpy[2]]
         rospy.loginfo(f"[Arm REAL] IK target: {target}")
 
@@ -644,17 +897,27 @@ class ArmController:
             # Use GetInverseKinRef with paired joint CSV as reference
             q0_deg = [np.degrees(j) for j in q0]
             rospy.loginfo(f"[Arm REAL] IK with q0 ref: {[round(d,1) for d in q0_deg]}")
-            ret, joints = self.robot.GetInverseKinRef(0, target, q0_deg)
+            ret, joints = self._ik_result(
+                self.robot.GetInverseKinRef(0, target, q0_deg))
         else:
-            ret, joints = self.robot.GetInverseKin(0, target, config=-1)
+            ret, joints = self._ik_result(
+                self.robot.GetInverseKin(0, target, config=-1))
 
-        if ret != 0:
-            rospy.logerr(f"[Arm REAL] IK failed: {ret}")
-            return
+        if ret != 0 or joints is None:
+            reach_m = float(np.hypot(pos[0], pos[1])) / 1000.0
+            frame = 'flange' if self._pose_tip_to_flange else 'tip'
+            raise RuntimeError(
+                f"IK failed (code {ret}): {frame} target ({pos[0]:.0f}, {pos[1]:.0f}, "
+                f"{pos[2]:.0f}) mm is {reach_m:.2f} m from the arm base "
+                f"(FR10 reach 1.40 m); world ({p.get('x', 0):.3f}, "
+                f"{p.get('y', 0):.3f}, {p.get('z', 0):.3f}) at robot pose "
+                f"({self.current_pose_msg.x:.3f}, {self.current_pose_msg.y:.3f}, "
+                f"{self.current_pose_msg.theta:.1f} deg)")
         rospy.loginfo(f"[Arm REAL] IK → joints: {joints}")
         ret = self.robot.MoveJ(joints, tool=TOOL_ID, user=0)
         if ret != 0:
-            rospy.logerr(f"[Arm REAL] MoveJ failed: {ret}")
+            raise RuntimeError(f"MoveJ failed (code {ret})")
+        self._refresh_live_pose()
 
     # --------------------------------------------------
     # MANUAL TEACHING — read pose, absolute move, incremental jog

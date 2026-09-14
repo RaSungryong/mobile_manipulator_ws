@@ -600,6 +600,7 @@ def _topic_table():
         ('sensor', '/keyence/value',           Float32,      False, _fmt_scalar, 0.0),
         ('sensor', '/keyence/raw',             Int32,        False, _fmt_scalar, 0.0),
         ('node',   '/arm/status',              String,       False, _fmt_string, 0.0),
+        ('node',   '/arm/scan_progress',       String,       False, _fmt_string, 0.0),
     ]
 
     try:

@@ -5,8 +5,17 @@ Ra scan pipeline: capture frames from the camera node, run ONNX inference,
 publish scan topics, optionally save images.
 
 Split out of arm_controller.py — none of this moves the arm. The controller
-positions the tool and then calls scan_point(); everything camera/inference
-related lives here.
+positions the tool, calls capture() while the arm is still, and hands the
+frames to process() — which arm_controller runs on a background thread since
+2026-09-14, so the ~2.6 s of inference + PNG encoding overlap the move to the
+NEXT point instead of holding the arm. scan_point() = capture + process, kept
+for tools that want the old synchronous call.
+
+The Basler is a MONO sensor (acA5472-5gm). Frames are kept single-channel
+end to end: the model's preprocessing widens to RGB itself (bit-identical to
+a pre-widened BGR frame), /scan/image goes out as mono8, and the PNG is
+written single-channel — three-channel PNG encoding of the widened 60 MB
+frame cost 1.3 s per point; mono is 0.6 s and runs off the arm's thread.
 
 Owns the ROS publishers for /scan/ra_value, /scan/point_result and
 /scan/image. Frames come from basler_camera_node's /camera/capture service
@@ -136,7 +145,9 @@ class RaScanPipeline:
         frames = []
         for img in resp.images:
             try:
-                frames.append(self.bridge.imgmsg_to_cv2(img, desired_encoding='bgr8'))
+                # Keep a mono frame mono (2-D); widen only real colour data.
+                enc = 'passthrough' if img.encoding in ('mono8', '8UC1') else 'bgr8'
+                frames.append(self.bridge.imgmsg_to_cv2(img, desired_encoding=enc))
             except Exception as e:
                 rospy.logwarn(f"[Scan] Image decode failed: {e}")
         return frames
@@ -145,28 +156,42 @@ class RaScanPipeline:
     # SCAN ONE POINT
     # --------------------------------------------------
     def scan_point(self, point_id, cancelled=None):
-        """Capture + infer at the current tool position.
+        """Capture + infer at the current tool position, synchronously.
 
         cancelled: optional zero-arg callable checked between steps, so the
         controller's cancel flag aborts the pipeline without coupling.
         Returns the per-point stats dict, or None if no valid sample.
         """
+        frames = self.capture(point_id, cancelled)
+        return self.process(point_id, frames, cancelled)
+
+    def capture(self, point_id, cancelled=None):
+        """Grab the burst for one point. The arm must be at rest for this
+        and only this — everything after it is pure computation.
+        Returns a list of frames (possibly empty)."""
         cancelled = cancelled or (lambda: False)
         rospy.loginfo(f"[Scan] Point {point_id} — {self.num_samples} sample(s)")
-
-        results = []
-        images  = []
-
         if cancelled():
-            return None
-
+            return []
         # One service call covers the whole burst: the camera node opens the
         # device, lights the lamp, grabs every sample, then darkens and releases.
         frames = self._capture_frames()
         if not frames:
             rospy.logwarn(f"  [Scan] Point {point_id}: no frames captured")
+        return frames
 
-        for s, frame in enumerate(frames):
+    def process(self, point_id, frames, cancelled=None):
+        """Infer, publish and persist the frames captured for one point.
+
+        Safe to call from a thread other than the capture's: it touches no
+        camera state, only the ONNX session, the publishers and the disk.
+        Returns the per-point stats dict, or None if no valid sample.
+        """
+        cancelled = cancelled or (lambda: False)
+        results = []
+        images  = []
+
+        for s, frame in enumerate(frames or []):
             if cancelled():
                 break
 
@@ -189,12 +214,15 @@ class RaScanPipeline:
                     f"Ra={ra_value:.4f}  ({infer_ms:.1f}ms)"
                 )
 
-                try:
-                    self.image_pub.publish(
-                        self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
-                    )
-                except Exception as e:
-                    rospy.logwarn(f"  [Scan] Image publish failed: {e}")
+                # 20 MB (mono) per message; skip it when nobody listens.
+                if self.image_pub.get_num_connections() > 0:
+                    try:
+                        enc = 'mono8' if frame.ndim == 2 else 'bgr8'
+                        self.image_pub.publish(
+                            self.bridge.cv2_to_imgmsg(frame, encoding=enc)
+                        )
+                    except Exception as e:
+                        rospy.logwarn(f"  [Scan] Image publish failed: {e}")
 
         if not results:
             rospy.logerr(f"[Scan] No valid samples at point {point_id}")
@@ -219,7 +247,10 @@ class RaScanPipeline:
                     f"point_{point_id}_sample_{idx+1}"
                     f"_ra_{ra_values[idx]:.4f}.png"
                 )
+                t0 = time.time()
                 cv2.imwrite(os.path.join(self.output_dir, fname), img)
+                rospy.logdebug(f"  [Scan] saved {fname} "
+                               f"({(time.time() - t0) * 1000:.0f} ms)")
 
         return scan_result
 

@@ -60,7 +60,9 @@ class TaskManager:
     TaskManager (Explicit + System Tasks)
     ====================================
     Responsibilities:
-    - Load explicitly-defined CSV tasks
+    - Discover the path-data CSVs in the task directory and register one
+      task per file (assigned_workpoints_* -> pose, rrt_final_path_* -> joint)
+    - Load explicitly-defined CSV tasks (TASK_DEFS, normally empty)
     - Register system tasks (no CSV)
     - Build dynamic runtime tasks (GOTO)
     - NEVER guess task type or scan mode
@@ -90,134 +92,106 @@ class TaskManager:
 
     START_TAG = 500   # Home tag (dock)
 
-    TASK_DEFS = {
+    # --------------------------------------------------------------
+    # Tasks come from the FILES in the task directory (2026-09-14, user
+    # rule: "task 디렉토리에 있는 경로데이터 기반으로 동작"). The planner
+    # exports two kinds of path data per run, told apart by filename prefix;
+    # the remainder of the name is the run key that pairs them:
+    #
+    #   assigned_workpoints_<key>.csv   end-effector POSES — x y z (world, m)
+    #                                   + rx ry rz (rad); one row per work
+    #                                   point.            -> task scan_pose_<key>
+    #   rrt_final_path_<key>.csv        JOINT-ANGLE path — q1..q6 (rad) along
+    #                                   the planned route, work points AND
+    #                                   transition/home waypoints
+    #                                   (`is_task_waypoint`, see helpers
+    #                                   above).           -> task scan_joint_<key>
+    #
+    # Each registers on its own; when both exist for a key they are paired
+    # (the joint file seeds pose-mode IK, the pose file gives the joint
+    # task's world x y z for the Ra map). Drop a new pair into task/csv and
+    # `RELOAD_TASKS` (or a task_executor restart) registers it — nothing
+    # here names a file.
+    #
+    # Result CSVs are named <task>_ra_map_<timestamp>.csv, which matches
+    # neither prefix, so they are never mistaken for path data; stems that
+    # look like results (`_result`, `_ra_map`) are skipped anyway.
+    #
+    # ⚠️ A joint task replays the planned trajectory from wherever the base
+    # actually stopped: MoveJ has no reach or collision check, so it is only
+    # collision-free if the base is at the stop pose the planner assumed for
+    # each group's tag. The 2026-09-11 check of the assignment is in
+    # CLAUDE.md ("The group -> tag assignment does not survive checking");
+    # a pose task solves IK per point and fails loudly instead.
+    # --------------------------------------------------------------
+    POSE_FILE_PREFIX = "assigned_workpoints_"
+    JOINT_FILE_PREFIX = "rrt_final_path_"
+    POSE_TASK_PREFIX = "scan_pose_"
+    JOINT_TASK_PREFIX = "scan_joint_"
+    RESULT_SUFFIX = "_ra_map.csv"
+    _RESULT_STEM_MARKERS = ("_result", "_ra_map")
 
-        # ---------------- scan: RRT-planned, 2026-09-11 ----------------
-        # Re-solved for the REPLACEMENT base (base_height_mm 652, lift_mm 0)
-        # after the 2026-08-21 cell swap invalidated everything before them.
-        # Three standoffs, registered separately because the standoff changes
-        # which tag each work point is assigned to, not just the offset.
-        #
-        # 🛑 THE JOINT TASKS ARE DISABLED — the group -> tag assignment in
-        # these files does not survive checking, and replaying an RRT
-        # trajectory from the wrong base position is a COLLISION path, not a
-        # bad-data one. Joint angles are relative to the arm base: if the base
-        # is not where the planner assumed, the arm's shape is unchanged but
-        # its absolute position in the cell is offset by that error, so
-        # "collision-free" does not transfer. _exec_joint is a bare MoveJ with
-        # no reachability or collision check, and the Keyence loop only runs
-        # after the move lands, so nothing downstream can intervene.
-        #
-        # The evidence (2026-09-11, offline): every group's work points are
-        # nearest to a DIFFERENT tag than the one it is assigned to, and all
-        # of them cluster around tags 102-104 --
-        #
-        #   group   assigned   max dist   nearest tag   max dist
-        #     104        104      1.00 m          104     1.00 m   ok
-        #     105        105      1.29 m          103     0.92 m
-        #     106        106      1.48 m          103     0.72 m
-        #     107        107      1.72 m          103     0.16 m
-        #     118        118      4.80 m          102     0.94 m
-        #     119        119      4.55 m          103     0.94 m
-        #
-        # The work points span only ~0.9 x 0.8 m in total and the per-group
-        # bounding boxes overlap heavily, i.e. this is ONE area subdivided,
-        # yet the groups place it across tags up to 6.4 m apart. Distances use
-        # the robot's STOP pose (tag - 0.55 m camera_offset), not the tag.
-        #
-        # The POSE tasks below stay enabled: they solve IK per point, so a
-        # mis-assigned group fails the move and reports it instead of driving
-        # somewhere planned for a different base position.
-        #
-        # To re-enable once the generator's author has confirmed the
-        # assignment: uncomment the three entries. Nothing else changes --
-        # the loader already handles the dialect.
+    # Explicit extras / overrides, merged OVER the discovered set (same name
+    # wins here). Normally empty. Keys: file / files, type ("scan"|"move"),
+    # scan_mode ("pose"|"joint"), optional joint_file(s) / pose_file(s),
+    # groups (run only these group_ids), result_name. Example — one group of
+    # a discovered pair, for an end-to-end bring-up without copying the CSV:
+    #
+    #   "scan_g104_standoff010": {
+    #       "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
+    #       "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
+    #       "groups": [104],
+    #       "type": "scan",
+    #       "scan_mode": "pose",
+    #   },
+    TASK_DEFS = {}
 
-        # "scan_rrt_standoff010": {
-        # "file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
-        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
-        # "type": "scan",
-        # "scan_mode": "joint",
-        # "result_name": "scan_rrt_standoff010_ra_map.csv",
-        # },
+    @classmethod
+    def discover_task_defs(cls, task_dir: str) -> Dict[str, dict]:
+        """Build task definitions from the path-data files in `task_dir`.
 
-        # "scan_rrt_standoff030": {
-        # "file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
-        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
-        # "type": "scan",
-        # "scan_mode": "joint",
-        # "result_name": "scan_rrt_standoff030_ra_map.csv",
-        # },
+        Returns {task_name: cfg} in name order. Pure — no ROS, no file
+        contents are read here; the loader validates the rows.
+        """
+        defs: Dict[str, dict] = {}
+        if not os.path.isdir(task_dir):
+            return defs
+        names = sorted(os.listdir(task_dir))
+        pose_keys, joint_keys = {}, {}
+        for fname in names:
+            stem, ext = os.path.splitext(fname)
+            if ext.lower() != ".csv":
+                continue
+            if any(m in stem for m in cls._RESULT_STEM_MARKERS):
+                continue          # a result written next to the inputs
+            if stem.startswith(cls.POSE_FILE_PREFIX):
+                key = stem[len(cls.POSE_FILE_PREFIX):]
+                if key:
+                    pose_keys[key] = fname
+            elif stem.startswith(cls.JOINT_FILE_PREFIX):
+                key = stem[len(cls.JOINT_FILE_PREFIX):]
+                if key:
+                    joint_keys[key] = fname
 
-        # "scan_rrt_standoff050": {
-        # "file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
-        # "pose_file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
-        # "type": "scan",
-        # "scan_mode": "joint",
-        # "result_name": "scan_rrt_standoff050_ra_map.csv",
-        # },
+        for key, fname in pose_keys.items():
+            name = cls.POSE_TASK_PREFIX + key
+            cfg = {"file": fname, "type": "scan", "scan_mode": "pose",
+                   "result_name": name + cls.RESULT_SUFFIX,
+                   "source": "discovered"}
+            if key in joint_keys:
+                cfg["joint_file"] = joint_keys[key]     # IK seed (q0)
+            defs[name] = cfg
 
-        # ---------------- scan: pose mode (the only enabled ones) -------
-        # IK-solved per point from the world coordinates. This is what makes
-        # them safe to leave registered while the group assignment is in
-        # doubt: an unreachable point FAILS the move and says so, rather than
-        # executing a trajectory planned for a base that is somewhere else.
-        # Expect group 104 to work (max 1.00 m from its stop) and 105 onward
-        # to fail progressively — that failure IS the diagnostic.
+        for key, fname in joint_keys.items():
+            name = cls.JOINT_TASK_PREFIX + key
+            cfg = {"file": fname, "type": "scan", "scan_mode": "joint",
+                   "result_name": name + cls.RESULT_SUFFIX,
+                   "source": "discovered"}
+            if key in pose_keys:
+                cfg["pose_file"] = pose_keys[key]       # world x y z for the map
+            defs[name] = cfg
 
-        "scan_grid_standoff010": {
-            "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "pose",
-            "result_name": "scan_grid_standoff010_ra_map.csv",
-        },
-
-        "scan_grid_standoff030": {
-            "file": "assigned_workpoints_errorY_p000mm_standoff_030mm_height_652mm.csv",
-            "joint_file": "rrt_final_path_errorY_p000mm_standoff_030mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "pose",
-            "result_name": "scan_grid_standoff030_ra_map.csv",
-        },
-
-        "scan_grid_standoff050": {
-            "file": "assigned_workpoints_errorY_p000mm_standoff_050mm_height_652mm.csv",
-            "joint_file": "rrt_final_path_errorY_p000mm_standoff_050mm_height_652mm.csv",
-            "type": "scan",
-            "scan_mode": "pose",
-            "result_name": "scan_grid_standoff050_ra_map.csv",
-        },
-
-        # ---------------- single-group bring-up ----------------
-        # Group 104 is the ONE group whose work points are actually within
-        # reach of the tag it is assigned to (max 1.00 m from the stop pose;
-        # every other group is nearest to a different tag — see the table
-        # above). This task exists to exercise the whole chain end to end —
-        # navigate to 104, arm to each point, Keyence standoff, capture,
-        # inference, result CSV — on data that should work, before anyone
-        # tries to interpret a failure from the mis-assigned groups.
-        #
-        # Pose mode on purpose: IK is solved per point, so anything out of
-        # reach fails the move and says so. Expect 182 of 183 points to
-        # solve; the one at 1.41 m is just past the 1.40 m flange reach and
-        # failing there is correct behaviour, not a bug.
-        "scan_g104_standoff010": {
-            "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
-            "groups": [104],
-            "type": "scan",
-            "scan_mode": "pose",
-            "result_name": "scan_g104_standoff010_ra_map.csv",
-        },
-
-        # ---------------- move-only CSV  --------
-        # "move_route_A": {
-        #     "file": "move_route_A.csv",
-        #     "type": "move",
-        # },
-
-    }
+        return dict(sorted(defs.items()))
 
     # ==================================================
     # INIT
@@ -236,6 +210,11 @@ class TaskManager:
         # lift_height column. See _extract_lift_height.
         self.lift_heights: Dict[str, Optional[float]] = {}
 
+        # task_name -> JSON-safe summary (mode, tags, point counts, files,
+        # lift height). What task_executor publishes on /task_list so a UI
+        # never has to hard-code a task name again.
+        self.task_info: Dict[str, dict] = {}
+
         rospy.loginfo(f"[TaskManager] Loading tasks from: {task_dir}")
 
         self._load_csv_tasks()
@@ -250,7 +229,19 @@ class TaskManager:
             rospy.logerr(f"[TaskManager] Task dir not found: {self.task_dir}")
             return
 
-        for task_name, cfg in self.TASK_DEFS.items():
+        defs = self.discover_task_defs(self.task_dir)
+        rospy.loginfo(
+            f"[TaskManager] Discovered {len(defs)} task(s) from "
+            f"{self.POSE_FILE_PREFIX}* / {self.JOINT_FILE_PREFIX}* in "
+            f"{self.task_dir}: {sorted(defs)}")
+        for name in self.TASK_DEFS:
+            if name in defs:
+                rospy.logwarn(
+                    f"[TaskManager] Explicit TASK_DEFS['{name}'] overrides "
+                    "the discovered task of the same name")
+        defs.update(self.TASK_DEFS)
+
+        for task_name, cfg in defs.items():
 
             # Input CSVs: accept `files` (list) or `file` (single), concat in order
             input_files = cfg.get("files") or (
@@ -370,11 +361,56 @@ class TaskManager:
 
             self.lift_heights[task_name] = lift_mm
 
+            if task_name in self.tasks:
+                self._record_task_info(task_name, cfg, input_files, want)
+
             rospy.loginfo(
                 f"[TaskManager] Task '{task_name}' loaded "
                 f"(steps={len(self.tasks.get(task_name, []))}, "
                 f"lift_height={'none' if lift_mm is None else f'{lift_mm} mm'})"
             )
+
+    def _record_task_info(self, task_name, cfg, input_files, groups_filter):
+        """Summarise a registered task for /task_list (JSON-safe values only)."""
+        steps = self.tasks.get(task_name, [])
+        by_tag = self.scan_points.get(task_name, {})
+        n_scan = sum(1 for pts in by_tag.values() for p in pts
+                     if p.get("scan", True))
+        n_traverse = sum(1 for pts in by_tag.values() for p in pts
+                         if not p.get("scan", True))
+        n_seeded = sum(1 for pts in by_tag.values() for p in pts
+                       if p.get("mode") == "pose" and "q0" in p)
+        n_xyz = sum(1 for pts in by_tag.values() for p in pts
+                    if p.get("mode") == "joint" and p.get("scan", True)
+                    and "x" in p)
+        paired = (cfg.get("joint_file") or cfg.get("pose_file")
+                  or (cfg.get("joint_files") or cfg.get("pose_files") or [None])[0])
+        scan_mode = cfg.get("scan_mode") if cfg.get("type") == "scan" else None
+        info = {
+            "name": task_name,
+            "kind": cfg.get("type", "scan"),
+            "scan_mode": scan_mode,
+            "source": cfg.get("source", "explicit"),
+            "tags": [int(st["tag"]) for st in steps],
+            "points": int(n_scan),
+            "traverse_points": int(n_traverse),
+            "lift_height_mm": self.lift_heights.get(task_name),
+            "files": list(input_files),
+            "paired_file": paired,
+            "result_name": cfg.get("result_name"),
+            "groups_filter": sorted(groups_filter) if groups_filter else None,
+        }
+        if scan_mode == "pose":
+            info["ik_seeded_points"] = int(n_seeded)
+        elif scan_mode == "joint":
+            info["points_with_world_xyz"] = int(n_xyz)
+            rospy.logwarn(
+                f"[TaskManager] '{task_name}' is a JOINT path replay: MoveJ "
+                "checks neither reach nor collision, so it is only safe if "
+                "the base is at the planned stop of every group tag "
+                f"{info['tags']}. Verify the group -> tag assignment first "
+                "(CLAUDE.md, scan-CSV section).")
+        self.task_info[task_name] = info
 
     # ==================================================
     # LIFT HEIGHT
@@ -454,6 +490,12 @@ class TaskManager:
         ]
         self.scan_points["go_home"] = {}
         self.lift_heights["go_home"] = None
+        self.task_info["go_home"] = {
+            "name": "go_home", "kind": "system", "scan_mode": None,
+            "source": "system", "tags": [self.START_TAG], "points": 0,
+            "traverse_points": 0, "lift_height_mm": None, "files": [],
+            "paired_file": None, "result_name": None, "groups_filter": None,
+        }
 
         rospy.loginfo(
             f"[TaskManager] System task registered: go_home → tag {self.START_TAG}"
@@ -633,3 +675,9 @@ class TaskManager:
 
     def get_all_task_names(self) -> List[str]:
         return list(self.tasks.keys())
+
+    def describe_tasks(self) -> List[dict]:
+        """JSON-safe summaries of every registered task, in registration
+        order (discovered, explicit, then system). This is the /task_list
+        payload; keep every value a plain str / int / float / None / list."""
+        return [dict(self.task_info[n]) for n in self.tasks if n in self.task_info]

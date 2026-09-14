@@ -15,8 +15,16 @@ roslaunch apriltag_nav mobile_manipulator.launch
    - task_executor        : main task orchestrator (STATUS lamp, e-stop, battery)
 
 Run a task
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line1"
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joints_line2"
+Task names come from the path-data files in task/csv (rostopic echo /task_list):
+  assigned_workpoints_<key>.csv -> scan_pose_<key>   (end-effector poses, IK per point)
+  rrt_final_path_<key>.csv      -> scan_joint_<key>  (joint-angle path, MoveJ replay)
+rostopic pub -1 /task_command std_msgs/String "TASK scan_pose_errorY_p000mm_standoff_010mm_height_652mm"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_errorY_p000mm_standoff_010mm_height_652mm"
+rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # re-scan task/csv
+
+Dock and charge / undock (the charger only starts on /crevis/charging true after docking)
+rostopic pub -1 /task_command std_msgs/String "CHARGE"    # lift home -> tag 500 -> /crevis/charging true
+rostopic pub -1 /task_command std_msgs/String "UNDOCK"    # /crevis/charging false -> 0.10 m forward
 
 Query state
 rostopic pub -1 /task_command std_msgs/String "STATE"

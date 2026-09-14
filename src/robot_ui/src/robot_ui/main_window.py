@@ -127,14 +127,16 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(box)
         self.lbl_estop = self._status_chip('E-STOP —')
         self.lbl_battery = self._status_chip('BAT —')
+        self.lbl_charge = self._status_chip('CHARGE —')
         self.lbl_arm = self._status_chip('ARM —')
         self.lbl_lift = self._status_chip('LIFT —')
         self.lbl_mobile = self._status_chip('BASE —')
         self.lbl_task = self._status_chip('TASK —')
+        self.lbl_scan = self._status_chip('SCAN —')
         self.lbl_camera = self._status_chip('CAM —')
-        for chip in (self.lbl_estop, self.lbl_battery, self.lbl_arm,
+        for chip in (self.lbl_estop, self.lbl_battery, self.lbl_charge, self.lbl_arm,
                      self.lbl_lift, self.lbl_mobile, self.lbl_task,
-                     self.lbl_camera):
+                     self.lbl_scan, self.lbl_camera):
             row.addWidget(chip)
         row.addStretch(1)
 
@@ -576,8 +578,12 @@ class MainWindow(QMainWindow):
         task_box = QGroupBox('Task command')
         task_layout = QVBoxLayout(task_box)
         note = QLabel(
-            'A task never returns to the start tag on its own — "scan then '
-            'come back" is two commands. Send TASK go_home separately.')
+            'Tasks are the path-data files in task/csv, as task_executor '
+            'reports them on /task_list: assigned_workpoints_* (end-effector '
+            'poses) → scan_pose_*, rrt_final_path_* (joint angles) → '
+            'scan_joint_*. A task never returns to the start tag on its own — '
+            '"scan then come back" is two commands. Send TASK go_home '
+            'separately.')
         note.setWordWrap(True)
         note.setStyleSheet('color:#888;')
         task_layout.addWidget(note)
@@ -585,21 +591,37 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.combo_task = QComboBox()
         self.combo_task.setEditable(True)
-        # Names come from task_manager.TASK_DEFS. Editable so an operator can
-        # type one this list has not been updated for, rather than being stuck.
-        self.combo_task.addItems([
-            'scan_joints_line1', 'scan_joints_line2',
-            'scan_grid_line1', 'scan_grid_line2',
-            'scan_full_joints', 'scan_full_pose',
-            'go_home',
-        ])
+        # Filled from /task_list (_on_task_list). Until that arrives only the
+        # one task that needs no CSV is offered. Editable so an operator can
+        # still type a name the executor knows but this list does not show.
+        self._task_infos = {}
+        self._task_list_seen = False
+        self.combo_task.addItem('go_home')
+        self.combo_task.lineEdit().setPlaceholderText(
+            'waiting for /task_list from task_executor …')
+        self.combo_task.currentTextChanged.connect(self._update_task_detail)
         row.addWidget(self.combo_task, 1)
         btn_task = QPushButton('Send TASK')
         btn_task.clicked.connect(
             lambda: self.bridge.send_task_command(
                 f'TASK {self.combo_task.currentText().strip()}'))
         row.addWidget(btn_task)
+        btn_reload = QPushButton('Reload tasks')
+        btn_reload.setToolTip(
+            'RELOAD_TASKS: task_executor re-scans task/csv (refused while a '
+            'task is running).')
+        btn_reload.clicked.connect(
+            lambda: self.bridge.send_task_command('RELOAD_TASKS'))
+        row.addWidget(btn_reload)
         task_layout.addLayout(row)
+
+        # What the selected task is: mode, tags in order, point counts, lift
+        # height, source file(s). Read from /task_list, never guessed.
+        self.lbl_task_detail = QLabel('')
+        self.lbl_task_detail.setWordWrap(True)
+        self.lbl_task_detail.setStyleSheet('color:#aaa; font-family: monospace;')
+        task_layout.addWidget(self.lbl_task_detail)
+        self._update_task_detail(self.combo_task.currentText())
 
         goto_row = QHBoxLayout()
         goto_row.addWidget(QLabel('GOTO tag'))
@@ -613,6 +635,31 @@ class MainWindow(QMainWindow):
         goto_row.addWidget(btn_goto)
         goto_row.addStretch(1)
         task_layout.addLayout(goto_row)
+
+        # Dock + charge (2026-09-14). CHARGE = task_executor's battery_return:
+        # lift origin home -> drive to the dock tag (500) -> /crevis/charging
+        # true -> wait for BMS current (the charger only starts on that
+        # explicit true). UNDOCK = /crevis/charging false -> 0.10 m forward.
+        charge_row = QHBoxLayout()
+        btn_charge = QPushButton('Dock && charge (tag 500)')
+        btn_charge.setToolTip(
+            'CHARGE: lift origin home → drive to the dock tag → '
+            '/crevis/charging true → wait for the BMS to report current. '
+            'Preempts a running task.')
+        btn_charge.clicked.connect(
+            lambda: self.bridge.send_task_command('CHARGE'))
+        charge_row.addWidget(btn_charge)
+        btn_undock = QPushButton('Undock / stop charging')
+        btn_undock.setToolTip(
+            'UNDOCK: /crevis/charging false → drive forward off the dock. '
+            'No automatic return until the next task.')
+        btn_undock.clicked.connect(
+            lambda: self.bridge.send_task_command('UNDOCK'))
+        charge_row.addWidget(btn_undock)
+        self.lbl_charge_detail = QLabel('')
+        self.lbl_charge_detail.setStyleSheet('color:#aaa;')
+        charge_row.addWidget(self.lbl_charge_detail, 1)
+        task_layout.addLayout(charge_row)
 
         raw_row = QHBoxLayout()
         self.edit_raw_cmd = QLineEdit()
@@ -1038,12 +1085,14 @@ class MainWindow(QMainWindow):
         self.bridge.image_received.connect(self._on_image)
         self.bridge.arm_state.connect(self._on_arm_state)
         self.bridge.task_state.connect(self._on_task_state)
+        self.bridge.task_list.connect(self._on_task_list)
         self.bridge.lift_state.connect(self._on_lift_state)
         self.bridge.mobile_state.connect(self._on_mobile_state)
         self.bridge.battery_state.connect(self._on_battery)
         self.bridge.estop_state.connect(self._on_estop)
         self.bridge.camera_state.connect(self._on_camera_state)
         self.bridge.calib_progress.connect(self._on_calib_progress)
+        self.bridge.scan_progress.connect(self._on_scan_progress)
         self.bridge.tag_ids.connect(self._on_tag_ids)
         self.bridge.log.connect(self.append_log)
 
@@ -1060,6 +1109,61 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is not None:
             view.set_frame(bgr)
+
+    def _on_scan_progress(self, ev):
+        """Per-point events from a running scan (/arm/scan_progress).
+
+        One log line per finished point — a FAILED one carries the arm's
+        reason (e.g. "IK failed (code 112): target ... is 2.55 m from the
+        arm base") — plus a SCAN chip with the running count. Before this
+        the operator saw nothing in the UI while every point of a scan
+        failed; the only trace was arm_node's rosout.
+        """
+        phase = ev.get('phase')
+        idx, total = ev.get('index', 0), ev.get('total', 0)
+        n_ok, n_fail = ev.get('n_ok', 0), ev.get('n_fail', 0)
+        if phase == 'start':
+            self.append_log(f"[scan] start: {total} points "
+                            f"({ev.get('scan_points', total)} to scan)")
+            self.lbl_scan.setText(f'SCAN 0/{total}')
+            self._tint(self.lbl_scan, '#553311')
+        elif phase == 'move':
+            kind = 'pt' if ev.get('scan', True) else 'via'
+            self.lbl_scan.setText(
+                f"SCAN {idx}/{total} {kind} {ev.get('point_id', '?')}")
+        elif phase == 'done':
+            # `done` = the frames are captured and the arm is free to move
+            # on; the Ra arrives later in a `result` event from arm_node's
+            # inference worker (2026-09-14). An older arm_node still puts
+            # ra_mean on `done`, which is logged here too.
+            if ev.get('scan', True):
+                ra = ev.get('ra_mean')
+                ra_s = f" ra={float(ra):.4f}" if ra is not None else ''
+                self.append_log(
+                    f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
+                    f"g{ev.get('group_id', '?')}: OK{ra_s}  {ev.get('message', '')}")
+            self.lbl_scan.setText(f'SCAN {idx}/{total} ok {n_ok} fail {n_fail}')
+            self._tint(self.lbl_scan, '#553311' if not n_fail else '#663300')
+        elif phase == 'result':
+            ra = ev.get('ra_mean')
+            ra_s = (f"ra={float(ra):.4f}" if ra is not None
+                    else f"no Ra  {ev.get('message', '')}")
+            self.append_log(
+                f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
+                f"g{ev.get('group_id', '?')}: {ra_s}")
+        elif phase == 'failed':
+            self.append_log(
+                f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
+                f"g{ev.get('group_id', '?')}: FAIL — {ev.get('message', '')}")
+            self.lbl_scan.setText(f'SCAN {idx}/{total} ok {n_ok} fail {n_fail}')
+            self._tint(self.lbl_scan, '#7a1f1f')
+        elif phase == 'finished':
+            tail = ' (cancelled)' if ev.get('cancelled') else ''
+            self.append_log(
+                f"[scan] finished{tail}: {n_ok} ok, {n_fail} failed of {total}")
+            self.lbl_scan.setText(
+                f'SCAN done {n_ok} ok / {n_fail} fail{tail}')
+            self._tint(self.lbl_scan, '#7a1f1f' if n_fail else '#1b3a1b')
 
     def _on_calib_progress(self, entry):
         """Per-tag status from a running map-calibration session."""
@@ -1099,6 +1203,79 @@ class MainWindow(QMainWindow):
         self.lbl_arm.setText(f'ARM {flag}')
         self._tint(self.lbl_arm, '#553311' if state['busy'] else '#1b3a1b')
 
+    # ---------- /task_list -> Task tab combo ----------
+    @staticmethod
+    def task_summary(info):
+        """One line describing a /task_list entry (also the combo tooltip)."""
+        mode = info.get('scan_mode') or info.get('kind') or '?'
+        tags = info.get('tags') or []
+        parts = [str(mode), 'tags ' + (
+            ','.join(str(t) for t in tags) if tags else '—')]
+        pts = info.get('points')
+        if pts:
+            s = f'{pts} pts'
+            trav = info.get('traverse_points')
+            if trav:
+                s += f' (+{trav} traverse)'
+            parts.append(s)
+        lift = info.get('lift_height_mm')
+        parts.append('lift —' if lift is None else f'lift {float(lift):g} mm')
+        files = info.get('files') or []
+        if files:
+            parts.append(files[0] if len(files) == 1 else f'{len(files)} files')
+        paired = info.get('paired_file')
+        if paired:
+            parts.append(f'paired {paired}')
+        return ' · '.join(parts)
+
+    def _on_task_list(self, payload):
+        """Rebuild the task combo from task_executor's /task_list."""
+        tasks = payload.get('tasks') or []
+        first_time = not self._task_list_seen
+        self._task_list_seen = True
+        # A name the operator typed by hand (not one of the previously
+        # listed tasks) survives a republish; a listed task that has gone
+        # away does not — the executor no longer knows it.
+        prev_names = set(self._task_infos)
+        self._task_infos = {t.get('name'): t for t in tasks if t.get('name')}
+        current = self.combo_task.currentText().strip()
+        typed = bool(current) and current not in prev_names and not first_time
+        names = list(self._task_infos.keys())
+        self.combo_task.blockSignals(True)
+        try:
+            self.combo_task.clear()
+            self.combo_task.setEditText('')
+            for i, name in enumerate(names):
+                self.combo_task.addItem(name)
+                self.combo_task.setItemData(
+                    i, self.task_summary(self._task_infos[name]), Qt.ToolTipRole)
+            if first_time and current == 'go_home':
+                # The placeholder item, not an operator's choice: offer the
+                # first real task instead.
+                current = names[0] if names else ''
+            if current in names:
+                self.combo_task.setCurrentIndex(names.index(current))
+            elif typed:
+                # Keep the hand-typed name in the edit field rather than
+                # silently replacing it; the detail line flags it.
+                self.combo_task.setEditText(current)
+        finally:
+            self.combo_task.blockSignals(False)
+        self._update_task_detail(self.combo_task.currentText())
+        self.append_log(f'[task] /task_list: {len(names)} task(s) from '
+                        f'{payload.get("task_dir", "?")}')
+
+    def _update_task_detail(self, text):
+        name = (text or '').strip()
+        info = self._task_infos.get(name)
+        if info is None:
+            self.lbl_task_detail.setText(
+                '' if not name else
+                (f'{name}: not in /task_list' if self._task_list_seen
+                 else f'{name}: task list not received yet'))
+            return
+        self.lbl_task_detail.setText(f'{name}: {self.task_summary(info)}')
+
     def _on_task_state(self, state):
         name = state.get('task') or '—'
         idx, total = state.get('group_index', 0), state.get('group_total', 0)
@@ -1107,6 +1284,32 @@ class MainWindow(QMainWindow):
         note = state.get('note')
         if note:
             self.append_log(f'[task] {state.get("state")} — {note}')
+        self._update_charge_chip(state)
+
+    def _update_charge_chip(self, state):
+        """CHARGE chip + Task-tab line from /task_state's charging fields
+        (task_executor since 2026-09-14; an older executor sends none, and
+        the chip stays at '—')."""
+        if 'charge_phase' not in state:
+            return
+        phase = state.get('charge_phase') or '?'
+        charging = state.get('charging')
+        pct = state.get('battery_pct')
+        pct_s = f' {float(pct):.0f}%' if pct is not None else ''
+        if charging:
+            text, tint = f'CHARGE charging{pct_s}', '#4a1a4a'      # magenta, like the lamp
+        elif phase == 'full':
+            text, tint = f'CHARGE full{pct_s}', '#3a3a3a'          # white on the lamp
+        elif phase == 'returning':
+            text, tint = f'CHARGE returning{pct_s}', '#553311'
+        elif phase == 'dock_failed':
+            text, tint = f'CHARGE DOCK FAILED{pct_s}', '#7a1f1f'
+        else:
+            text, tint = f'CHARGE {phase}{pct_s}', ''
+        self.lbl_charge.setText(text)
+        self._tint(self.lbl_charge, tint)
+        self.lbl_charge_detail.setText(
+            f'phase: {phase}, BMS charging: {"yes" if charging else "no"}{pct_s}')
 
     def _on_lift_state(self, state):
         height = state.get('height_mm')

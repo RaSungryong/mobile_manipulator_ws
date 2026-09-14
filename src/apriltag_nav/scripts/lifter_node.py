@@ -303,7 +303,7 @@ class BaseLifterNode:
         rospy.logwarn(
             f"[BaseLifter] Moving to {target} counts, away from the "
             f"calibrated scan height {self.scan_height}. Pose-mode scans "
-            "(scan_grid_*, scan_full_pose, TEST_POSE) will be offset in Z — "
+            "(scan_pose_*, TEST_POSE) will be offset in Z — "
             "arm_base_z is a constant and does not track the lift.")
 
     def _begin(self, what):

@@ -188,9 +188,36 @@ pull + `catkin_make` before anything below.
   reachability or collision check, so running them was a collision path.
 - Replaced by the 2026-09-11 RRT set: `base_height_mm` 652, `lift_mm` 0,
   three standoffs. Old task names no longer exist.
-- 🛑 **Only the POSE tasks are registered**:
-  `scan_grid_standoff{010,030,050}`. The joint ones
-  (`scan_rrt_standoff*`) are commented out in TASK_DEFS — see below.
+- **Pose mode = joint mode again (2026-09-14):** the controller's ACTIVE
+  tool frame is the FLANGE (tool 1 from `set_tool_tcp.py` is not in
+  effect), so `ArmController` converts the CSV's vision-tip targets to
+  flange targets before IK, and the new planner's `rx ry rz` are read as
+  `csv_euler: "ZYX"`. Verified only by URDF FK offline
+  (`tools/check_pose_vs_joint.py`); watch the startup line `Active tool
+  frame is the FLANGE` and compare a pose point with its joint twin on
+  the robot. Do not activate tool 1 on the controller without re-expressing
+  the hand-eye and the calibration seeds (CLAUDE.md, Coordinate Frames).
+- **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
+  operator versions of the charging manager's dock-and-charge / undock
+  tasks; the charger starts only on the `/crevis/charging true` that
+  CHARGE sends after arriving at tag 500. Not yet driven.
+- **Inference runs behind the arm (2026-09-14):** after the capture the
+  scan loop hands the frame to a worker thread and moves to the next row;
+  the Ra arrives as a `result` event on `/arm/scan_progress` and the CSV
+  row is filled in a few seconds later. A cancel stops the arm at once but
+  `/scan_finished` waits for the frames already taken to be scored. Not
+  yet run on the robot — expect the per-point cycle to drop from ~6.6 s
+  to ~3 s; if the SCAN log shows `OK` lines but no `ra=` lines, the worker
+  is dead (arm_node rosout says why).
+- **Task names come from the files** (2026-09-14): `assigned_workpoints_
+  <key>.csv` → `scan_pose_<key>` (end-effector poses, IK per point) and
+  `rrt_final_path_<key>.csv` → `scan_joint_<key>` (joint-angle path, MoveJ
+  replay). Nothing in `TASK_DEFS` names a file any more; `rostopic echo
+  /task_list` or robot_ui's Task tab lists what is registered, and
+  `RELOAD_TASKS` re-scans task/csv. ⚠️ The joint tasks ARE registered
+  again (user instruction) although the assignment problem below is
+  unresolved — a `logwarn` per `scan_joint_*` task says so at load. Run
+  the `scan_pose_*` twin first.
 - ⚠️ The joint files are PATHS: ~30 % of rows are transition/home
   waypoints the arm drives through but must not scan. Handled via
   `is_task_waypoint` → a `scan` flag; pairing with the pose file is on
@@ -383,8 +410,10 @@ pull + `catkin_make` before anything below.
 
 ## 3. Interim operating rules
 
-1. **No `scan_joints_*` / `scan_grid_*` / `scan_full_*` on the new cell**
-   (§2-1). `GOTO` within installed tags and `go_home` are fine.
+1. **Run `scan_pose_*` before its `scan_joint_*` twin on any new path
+   pair** (§2-1): pose mode fails IK loudly on a mis-assigned group, a
+   joint replay drives it. `GOTO` within installed tags and `go_home` are
+   fine.
 2. One commander of the base at a time: no `TASK`/`GOTO` during a
    calibration session; never run `tools/navigate.py`, `tools/vw_drive.py`
    or `tools/lift_calib_ui.py` while the stack is up (second writers).

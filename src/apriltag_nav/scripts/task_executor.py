@@ -158,9 +158,16 @@ class MobileManipulatorTaskExecutor:
         self._progress_tag = -1
         self._progress_note = ''
 
+        # The registered tasks, so a UI never hard-codes a task name. Latched:
+        # the set only changes on RELOAD_TASKS or a restart, and a viewer that
+        # connects later must still get it.
+        self._task_list_pub = rospy.Publisher("/task_list", String,
+                                              queue_size=1, latch=True)
+
         # Reflect the initial state on the STATUS lamp.
         self._publish_status_color()
         self._publish_task_state()
+        self._publish_task_list()
 
         rospy.loginfo("[Executor] System ready (IDLE)")
 
@@ -201,11 +208,53 @@ class MobileManipulatorTaskExecutor:
                 'tag_id': self._progress_tag,
                 'note': self._progress_note,
                 'stop_requested': bool(self._stop_requested),
+                # Charging manager (2026-09-14, for robot_ui's CHARGE chip):
+                # phase is the manager's own word, `charging` is the BMS's.
+                'charge_phase': self._charge_phase,
+                'charging': self._is_charging(),
+                'battery_pct': self._charge_pct(),
                 'stamp': rospy.get_time(),
             }
             self._task_state_pub.publish(String(json.dumps(payload)))
         except Exception as e:
             rospy.logwarn_throttle(10.0, f"[Executor] task_state publish failed: {e}")
+
+    def _publish_task_list(self):
+        """Publish /task_list: every registered task with mode, tags, point
+        counts and source files (TaskManager.describe_tasks). JSON for the
+        same reason as /task_state."""
+        try:
+            payload = {
+                'task_dir': TASK_DIR,
+                'tasks': self.task_mgr.describe_tasks(),
+                'stamp': rospy.get_time(),
+            }
+            self._task_list_pub.publish(String(json.dumps(payload)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Executor] task_list publish failed: {e}")
+
+    def _reload_tasks(self):
+        """Re-scan the task directory and re-register every task.
+
+        Refused while a task is running or pending: the running task holds
+        references into the old TaskManager's scan points, and swapping the
+        manager under it would let the next group read from the new one.
+        """
+        if self._task_running or self._pending_task is not None:
+            rospy.logerr("[Executor] RELOAD_TASKS refused: a task is running "
+                         "or pending. STOP it first.")
+            return False
+        try:
+            new_mgr = TaskManager(TASK_DIR)
+        except Exception as e:
+            rospy.logerr(f"[Executor] RELOAD_TASKS failed, keeping the old "
+                         f"task set: {e}")
+            return False
+        self.task_mgr = new_mgr
+        rospy.loginfo(f"[Executor] Tasks reloaded from {TASK_DIR}: "
+                      f"{self.task_mgr.get_all_task_names()}")
+        self._publish_task_list()
+        return True
 
     def _lamp_key_for_state(self):
         name = self._state.name.lower()
@@ -376,6 +425,7 @@ class MobileManipulatorTaskExecutor:
         # The lamp follows the charging state even while IDLE (no state change)
         if self._lamp_key != self._lamp_key_for_state():
             self._publish_status_color()
+            self._publish_task_state()      # charge_phase / charging changed
         now = rospy.get_time()
         if now < self._charge_next_eval:
             return
@@ -614,6 +664,36 @@ class MobileManipulatorTaskExecutor:
                 rospy.logerr(f"[DEBUG EVAL] Failed: {e}")
             return
 
+
+        # ---------- RELOAD_TASKS ----------
+        # Re-scan task/csv (new path-data files dropped in) without a restart.
+        if cmd.upper() == "RELOAD_TASKS":
+            self._reload_tasks()
+            return
+
+        # ---------- CHARGE / UNDOCK (operator, 2026-09-14) ----------
+        # The charging manager's two internal tasks, on demand. CHARGE =
+        # lift origin home -> drive to the dock tag (500) -> /crevis/charging
+        # true -> wait for BMS current (the charger only starts on that
+        # explicit true, user-confirmed). UNDOCK = /crevis/charging false ->
+        # undock_forward_m forward. Both preempt whatever runs, like TASK.
+        # They do not need charging.enabled — that key gates only the
+        # automatic rules — but the manager's phase is kept in step so its
+        # rules read the situation correctly afterwards.
+        if cmd.upper() == "CHARGE":
+            rospy.logwarn("[Charge] operator CHARGE -> dock at tag "
+                          f"{int(self._charge_cfg.get('dock_tag', self.task_mgr.START_TAG))} and charge")
+            self._queue_internal_task('battery_return', self._battery_return_task())
+            self._charge_phase = 'returning'
+            return
+        if cmd.upper() == "UNDOCK":
+            rospy.logwarn("[Charge] operator UNDOCK -> /crevis/charging false, come forward")
+            self._queue_internal_task('battery_undock', self._battery_undock_task())
+            # 'stopped': no unattended return until the next user task, and
+            # a plain idle lamp — 'full' would light the "charged" colour
+            # for a pack the operator merely unplugged.
+            self._charge_phase = 'stopped'
+            return
 
         # ---------- TEST_POSE x y z [rx ry rz] ----------
         # Usage: TEST_POSE 0.737 2.14 0.704

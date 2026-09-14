@@ -10,9 +10,10 @@ The production sequence inside ArmController.execute_scan_points() is:
     SetSpeed + MoveJ            -> arm travels to the point
     sleep(stabilization_time)
     _adjust_distance_to_surface -> reads keyence/value, MoveL along tool Z, loop
-    sleep(0.5)
-    pipeline.scan_point()       -> /camera/capture (lamp ON -> grab -> lamp OFF)
-                                   -> ONNX infer -> /scan/ra_value
+    sleep(0.5)                  (only if the standoff loop moved the tool)
+    pipeline.capture()          -> /camera/capture (lamp ON -> grab -> lamp OFF)
+    pipeline.process()          -> ONNX infer -> /scan/ra_value, PNG — on a
+                                   background thread, overlapping the next move
     (after the last point)      -> move_to_home()
     pipeline.release()          -> /camera/set_active false (device closes)
 

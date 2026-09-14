@@ -45,7 +45,7 @@ import rospy
 from apriltag_nav.paths import load_yaml_block
 
 
-def transform_world_to_arm(g, msg, lift_m=0.0):
+def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
     """
     World frame (CSV pose frame) → arm base_link.
 
@@ -56,15 +56,18 @@ def transform_world_to_arm(g, msg, lift_m=0.0):
              why leaving it at 0 while the lift is raised puts the TCP that
              far ABOVE the target.
 
-    ⚠️ `g`'s rx/ry/rz are NOT the "ZYX intrinsic" the old docstring claimed.
-    The encoding below — `from_euler('zyx', [rx, ry, rz])`, i.e. scipy
-    LOWERCASE = extrinsic = `XYZ`-intrinsic(rz, ry, rx) — is the one that
-    reproduces the physical scan pose: on `grid_path_line1.csv` it puts the
-    tool z-axis at (-0.089, -0.037, -0.995), pointing DOWN at the plate,
-    while reading the columns as ZYX-intrinsic(rz, ry, rx) gives
-    (0.036, 0.999, -0.003) — horizontal, and 116-124 deg away over that
-    file. The code is right; the documentation was wrong. Do not "fix" this
-    line to match a doc.
+    ⚠️ `g`'s rx/ry/rz convention is PER GENERATOR — `euler` (default:
+    robot.yaml `arm_calibration.csv_euler`) is the scipy from_euler spec
+    applied to [rx, ry, rz]:
+      * "ZYX" — the 2026-09 RRT planner (`assigned_workpoints_*`): checked
+        2026-09-14 against the FK of its own paired joint rows, 0.00 deg
+        over 943 points. "zyx" read those files 180 deg off (tool UP).
+      * "zyx" — the deleted pre-cell-swap `grid_path_line*.csv`: on those
+        it put the tool z-axis at (-0.089, -0.037, -0.995), down at the
+        plate, and "ZYX" gave horizontal (the 2026-09-11 finding).
+    Both findings are real; they are about different files. Change the
+    key, not this line, and verify a new generator the same way
+    (tools/check_pose_vs_joint.py).
 
     Returns (pos_mm, rpy_deg) in Fairino SDK units (mm, degrees).
     """
@@ -104,7 +107,9 @@ def transform_world_to_arm(g, msg, lift_m=0.0):
     pos_mm = p_arm * 1000.0
 
     # Orientation: CSV ZYX intrinsic → arm frame → degrees for Fairino
-    r_csv_W = R.from_euler('zyx', [g["rx"], g["ry"], g["rz"]])
+    if euler is None:
+        euler = str(_calib.get('csv_euler', 'ZYX'))
+    r_csv_W = R.from_euler(euler, [g["rx"], g["ry"], g["rz"]])
     r_arm = R_AW_rot * r_csv_W
     rpy_deg = r_arm.as_euler("xyz", degrees=True)
 

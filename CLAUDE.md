@@ -79,18 +79,37 @@ debug path, not the way to bring the stack up.
 ## Task Commands
 
 ```
-TASK <name>                # joint (replays the RRT-planned path):
-                           #   scan_rrt_standoff{010,030,050}
-                           # pose  (IK from the world points):
-                           #   scan_grid_standoff{010,030,050}
-                           # other: go_home            → *_ra_map.csv
+TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
+                           # (since 2026-09-14; `rostopic echo /task_list`
+                           # or robot_ui's Task tab lists them):
+                           #   assigned_workpoints_<key>.csv → scan_pose_<key>
+                           #       end-effector poses x y z rx ry rz — IK per
+                           #       point (seeded from the paired rrt file)
+                           #   rrt_final_path_<key>.csv      → scan_joint_<key>
+                           #       joint-angle path q1..q6 — MoveJ replay,
+                           #       transition/home rows driven through, not
+                           #       scanned; world x y z from the paired file
+                           # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # The three standoffs are SEPARATE tasks because
-                           # the standoff changes which tag each work point is
+                           # Today's keys: errorY_p000mm_standoff_{010,030,
+                           # 050}mm_height_652mm — SEPARATE tasks because the
+                           # standoff changes which tag each work point is
                            # assigned to, not just the offset.
                            # 🛑 target_line 2 (groups 118/119/120) is not
                            #    trustworthy yet — see the scan-CSV section.
-                           # (move_route_A is commented out in TASK_DEFS.)
+                           # ⚠️ scan_joint_* replays a planned trajectory with
+                           #    no reach/collision check; only safe if the base
+                           #    is at the planned stop of every group tag.
+RELOAD_TASKS               # Re-scan task/csv without a restart (refused while
+                           # a task runs); republishes /task_list (latched)
+CHARGE                     # Operator dock + charge (2026-09-14): lift origin
+                           # home → drive to the dock tag 500 → /crevis/charging
+                           # true → wait for BMS current. = the charging
+                           # manager's battery_return, on demand; works with
+                           # charging.enabled false too. robot_ui: Task tab
+                           # "Dock & charge", CHARGE chip from /task_state
+UNDOCK                     # /crevis/charging false → 0.10 m forward; no
+                           # automatic return until the next task
 GOTO <tag_id>              # Navigate to AprilTag
                            # Every TASK / GOTO gets exactly ONE camera-centre-vs-tag
                            # record: ~/.ros/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
@@ -102,10 +121,20 @@ EXEC <code> / EVAL <expr>  # Debug execution
 ```
 
 Each task registers one step per `group_id` in ascending order, and the robot
-drives to that tag before scanning its points. `scan_rrt_standoff010` is
+drives to that tag before scanning its points. The `standoff_010mm` pair is
 `[104, 105, 106, 107, 118, 119]`; 030 and 050 differ (`…107, 119, 120` and
 `…106, 119, 120`) because the standoff changes the assignment. All of them
 route from `START_TAG` 500.
+
+`TaskManager.discover_task_defs()` builds the definitions from the directory
+listing (prefix → mode, the rest of the stem is the pairing key); the loader
+then validates the rows exactly as before. `TASK_DEFS` still exists for
+explicit extras or overrides (e.g. a `groups: [104]` bring-up subset) and is
+normally empty. Result CSVs are `<task>_ra_map_<timestamp>.csv`, which
+matches neither prefix, so nothing written into task/csv is ever re-read as
+path data. `task_executor` publishes `/task_list` (latched JSON: name, mode,
+tags, work/traverse point counts, lift height, files) and robot_ui fills its
+Task combo from it — no task name is hard-coded anywhere.
 
 `lift_mm` is 0 in every one of these files, so the lift is commanded to its
 origin — which is where `arm_base_z` is measured, and what pose-mode IK
@@ -122,6 +151,14 @@ is nowhere near the surface, so the loop would chase a meaningless reading.)
 `is_task_waypoint` marks the difference; `task_manager` turns it into a `scan`
 flag on the point, `arm_controller` acts on it, and `ScanResultWriter.begin`
 skips it so the Ra map has no permanently-empty rows.
+
+⚠️ **The stop-start motion between those rows is INTENDED (user, 2026-09-14:
+"끊기며 움직이는 게 정상이었어").** Each row goes out as its own blocking
+`MoveJ`, so a resampled straight transition (e.g. group 104's home → point
+14: 12 rows of 5.72°, 0.88 s each) is driven as 12 accelerate-decelerate
+hops. That is the planner's path executed row for row, not a defect. A
+loader-side fold of collinear traverse runs into one `MoveJ` was built and
+backed out the same day on the user's instruction — do not re-add it.
 
 Three columns differ from the original dialect, all handled in
 `task_manager`'s module-level helpers:
@@ -158,13 +195,17 @@ The work points span only **~0.9 × 0.8 m in total** with heavily overlapping
 per-group bounding boxes — one area, spread across tags up to 6.4 m apart.
 **Only group 104 is reachable.** Needs the generator's author.
 
-⚠️ **Only the POSE tasks are registered.** `scan_rrt_standoff*` are commented
-out in TASK_DEFS: joint angles are relative to the arm base, so replaying an
-RRT trajectory from a base that is not where the planner assumed leaves the
-arm's shape unchanged but its absolute position offset — "collision-free"
-does not transfer, and `_exec_joint` is a bare `MoveJ` with no checks. Pose
-mode solves IK per point, so a mis-assigned group fails the move and says so.
-That failure is the diagnostic, not a hazard.
+⚠️ **Both kinds register since 2026-09-14 (user instruction: run from the
+files in task/csv), joint tasks included.** The hazard stands: joint angles
+are relative to the arm base, so replaying an RRT trajectory from a base that
+is not where the planner assumed leaves the arm's shape unchanged but its
+absolute position offset — "collision-free" does not transfer, and
+`_exec_joint` is a bare `MoveJ` with no checks. `TaskManager` logs a warning
+at registration for every `scan_joint_*` task saying so. Pose mode solves IK
+per point, so a mis-assigned group fails the move and says so — run
+`scan_pose_*` on a new pair first; that failure is the diagnostic, not a
+hazard. (Between 2026-09-11 and 09-14 the joint tasks were commented out in
+`TASK_DEFS` for this reason.)
 
 ⚠️ **The pre-cell-swap CSVs were deleted 2026-09-11** —
 `optimized_joints_line{1,2,3}*`, `grid_path_line{1,2}*` and the
@@ -226,7 +267,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv) |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -900,6 +941,12 @@ lift starts at the origin.
 
 #### Charging manager — `task_executor` (2026-09-09)
 
+**Operator entry points since 2026-09-14: `CHARGE` and `UNDOCK` on
+`/task_command`** (robot_ui Task tab buttons) — the same two internal
+tasks the rules below queue, on demand, and independent of `enabled`.
+`/task_state` carries `charge_phase` / `charging` / `battery_pct` for the
+UI's CHARGE chip.
+
 User rules, in `robot.yaml` `navifra.charging:`: charge until **85 %**
 (`full_pct`), then `/crevis/charging false` and come forward
 `undock_forward_m` (0.10); at **20 %** (`return_pct`; 30 → 20 on the
@@ -1212,17 +1259,35 @@ Manipulator Frame (/robot_pose msg: x, y, theta°)
 Arm base_link (IK input: mm+deg for Fairino SDK)
 ```
 
-⚠️ **CSV orientation is NOT "ZYX intrinsic"** — this line said so until
-2026-09-11 and it was wrong. `arm_transform.py` encodes it as
-`from_euler('zyx', [rx, ry, rz])`, i.e. scipy LOWERCASE = **extrinsic**
-= `XYZ`-intrinsic(rz, ry, rx). **The code is right and the old doc was
-wrong**, settled physically rather than by convention-lawyering: on
-`grid_path_line1.csv` the code puts the tool z-axis at
-(−0.089, −0.037, **−0.995**) — pointing down at the plate, which is the
-only way a scan works — while reading the columns as ZYX-intrinsic gives
-(0.036, **0.999**, −0.003), horizontal. The two differ by **116–124°**
-across that file. Anyone generating a new CSV or a new world-point command
-from the old wording would get a completely wrong wrist pose.
+⚠️ **CSV orientation is PER GENERATOR — `arm_calibration.csv_euler`
+(2026-09-14).** It is the scipy `from_euler` spec applied to
+`[rx, ry, rz]`. The 2026-09 RRT planner's `assigned_workpoints_*` need
+**`"ZYX"`** (intrinsic, R = Rz(rx)·Ry(ry)·Rx(rz) — its "rx" column is the
+yaw): checked against the FK of its own paired joint rows, **0.00° over
+943 points**, while the `"zyx"` the code had hard-coded read them **180°
+off, tool pointing up**. The deleted pre-cell-swap `grid_path_line*.csv`
+were the opposite (`"zyx"` gave the tool z-axis (−0.089, −0.037, −0.995),
+down at the plate; ZYX gave horizontal — the 2026-09-11 finding). Both
+findings are real; they are about different files. Verify a new generator
+with `tools/check_pose_vs_joint.py` and change the key, not the code.
+
+⚠️ **The CSV x y z are the VISION TIP, but the controller's active tool
+frame was the FLANGE (2026-09-14).** `GetInverseKin` has no tool argument
+— it solves for the controller's ACTIVE tool — and `/arm/state` at the
+home joints read (−159, 700, 774) mm, the URDF **flange** to 0.0 mm, so
+tool 1's (0, −253, 225.2) offset from `set_tool_tcp.py` was not in effect.
+A tip target sent as-is therefore put the flange there: the tip landed
+**338.7 mm** from where the paired joint row put it ("joint 값은 정확한데
+pose는 다른 곳"). `ArmController._probe_tool_frame` now reads
+`GetTCPOffset` at start: flange → `_exec_pose` converts tip → flange
+(`flange = tip − R·offset`) before IK; tip → sends as is; anything else →
+pose mode refused. Deliberately NOT fixed by activating tool 1 on the
+controller: `/arm/state`, `move_cart`, the calibration seeds and the
+hand-eye `T_hc2ee` are all expressed against what the controller reports
+today (the flange), and activating the tip would shift every one of them
+by that 339 mm. If tool 1 is ever activated, the probe sees it and the
+conversion switches itself off — but the calibration chain has to be
+re-expressed first.
 
 Target orientation for IK comes directly from CSV (through
 `process_transforms`) — EE orientation barely changes across a scan, so the
@@ -1429,6 +1494,280 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-14 — CHARGE / UNDOCK: dock-and-charge as an operator command, with robot_ui buttons
+
+User: "주차태그 이동 및 충전 task robot_ui 추가 — `rostopic pub -1
+/crevis/charging std_msgs/Bool "data: true"` 이것을 보내야 충전이 됨,
+충전도크는 500번". The 2026-09-09 charging manager already does exactly
+that sequence as its internal `battery_return` task (lift origin home →
+`move_to_tag(dock_tag 500)` → `/crevis/charging true` → wait
+`charge_confirm_s` for BMS current), but only when its own rules fire.
+Now `/task_command` accepts **`CHARGE`** (queues `battery_return`, phase
+`returning`) and **`UNDOCK`** (queues `battery_undock`: `/crevis/charging
+false` → `undock_forward_m` forward; phase `stopped`, i.e. plain idle
+lamp and no unattended return until the next user task — `full` would
+have lit the "charged" colour for a pack that was merely unplugged).
+Both preempt a running task like `TASK` does and need no
+`charging.enabled`, which gates only the automatic rules. `/task_state`
+gained `charge_phase` / `charging` / `battery_pct`, republished whenever
+the lamp key changes, so the UI sees a charge start or stop while IDLE.
+robot_ui: Task tab row "Dock & charge (tag 500)" / "Undock / stop
+charging" with a phase line, and a `CHARGE` status chip (magenta tint
+while the BMS reports current, red on `dock_failed`, unchanged for an
+older executor that sends no fields).
+
+Verified offline only: `tools/check_charging_manager.py` 13 → **19**
+(CHARGE with the manager disabled runs lift home → goto 500 → relay
+true → confirmed; UNDOCK drops the relay, drives 0.10 m, no return
+afterwards; the /task_state fields) and `check_task_list_ui.py` 29 →
+**34**. Not driven; `task_executor` and robot_ui restart required. The
+2026-09-09 caveat stands: whether the designed stop pose on 500 actually
+makes the charger contacts is unverified — `dock_reverse_m` is the knob.
+
+### 2026-09-14 — "拍照后出结果为什么这么慢": inference + PNG moved off the arm's thread; mono frames end to end
+
+User question after the first 105-point pose run (15:16, `scan_pose_
+errorX_…050mm`): why the wait after the shutter. Read off that run's
+arm_node log, per point (6.6 s cycle): MoveJ 0.96 s, `stabilization_time`
+0.5 s, Keyence 0.48 s (five out-of-range readings → "0 steps"), a fixed
+0.5 s sleep, capture 0.39 s, **ONNX 1.7–1.9 s**, then **1.87 s between
+the `Sample` line and `Ra map saved`** — `_capture_frames` decoded the
+mono8 frame as `bgr8` (5472×3648×3 = 60 MB), published it on
+`/scan/image` with nobody subscribed, and `cv2.imwrite` PNG-encoded the
+three channels (measured 1.31 s here; the same frame single-channel 0.62 s,
+BMP 0.04 s). So of the ~4.2 s after the shutter, 1.9 s was scoring and
+1.9 s was bookkeeping that never needed the arm to wait.
+
+Three changes, all in the scan loop / pipeline, none touching motion:
+
+1. **Capture and processing are split** (`RaScanPipeline.capture` /
+   `process`; `scan_point` = both, kept for tools). `execute_scan_points`
+   captures with the arm at rest, publishes `done`, enqueues the frames and
+   moves to the next row; one `scan-infer` worker per scan (FIFO, bounded
+   `~infer_queue_max` 4 so a slow model throttles the arm rather than
+   growing memory) runs inference + `/scan/*` publishes + the PNG, fills
+   the row in place under `_results_lock`, rewrites the CSV and publishes a
+   new **`result`** event (ra_mean / ra_std / num_samples). The end-of-scan
+   home move overlaps the last inference; `finished` / `/scan_finished`
+   wait for the queue to drain, on cancel too (frames already taken are
+   scored, so the CSV never ends with blank rows for measured points). A
+   raise inside the worker marks that row `(no Ra)` and continues.
+   robot_ui logs `OK` on `done` and `ra=` on `result`; the SCAN chip counts
+   only on `done`/`failed`.
+2. **Mono end to end.** `imgmsg_to_cv2(…, 'passthrough')` for mono8, the
+   model's own GRAY→RGB widening (checked on a real frame against the
+   pre-widened BGR: Ra 0.258414 both, bit-identical), `/scan/image` as
+   mono8 and only when subscribed, single-channel PNG. The saved files are
+   the same pixels, one channel instead of three identical ones.
+3. **The 0.5 s after the standoff loop is skipped when the loop took no
+   step** (`travel_mm == 0`); when it did move, its own `settle_s` per
+   MoveL plus this 0.5 s stay.
+
+Expected cycle ≈ move 1.0 + stabilise 0.5 + Keyence 0.5 + capture 0.4 ≈
+2.5–3 s with the ~2.5 s of scoring hidden behind the next move (the
+worker keeps up: 8-core, 4 ORT threads, 1.3–1.9 s per frame). Verified
+offline only: `tools/check_scan_progress.py` 28 → **37** (Ra arrives in a
+`result` after `done` and before `finished`, on the `scan-infer` thread;
+row filled before `execute_scan_points` returns; worker survives an
+inference raise; settle only when the standoff moved) and
+`src/robot_ui/tools/check_task_list_ui.py` 26 → **29**. `arm_node` and
+robot_ui restart required. Found on the way and fixed:
+`check_task_discovery.py` hard-coded the errorY files' tags and counts
+and broke when the user swapped in errorX; it now reads its expectations
+from the CSVs with pandas (48 ok).
+
+⚠️ Seen in the same log and NOT fixed: every point read `standoff NOT
+corrected: out of range on the far side` — the Keyence saw no surface
+within its ±20 mm window at any of the 105 points (`seek_enabled` off),
+so those Ra values were taken at the CSV's raw height with no standoff
+correction. Worth checking the standoff geometry before trusting them.
+
+### 2026-09-14 — "joint 값은 정확한데 _exec_pose는 같은 지점에 안 간다": the controller's active tool is the flange, and the new CSV's euler is ZYX
+
+User (pinyin): the two execution paths do not reach the same place; the
+joint values are correct. Settled by forward kinematics, not by reading
+conventions: an offline FK of the FR10v6 URDF (base_link → tool_Link,
+`tools/check_pose_vs_joint.py`) reproduces the robot's own home TCP
+(−159, 700, 774) mm to 0.0 mm, so it is trusted as the flange; the
+planner's `assigned_workpoints_*` rows equal URDF-flange + (0, −253,
+225.2) of their paired `rrt_final_path_*` joint rows to **0.000 m over all
+943 points** (the 13:42 export; the 13:01 one was in another frame — the
+user re-exported after the 13:20 diagnosis). So the planner is internally
+consistent and `transform_world_to_arm` reproduces its positions exactly.
+The two paths still diverge, for two reasons, both fixed:
+
+1. **Tool frame.** `/arm/state` at home == the URDF FLANGE ⇒ the
+   controller's active tool offset is zero; tool 1 from `set_tool_tcp.py`
+   is not in effect (at least since 2026-09-04, when the same home TCP
+   was recorded). `GetInverseKin` uses the active tool, so the tip
+   coordinates were solved as flange targets: tip 338.7 mm off (+232 mm
+   z), and many targets "unreachable" at 1.6 m that are fine for the tip.
+   Fix in software (`_probe_tool_frame` / `_tip_to_flange`, see the
+   Coordinate Frames section for why the controller was NOT changed).
+2. **Euler convention.** The planner's `[rx, ry, rz]` are ZYX-intrinsic
+   (rx = yaw); the code's hard-coded `'zyx'` was 180° off. Now
+   `arm_calibration.csv_euler` (default `"ZYX"`), with the 2026-09-11
+   finding recorded as true for the old generator only.
+
+**The planner's URDF is
+`frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`** (user,
+same day: "이것이 현재 사용하는 urdf"; untracked until this commit). It
+settles the frames by construction: same j1–j6 + `tool` (0.106) chain as
+`fr10v6_vision.urdf`, `vision_tip_joint` = tool_Link + (0, −0.25299,
+0.2252) with rpy 0 — exactly tool 1 / `vision_tip_offset_mm`, so the CSV
+x y z are the `vision_tip` link and its rx ry rz the flange orientation —
+and `mobile_to_base` = (0, +0.1, 0.652), rpy 0, which is `T_ab2mb`
+(0, −0.100, −0.652) seen from a mobile_base frame yawed 180° from the
+code's body frame. `check_pose_vs_joint.py` reads that file for its FK
+chain and asserts both offsets against `robot.yaml`.
+
+Verified offline only: `tools/check_pose_vs_joint.py` (24 — the URDF's
+tip and mount offsets; embedded
+paired rows for tags 106 and 119: ZYX 0.000°, zyx 180°, position 0.01 mm;
+`_exec_pose` against a fake Fairino sends exactly the URDF flange pose of
+the joint row when `GetTCPOffset` is zero (0.01 mm / 0.000°), the tip when
+the tip is active, refuses on anything else; probe verdicts), plus
+`check_scan_progress.py` 28 and `check_lift_compensation.py` 12 still
+pass. Not run on the robot; `arm_node` restart required. **First thing to
+watch at startup:** `[Arm REAL] Active tool frame is the FLANGE … will be
+converted` — then a pose task's `tip target … -> flange target …` lines,
+and the tip physically where the joint replay put it.
+
+### 2026-09-14 — Pose scan: every point "cannot unpack non-iterable int object" — IK failures were invisible, and would have been "Success"
+
+User, 13:20, `TASK scan_pose_errorX_p000mm_standoff_050mm_height_652mm` at
+tag 106: `[Arm REAL] Move failed at point 110: cannot unpack non-iterable
+int object`, 110 of 110 attempted points, then STOP. Two layers:
+
+1. **The message is a TypeError, not the reason.** `_exec_pose` did
+   `ret, joints = self.robot.GetInverseKinRef(...)`; the Fairino SDK
+   returns a BARE INT error code when IK has no solution (the tuple only on
+   success), so the unpack raised. That raise is the only reason the
+   points were recorded as failures at all — see 3.
+2. **The reason: the CSV's points are 1.65–2.56 m from the arm base.**
+   Reproduced exactly: the file's group-106 first row, world
+   (0.285, 1.714, 0.385) m, through the real `transform_world_to_arm` at
+   the logged `/robot_pose` (x −0.000, y 1.711, θ 90) gives the logged
+   target (−1714, 1896, −267) mm; FR10 reach is 1.40 m. The CSV world
+   frame IS the `map.yaml` frame (origin 정반 1 centre — `calculate_robot_pose`
+   swaps/negates into the manipulator frame and `arm_transform` swaps back),
+   so at tag 106 the base is at (−1.711, 0.0) and the points would have to
+   lie within ~1.2 m of it; the file puts them near the plate centre and
+   1.2–1.7 m up the lane. Same finding as 2026-09-11 (group → tag
+   assignment / planner frame), now on the user's 13:01 `errorX` export;
+   the user confirmed this reading ("2번이 맞습니다"). Planner-side.
+3. **Latent and worse: `_exec_joint` / `_exec_pose` logged failures and
+   RETURNED.** `execute_scan_points` then marked the point `Success`, ran
+   the Keyence loop and captured wherever the arm was. Both now RAISE
+   (`RuntimeError`), the per-point `except` records the message, and the
+   scan continues — the contract that was already assumed. The IK message
+   names the code, the arm-frame target, its distance from the base, the
+   CSV world point and the robot pose, so the next such failure diagnoses
+   itself. `_ik_result()` normalises the SDK's int-or-tuple return.
+   `tools/arm_controller_sdk.py` still has the old shape (already flagged
+   as needing work before `arm_node` is pointed at it).
+
+**"UI에 로그 보이게" + "로봇팔 실시간 state 안 보임" (user, same
+message):**
+- `/arm/scan_progress` (String JSON from `ArmController`: `start` with
+  totals, `move` per point, `done` with `ra_mean`/message, `failed` with
+  the reason, `finished` with `n_ok`/`n_fail`/`cancelled`; every event
+  after the first successful move carries `tcp_pose`). robot_ui: a `SCAN
+  i/N ok a fail b` chip in the status bar (red once anything fails) and
+  one log line per work point (`[scan] 110/468 pt 110 g106: FAIL — IK
+  failed (code 112): …`); traverse rows update the chip only.
+- **`/arm/state` was blind for the whole scan.** arm_node's state timer
+  skips the pose read whenever a motion holds the executor lock — and a
+  scan holds it for minutes — so `pose_valid` was false and the Arm tab
+  showed `—` throughout. The worker now snapshots pose + joints after
+  every MoveJ / standoff MoveL / capture (`_refresh_live_pose`, between
+  its own RPC calls, so no socket collision), and the timer serves that
+  snapshot as valid while it cannot take the lock (`~live_pose_max_age_s`
+  60). Exact between moves, a few seconds stale during one.
+
+Verified offline only: `tools/check_scan_progress.py` (28 — real
+`ArmController` without `__init__` against a fake Fairino whose IK returns
+a bare int: the verbatim CSV row fails with the full reason and no MoveJ /
+capture, the reachable point completes with its Ra, event sequence and
+counts, live pose after the first move, MoveJ error code, traverse rows,
+5-value row, seedless IK path, `_ik_result` shapes) and
+`src/robot_ui/tools/check_task_list_ui.py` (26: chip texts per phase,
+failure reason in the log, Ra line, traverse silent, finished summary).
+Not run on the robot; `arm_node` and the UI must be restarted.
+
+### 2026-09-14 — Tasks come from the files in task/csv; robot_ui reads /task_list
+
+User: "task 디렉토리에 있는 경로데이터 기반으로 동작할 수 있도록 수정해줘" —
+`assigned_workpoints_*` are end-effector pose paths (x y z rx ry rz),
+`rrt_final_path_*` are joint-angle paths — "수정되면 당연히 robot_ui도 수정".
+Before this, `TASK_DEFS` named the six 2026-09-11 files by hand, the three
+joint entries were commented out, and robot_ui's Task combo still listed
+`scan_joints_line1` & co. — names deleted three days earlier.
+
+- **`TaskManager.discover_task_defs(task_dir)`**: `assigned_workpoints_<key>.csv`
+  → `scan_pose_<key>` (pose mode, `joint_file` = the rrt file of the same key
+  when present, for the IK seed), `rrt_final_path_<key>.csv` →
+  `scan_joint_<key>` (joint mode, `pose_file` for the Ra map's world x y z).
+  Each file registers on its own; pairing is by key. Result CSVs are
+  `<task>_ra_map_<ts>.csv` and stems containing `_result` / `_ra_map` are
+  skipped, so results written into task/csv (as the 2026-08 runs were) never
+  come back as path data. `TASK_DEFS` is kept as an explicit-extras layer
+  merged OVER the discovered set (same name wins, announced), normally empty;
+  the 2026-09-11 `groups: [104]` bring-up entry is the commented example.
+- **Joint tasks are registered again**, on the user's instruction. The
+  2026-09-11 finding (group → tag assignment does not check out; MoveJ
+  replay has no reach/collision check) is unchanged and is now a `logwarn`
+  per `scan_joint_*` task at load plus the scan-CSV section above. Run the
+  `scan_pose_*` twin of a new pair first.
+- **`/task_list`** (latched JSON from `task_executor`, `TaskManager.
+  describe_tasks()`): per task name, kind, scan_mode, tags in order, work /
+  traverse point counts, IK-seeded or xyz-paired counts, lift height, files,
+  result name. **`RELOAD_TASKS`** re-scans the directory (refused while a
+  task is running or pending — the running task holds the old manager's
+  scan points).
+- **robot_ui** fills the Task combo from `/task_list` (cached + replayed
+  like `/task_state`), shows a detail line (`mode · tags · N pts (+M
+  traverse) · lift · file · paired file`) and per-item tooltips, preserves
+  a hand-typed name across republishes, and has a "Reload tasks" button.
+  `readme.txt`, `tools/send_debug_cmd.py` and a `lifter_node` warning string
+  lost their stale names.
+
+**Same day, on the robot: "매니퓰레이터의 첫 home pose에서 경로데이터의 첫
+point_id로 이동할 때 뚝뚝 끊기면서 움직여" — diagnosed, "fixed", and the fix
+BACKED OUT on the user's word.** From the 11:19 arm_node log: group 104's
+home → point 14 is 1 home + 12 transition rows, each an exact 5.72° step on
+every joint (a straight joint-space line, sum 74.4° = the direct distance),
+and each row went out as its own blocking `MoveJ(..., blendT=-1)` taking
+0.88 s — 12 stop-starts over 11.5 s. A load-time fold of collinear traverse
+runs into one `MoveJ` (all 728 runs in the three files are straight to
+0.0000°) was implemented and verified offline, then removed within the
+hour: the user confirmed the row-by-row motion is the intended behaviour
+("경로데이터대로 잘 가고 있는 거였어"). Nothing of it remains in the code;
+the RRT-dialect section now says so, so it is not rebuilt.
+
+**Speeds halved in all six path files (user instruction, same day):** the
+`speed` column's 60 → 30 and 30 → 10, in place, nothing else touched (BOM,
+CRLF and the scientific-notation cells preserved; verified field by field
+against HEAD for the rrt files). `speed` feeds `SetSpeed(percent)` per row
+in `execute_scan_points`, so every move — work points and transitions — now
+runs at half the planner's percentage. `test_move_57.csv` (2026-08-12
+bring-up scaffolding, no task referenced it) deleted on the user's
+instruction; the `*_result_*.csv` files that sat beside it were gitignored
+and are gone too.
+
+Verified offline only: `tools/check_task_discovery.py` (48 checks — real
+task dir: 3 + 3 tasks, 1035 work points each, every pose point IK-seeded,
+joint path 1035 work + 422 traverse with world xyz on every work point and
+none on traverse rows, per-row speed 10/30, standoff-050 tags differ;
+scratch dirs: result files ignored, unpaired pose / joint file registers
+alone, explicit TASK_DEFS with `groups` overrides and is announced, a
+disagreeing `lift_mm` refuses that file only, empty CSVs register nothing)
+and `src/robot_ui/tools/check_task_list_ui.py` (offscreen MainWindow +
+fake bridge, 20 checks). Not run on the robot; `task_executor` and the UI
+must be restarted. Task names on the wire are now long
+(`scan_pose_errorY_p000mm_standoff_010mm_height_652mm`) — exact, on
+purpose; shorten them by renaming the files' key, not by editing code.
 
 ### 2026-09-11 — Pose-mode IK finally tracks the lift; and the CSV euler convention was documented backwards
 

@@ -1015,6 +1015,29 @@ arm_calibration:
   arm_tilt_x:        0.0       # no mount tilt on the real platform
   arm_tilt_y:        0.0       # no mount tilt on the real platform
 
+  # ---- how a POSE-mode CSV row is read (2026-09-14) ----
+  # csv_euler: scipy from_euler spec applied to the columns [rx, ry, rz].
+  #   "ZYX" (intrinsic, R = Rz(rx)·Ry(ry)·Rx(rz)) is what the 2026-09 RRT
+  #   planner writes — verified against the FK of its OWN joint rows: 0.00 deg
+  #   over 943 paired points, while "zyx" (what the code used until today)
+  #   was 180 deg off, i.e. the tool pointing UP. The pre-cell-swap grid CSVs
+  #   (deleted 2026-09-11, a different generator) needed "zyx"; the 09-11
+  #   "the code is right" note was true for THOSE files only. Per-generator,
+  #   so it is a key and not a constant.
+  csv_euler: "ZYX"
+  # The CSV x y z are the VISION TIP: flange + this offset in the flange frame
+  # (mm), the same numbers tools/set_tool_tcp.py writes as tool 1 and the
+  # planner URDF's vision_tip_joint (frcobot_description/urdf/
+  # fr10v6_mobile_vision_0317_test.urdf, the one in use per the user). The
+  # planner's FK confirms it (0.000 m). ⚠️ The controller's ACTIVE tool frame
+  # is what GetInverseKin / GetActualTCPPose use, and on 2026-09-14 that was
+  # the FLANGE (offset 0 — /arm/state at home = the URDF flange position to
+  # 0.0 mm), so a tip target sent as-is put the flange there: 338.7 mm off.
+  # ArmController reads GetTCPOffset at start and converts tip -> flange for
+  # IK when the active offset is zero; leaves the target alone when the
+  # active tool IS the tip; refuses pose mode for anything else.
+  vision_tip_offset_mm: [0.0, -253.0, 225.2]
+
 # Arm home joint angles in radians. This matches the hardcoded value used
 # across every controller (arm_controller.py, tools/arm_controller_sdk.py)
 # — they all use j1 = -1.5708, not 0.0. Keep this in sync if either side changes.

@@ -35,6 +35,12 @@ Services:
 Publishes:
   /arm/state          robot_msgs/ArmState  ~10 Hz — live pose, joints,
                                            busy, motion_seq + result
+                                           (during a scan the pose is the
+                                           worker's per-move snapshot)
+  /arm/scan_progress  std_msgs/String   JSON per scan phase / point: start, move,
+                                        done, result, failed, finished — `done` when
+                                        the frames are captured, `result` with the
+                                        Ra from the inference worker a little later
   /arm/status         std_msgs/String   "idle" | "busy" (latched, LEGACY)
 
 The controller itself additionally subscribes /robot_pose and keyence/value and
@@ -92,6 +98,10 @@ class ArmControllerNode:
         robot_ip = rospy.get_param('~robot_ip', '192.168.58.2')
 
         self._state_rate = float(rospy.get_param('~state_rate_hz', 10.0))
+        # How old the worker's pose snapshot may be and still be published as
+        # valid while a motion holds the executor lock (see _tick_state).
+        self._live_pose_max_age_s = float(
+            rospy.get_param('~live_pose_max_age_s', 60.0))
         self._default_vel = float(rospy.get_param('~default_vel', 30.0))
         self._default_acc = float(rospy.get_param('~default_acc', 50.0))
         self._jog_max_step = float(rospy.get_param('~jog_max_step', 50.0))
@@ -188,7 +198,18 @@ class ArmControllerNode:
                     self._last_joints = joints
                 self._pose_valid = pose is not None
             else:
-                self._pose_valid = False
+                # A motion holds the lock (a scan holds it for MINUTES).
+                # The worker refreshes a snapshot after every move it makes,
+                # so serve that instead of going blind: it is exactly where
+                # the arm is between moves, and a few seconds stale at
+                # worst during one. Before 2026-09-14 the whole scan showed
+                # pose_valid=False and the UI displayed "—" throughout.
+                live = self.arm.live_pose()
+                if live is not None and live[2] <= self._live_pose_max_age_s:
+                    self._last_pose, self._last_joints = live[0], live[1]
+                    self._pose_valid = True
+                else:
+                    self._pose_valid = False
 
             msg = ArmState()
             msg.header.stamp = rospy.Time.now()

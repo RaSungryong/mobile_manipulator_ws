@@ -11,6 +11,7 @@ import importlib.util
 import os
 import sys
 import types
+import json
 
 WS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, os.path.join(WS, 'src'))
@@ -290,6 +291,32 @@ def main():
     ex, b = make(15.0, docked=False); ex._charge_enabled = False
     ticks(ex, 15)
     check('9 disabled: no motion, no relay', ex.mobile.calls == [] and not b.relay)
+
+    # ---- 10. operator CHARGE at 55 % (well above return_pct), manager disabled
+    ex, b = make(55.0, docked=False); ex._charge_enabled = False
+    ex._command_cb(types.SimpleNamespace(data='CHARGE'))
+    check('10a CHARGE queues battery_return and sets phase returning',
+          ex._pending_task_name == 'battery_return' and ex._charge_phase == 'returning')
+    b.docked = True
+    ticks(ex, 30)
+    check('10b it runs: lift home -> goto 500 -> /crevis/charging true -> confirmed',
+          'home' in ex.lift.calls and ('goto', 500) in ex.mobile.calls and b.relay
+          and ex._charge_phase == 'charging', f'{ex.lift.calls} {ex.mobile.calls} relay={b.relay} {ex._charge_phase}')
+    # ---- 11. operator UNDOCK while charging
+    ex._command_cb(types.SimpleNamespace(data='UNDOCK'))
+    check('11a UNDOCK queues battery_undock, phase stopped (plain idle lamp, no auto-return)',
+          ex._pending_task_name == 'battery_undock' and ex._charge_phase == 'stopped')
+    ticks(ex, 30)
+    check('11b it runs: /crevis/charging false, 0.10 m forward, no return afterwards',
+          not b.relay and ('drive', 0.1) in ex.mobile.calls and ex.mobile.calls.count(('goto', 500)) == 1
+          and ex._charge_phase == 'stopped', f'relay={b.relay} {ex.mobile.calls} {ex._charge_phase}')
+    # ---- 12. /task_state carries the charge fields
+    seen = []
+    ex._task_state_pub = types.SimpleNamespace(publish=lambda m: seen.append(json.loads(m.data)))
+    ex._publish_task_state()
+    check('12 /task_state carries charge_phase / charging / battery_pct',
+          seen and seen[-1]['charge_phase'] == 'stopped' and seen[-1]['charging'] is False
+          and seen[-1]['battery_pct'] == 55.0, str(seen[-1:]))
 
     n = sum(1 for c in checks if not c)
     print(f'\n{len(checks) - n}/{len(checks)} checks passed')

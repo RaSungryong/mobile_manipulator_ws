@@ -13,7 +13,9 @@ Two formats for cmd_str:
        "/mobile/goto_tag   std_msgs/Int32   108"
 
   2. /task_command string (Plan A / Plan B orchestrator):
-       "TASK scan_joints_line1"
+       "TASK scan_pose_<key>"      (names: rostopic echo /task_list)
+       "RELOAD_TASKS"
+       "CHARGE" / "UNDOCK"        (dock at tag 500 + /crevis/charging true / undock)
        "GOTO 108"
        "STOP"
        "STATE"
@@ -85,11 +87,12 @@ def main():
     # ------------------------------------------
     # Format 2 — /task_command (Plan A & Plan B)
     # ------------------------------------------
-    # cmd_str = 'TASK scan_joints_line1'
-    # cmd_str = 'TASK scan_grid_line1'
-    # cmd_str = 'TASK scan_full_joints'
-    # cmd_str = "TASK scan_full_pose"
-    # cmd_str =  'TASK scan_joints_line1_new'
+    # Task names are derived from the files in task/csv — list them with
+    #   rostopic echo -n1 /task_list
+    # cmd_str = 'TASK scan_pose_errorY_p000mm_standoff_010mm_height_652mm'
+    # cmd_str = 'TASK scan_joint_errorY_p000mm_standoff_010mm_height_652mm'
+    # cmd_str = 'TASK go_home'
+    # cmd_str = 'RELOAD_TASKS'
     cmd_str = 'GOTO 100'
     # cmd_str = 'STOP'
 
