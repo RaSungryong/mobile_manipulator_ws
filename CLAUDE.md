@@ -1826,7 +1826,33 @@ single-tag extremes), `--pivot-speed` 0.08 rad/s, a levelling pivot
 first (the tags back onto the principal row, first command capped to 3°
 until the sign is learned), and a pivot mobile_node reports short of its
 ODOM target (its `shortfall_frac` check, the normal case for this base)
-is progress rather than an abort.
+is progress rather than an abort. **Third run (14:29) completed: 9 pivot
+snapshots over 12.5° of executed spread, all two-tag.** Solve
+(`--spacing 0.120`, 17 snapshots rms 0.237 px): roll +1.406 / pitch
+−0.323°, lens 301.8 mm, tag size 89.82; rotation centre (−550.3, +4.6)
+mm from the nadir (jackknife sd 1.3 / 3.8 mm, rms 0.32 mm) ⇒ **tx 0.5504,
+ty +1.7 mm**; yaw −0.305° (fwd tracks −0.03, rev −0.59). Analysis before
+trusting it: (1) the tilt subsets agree in roll (1.33–1.41) less in
+pitch (−0.26 scans / −0.42 pivots); vs 09-08 (+1.228 / −0.504) both
+components moved ~0.18° and the optical axis by 0.25° — floor-flatness /
+chassis-loading territory (two different floor spots, 3 mm/m), not
+evidence of the camera moving; the practical difference in the current
+pipeline is 0.09° of edge angle at the aim position and 1.4 mm of
+position. (2) The lever depends on which tilt is used (0.5504 with
+today's, 0.5465 with 09-08's on the same pivots), so its honest
+uncertainty is ~3 mm; 0.550 / 0.552 / 0.5504 all say `camera_offset`
+0.55 stands; ty +1.7 ± 3.8 vs 09-08 −4.5 ± 4.9 ⇒ lens on the centreline
+within the noise, `camera_lateral` stays 0. (3) The fwd/rev yaw split
+is NOT the single-tag reconstruction (bias ±0.03° / ±0.4 mm, random,
+checked on 29 at-rest snapshots across x 586–1086): the rotation
+centre's body-frame lateral position along every track is flat with a
++1 mm step (to the left) at the same floor position in both directions
+— a floor feature — and 1 mm over 0.145 m is 0.4°, so a straight-drive
+yaw on this floor is ±0.3° at best; the both-tag middle segments alone
+give −0.71 (fwd −0.80 / rev −0.60, consistent), the whole tracks −0.31.
+Verdict: yaw −0.3…−0.7, the configured −0.38 is inside it; nothing
+applied yet (user to decide: today's tilt per the "measured = config"
+rule, or keep 09-08's — 1 mm either way).
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
