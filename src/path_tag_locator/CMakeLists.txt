@@ -59,6 +59,8 @@ install(PROGRAMS
   scripts/check_repose_from_corners.py
   scripts/check_front_cam_extrinsics.py
   scripts/make_front_cam_extrinsics.py
+  scripts/calib_fc_hc_chain.py
+  scripts/check_chain_calib.py
   scripts/error_budget.py
   scripts/update_plan_seeds_from_session.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

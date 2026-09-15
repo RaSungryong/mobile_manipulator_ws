@@ -2035,6 +2035,44 @@ two tags 0.5 m apart, so two snapshots). Verified offline only; the
 suites that read the loader still pass (ground_plane 17, repose 10,
 error_budget, yaw-sweep 4/4). `catkin_make` not needed. Not driven.
 
+### 2026-09-15 — front_cam ↔ hand_cam chain calibration from two floor tags (`calib_fc_hc_chain.py`)
+
+User: the matrices between front_cam and hand_cam are a black box — no
+way to tell any of them from its ideal value — so measure the whole
+T_fc2hc against two 90 mm tags (149 / 150) laid at a known spacing, one
+under each camera, and use the ideal-vs-measured difference as a
+correction. Built as `path_tag_locator/chain_calib.py` (pure numpy) +
+`scripts/calib_fc_hc_chain.py` (check / collect / solve) +
+`docs/FC_HC_CHAIN_CALIBRATION_kr.md`.
+
+The design point: with the base still, tag B under front_cam is one
+constant observation and the arm poses are the only excitation, which
+makes this the AX = YB (robot-world / hand-eye) problem — `inv(H)·S_i =
+D·(A_i·B)·F` with D a hand-side (hand-eye) correction and F a base-side
+one (arm mount T_ab2mb, T_mb2fc and the front-tag observation, which one
+base pose cannot separate). One pose cannot tell D from F; views with
+rotation DIVERSITY (tilts about two axes + spins — the hand-eye sweep's
+own planner and safety rules, tag plane = the floor) can, which is
+precisely what the 09-11 sessions lacked. `solve` fits raw / hand-only /
+base-only / joint and reads the attribution off the residuals; the laid
+truth is snapped to the quarter-turn ambiguities of two collinear-edge
+tags, so the print orientation need not be known. Nothing is applied
+automatically: `--write-hand-eye` writes a dated npz for locator.yaml, a
+base-side F is printed folded into T_ab2mb (also robot.yaml
+arm_calibration's matrix — pose-mode IK — so a separate decision).
+
+Verified offline: `scripts/check_chain_calib.py` (23 — synthetic chain
+through the real `plan_sweep` with the real hand-eye / extrinsics, tag
+corners rendered and re-solved: a planted 2° / 15 mm hand-eye error is
+recovered to 0.8 mm / 0.06° with the base fit 10× worse, a planted 1° /
+8 mm mount error to 0.3 mm / 0.04° the other way round, both at once by
+the joint fit; the per-sample noise floor is 2–3 mm / 0.3° because a
+120 px tag's out-of-plane tilt is only 0.7° per FRAME and rides the
+0.7 m A→B lever — hence 20-frame means per camera per view, without
+which D is only good to ~4 mm). Live `check` ran against the master
+(arm state, extrinsics, both K, hand_cam topic) and failed correctly on
+the unlaid tag. Not run with the tags yet.
+
 ### 2026-09-15 — Collect tab VISION lamp switch; black frames in bursts explained and fixed
 
 User: "UI 收集数据上添加 vision 的照明开关，还有在连续拍照时会发生一部分完全黑
