@@ -114,6 +114,9 @@ def main():
 
     T_hc2ee = load_T_hc2ee(_resolve_ros_path(cfg.hand_eye_npz))
     assert_rigid(T_hc2ee, name="T_hc2ee")
+    # This tool re-detects RAW front_cam frames, so the PHYSICAL (tilted)
+    # T_mb2fc is the right one here — unlike the nodes, which consume
+    # robot_camera_node's level-frame detections (constants.Extrinsics).
     T_ab2mb, T_mb2fc = load_extrinsics(_resolve_ros_path(cfg.extrinsics_yaml))
 
     if not (cfg.topics.hand_cam_image and cfg.topics.hand_cam_info

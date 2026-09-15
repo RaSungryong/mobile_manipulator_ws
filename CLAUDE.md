@@ -1418,11 +1418,37 @@ the unknown-height policy. Joint-mode tasks were never affected.
 `docs/lift_arm_base_z_analysis.md` still holds the background (its §4.2 is
 now obsolete).
 
-`T_mb2fc` front_cam translation is **(0.55, 0, 0.300)** as of 2026-08-21 (was
-`(0.547, 0, 0.300)` from 2026-08-13, and `(0.45, 0, 0.293)` before that). The
-height moved only 7 mm even though the deck dropped 374 mm, so the camera is
-mounted off the chassis, not off the deck. `tx` must stay equal to `robot.yaml`
-`camera_offset`, which is the only key in that block any code reads.
+**`T_mb2fc` is the PHYSICAL front_cam since 2026-09-15 — translation
+(0.55, 0, 0.302), rotation = level camera × the 2026-09-08 ground-plane
+fit (roll +1.228°, pitch −0.504°, yaw −0.38°; optical axis 1.327° off
+vertical) — and it is GENERATED, never hand-edited:**
+`path_tag_locator/scripts/make_front_cam_extrinsics.py --apply` derives it
+from three `robot.yaml` numbers (`camera_offset`, `ground_plane.front_cam`
+roll/pitch/yaw, `height_m`). tz moved 0.300 → 0.302 the same day (user:
+the tape figure and the fit's lens height must be one value). Before that
+the translation was (0.55, 0, 0.300) from 2026-08-21, `(0.547, 0, 0.300)`
+from 2026-08-13 and `(0.45, 0, 0.293)` before the base swap — the height
+moved only 7 mm across a 374 mm deck drop because the camera is mounted off
+the chassis, not the deck. `tx` must stay equal to `robot.yaml`
+`camera_offset`, the only key in that block any code reads.
+
+⚠️ **Two front_cam frames now exist, and the chain must use the one its
+detections are in.** `robot_camera_node` re-images front_cam's detections
+through a LEVEL virtual camera while the ground-plane correction is on,
+so a chain fed from `/front_cam/tag_detections` needs
+`T_mb2fc_level = T_mb2fc @ T_tilted_to_level(fit)` (rotation exactly
+diag(1, −1, −1), same lens centre) — feeding it the stored tilted matrix
+applies the tilt twice (8 mm / 1.38° on a floor tag). Only a consumer
+that re-detects RAW frames (`verify_arm_pointing.py`) takes the stored
+matrix. `path_tag_locator.constants.load_extrinsics_full()` derives the
+level frame (`ground_plane.T_tilted_to_level`), picks per
+`locator.yaml detector.front_cam_frame` (`auto` = follow
+`ground_plane.enabled`), and REFUSES a yaml whose rotation or tz no
+longer matches `robot.yaml` (0.01° / 1e-6 m) — so an edit to the fit
+without re-running the generator fails the calibration nodes at start
+instead of shifting every result. `robot_sim` renders through the same
+choice. `scripts/check_front_cam_extrinsics.py` (22) pins all of it,
+including the tilt's sign against `GroundPlane.project` itself.
 
 ⚠️ **The last 3 mm is a design figure overriding a measurement, and it is not
 reconciled.** 0.547 was measured on the base 2026-08-13. 0.55 is what the new
@@ -1547,7 +1573,7 @@ of editing the guide.
 | §7 topic tables | `/cmd_vel` and `/robot_pose` are published by **`mobile_node`**, not `mobile_manipulator_system`. New: `/mobile/goto_tag`, `/mobile/state`, `/mobile/busy` and the `/mobile/{stop,cancel,clear_stop}` services. |
 | Missing entirely | that `task_executor` now owns **no device at all** — drive, lift and arm are each reached through a client proxy. Worth a short section; it is the main structural change since the guide was written. |
 | Task list / §5 | `scan_joints_line1_lift` no longer exists (retired 2026-08-13). Both `optimized_joints_line*.csv` now carry `lift_height: 150`, so **every joint-mode scan raises the lift 150 mm** and pose-mode scans still do not. |
-| Appendix / §7 | robot footprint is **0.90 x 0.70 m** (was 0.80 x 0.50), `wheel_radius` 0.0825 / `wheel_separation` 0.65, and `T_mb2fc` is **(0.55, 0, 0.300)** (was `(0.45, 0, 0.293)`). |
+| Appendix / §7 | robot footprint is **0.90 x 0.70 m** (was 0.80 x 0.50), `wheel_radius` 0.0825 / `wheel_separation` 0.65, and `T_mb2fc` is **(0.55, 0, 0.302) with the 1.3° tilt in its rotation, generated from robot.yaml** since 2026-09-15 (was `(0.45, 0, 0.293)`). |
 | Wherever wall clearance appears | `wall_dist_work_zone` is **0.45** (was 0.35). `wall_dist_zone_a` is **0.52** (was 0.6275) since the 2026-08-21 cell change. |
 | §7 / Appendix, transform block | `arm_body_offset_y` is **−0.100 m** — the arm mount was moved 100 mm toward the wall 2026-08-13, so `T_ab2mb` t is `(0, −0.100, −0.652)`. Explain that this corrects **pose mode only**. |
 | Wherever `camera_offset` appears | it is **0.55 m** (was 0.45, briefly 0.547) and it is the only key in the `robot:` block that any code reads. |
@@ -1564,6 +1590,64 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — The TF chain: no ROS TF exists; extrinsics.yaml now carries the physical (tilted) front_cam, and the chain picks the frame its detections are in
+
+User: "모바일 로봇의 tf 체인이 있잖아. 확인해줘", then "보정값들 다 tf
+matrix에 반영해줘 … tz 0.302 … 1.3° 틸트 반영, path_tag_locator도 수정".
+
+**What the check found (read-only on the live master).** There is no ROS
+TF chain for this robot: `/tf` is four disconnected islands — navifra's
+`odom → base_link` (50 Hz) and each camera driver's own static subtree
+(`front_cam_link`, `side_cam_link`, `hand_cam_link` roots) — no `map`,
+no `base_link → <camera>`, no arm (`robot_state_publisher`, `/joint_states`
+and `robot_description` are absent), no lift. Nothing in this workspace
+publishes TF. The actual chain lives in config matrices consumed by code:
+`map.yaml` tag → `/robot_pose` (`calculate_robot_pose`), `T_mb2fc`,
+`T_ab2mb` (= `robot.yaml arm_calibration` = the planner URDF's
+`mobile_to_base` under the 180° frame convention), `T_hc2ee.npz`, the
+URDF `vision_tip_joint` = `vision_tip_offset_mm`, and `/lifter/height`
+added at run time. Two inconsistencies: `T_mb2fc` tz 0.300 vs
+`ground_plane.height_m` 0.302, and no tilt in `T_mb2fc`. ⚠️ Also noted, not
+changed: navifra's `base_link` is the MOBILE base while the planner URDF's
+`base_link` is the ARM base (child of `mobile_base`) — running
+`robot_state_publisher` on that URDF next to the driver would give
+`base_link` two parents.
+
+**What changed.** `T_mb2fc` is now the physical camera: t (0.55, 0,
+0.302), R = diag(1,−1,−1) · inv(rot_xyz(roll, pitch, yaw)) with the
+2026-09-08 fit — GENERATED by `make_front_cam_extrinsics.py` from
+robot.yaml, comment in the yaml says so. The trap this creates and how it
+is closed is promoted to *Transform Parameters*: robot_camera_node's
+detections are LEVEL-frame while the correction is on, so
+`load_extrinsics_full()` derives `T_mb2fc_level`
+(`ground_plane.T_tilted_to_level`, new), selects per
+`locator.yaml detector.front_cam_frame` (`auto` → `ground_plane.enabled`),
+and refuses a stale yaml. Switched to it: `path_tag_locator_node`,
+`map_calibrator_node`, `error_budget.py`, `analyse_yaw_sweep.py`,
+`robot_sim/sim_node.py` (renders through the same choice);
+`verify_arm_pointing.py` keeps the physical matrix (raw frames) and says
+why. `load_extrinsics()` still returns the stored matrix, so
+`generate_calibration_artifacts.py` (T_ab2mb only) is untouched. Numerically
+the level frame is bit-for-bit the pre-change matrix except tz, so every
+calibration path behaves as before plus 2 mm of lens height.
+
+The tilt's sign was the thing to get right and it was settled against
+`GroundPlane` itself, not by reading: `to_ground` maps a camera ray r to
+ground coordinates Rᵀr, so the level camera's axes in the physical frame
+are the columns of R = rot_xyz(roll, pitch, yaw) — `T_tilted_to_level`.
+Verified offline only: `check_front_cam_extrinsics.py` (22 — stored ==
+generator to 3e-10; tx/tz invariants; auto/override selection; a level
+matrix, a 0.300 tz and a tilted matrix without a fit are all refused; a
+plain pinhole render through the physical matrix equals
+`GroundPlane.project` to 4e-7 px; RAW corners + physical and CORRECTED
+corners + level both land 40 random floor tags to 0.0000 mm / 0.00000°;
+the cross pairing is off 8.1 mm / 1.38°), plus `check_repose_from_corners`
+10, `check_ground_plane` 17, `error_budget.py -n 200` and
+`analyse_yaw_sweep.py --self-test` 4/4 under the new loader. Not run on the
+robot; the calibration nodes (`path_tag_locator.launch`) must be restarted
+to pick the yaml up. `catkin_make` is needed once for the two new
+`install(PROGRAMS)` entries, not for behaviour (Python only).
 
 ### 2026-09-14 — Run output moved into the workspace; old output kept or deleted
 

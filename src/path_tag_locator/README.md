@@ -35,7 +35,15 @@ T_B_world = T_A_world · T_A2B
 - **B**: path tag, observed by **front/floor camera** (mobile base).
 - `T_hc2ee`: hand-eye calibration (npz).
 - `T_ee2ab`: from live Fairino TCP pose.
-- `T_ab2mb`, `T_mb2fc`: platform-fixed geometry (yaml).
+- `T_ab2mb`, `T_mb2fc`: platform-fixed geometry (yaml). ⚠️ Since 2026-09-15
+  `T_mb2fc` is the PHYSICAL front_cam, 1.3° tilt included (generated from
+  robot.yaml by `scripts/make_front_cam_extrinsics.py`); the chain above runs
+  on `robot_camera_node`'s detections, which are re-imaged through a LEVEL
+  virtual camera while `robot.yaml robot_camera.ground_plane.front_cam` is
+  enabled — so the nodes use `T_mb2fc_level` from
+  `constants.load_extrinsics_full()` (`detector.front_cam_frame: auto`), and
+  only a tool re-detecting RAW frames uses the stored matrix. Check:
+  `scripts/check_front_cam_extrinsics.py`.
 
 ## Files
 
@@ -44,7 +52,7 @@ T_B_world = T_A_world · T_A2B
 | `srv/LocatePathTag.srv` | Service: request tag_b_id (or default), optional T_A_world override, optional save |
 | `config/locator.yaml` | Detections/arm topics, tag IDs/sizes, detector sizes, file paths |
 | `config/reference_tag.yaml` | Default T_A_world (pose or 4x4) |
-| `config/extrinsics.yaml` | T_AB2MB / T_MB2FC (row-major 4x4) |
+| `config/extrinsics.yaml` | T_AB2MB / T_MB2FC (row-major 4x4; T_MB2FC = physical tilted camera, GENERATED — see above) |
 | `config/handeye_calib.yaml` | Hand-eye calibration node config |
 | `config/hand_eye/T_hc2ee.npz` | 4x4 hand-eye calibration (produced by handeye_calib_node) |
 | `config/reference_tags.yaml` | Multi-ref-tag ground truth for batch map calibration |

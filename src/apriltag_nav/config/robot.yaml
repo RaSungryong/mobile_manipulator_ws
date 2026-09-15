@@ -923,6 +923,11 @@ robot_camera:
   # 0.2 m tag-held drive drifted ~1.3 mm. Re-measure with the same test
   # (ground_plane enabled is fine for that one — the residual drift is
   # then the error of this number).
+  # ⚠️ These four numbers are ALSO baked into path_tag_locator/config/
+  # extrinsics.yaml T_mb2fc (the physical, tilted camera; tz = height_m)
+  # by scripts/make_front_cam_extrinsics.py --apply. Re-run it after any
+  # edit here — the locator's loader refuses a matrix that no longer
+  # matches (0.01 deg / 1e-6 m) rather than apply the tilt twice.
   ground_plane:
     front_cam:
       enabled: true

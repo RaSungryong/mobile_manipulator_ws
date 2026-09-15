@@ -36,7 +36,7 @@ sys.path.insert(0, str(PKG / "src"))
 sys.path.insert(0, str(WS / "src" / "apriltag_nav" / "src"))
 
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
-from path_tag_locator.constants import load_extrinsics
+from path_tag_locator.constants import load_extrinsics_full
 from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m, \
     matrix_m_to_pose_fr5
 from path_tag_locator.hand_eye import load_T_hc2ee
@@ -101,7 +101,10 @@ def main():
         open(PKG / reffile))["reference_tags"]}
     ref = refs[entry["ref_tag_id"]]
 
-    T_ab2mb, T_mb2fc = load_extrinsics(str(PKG / "config/extrinsics.yaml"))
+    # The chain runs on robot_camera_node's detections: level frame while
+    # the ground-plane correction is on (T_mb2fc_chain picks it).
+    _ext = load_extrinsics_full(str(PKG / "config/extrinsics.yaml"))
+    T_ab2mb, T_mb2fc = _ext.T_ab2mb, _ext.T_mb2fc_chain
     T_hc2ee = load_T_hc2ee(str(PKG / "config/hand_eye/T_hc2ee.npz"))
 
     heading = ZONE_YAW[zone]

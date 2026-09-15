@@ -6,6 +6,7 @@ Configuration loaders.
 Reads ROS-style nested yaml/params and produces typed Python objects. Pure
 helpers — no ROS imports here, so the loaders work in unit-test scripts too.
 """
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,19 @@ class DetectorCfg:
     # detections.py's module docstring. Harmless when the correction is off
     # (the re-solve matches dt_apriltags' own estimate to ~0.2 deg).
     front_cam_repose_from_corners: bool = True
+    # Which front_cam frame the published detections are expressed in,
+    # i.e. which T_mb2fc the chain must use (2026-09-15, extrinsics.yaml
+    # now carries the PHYSICAL, tilted camera):
+    #   "auto"     — read robot.yaml robot_camera.ground_plane.front_cam
+    #                .enabled (the same file robot_camera_node reads):
+    #                enabled -> "level", off -> "physical"
+    #   "level"    — detections are the level virtual camera's (correction
+    #                on): chain uses T_mb2fc_level = T_mb2fc @ tilt
+    #   "physical" — raw detections (correction off, or a consumer that
+    #                re-detects raw frames): chain uses T_mb2fc as stored
+    # Getting this wrong applies the 1.3 deg tilt twice or not at all —
+    # ~7 mm of tag position at the 0.3 m lens height, 1.3 deg of yaw.
+    front_cam_frame: str = "auto"
 
 
 @dataclass
@@ -191,7 +205,13 @@ def load_locator_cfg(yaml_path) -> LocatorCfg:
 
 
 def load_extrinsics(yaml_path):
-    """Load T_AB2MB and T_MB2FC (both 4x4) from yaml row-major lists."""
+    """Load T_AB2MB and T_MB2FC (both 4x4) from yaml row-major lists.
+
+    T_MB2FC is the PHYSICAL front_cam optical frame as stored — since
+    2026-09-15 that includes the measured 1.3 deg tilt. A consumer of
+    robot_camera_node's ground-plane-corrected detections must NOT use it
+    directly: see :func:`load_extrinsics_full` and ``Extrinsics.T_mb2fc_chain``.
+    """
     with open(yaml_path, "r") as fh:
         d = yaml.safe_load(fh)
     T_ab2mb = np.asarray(d["T_ab2mb_row_major"], dtype=np.float64).reshape(4, 4)
@@ -199,6 +219,130 @@ def load_extrinsics(yaml_path):
     assert_rigid(T_ab2mb, name="T_ab2mb")
     assert_rigid(T_mb2fc, name="T_mb2fc")
     return T_ab2mb, T_mb2fc
+
+
+# Rotation of the level virtual front_cam in the mobile-base frame: x = image
+# right = forward, y = image down = robot right, z = optical axis = down.
+# This is what T_mb2fc's rotation WAS before the tilt went into it, and what
+# T_mb2fc_level's rotation must come out as.
+R_MB2FC_LEVEL = np.diag([1.0, -1.0, -1.0])
+
+# How far T_mb2fc @ tilt may deviate from R_MB2FC_LEVEL before the stored
+# matrix and robot.yaml's ground-plane fit are declared inconsistent.
+_LEVEL_TOL_RAD = math.radians(0.01)
+
+
+def load_front_cam_ground_plane(robot_yaml_path=None):
+    """robot.yaml ``robot_camera.ground_plane.front_cam`` as a dict, or None
+    when the block is absent. Defaults to the same file robot_camera_node
+    reads (apriltag_nav.paths.CONFIG_PATH), so "what frame are the
+    detections in" is answered by the publisher's own config."""
+    if robot_yaml_path is None:
+        from apriltag_nav.paths import CONFIG_PATH  # exec_depend
+        robot_yaml_path = CONFIG_PATH
+    with open(robot_yaml_path, "r") as fh:
+        d = yaml.safe_load(fh) or {}
+    gp = ((d.get("robot_camera") or {}).get("ground_plane") or {}).get("front_cam")
+    return dict(gp) if gp else None
+
+
+@dataclass
+class Extrinsics:
+    """Platform extrinsics plus the two front_cam frames (2026-09-15).
+
+    T_mb2fc        the PHYSICAL front_cam optical frame (tilted), as stored
+                   in extrinsics.yaml — right for anything that re-detects
+                   RAW frames (verify_arm_pointing, hand-eye tools).
+    T_mb2fc_level  the LEVEL virtual camera robot_camera_node re-images
+                   detections into (= T_mb2fc @ T_tilted_to_level(fit)) —
+                   right for a chain fed from /front_cam/tag_detections
+                   while the ground-plane correction is on. Rotation is
+                   exactly R_MB2FC_LEVEL; translation is the same lens
+                   centre.
+    T_mb2fc_chain  whichever of the two matches the detections the chain
+                   consumes (``front_cam_frame`` after "auto" resolution).
+    """
+    T_ab2mb: np.ndarray
+    T_mb2fc: np.ndarray
+    T_mb2fc_level: np.ndarray
+    T_mb2fc_chain: np.ndarray
+    front_cam_frame: str          # "level" | "physical" (resolved)
+    ground_plane: Optional[dict]  # robot.yaml block used for the derivation
+    note: str = ""
+
+    def as_tuple(self):
+        return self.T_ab2mb, self.T_mb2fc_chain
+
+
+def load_extrinsics_full(yaml_path, front_cam_frame="auto",
+                         ground_plane="auto", robot_yaml_path=None):
+    """Load extrinsics.yaml and derive the level front_cam frame.
+
+    ``ground_plane``: "auto" reads robot.yaml (see
+    :func:`load_front_cam_ground_plane`), a dict is used as given, None
+    means "no correction exists" (level == physical is then only true if
+    the stored matrix is level — checked).
+    ``front_cam_frame``: "auto" | "level" | "physical" (DetectorCfg).
+
+    Consistency is enforced, not assumed: the stored T_mb2fc must equal
+    R_MB2FC_LEVEL @ inv(tilt) to 0.01 deg and its tz must equal the fit's
+    ``height_m`` — otherwise the yaml was hand-edited out of step with
+    robot.yaml and the caller gets a ValueError naming
+    scripts/make_front_cam_extrinsics.py.
+    """
+    from apriltag_nav.ground_plane import T_tilted_to_level  # exec_depend
+
+    T_ab2mb, T_mb2fc = load_extrinsics(yaml_path)
+    if isinstance(ground_plane, str) and ground_plane == "auto":
+        ground_plane = load_front_cam_ground_plane(robot_yaml_path)
+
+    if ground_plane:
+        tilt = T_tilted_to_level(math.radians(float(ground_plane.get("roll_deg", 0.0))),
+                                 math.radians(float(ground_plane.get("pitch_deg", 0.0))),
+                                 math.radians(float(ground_plane.get("yaw_deg", 0.0))))
+        enabled = bool(ground_plane.get("enabled", False))
+        h = ground_plane.get("height_m")
+    else:
+        tilt = np.eye(4)
+        enabled = False
+        h = None
+    T_level = T_mb2fc @ tilt
+
+    # --- the stored matrix must agree with the fit it claims to embed.
+    R_err = T_level[:3, :3].T @ R_MB2FC_LEVEL
+    ang = math.acos(max(-1.0, min(1.0, (np.trace(R_err) - 1.0) / 2.0)))
+    if ang > _LEVEL_TOL_RAD:
+        raise ValueError(
+            "extrinsics.yaml T_mb2fc does not embed robot.yaml's front_cam "
+            "ground-plane fit: T_mb2fc @ tilt is %.3f deg from the level "
+            "camera. Regenerate it with "
+            "path_tag_locator/scripts/make_front_cam_extrinsics.py --apply "
+            "(never hand-edit the rotation)." % math.degrees(ang))
+    if h is not None and abs(float(T_mb2fc[2, 3]) - float(h)) > 1e-6:
+        raise ValueError(
+            "extrinsics.yaml T_mb2fc tz %.4f != robot.yaml ground_plane."
+            "front_cam.height_m %.4f — they are the same lens height; "
+            "regenerate with make_front_cam_extrinsics.py --apply."
+            % (float(T_mb2fc[2, 3]), float(h)))
+    T_level[:3, :3] = R_MB2FC_LEVEL  # exact, the check above bounds the residual
+
+    frame = (front_cam_frame or "auto").lower()
+    if frame == "auto":
+        frame = "level" if enabled else "physical"
+    if frame not in ("level", "physical"):
+        raise ValueError("front_cam_frame must be auto|level|physical, got %r"
+                         % front_cam_frame)
+    chain = T_level if frame == "level" else T_mb2fc
+    note = ("front_cam detections taken as %s (ground_plane %s, roll %+.3f "
+            "pitch %+.3f yaw %+.3f deg, lens %.3f m)"
+            % (frame, "ON" if enabled else "OFF",
+               float((ground_plane or {}).get("roll_deg", 0.0)),
+               float((ground_plane or {}).get("pitch_deg", 0.0)),
+               float((ground_plane or {}).get("yaw_deg", 0.0)),
+               float(T_mb2fc[2, 3])))
+    return Extrinsics(T_ab2mb=T_ab2mb, T_mb2fc=T_mb2fc, T_mb2fc_level=T_level,
+                      T_mb2fc_chain=chain, front_cam_frame=frame,
+                      ground_plane=ground_plane, note=note)
 
 
 def load_reference_tag(yaml_path) -> np.ndarray:

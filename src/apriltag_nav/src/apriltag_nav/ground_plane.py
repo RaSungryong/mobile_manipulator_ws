@@ -53,6 +53,34 @@ def rot_xyz(roll, pitch, yaw=0.0):
     return Rz @ Ry @ Rx
 
 
+def T_tilted_to_level(roll, pitch, yaw=0.0):
+    """4x4 pose of the LEVEL virtual camera expressed in the TILTED
+    (physical) camera's frame — the ground-plane fit as a rigid transform
+    (radians; translation zero, both cameras share the lens centre).
+
+    In path_tag_locator's T_X2Y convention (pose of Y in X):
+
+        T_mb2fc_level    = T_mb2fc_physical @ T_tilted_to_level(...)
+        T_mb2fc_physical = T_mb2fc_level    @ inv(T_tilted_to_level(...))
+
+    Why: `to_ground` maps a camera ray r to ground coordinates R^T r, i.e.
+    v_physical = R v_level with R = rot_xyz(roll, pitch, yaw), and the
+    level virtual camera's axes ARE the ground axes (x forward = image
+    right, y right = image down, z down). So the level camera's axes,
+    written in the physical camera's frame, are the columns of R.
+
+    Consumers: `robot_camera_node` publishes detections in the LEVEL
+    frame whenever the correction is enabled, so a chain that consumes
+    those detections needs T_mb2fc_level, while a consumer re-detecting
+    RAW frames needs the physical matrix. `extrinsics.yaml` carries the
+    physical one (2026-09-15); `path_tag_locator.constants.
+    load_extrinsics_full` derives the level one with this function.
+    """
+    T = np.eye(4)
+    T[:3, :3] = rot_xyz(float(roll), float(pitch), float(yaw))
+    return T
+
+
 class GroundPlane(object):
     """Pixel <-> floor mapping for one camera.
 

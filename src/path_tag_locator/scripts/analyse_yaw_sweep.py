@@ -178,14 +178,15 @@ def self_test():
     """
     sys.path.insert(0, os.path.join(PKG, "src"))
     from path_tag_locator.chain import compute_T_A2B
-    from path_tag_locator.constants import load_extrinsics
+    from path_tag_locator.constants import load_extrinsics_full
     from path_tag_locator.calibration.view_pose import compute_view_tcp
     from path_tag_locator.calibration.plan_io import load_reference_tags
     from path_tag_locator.geometry import rpy_deg_to_R, invert_T, \
         pose_fr5_to_matrix_m
 
     cfg = os.path.join(PKG, "config")
-    T_ab2mb, T_mb2fc_T = load_extrinsics(os.path.join(cfg, "extrinsics.yaml"))
+    _ext = load_extrinsics_full(os.path.join(cfg, "extrinsics.yaml"))
+    T_ab2mb, T_mb2fc_T = _ext.T_ab2mb, _ext.T_mb2fc_chain   # detections' frame
     T_hc2ee_T = np.load(os.path.join(cfg, "hand_eye", "T_hc2ee.npz"))["arr_0"]
     REFS = {k: v.T_world for k, v in load_reference_tags(
         os.path.join(cfg, "reference_tags.yaml")).items()}

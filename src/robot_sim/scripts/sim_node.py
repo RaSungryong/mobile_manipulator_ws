@@ -52,6 +52,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from robot_msgs.msg import AprilTagDetection, AprilTagDetectionArray, ArmState
 
 from apriltag_nav.paths import CONFIG_PATH, MAP_PATH
+from path_tag_locator.constants import load_extrinsics_full
 from path_tag_locator.hand_eye import load_T_hc2ee
 from path_tag_locator.geometry import (
     invert_T,
@@ -164,11 +165,15 @@ class SimNode:
             import rospkg
             ex_path = (rospkg.RosPack().get_path('path_tag_locator')
                        + '/config/extrinsics.yaml')
-        ex = yaml.safe_load(open(ex_path))
-        self.T_mb2fc = np.asarray(ex['T_mb2fc_row_major'],
-                                  dtype=float).reshape(4, 4)
-        self.T_ab2mb = np.asarray(ex['T_ab2mb_row_major'],
-                                  dtype=float).reshape(4, 4)
+        # extrinsics.yaml holds the PHYSICAL (tilted) front_cam. The sim
+        # stands in for robot_camera_node's OUTPUT, which is the LEVEL
+        # virtual camera while robot.yaml's ground-plane correction is on
+        # (and the raw tilted camera when it is off) — so render through
+        # the same matrix the consumers pick (constants.Extrinsics).
+        ext = load_extrinsics_full(ex_path, robot_yaml_path=CONFIG_PATH)
+        self.T_mb2fc = ext.T_mb2fc_chain
+        self.T_ab2mb = ext.T_ab2mb
+        rospy.loginfo('[sim] %s', ext.note)
         import rospkg
         ptl = rospkg.RosPack().get_path('path_tag_locator')
         self.T_hc2ee = load_T_hc2ee(

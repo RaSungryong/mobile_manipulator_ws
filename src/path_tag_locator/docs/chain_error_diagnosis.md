@@ -57,7 +57,9 @@ Sensitivity, forward-modelled through the real chain:
 ```
 radius large                       -> HAND-EYE     -> run handeye_calib
 radius ~0, but the normal session
-  shows a large absolute error     -> FRONT_CAM    -> re-fit T_mb2fc
+  shows a large absolute error     -> FRONT_CAM    -> re-fit the ground plane
+                                                     (tools/fit_front_cam_ground.py)
+                                                     -> robot.yaml -> make_front_cam_extrinsics.py
 ```
 
 ## Running it

@@ -37,6 +37,15 @@ path_tag_locator:
     # here (detections.pose_from_corners). robot_camera_node and the
     # on-robot-verified navigation behaviour are untouched.
     front_cam_repose_from_corners: true
+    # Which frame those detections are in, i.e. which T_mb2fc the chain
+    # uses (2026-09-15: extrinsics.yaml stores the PHYSICAL, 1.3 deg
+    # tilted camera; the level virtual camera is derived from it):
+    #   auto     -> robot.yaml ground_plane.front_cam.enabled ? level : physical
+    #   level    -> force T_mb2fc_level (detections are corrected)
+    #   physical -> force the stored T_mb2fc (raw detections)
+    # Leave on auto; the override exists for offline checks and for a
+    # robot_camera_node started with a different robot.yaml.
+    front_cam_frame: auto
 
   # arm_node proxy (replaces the old direct-SDK robot: block — this package
   # opens no Fairino RPC connection; arm_node owns the arm).

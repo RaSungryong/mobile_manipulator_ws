@@ -25,7 +25,7 @@ from path_tag_locator.align import tag_in_cam_report
 from path_tag_locator.arm_interface import ArmInterface
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
 from path_tag_locator.constants import (
-    load_extrinsics,
+    load_extrinsics_full,
     load_locator_cfg_from_dict,
     load_reference_tag,
 )
@@ -93,7 +93,16 @@ class PathTagLocatorNode:
         self.T_hc2ee = load_T_hc2ee(hand_eye_path)
         assert_rigid(self.T_hc2ee, name="T_hc2ee")
 
-        self.T_ab2mb, self.T_mb2fc = load_extrinsics(extrinsics_path)
+        # extrinsics.yaml stores the PHYSICAL (tilted) front_cam; the chain
+        # consumes robot_camera_node's detections, which are in the LEVEL
+        # virtual frame while the ground-plane correction is on — the
+        # loader picks the matching T_mb2fc (locator.yaml front_cam_frame).
+        self.extrinsics = load_extrinsics_full(
+            extrinsics_path,
+            front_cam_frame=getattr(self.cfg.detector, "front_cam_frame", "auto"))
+        self.T_ab2mb = self.extrinsics.T_ab2mb
+        self.T_mb2fc = self.extrinsics.T_mb2fc_chain
+        rospy.loginfo("path_tag_locator: %s", self.extrinsics.note)
         self.T_A_world_default = load_reference_tag(ref_tag_path)
         if np.allclose(self.T_A_world_default, np.eye(4), atol=1e-9):
             rospy.logwarn(

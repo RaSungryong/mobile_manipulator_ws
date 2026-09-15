@@ -36,7 +36,7 @@ from path_tag_locator.calibration.orchestrator import (
     OrchestratorCfg,
 )
 from path_tag_locator.constants import (
-    load_extrinsics,
+    load_extrinsics_full,
     load_locator_cfg_from_dict,
 )
 from path_tag_locator.geometry import assert_rigid
@@ -106,8 +106,15 @@ class MapCalibratorNode:
         # --- one-time loads: hand-eye + extrinsics + device proxies.
         self.T_hc2ee = load_T_hc2ee(_resolve_ros_path(self.locator_cfg.hand_eye_npz))
         assert_rigid(self.T_hc2ee, name="T_hc2ee")
-        self.T_ab2mb, self.T_mb2fc = load_extrinsics(
-            _resolve_ros_path(self.locator_cfg.extrinsics_yaml))
+        # PHYSICAL front_cam stored; the chain runs on robot_camera_node's
+        # LEVEL-frame detections while the ground-plane correction is on,
+        # so use the loader's per-config choice (see constants.Extrinsics).
+        self.extrinsics = load_extrinsics_full(
+            _resolve_ros_path(self.locator_cfg.extrinsics_yaml),
+            front_cam_frame=getattr(self.locator_cfg.detector, "front_cam_frame", "auto"))
+        self.T_ab2mb = self.extrinsics.T_ab2mb
+        self.T_mb2fc = self.extrinsics.T_mb2fc_chain
+        rospy.loginfo("[MapCalib] %s", self.extrinsics.note)
 
         # Arm through arm_node, base through mobile_node — this package
         # owns no hardware. ⚠️ Second commander of /mobile/goto_tag after
