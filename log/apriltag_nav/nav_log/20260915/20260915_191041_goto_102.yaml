@@ -1,0 +1,64 @@
+command: goto_102
+started_at: '2026-09-15T19:10:41.653'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1789467042.6681764
+  ros_time: 1789467042.6681795
+  stage: aligned
+  tag_id: 101
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 637.6401814289214
+  - 355.78425686567914
+  image_offset_px:
+  - -0.5569010906098129
+  - 2.80256741255414
+  tag_pose_m:
+  - -0.0002241737184179954
+  - 0.0011288440553326466
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0002241737184179954
+  - -0.0011288440553326466
+  camera_center_offset_from_tag_mm:
+  - 0.2241737184179954
+  - -1.1288440553326466
+  camera_center_offset_from_tag_norm_mm: 1.150887812642573
+  tag_edge_yaw_error_deg: 0.03931522153249034
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - -0.224
+  - 1.129
+  image_center_offset_norm_mm: 1.151
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws_20260902/log/path_tag_locator/map_world_20260915_190821.yaml
+    calibrated_tag_position_m:
+    - -1.7053888836282272
+    - -1.4440460137832092
+    - -0.07712702954587627
+    calibrated_tag_rpy_deg:
+    - -179.59904694195578
+    - 0.5360223756882894
+    - 0.10450826406357787
+    world_offset_from_calibrated_tag_m:
+    - 0.0002262323709350808
+    - -0.0011284332818692908
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 0.2262323709350808
+    - -1.1284332818692908
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.7051626512572922
+    - -1.4451744470650785
+    - -0.07712702954587627

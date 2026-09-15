@@ -1,0 +1,117 @@
+timestamp: '20260915_190943'
+success: true
+message: ok
+tag_a_id: 0
+tag_a_size_m: 0.09
+tag_b_id: 100
+tag_b_size_m: 0.09
+apriltag_family: tag36h11
+tcp_pose_mm_deg:
+- -1060.32666015625
+- 925.0584716796875
+- 86.6557388305664
+- 179.741455078125
+- -1.802833199501037
+- 48.41773223876953
+T_B_world_position_m:
+- -1.7131253819733234
+- -1.843780911346416
+- -0.08380869885826078
+T_B_world_rpy_deg:
+- 179.79754066186513
+- 0.10803882496431186
+- 0.1285918166123333
+camera_frame_note: 'camera optical frame: +x = image right, +y = image down, +z =
+  optical axis into the scene. position_m = tag centre relative to the camera centre
+  (x, y are the lateral error from the optical axis, z the range); rpy_deg = tag orientation
+  in that frame, ZYX intrinsic. Square-on tag: position [0, 0, z], rpy [0, 0, spin].'
+observations:
+  hand_cam_to_tag_a:
+    tag_id: 0
+    position_m:
+    - 9.7e-05
+    - -7.8e-05
+    - 0.505426
+    rpy_deg:
+    - 0.798244
+    - -0.689873
+    - -39.886385
+    xy_offset_m: 0.000125
+    z_distance_m: 0.505426
+    tilt_deg: 1.055029
+  front_cam_to_tag_b:
+    tag_id: 100
+    position_m:
+    - -0.002146
+    - -0.000111
+    - 0.302297
+    rpy_deg:
+    - -0.653014
+    - -0.456836
+    - 90.028041
+    xy_offset_m: 0.002149
+    z_distance_m: 0.302297
+    tilt_deg: 0.796942
+auto_align:
+  iterations: 3
+  xy_offset_m: 0.00011381020951164582
+  tilt_deg: 0.6213115037120938
+  final_tcp:
+  - -1060.3291015625
+  - 925.0563354492188
+  - 86.6544418334961
+  - 179.7417755126953
+  - -1.80395984649658
+  - 48.41794204711914
+  tag_in_cam:
+    position_m:
+    - 7.0e-06
+    - -0.000114
+    - 0.50542
+    rpy_deg:
+    - 0.132048
+    - -0.607118
+    - -39.861077
+    xy_offset_m: 0.000114
+    z_distance_m: 0.50542
+    tilt_deg: 0.621312
+  history:
+  - iteration: 1
+    position_m:
+    - 0.011304
+    - 0.00573
+    - 0.506022
+    rpy_deg:
+    - -0.512983
+    - -0.605219
+    - -39.852758
+    xy_offset_m: 0.012673
+    z_distance_m: 0.506022
+    tilt_deg: 0.793367
+  - iteration: 2
+    position_m:
+    - -0.000419
+    - -0.000681
+    - 0.505829
+    rpy_deg:
+    - -0.758204
+    - 0.955809
+    - -39.861025
+    xy_offset_m: 0.0008
+    z_distance_m: 0.505829
+    tilt_deg: 1.219996
+  - iteration: 3
+    position_m:
+    - 7.0e-06
+    - -0.000114
+    - 0.50542
+    rpy_deg:
+    - 0.132048
+    - -0.607118
+    - -39.861077
+    xy_offset_m: 0.000114
+    z_distance_m: 0.50542
+    tilt_deg: 0.621312
+  degraded: 'step 3 move failed, continuing with last reachable pose: move_cart failed:
+    move_cart failed: MoveL error 112 (target=[-1058.883907863968, 932.1413370565509,
+    87.27435770552586, 179.43962513862434, -1.2616547277862946, 48.413307299295354])'

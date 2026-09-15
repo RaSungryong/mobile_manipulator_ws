@@ -1,0 +1,64 @@
+command: GOTO 108
+started_at: '2026-09-15T14:58:30.234'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1789451911.6877363
+  ros_time: 1789451911.6877394
+  stage: aligned
+  tag_id: 112
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 640.4109040860617
+  - 353.34994718688176
+  image_offset_px:
+  - 2.2138215665304415
+  - 0.3682577337567636
+  tag_pose_m:
+  - 0.0008911467778590377
+  - 0.000148330260217629
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.0008911467778590377
+  - -0.000148330260217629
+  camera_center_offset_from_tag_mm:
+  - -0.8911467778590377
+  - -0.14833026021762902
+  camera_center_offset_from_tag_norm_mm: 0.9034071317987117
+  tag_edge_yaw_error_deg: 0.033346010632911316
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - 0.891
+  - 0.148
+  image_center_offset_norm_mm: 0.903
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws_20260902/log/path_tag_locator/map_world_20260914_192243.yaml
+    calibrated_tag_position_m:
+    - -1.7100402877684817
+    - 2.9448847360724573
+    - -0.07448370221352167
+    calibrated_tag_rpy_deg:
+    - 178.89969695363726
+    - 1.968155248739186
+    - -0.0332292784308609
+    world_offset_from_calibrated_tag_m:
+    - -0.0008912326536485307
+    - -0.00014781340553337088
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - -0.8912326536485308
+    - -0.14781340553337088
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.7109315204221303
+    - 2.944736922666924
+    - -0.07448370221352167

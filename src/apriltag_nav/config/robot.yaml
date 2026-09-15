@@ -1252,7 +1252,7 @@ keyence:
                               #   every step. 20 mm -> 10 -> 5 -> 2.5 -> ...
   retreat_step_mm:     3.0    # ~keyence_retreat_step_mm — cap when moving
                               #   AWAY from the surface (always safe)
-  activate_threshold:  20.0   # ~keyence_activate_threshold — |err| >= this
+  activate_threshold:  45.0   # ~keyence_activate_threshold — |err| >= this
                               #   is not trusted (was 5.0: the loop refused
                               #   anything beyond 5 mm and the scan then ran
                               #   at the wrong standoff). The sensor's own

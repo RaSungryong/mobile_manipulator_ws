@@ -1,0 +1,115 @@
+timestamp: '20260915_192834'
+success: true
+message: ok
+tag_a_id: 4
+tag_a_size_m: 0.09
+tag_b_id: 118
+tag_b_size_m: 0.09
+apriltag_family: tag36h11
+tcp_pose_mm_deg:
+- -296.0787658691406
+- 843.5050048828125
+- 84.42860412597656
+- -179.6498718261718
+- -0.1289302110671997
+- 18.39658546447754
+T_B_world_position_m:
+- 1.6835158255770093
+- -0.16102975233948152
+- -0.08227882082579045
+T_B_world_rpy_deg:
+- 178.51299118354018
+- -0.6118510484251672
+- -179.91044187763632
+camera_frame_note: 'camera optical frame: +x = image right, +y = image down, +z =
+  optical axis into the scene. position_m = tag centre relative to the camera centre
+  (x, y are the lateral error from the optical axis, z the range); rpy_deg = tag orientation
+  in that frame, ZYX intrinsic. Square-on tag: position [0, 0, z], rpy [0, 0, spin].'
+observations:
+  hand_cam_to_tag_a:
+    tag_id: 4
+    position_m:
+    - 0.000109
+    - -0.000249
+    - 0.510369
+    rpy_deg:
+    - -0.130971
+    - 0.381549
+    - 110.176525
+    xy_offset_m: 0.000272
+    z_distance_m: 0.510369
+    tilt_deg: 0.403402
+  front_cam_to_tag_b:
+    tag_id: 118
+    position_m:
+    - -0.000733
+    - 0.002985
+    - 0.302796
+    rpy_deg:
+    - -0.827891
+    - -0.053598
+    - 90.126299
+    xy_offset_m: 0.003073
+    z_distance_m: 0.302796
+    tilt_deg: 0.829624
+auto_align:
+  iterations: 3
+  xy_offset_m: 0.00023829982998793426
+  tilt_deg: 0.17172427333325715
+  final_tcp:
+  - -296.0761108398437
+  - 843.5068969726562
+  - 84.4334487915039
+  - -179.6483306884765
+  - -0.12896007299423218
+  - 18.39614677429199
+  tag_in_cam:
+    position_m:
+    - 8.7e-05
+    - -0.000222
+    - 0.510412
+    rpy_deg:
+    - -0.171706
+    - -0.002497
+    - 110.168709
+    xy_offset_m: 0.000238
+    z_distance_m: 0.510412
+    tilt_deg: 0.171724
+  history:
+  - iteration: 1
+    position_m:
+    - 0.008725
+    - 0.028102
+    - 0.510708
+    rpy_deg:
+    - -0.397864
+    - 0.808858
+    - 110.262435
+    xy_offset_m: 0.029425
+    z_distance_m: 0.510708
+    tilt_deg: 0.901408
+  - iteration: 2
+    position_m:
+    - -0.000882
+    - -0.00023
+    - 0.510454
+    rpy_deg:
+    - -0.099171
+    - -0.521005
+    - 110.202471
+    xy_offset_m: 0.000911
+    z_distance_m: 0.510454
+    tilt_deg: 0.530359
+  - iteration: 3
+    position_m:
+    - 8.7e-05
+    - -0.000222
+    - 0.510412
+    rpy_deg:
+    - -0.171706
+    - -0.002497
+    - 110.168709
+    xy_offset_m: 0.000238
+    z_distance_m: 0.510412
+    tilt_deg: 0.171724
+  degraded: null
