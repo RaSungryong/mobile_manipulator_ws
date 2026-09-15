@@ -1813,7 +1813,20 @@ read off the frame (≤ `--pivot-max` 12), the feedback is per-tag
 pivot snapshots may show one tag (`pair_pose_any`). Plant: F 5.4°,
 spread 10.8°, eight seeds tx rms 0.36 / max 0.62 mm, ty 0.5 / 1.2, yaw
 0.05 / 0.11°. Going beyond needs a different layout (tags offset
-laterally), not a bigger command.
+laterally), not a bigger command. **Second closed-loop run (14:22):**
+reached +8.7° (7.5° commanded → 4.3° executed, twice) and then stuck —
+the lateral cap took the smaller of the top/bottom rooms, so with the
+tags at the bottom edge it forbade the way BACK too, and the sweep ran
+at mobile_node's default 0.2 rad/s ("too fast"). Fixed: the cap is
+directional (image angle + ⇒ tags move DOWN the image, verified on the
+run's snapshots: +8.7° moved tag 149 from row 356 to 576), margin 12 mm
+(at 8.7° a tag 6 mm from the edge was still detected), the sweep keeps
+BOTH tags by default (F ≈ 6.4° here; `--pivot-one-tag` for ±8 with
+single-tag extremes), `--pivot-speed` 0.08 rad/s, a levelling pivot
+first (the tags back onto the principal row, first command capped to 3°
+until the sign is learned), and a pivot mobile_node reports short of its
+ODOM target (its `shortfall_frac` check, the normal case for this base)
+is progress rather than an abort.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
