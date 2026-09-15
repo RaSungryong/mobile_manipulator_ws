@@ -81,6 +81,7 @@ class RosBridge(QObject):
     battery_state = pyqtSignal(dict)
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
+    lamp_state = pyqtSignal(bool)       # /camera/lamp_state: VISION lamp on (latched)
     calib_progress = pyqtSignal(dict)
     handeye_progress = pyqtSignal(dict)     # /handeye_calib/progress (sweep events)
     scan_progress = pyqtSignal(dict)    # /arm/scan_progress events (per point)
@@ -147,6 +148,8 @@ class RosBridge(QObject):
                                                  queue_size=1)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
                                                queue_size=1)
+        self._pub_cam_lamp = rospy.Publisher('/camera/set_lamp', Bool,
+                                             queue_size=1)
         self._pub_lift_mm = rospy.Publisher('/lifter/height_cmd', Float32,
                                             queue_size=1)
         self._pub_mobile_move = rospy.Publisher('/mobile/move_cmd', String,
@@ -180,6 +183,7 @@ class RosBridge(QObject):
                   callback_args=self.lift_state, queue_size=1)
         self._sub('/mobile/state', String, self._cb_mobile, queue_size=1)
         self._sub('/camera/state', String, self._cb_camera_state, queue_size=1)
+        self._sub('/camera/lamp_state', Bool, self._cb_lamp_state, queue_size=1)
         self._sub('/bms/state', BatteryState, self._cb_battery, queue_size=1)
         self._sub('/safety/estop', Bool, self._cb_estop, queue_size=1)
         # Per-tag status lines from a running calibration session. Larger
@@ -342,6 +346,11 @@ class RosBridge(QObject):
             return
         self._emit(self.camera_state, msg.data)
 
+    def _cb_lamp_state(self, msg):
+        if not self._alive:
+            return
+        self._emit(self.lamp_state, bool(msg.data))
+
     def _cb_calib_progress(self, msg):
         """Event stream, not state: emit without caching (see subscriber)."""
         if not self._alive:
@@ -460,6 +469,17 @@ class RosBridge(QObject):
     # ==========================================================
     # CAMERA + INFERENCE
     # ==========================================================
+    def set_vision_lamp(self, on):
+        """Ask basler_camera_node to HOLD the VISION lamp on (or release it).
+
+        Same ownership rule as set_camera_active: the node drives the relay,
+        opens the device for the hold, and drops the hold the moment the
+        device closes (idle, release, shutdown). /camera/lamp_state reports
+        the truth back; the UI checkbox follows that, not its own click.
+        """
+        self._pub_cam_lamp.publish(Bool(bool(on)))
+        self.log.emit(f'[UI] VISION lamp hold {"on" if on else "off"} requested')
+
     def set_camera_active(self, active):
         """Ask basler_camera_node to hold the device open (or release it).
 

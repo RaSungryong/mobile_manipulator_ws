@@ -1124,6 +1124,30 @@ shutter is open. So:
   adjustment instead of adding to capture time, and releases it when the scan
   ends or is cancelled. The lamp is untouched by pre-open — it stays bracketed
   with the shutter inside the capture service.
+- **Operator lamp HOLD (2026-09-15):** `/camera/set_lamp` (Bool) makes the
+  node hold the lamp on for aiming with the live preview — robot_ui's
+  "VISION lamp" box on the Collect tab, which follows the latched
+  `/camera/lamp_state` rather than its own click. The hold opens the device
+  and is dropped by `_close_locked` whoever closes it (idle timer, preview
+  off, STOP ALL, shutdown), so the lamp still cannot outlive the shutter; a
+  capture under a hold neither toggles nor flushes.
+- ⚠️ **Black frames after lamp-on — a timing defect, fixed 2026-09-15.** The
+  camera free-runs at 5 fps under `GrabStrategy_LatestImageOnly`, and the
+  acA5472's readout + GigE transfer of a 20 MB frame takes about the whole
+  200 ms period, so the frame `RetrieveResult` returns right after
+  `vision_led(True)` + the 150 ms warmup was EXPOSED (4 ms, gain 0) before
+  the lamp: completely black. The operator saw it in bursts; a survey of
+  240 of the 1273 scan frames of 2026-09-14 found **7.1 % black (mean
+  < 5/255)**, every one scored **Ra ≈ 0.082** — the model's answer to a
+  black image, so those Ra map rows are wrong. Fix in `_handle_capture`:
+  `lamp_flush_frames` (1) frames discarded after this call switched the
+  lamp on, and `_grab_burst` re-grabs any lamp-on frame with mean <
+  `dark_frame_mean` (4.0) up to `dark_frame_retries` (2) times (a slow
+  relay); lamp-off preview frames are never re-grabbed. The response
+  message says what happened (`flushed 1 pre-lamp frame`, `1 dark frame
+  re-grabbed`, `lamp held`). Cost: one extra frame (~200 ms) per lamp-on
+  capture. `tools/check_basler_lamp.py` reproduces the defect against a
+  one-period-delayed camera model and pins the fix.
 
 LED ownership is split by channel: `STATUS_{red,green,blue}` → `task_executor`,
 `VISION` → `basler_camera_node`. Use `devices.shutdown(leds='status')` from any
@@ -1590,6 +1614,50 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — Collect tab VISION lamp switch; black frames in bursts explained and fixed
+
+User: "UI 收集数据上添加 vision 的照明开关，还有在连续拍照时会发生一部分完全黑
+的图像是怎么回事". Two things, the second more important than it looked.
+
+**The black frames.** Read from the capture path, then checked against
+data: `camera_interface` runs the Basler free-running (Continuous, 5 fps,
+4 ms exposure, gain 0) with `GrabStrategy_LatestImageOnly`; the node turns
+the lamp on, sleeps `warmup_s` 150 ms and calls `RetrieveResult`, which
+hands back the newest COMPLETED frame — and on this 20 MB GigE part a frame
+completes ~200 ms after it was exposed, so that frame was exposed before
+the lamp: black. In a burst only the first frame is affected; over many
+single-frame captures it is a fraction of them. The survey of yesterday's
+scan frames (`results/scan_images/20260914_flat_three_runs`, 240 sampled)
+puts it at **7.1 % black**, and every black frame carries **Ra ≈ 0.082**
+(0.0802–0.0897): the ONNX model's constant answer to a black input. So
+the same defect has been in every TASK scan, silently — a Ra map row at
+~0.082 with `success` is the signature. Fix: flush `lamp_flush_frames`
+after lamp-on plus a mean-intensity dark check with bounded re-grabs;
+promoted to the camera-lifecycle section. Not changed: the exposure — the
+frames are dim overall (median mean 18/255) but that is what the model was
+trained on, and the user did not ask.
+
+**The lamp switch.** `basler_camera_node` stays the sole owner:
+`/camera/set_lamp` (Bool) holds the lamp on, `/camera/lamp_state` (latched
+Bool) reports it, the hold opens the device and ends whenever the device
+closes. robot_ui: "VISION lamp" checkbox next to Live preview (follows
+`lamp_state`; STOP ALL releases it), bridge `set_vision_lamp` /
+`lamp_state`. Under a hold a capture uses the lamp as it is (no toggling,
+no flush, message `lamp held`).
+
+Verified offline only: new `tools/check_basler_lamp.py` (18 — the old
+behaviour reproduces a black first frame against the delayed-camera
+model; flush fixes it; a relay that lights 2 frames late is caught by the
+re-grab; retries bounded; lamp-off frames never re-grabbed; hold opens /
+lights / publishes, capture under hold neither toggles nor flushes,
+release / close / shutdown all end with the lamp off) and
+`check_task_list_ui.py` 55 → **61**. Not run on the robot;
+`basler_camera_node` and robot_ui restart required. First thing to watch:
+`captured 1/1 (flushed 1 pre-lamp frame)` in the node log, and no more
+Ra ≈ 0.082 rows in a scan CSV. ⚠️ The three Ra maps of 2026-09-14 in
+`results/ra_maps` should be re-checked: rows at Ra ≈ 0.082 are black
+frames, not measurements.
 
 ### 2026-09-15 — front_cam pose calibration as a procedure: `tools/calib_front_cam_pose.py` (tx, ty, yaw, roll, pitch, height) + the rotation-centre question
 

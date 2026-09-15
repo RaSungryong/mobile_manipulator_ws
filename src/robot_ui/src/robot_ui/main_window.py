@@ -406,8 +406,9 @@ class MainWindow(QMainWindow):
             'The Basler is kept closed between captures (heat, sensor life, '
             'and the VISION lamp must only be lit while the shutter is open). '
             'Preview asks basler_camera_node to hold it open and polls the '
-            'capture service with the lamp OFF — use it to aim, then turn it '
-            'off. The UI never opens the device itself.')
+            'capture service; "VISION lamp" holds the lamp on for aiming and '
+            'is released automatically when the camera closes. The UI never '
+            'opens the device or drives the lamp itself.')
         note.setWordWrap(True)
         note.setStyleSheet('color:#888;')
         preview_layout.addWidget(note)
@@ -416,6 +417,17 @@ class MainWindow(QMainWindow):
         self.chk_preview = QCheckBox('Live preview')
         self.chk_preview.toggled.connect(self._on_preview_toggled)
         row.addWidget(self.chk_preview)
+        # Lamp HOLD for aiming (2026-09-15). The box shows /camera/lamp_state,
+        # not its own click: a hold the node refused, or dropped when the
+        # device closed, unticks it.
+        self.chk_lamp = QCheckBox('VISION lamp')
+        self.chk_lamp.setToolTip(
+            'Hold the VISION lamp on while aiming (the preview is otherwise '
+            'lamp-off). basler_camera_node drives the relay and turns it off '
+            'again whenever the camera closes — idle timeout, preview off, '
+            'STOP ALL. Captures taken while held use the lamp as it is.')
+        self.chk_lamp.toggled.connect(self._on_lamp_toggled)
+        row.addWidget(self.chk_lamp)
         row.addWidget(QLabel('rate'))
         self.spin_preview_hz = QDoubleSpinBox()
         # 5 Hz is the sensor's own ceiling — an acA5472-5gm is a 5 fps part, so
@@ -1269,6 +1281,7 @@ class MainWindow(QMainWindow):
         self.bridge.battery_state.connect(self._on_battery)
         self.bridge.estop_state.connect(self._on_estop)
         self.bridge.camera_state.connect(self._on_camera_state)
+        self.bridge.lamp_state.connect(self._on_lamp_state)
         self.bridge.calib_progress.connect(self._on_calib_progress)
         self.bridge.scan_progress.connect(self._on_scan_progress)
         self.bridge.handeye_progress.connect(self._on_handeye_progress)
@@ -1533,6 +1546,20 @@ class MainWindow(QMainWindow):
     def _on_camera_state(self, state):
         self.lbl_camera.setText(f'CAM {state}')
 
+    def _on_lamp_toggled(self, on):
+        if getattr(self, '_lamp_from_node', False):
+            return          # reflecting the node's state, not a click
+        self.bridge.set_vision_lamp(on)
+
+    def _on_lamp_state(self, on):
+        """/camera/lamp_state is the truth; the checkbox follows it."""
+        self._lamp_from_node = True
+        try:
+            self.chk_lamp.setChecked(bool(on))
+        finally:
+            self._lamp_from_node = False
+        self._tint(self.lbl_camera, '#665500' if on else None)
+
     @staticmethod
     def _tint(label, colour):
         base = 'padding:4px 10px; border:1px solid #555;'
@@ -1678,6 +1705,8 @@ class MainWindow(QMainWindow):
         self.bridge.send_task_command('STOP')
         self._run(self.bridge.mobile_stop, label='mobile stop')
         self._run(self.bridge.lift_stop, label='lift stop')
+        if self.chk_lamp.isChecked():
+            self.chk_lamp.setChecked(False)
         if self.chk_preview.isChecked():
             self.chk_preview.setChecked(False)
 
@@ -1693,7 +1722,9 @@ class MainWindow(QMainWindow):
         if on:
             self.bridge.set_camera_active(True)
             self._preview_timer.start(int(1000 / self.spin_preview_hz.value()))
-            self.append_log('[UI] preview on — basler held open, lamp off')
+            self.append_log('[UI] preview on — basler held open'
+                            + (' (lamp held on)' if self.chk_lamp.isChecked()
+                               else ', lamp off'))
         else:
             self._preview_timer.stop()
             self.bridge.set_camera_active(False)

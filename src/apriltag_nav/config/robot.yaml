@@ -855,6 +855,19 @@ camera:
   delay_between_s: 0.2        # delay between frames inside one burst
   use_vision_led: true        # light the VISION lamp around the grab
   warmup_s: 0.15              # settle time after lamp on / grabbing start
+  # BLACK FRAMES after lamp-on (operator report 2026-09-15, "some frames in a
+  # burst are completely black"): the camera free-runs at 5 fps with
+  # GrabStrategy_LatestImageOnly, and the acA5472's readout + GigE transfer
+  # of a 20 MB frame takes about the whole 200 ms period, so the frame
+  # RetrieveResult hands back right after the lamp came on was EXPOSED
+  # (4 ms) before it — unlit = black at gain 0. lamp_flush_frames discards
+  # that many frames after this capture switched the lamp on; dark_frame_mean
+  # re-grabs any lamp-on frame whose mean intensity is below it (safety net
+  # for relay latency), dark_frame_retries times at most. Neither applies
+  # to lamp-off preview frames.
+  lamp_flush_frames: 1
+  dark_frame_mean: 4.0        # 0..255; 0 disables the check
+  dark_frame_retries: 2
   grab_timeout_ms: 5000       # per-frame RetrieveResult timeout
   capture_timeout_s: 20.0     # client-side wait_for_service timeout
   publish_last: true          # also echo frames on /basler/image_raw (debug)

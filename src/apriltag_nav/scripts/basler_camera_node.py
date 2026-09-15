@@ -28,6 +28,15 @@ Service:
   /camera/capture      robot_msgs/CaptureImages
 Topics:
   /camera/set_active   std_msgs/Bool   in   — force open (true) / close (false)
+  /camera/set_lamp     std_msgs/Bool   in   — HOLD the VISION lamp on (true) /
+                                            release it (false). For aiming with
+                                            the live preview (2026-09-15). The
+                                            hold opens the device and ends
+                                            whenever the device closes (idle,
+                                            set_active false, shutdown), so
+                                            the lamp still cannot outlive the
+                                            shutter.
+  /camera/lamp_state   std_msgs/Bool   out  — latched: lamp currently on
   /camera/state        std_msgs/String out  — "closed" | "open" | "capturing"
   /basler/image_raw    sensor_msgs/Image out — last captured frame, for debug
                                                only; not a continuous stream
@@ -39,6 +48,19 @@ ROS parameters (defaults come from robot.yaml `camera:` when present):
                              (0 = close immediately after every capture)
   ~grab_timeout_ms   (int)   per-frame RetrieveResult timeout
   ~warmup_s          (float) settle time after lamp on / grabbing start
+  ~lamp_flush_frames (int)   frames DISCARDED after this call switched the lamp
+                             on (default 1). The camera free-runs at 5 fps with
+                             GrabStrategy_LatestImageOnly, so the first
+                             RetrieveResult after lamp-on hands back a frame
+                             that was EXPOSED before the lamp (the acA5472's
+                             readout + GigE transfer of a 20 MB frame is ~the
+                             whole 200 ms period, i.e. every delivered frame is
+                             ~200 ms old): a completely black image. Seen by
+                             the operator in bursts, 2026-09-15.
+  ~dark_frame_mean   (float) with the lamp on, a frame whose mean intensity is
+                             under this (0..255) is treated as exposed unlit
+                             and grabbed again (default 4.0; 0 disables)
+  ~dark_frame_retries (int)  how many extra grabs per frame (default 2)
   ~publish_last      (bool)  also publish each frame on /basler/image_raw
 """
 
@@ -76,6 +98,9 @@ class BaslerCameraNode:
         self._warmup_s        = float(p('warmup_s', 0.15))
         self._publish_last    = bool(p('publish_last', True))
         self._service_name    = p('service', '/camera/capture')
+        self._lamp_flush_frames = int(p('lamp_flush_frames', 1))
+        self._dark_frame_mean   = float(p('dark_frame_mean', 4.0))
+        self._dark_frame_retries = int(p('dark_frame_retries', 2))
 
         self._bridge = CvBridge()
         self._camera = CameraInterface()
@@ -88,12 +113,23 @@ class BaslerCameraNode:
         # VISION lamp lives here, with the shutter it belongs to.
         self._devices = NavifraDevices(nav_cfg)
 
+        # Lamp HOLD (operator aiming). Only ever true while the device is
+        # open; _close_locked drops it. _lamp_on mirrors what was last sent
+        # to the relay so the state topic and the capture bracket agree.
+        self._lamp_hold = False
+        self._lamp_on = False
+
         self._state_pub = rospy.Publisher('/camera/state', String,
                                           queue_size=1, latch=True)
+        self._lamp_pub = rospy.Publisher('/camera/lamp_state', Bool,
+                                         queue_size=1, latch=True)
         self._image_pub = rospy.Publisher('/basler/image_raw', Image,
                                           queue_size=1)
         rospy.Subscriber('/camera/set_active', Bool, self._cb_set_active,
                          queue_size=1)
+        rospy.Subscriber('/camera/set_lamp', Bool, self._cb_set_lamp,
+                         queue_size=1)
+        self._publish_lamp()
 
         self._srv = rospy.Service(self._service_name, CaptureImages,
                                   self._handle_capture)
@@ -111,6 +147,42 @@ class BaslerCameraNode:
             self._state_pub.publish(String(state))
         except Exception:
             pass
+
+    def _publish_lamp(self):
+        try:
+            self._lamp_pub.publish(Bool(self._lamp_on))
+        except Exception:
+            pass
+
+    def _set_lamp_locked(self, on):
+        """Drive the VISION relay and publish the state. Caller holds the lock."""
+        on = bool(on)
+        try:
+            self._devices.vision_led(on)
+            self._lamp_on = on
+        except Exception as e:
+            rospy.logerr(f"[BaslerCamera] VISION lamp {'on' if on else 'off'} failed: {e}")
+        self._publish_lamp()
+
+    def _cb_set_lamp(self, msg):
+        want = bool(msg.data)
+        with self._lock:
+            if want:
+                # A held lamp needs an open shutter to belong to: opening the
+                # device is what makes the idle timer / close path own the
+                # lamp's lifetime too.
+                self._cancel_idle_timer()
+                if not self._open_locked():
+                    rospy.logwarn("[BaslerCamera] lamp hold refused: camera open failed")
+                    return
+                self._lamp_hold = True
+                self._set_lamp_locked(True)
+                rospy.loginfo("[BaslerCamera] VISION lamp HELD on (operator)")
+            else:
+                self._lamp_hold = False
+                self._set_lamp_locked(False)
+                rospy.loginfo("[BaslerCamera] VISION lamp hold released")
+                self._arm_idle_timer()
 
     # ==========================================================
     # DEVICE LIFECYCLE
@@ -139,6 +211,11 @@ class BaslerCameraNode:
         """
         if not self._is_open:
             return
+        # The lamp never outlives the shutter: a hold ends here, whoever
+        # closed the device (idle timer, set_active false, shutdown).
+        if self._lamp_hold or self._lamp_on:
+            self._lamp_hold = False
+            self._set_lamp_locked(False)
         try:
             self._camera.stop_grabbing()
             self._camera.close()
@@ -206,11 +283,13 @@ class BaslerCameraNode:
                 return resp
 
             self._publish_state('capturing')
-            led_on = False
+            led_on = False          # switched on BY THIS CALL (so off after)
+            lamp_lit = self._lamp_hold or self._lamp_on
             try:
-                if use_led:
-                    self._devices.vision_led(True)
+                if use_led and not lamp_lit:
+                    self._set_lamp_locked(True)
                     led_on = True
+                    lamp_lit = True
 
                 # The warmup covers two settling effects, and only one of them
                 # applies to every call: the VISION lamp reaching brightness,
@@ -223,11 +302,22 @@ class BaslerCameraNode:
                 # the whole 200 ms budget, spent settling a lamp that is not
                 # on. Scan captures are unaffected: they use the lamp, so they
                 # still warm up.
-                needs_warmup = use_led or not was_open
+                needs_warmup = led_on or not was_open
                 if self._warmup_s > 0 and needs_warmup:
                     rospy.sleep(self._warmup_s)
 
-                frames = self._grab_burst(n, delay)
+                # Frames already in flight were exposed BEFORE the lamp came
+                # on (free-running 5 fps camera, LatestImageOnly, ~200 ms of
+                # readout + GigE transfer per frame): the first RetrieveResult
+                # after lamp-on is a black image. Throw those away; the dark
+                # check in _grab_burst is the safety net for a slow relay.
+                flushed = 0
+                if led_on:
+                    for _ in range(max(0, self._lamp_flush_frames)):
+                        if self._camera.grab_frame(timeout=self._grab_timeout_ms) is not None:
+                            flushed += 1
+
+                frames, dark_retries = self._grab_burst(n, delay, lamp_lit)
             except Exception as e:
                 rospy.logerr(f"[BaslerCamera] Capture failed: {e}")
                 resp.success = False
@@ -237,10 +327,7 @@ class BaslerCameraNode:
                 # Lamp off before anything else can fail. The topic is latched,
                 # so a leaked "on" would stay lit indefinitely.
                 if led_on:
-                    try:
-                        self._devices.vision_led(False)
-                    except Exception as e:
-                        rospy.logerr(f"[BaslerCamera] VISION lamp off failed: {e}")
+                    self._set_lamp_locked(False)
                 self._publish_state('open' if self._is_open else 'closed')
                 self._arm_idle_timer()
 
@@ -253,13 +340,42 @@ class BaslerCameraNode:
                 resp.images.append(f)
             resp.success = True
             resp.message = f"captured {len(frames)}/{n}"
+            extras = []
+            if flushed:
+                extras.append(f"flushed {flushed} pre-lamp frame{'s' if flushed != 1 else ''}")
+            if dark_retries:
+                extras.append(f"{dark_retries} dark frame{'s' if dark_retries != 1 else ''} re-grabbed")
+            if lamp_lit and not led_on:
+                extras.append("lamp held")
+            if extras:
+                resp.message += " (" + ", ".join(extras) + ")"
             return resp
 
-    def _grab_burst(self, n, delay):
-        """Grab n frames as ROS Images. Skips failed grabs rather than aborting."""
+    def _is_dark(self, frame):
+        """Mean intensity on a 1/64 subsample — a lamp-on frame under
+        dark_frame_mean was exposed unlit (stale buffer / relay latency)."""
+        try:
+            return float(frame[::8, ::8].mean()) < self._dark_frame_mean
+        except Exception:
+            return False
+
+    def _grab_burst(self, n, delay, lamp_lit=False):
+        """Grab n frames as ROS Images. Skips failed grabs rather than aborting.
+        With the lamp lit, a black frame is re-grabbed up to dark_frame_retries
+        times. Returns (frames, dark_retries_used)."""
         out = []
+        dark_retries = 0
         for i in range(n):
             frame = self._camera.grab_frame(timeout=self._grab_timeout_ms)
+            tries = 0
+            while (frame is not None and lamp_lit and self._dark_frame_mean > 0
+                   and tries < self._dark_frame_retries and self._is_dark(frame)):
+                tries += 1
+                dark_retries += 1
+                rospy.logwarn(f"[BaslerCamera] Sample {i + 1}/{n}: frame exposed "
+                              f"unlit (mean < {self._dark_frame_mean}), "
+                              f"re-grabbing ({tries}/{self._dark_frame_retries})")
+                frame = self._camera.grab_frame(timeout=self._grab_timeout_ms)
             if frame is None:
                 rospy.logwarn(f"[BaslerCamera] Sample {i + 1}/{n} grab failed")
             else:
@@ -279,7 +395,7 @@ class BaslerCameraNode:
                         rospy.logwarn(f"[BaslerCamera] debug publish failed: {e}")
             if i < n - 1 and delay > 0:
                 rospy.sleep(delay)
-        return out
+        return out, dark_retries
 
     # ==========================================================
     # SHUTDOWN
@@ -287,7 +403,7 @@ class BaslerCameraNode:
     def shutdown(self):
         with self._lock:
             self._cancel_idle_timer()
-            self._close_locked()
+            self._close_locked()      # drops a lamp hold too
         try:
             self._devices.vision_led(False)
         except Exception:

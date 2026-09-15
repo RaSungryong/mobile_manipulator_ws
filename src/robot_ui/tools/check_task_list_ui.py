@@ -37,6 +37,7 @@ class FakeBridge(QObject):
     battery_state = pyqtSignal(dict)
     estop_state = pyqtSignal(bool)
     camera_state = pyqtSignal(str)
+    lamp_state = pyqtSignal(bool)
     calib_progress = pyqtSignal(dict)
     handeye_progress = pyqtSignal(dict)
     scan_progress = pyqtSignal(dict)
@@ -323,6 +324,28 @@ def main():
     bridge.calls.clear()
     check(click(arm_tab, 'Cancel'), 'Cancel button found next to Auto standoff')
     check(('arm_cancel',) in bridge.calls, 'Cancel publishes the arm cancel')
+
+    print('== VISION lamp hold (Collect tab, 2026-09-15)')
+    bridge.calls.clear()
+    check(not win.chk_lamp.isChecked(), 'lamp box starts unticked')
+    win.chk_lamp.setChecked(True)
+    app.processEvents()
+    check(('set_vision_lamp', True) in bridge.calls, 'ticking the box asks the node to hold the lamp')
+    bridge.calls.clear()
+    bridge.lamp_state.emit(False)          # node refused / device closed
+    app.processEvents()
+    check(not win.chk_lamp.isChecked(), 'lamp_state false from the node unticks the box')
+    check(not any(c[0] == 'set_vision_lamp' for c in bridge.calls),
+          'reflecting the node state sends no command back')
+    bridge.lamp_state.emit(True)
+    app.processEvents()
+    check(win.chk_lamp.isChecked(), 'lamp_state true ticks it')
+    bridge.calls.clear()
+    click(win.chk_lamp.parentWidget().parentWidget(), 'STOP ALL') or win._on_stop_all()
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 2.0 and ('set_vision_lamp', False) not in bridge.calls:
+        app.processEvents(); _time.sleep(0.02)
+    check(('set_vision_lamp', False) in bridge.calls, 'STOP ALL releases the lamp hold')
 
     win.close()
     print(f'\n{N_OK} ok, {N_FAIL} failed')
