@@ -43,7 +43,7 @@ Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,
    parsed — stop and report.
 2. **Drive the same corridor as 2026-09-08 21:15** (`GOTO 117 → 120 →
    123`, then back to `114`) and compare the `aligned` records in
-   `~/.ros/apriltag_nav/nav_log/<day>/` with yesterday's: forward lateral
+   `log/apriltag_nav/nav_log/<day>/` with yesterday's: forward lateral
    was +8.8 ± 1.3 mm and reverse −11.6 ± 1.6 mm on EVERY hop; both should
    now be within a few mm with no direction-dependent sign. Yaw at rest
    (±0.2°) and fore-aft (+2…+5 mm forward, 155–158 mm reverse) were
