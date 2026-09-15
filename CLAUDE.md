@@ -1878,7 +1878,12 @@ at the stop, ~1 mm while steering at 0.033 m/s. Now
 records, so the next records show the true age. Not fixed: the node's
 latency itself — check it with one overlay subscriber, and whether the
 rectified overlay (`GroundPlane.rectify`, cv2.remap per frame per
-subscriber) is what costs the 0.24 s.
+subscriber) is what costs the 0.24 s. **A/B driven the same hour (user):
+with the compensation OFF the forward stops rested +1.3…+3.3 mm PAST the
+tag (mean +2.3; reverse 3.5–4.6 mm further than the trigger) against
+−0.2…−2.6 mm (mean −1.0) with it ON on the same lane an hour earlier —
+a 3.3 mm difference = the 0.33 s frame age × the 0.01 m/s stop speed,
+exactly. The raw ages now recorded: 0.30–0.36 s. Kept ON.**
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
