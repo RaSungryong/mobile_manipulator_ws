@@ -141,6 +141,12 @@ class ArmControllerNode:
         rospy.Subscriber('/arm/move_cart', String, self._cb_move_cart,
                          queue_size=1)
         rospy.Subscriber('/arm/jog_cmd', String, self._cb_jog, queue_size=1)
+        # On-demand Keyence standoff from the current pose (robot_ui's
+        # distance-sensor assist, 2026-09-15). JSON {"target_mm": 10.0}
+        # (optional). Completion through motion_seq like move_cart / jog;
+        # cancel through /arm/cancel like every other motion.
+        rospy.Subscriber('/arm/standoff', String, self._cb_standoff,
+                         queue_size=1)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
 
         self._publish_status('idle')
@@ -330,6 +336,29 @@ class ArmControllerNode:
             except Exception as e:
                 rospy.logerr(f"[ArmNode] jog failed: {e}")
                 self._bump(False, f"jog exception: {e}")
+            finally:
+                self._publish_status('idle')
+
+    def _cb_standoff(self, msg):
+        target = None
+        try:
+            req = json.loads(msg.data) if msg.data.strip() else {}
+            if req.get('target_mm') is not None:
+                target = float(req['target_mm'])
+        except Exception as e:
+            self._bump(False, f"bad /arm/standoff JSON: {e}")
+            return
+        self._start_worker(self._run_standoff, (target,), 'standoff')
+
+    def _run_standoff(self, target):
+        with self._exec_lock:
+            self._publish_status('busy')
+            try:
+                ok, message, _ = self.arm.adjust_standoff(target)
+                self._bump(ok, message)
+            except Exception as e:
+                rospy.logerr(f"[ArmNode] standoff failed: {e}")
+                self._bump(False, f"standoff exception: {e}")
             finally:
                 self._publish_status('idle')
 

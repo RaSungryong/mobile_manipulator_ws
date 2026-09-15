@@ -326,5 +326,66 @@ check(any(c[0] == 'IK' for c in robot.calls) and not any(c[0] == 'IKref' for c i
 check(events()[2]['phase'] == 'failed' and events()[2]['message'].startswith('IK failed (code 112)'),
       'same failure report on that path')
 
+# ---------------------------------------------------------------- standoff assist (2026-09-15)
+print('== distance-sensor assist: standoff_state / keyence_cb / adjust_standoff')
+robot = FakeRobot()
+ac = make_controller(robot)
+ac._keyence_cos = float(np.cos(np.radians(42.6)))
+ac.keyence_invalid_abs_mm = 90.0
+ac.keyence_sensor_zero_mm = 10.0
+ac.keyence_target_distance_mm = 10.0
+ac.keyence_setpoint_mm = 0.0
+ac._keyence_lock = threading.Lock()
+ac.current_keyence_val = None
+ac._keyence_seq = 0
+ac.standoff_pub = _Pub('/arm/standoff_state')
+st = ac.standoff_state(-3.0)
+check(st['valid'] and abs(st['perp_mm'] - (-3.0 * ac._keyence_cos)) < 1e-9,
+      'raw -3.0 projects by cos(42.6 deg) to the perpendicular')
+check(abs(st['standoff_mm'] - (10.0 + 3.0 * ac._keyence_cos)) < 1e-9
+      and st['err_mm'] < 0,
+      f'standoff = zero - perp = {st["standoff_mm"]:.3f} mm, error negative = too far')
+st = ac.standoff_state(+2.0)
+check(st['standoff_mm'] < 10.0 and st['err_mm'] > 0,
+      'positive raw = closer than the zero, error positive (approach-positive)')
+for raw, side in ((-99999.0, 'far'), (99999.0, 'close')):
+    st = ac.standoff_state(raw)
+    check(not st['valid'] and st['standoff_mm'] is None and st['side'] == side,
+          f'sentinel {raw:+.0f} -> invalid, side {side}')
+PUBLISHED.clear()
+ac.keyence_cb(types.SimpleNamespace(data=-1.5))
+pub = [json.loads(d) for t, d in PUBLISHED if t == '/arm/standoff_state']
+check(len(pub) == 1 and pub[0]['valid'] and abs(pub[0]['raw_mm'] + 1.5) < 1e-9
+      and ac._keyence_seq == 1 and ac.current_keyence_val == -1.5,
+      'keyence_cb caches the reading, bumps the sequence and publishes the state')
+
+seen = {}
+def _fake_adjust(_ac=ac):
+    seen['setpoint'] = _ac.keyence_setpoint_mm
+    seen['target'] = _ac.keyence_target_distance_mm
+    seen['cancel'] = _ac.cancel_requested
+    return StandoffResult(converged=True, reason='ok', steps=2, travel_mm=1.5,
+                          final_err_mm=0.05)
+ac._adjust_distance_to_surface = _fake_adjust
+ac.cancel_requested = True
+ok, message, res = ac.adjust_standoff(12.0)
+check(ok and res.converged and message.startswith('standoff (target 12 mm): standoff ok'),
+      f'adjust_standoff reports the loop result: {message!r}')
+check(abs(seen['setpoint'] - (-2.0)) < 1e-9 and seen['target'] == 12.0,
+      'the one-off target 12 mm is a setpoint of -2 mm during the call')
+check(ac.keyence_setpoint_mm == 0.0 and ac.keyence_target_distance_mm == 10.0,
+      'the configured setpoint / target are restored afterwards')
+check(seen['cancel'] is False, 'a stale cancel flag is cleared before the loop runs')
+ok, message, res = ac.adjust_standoff(None)
+check(ok and seen['setpoint'] == 0.0 and 'target 10 mm' in message,
+      'no target -> the configured 10 mm')
+def _fail_adjust():
+    return StandoffResult(converged=False, reason='out of range on the far side',
+                          steps=0, travel_mm=0.0)
+ac._adjust_distance_to_surface = _fail_adjust
+ok, message, _ = ac.adjust_standoff(None)
+check(not ok and 'NOT corrected: out of range' in message,
+      f'a non-converged loop reports failure with its reason: {message!r}')
+
 print(f'\n{N_OK} ok, {N_FAIL} failed')
 sys.exit(1 if N_FAIL else 0)

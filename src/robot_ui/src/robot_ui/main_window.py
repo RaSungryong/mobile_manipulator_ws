@@ -330,6 +330,12 @@ class MainWindow(QMainWindow):
             if seen is not None and now - seen > 1.5:
                 lbl.setText('tags: — (no detections topic)')
                 self._tag_seen_at[cam] = None
+        seen = getattr(self, '_standoff_seen_at', None)
+        if seen is not None and now - seen > 1.5:
+            self.lbl_standoff.setText(
+                'standoff: —  (no reading for >1.5 s: keyence node / arm_node?)')
+            self._tint(self.lbl_standoff, '#553311')
+            self._standoff_seen_at = None
 
     def _on_view_double_clicked(self, title):
         """Give the image the whole window, or put the controls back.
@@ -536,6 +542,48 @@ class MainWindow(QMainWindow):
             grid.addWidget(minus, 2, col)
         jog_layout.addLayout(grid)
         layout.addWidget(jog_box)
+
+        # ---- Distance-sensor assist (2026-09-15) ----
+        # The Keyence DL-EN1 on the tool reads 0 at its 10 mm zero, negative
+        # when too far, positive when too close; arm_node projects the oblique
+        # beam and publishes the standoff on /arm/standoff_state. "Auto
+        # standoff" runs the scan's own closed loop from wherever the arm is
+        # (fresh median readings, capped approach steps, 25 mm travel budget)
+        # — the operator jogs roughly into range, then lets the sensor finish.
+        so_box = QGroupBox('Distance sensor assist  (Keyence standoff)')
+        so_layout = QVBoxLayout(so_box)
+        self.lbl_standoff = QLabel('standoff: —  (no /arm/standoff_state yet)')
+        self.lbl_standoff.setFont(QFont('monospace', 11))
+        self.lbl_standoff.setStyleSheet('border:1px solid #555; padding:4px;')
+        so_layout.addWidget(self.lbl_standoff)
+        so_row = QHBoxLayout()
+        so_row.addWidget(QLabel('target [mm]'))
+        self.spin_standoff_target = QDoubleSpinBox()
+        self.spin_standoff_target.setRange(1.0, 30.0)
+        self.spin_standoff_target.setDecimals(1)
+        self.spin_standoff_target.setSingleStep(0.5)
+        self.spin_standoff_target.setValue(10.0)
+        self.spin_standoff_target.setToolTip(
+            'Perpendicular standoff the loop drives to. 10 mm is the sensor '
+            'zero and where the Basler focus / Ra model were set; the sensor '
+            'measures roughly ±20 mm around it. A value typed here applies '
+            'to this button only — TASK scans keep robot.yaml\'s target.')
+        so_row.addWidget(self.spin_standoff_target)
+        self.btn_standoff = QPushButton('Auto standoff')
+        self.btn_standoff.setToolTip(
+            'Move the tool along its own Z axis until the Keyence reads the '
+            'target standoff. Needs the surface inside the sensor range '
+            '(no "out of range" above). Refused while the arm is scanning.')
+        self.btn_standoff.clicked.connect(self._on_standoff)
+        so_row.addWidget(self.btn_standoff)
+        btn_so_cancel = QPushButton('Cancel')
+        btn_so_cancel.clicked.connect(lambda: self.bridge.arm_cancel())
+        so_row.addWidget(btn_so_cancel)
+        so_row.addStretch(1)
+        so_layout.addLayout(so_row)
+        layout.addWidget(so_box)
+        self._standoff_seen_at = None
+        self._standoff_inflight = False
 
         move_box = QGroupBox('Absolute move')
         move_layout = QVBoxLayout(move_box)
@@ -1213,6 +1261,7 @@ class MainWindow(QMainWindow):
     def _connect_bridge(self):
         self.bridge.image_received.connect(self._on_image)
         self.bridge.arm_state.connect(self._on_arm_state)
+        self.bridge.standoff_state.connect(self._on_standoff_state)
         self.bridge.task_state.connect(self._on_task_state)
         self.bridge.task_list.connect(self._on_task_list)
         self.bridge.lift_state.connect(self._on_lift_state)
@@ -1530,6 +1579,42 @@ class MainWindow(QMainWindow):
 
     def _update_busy(self):
         self.btn_capture.setEnabled(self._busy_calls == 0)
+
+    # ---------- Keyence standoff assist ----------
+    @staticmethod
+    def standoff_text(st):
+        """One line for /arm/standoff_state: standoff, error vs target, raw."""
+        raw = st.get('raw_mm')
+        tgt = st.get('target_mm')
+        if st.get('valid') and st.get('standoff_mm') is not None:
+            err = st.get('err_mm') or 0.0
+            hint = ('ON TARGET' if abs(err) <= 0.2 else
+                    f'{abs(err):.2f} mm too {"close" if err > 0 else "far"}')
+            return (f'standoff: {st["standoff_mm"]:.2f} mm   '
+                    f'(target {tgt:g}: {hint})   raw {raw:+.2f}')
+        side = st.get('side')
+        which = ({'far': 'too far', 'close': 'too close'}.get(side)
+                 or 'unknown side')
+        return (f'standoff: OUT OF RANGE ({which})   raw {raw:+.0f}   '
+                f'— jog Z toward the surface until a value appears')
+
+    def _on_standoff_state(self, st):
+        self._standoff_seen_at = time.monotonic()
+        self.lbl_standoff.setText(self.standoff_text(st))
+        self._tint(self.lbl_standoff,
+                   '#1b3a1b' if st.get('valid') else '#553311')
+
+    def _set_standoff_inflight(self, inflight):
+        self._standoff_inflight = inflight
+        self.btn_standoff.setEnabled(not inflight)
+
+    def _on_standoff(self):
+        target = self.spin_standoff_target.value()
+        self._set_standoff_inflight(True)
+        self._run(self.bridge.arm_standoff, target,
+                  label=f'standoff -> {target:g} mm',
+                  on_done=lambda _r: self._set_standoff_inflight(False),
+                  on_error=lambda _m: self._set_standoff_inflight(False))
 
     def _on_jog(self, axis, sign):
         step = self.spin_step.value() * sign

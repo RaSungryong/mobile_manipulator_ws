@@ -40,6 +40,7 @@ class FakeBridge(QObject):
     calib_progress = pyqtSignal(dict)
     handeye_progress = pyqtSignal(dict)
     scan_progress = pyqtSignal(dict)
+    standoff_state = pyqtSignal(dict)
     tag_ids = pyqtSignal(str, object)
     log = pyqtSignal(str)
 
@@ -268,6 +269,60 @@ def main():
     app.processEvents()
     check(combo.count() == 0, 'an empty /task_list empties the combo')
     check(win.lbl_task_detail.text() == '', 'detail line cleared')
+
+    print('== distance-sensor assist (Arm tab, 2026-09-15)')
+    import time as _time
+    arm_tab = win.btn_standoff.parentWidget().parentWidget()
+    check('no /arm/standoff_state yet' in win.lbl_standoff.text(),
+          'standoff label says no reading before the first state')
+    bridge.standoff_state.emit({'raw_mm': -3.0, 'target_mm': 10.0,
+                                'sensor_zero_mm': 10.0, 'valid': True,
+                                'side': None, 'perp_mm': -2.209,
+                                'standoff_mm': 12.209, 'err_mm': -2.209})
+    app.processEvents()
+    t = win.lbl_standoff.text()
+    check(t.startswith('standoff: 12.21 mm') and 'too far' in t and 'raw -3.00' in t,
+          f'valid reading rendered as standoff + error side + raw: {t!r}')
+    bridge.standoff_state.emit({'raw_mm': 0.1, 'target_mm': 10.0,
+                                'sensor_zero_mm': 10.0, 'valid': True,
+                                'side': None, 'perp_mm': 0.07,
+                                'standoff_mm': 9.93, 'err_mm': 0.07})
+    app.processEvents()
+    check('ON TARGET' in win.lbl_standoff.text(),
+          'inside 0.2 mm reads ON TARGET')
+    bridge.standoff_state.emit({'raw_mm': -99999.0, 'target_mm': 10.0,
+                                'sensor_zero_mm': 10.0, 'valid': False,
+                                'side': 'far', 'perp_mm': None,
+                                'standoff_mm': None, 'err_mm': None})
+    app.processEvents()
+    t = win.lbl_standoff.text()
+    check('OUT OF RANGE (too far)' in t and 'jog Z' in t,
+          f'sentinel rendered as out of range with the side: {t!r}')
+    win._standoff_seen_at = _time.monotonic() - 5.0
+    win._age_tag_labels()
+    check('no reading for >1.5 s' in win.lbl_standoff.text(),
+          'label ages out when the state stops arriving')
+
+    win.spin_standoff_target.setValue(12.5)
+    bridge.calls.clear()
+    check(win.btn_standoff.isEnabled(), 'Auto standoff enabled at rest')
+    check(click(arm_tab, 'Auto standoff'), 'Auto standoff button found on the Arm tab')
+    check(not win.btn_standoff.isEnabled(), 'button disabled while the call is in flight')
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and not any(c[0] == 'arm_standoff' for c in bridge.calls):
+        app.processEvents(); _time.sleep(0.02)
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and not win.btn_standoff.isEnabled():
+        app.processEvents(); _time.sleep(0.02)
+    calls = [c for c in bridge.calls if c[0] == 'arm_standoff']
+    check(calls == [('arm_standoff', 12.5)],
+          f'bridge.arm_standoff called once with the spinbox target: {calls}')
+    check(win.btn_standoff.isEnabled(), 'button re-enabled after completion')
+    check('standoff -> 12.5 mm' in win.log_view.toPlainText(),
+          'log line names the standoff call')
+    bridge.calls.clear()
+    check(click(arm_tab, 'Cancel'), 'Cancel button found next to Auto standoff')
+    check(('arm_cancel',) in bridge.calls, 'Cancel publishes the arm cancel')
 
     win.close()
     print(f'\n{N_OK} ok, {N_FAIL} failed')

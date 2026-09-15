@@ -246,6 +246,13 @@ class ArmController:
         rospy.Subscriber("/robot_pose", Pose2DWithFlag, self.pose_cb, queue_size=1)
         rospy.Subscriber("keyence/value", Float32, self.keyence_cb, queue_size=1)
         self.done_pub = rospy.Publisher("/scan_finished", Bool, queue_size=1)
+        # Live standoff derived from every /keyence/value message (2026-09-15,
+        # for robot_ui's distance-sensor assist): the raw reading, its
+        # perpendicular projection, the standoff in mm and the error against
+        # the target. Published here rather than computed in the UI so the
+        # beam angle, sensor zero and target live in ONE place.
+        self.standoff_pub = rospy.Publisher("/arm/standoff_state", String,
+                                            queue_size=1)
         # Per-point scan progress for the operator UI (2026-09-14). JSON
         # events, one per phase: start / move / done / failed / finished.
         # Before this the only trace of a failed point was arm_node's rosout
@@ -288,6 +295,62 @@ class ArmController:
         with self._keyence_lock:
             self.current_keyence_val = msg.data
             self._keyence_seq += 1
+        pub = getattr(self, 'standoff_pub', None)
+        if pub is not None:
+            try:
+                pub.publish(String(json.dumps(self.standoff_state(msg.data))))
+            except Exception:
+                pass
+
+    def standoff_state(self, raw):
+        """Interpret one raw Keyence reading in scan terms.
+
+        raw (mm along the beam; the DL-EN1 reads 0 at sensor_zero_mm, NEGATIVE
+        when too far, POSITIVE when too close) -> perpendicular deviation
+        perp = raw * cos(beam), standoff = sensor_zero - perp, and the error
+        against the live target (positive = closer than the target, the
+        loop's approach-positive convention). |raw| >= invalid_abs_mm is the
+        +/-99999 out-of-range sentinel: no standoff, only the side its sign
+        names (negative = too far).
+        """
+        raw = float(raw)
+        state = {'raw_mm': raw, 'target_mm': float(self.keyence_target_distance_mm),
+                 'sensor_zero_mm': float(self.keyence_sensor_zero_mm),
+                 'valid': False, 'side': None,
+                 'perp_mm': None, 'standoff_mm': None, 'err_mm': None}
+        if abs(raw) >= self.keyence_invalid_abs_mm:
+            state['side'] = 'far' if raw < 0 else 'close'
+            return state
+        perp = raw * self._keyence_cos
+        standoff = self.keyence_sensor_zero_mm - perp
+        state.update(valid=True, perp_mm=perp, standoff_mm=standoff,
+                     err_mm=self.keyence_target_distance_mm - standoff)
+        return state
+
+    def adjust_standoff(self, target_mm=None):
+        """On-demand standoff correction from the CURRENT pose (robot_ui's
+        "Auto standoff", 2026-09-15): the same closed loop the scan runs
+        before every capture, optionally toward a one-off target in mm
+        (None = keyence.target_distance_mm). Blocks; honours cancel().
+        Returns (converged, message, StandoffResult). The target override
+        is scoped to this call so a UI experiment cannot change what the
+        next TASK scans at."""
+        self.cancel_requested = False
+        saved = (self.keyence_setpoint_mm, self.keyence_target_distance_mm)
+        if target_mm is not None:
+            self.keyence_target_distance_mm = float(target_mm)
+            self.keyence_setpoint_mm = (self.keyence_sensor_zero_mm
+                                        - float(target_mm))
+        try:
+            result = self._adjust_distance_to_surface()
+        finally:
+            self.keyence_setpoint_mm, self.keyence_target_distance_mm = saved
+        if result is None:
+            return False, 'standoff: no result', None
+        tgt = (float(target_mm) if target_mm is not None
+               else float(self.keyence_target_distance_mm))
+        return (bool(result.converged),
+                f"standoff (target {tgt:g} mm): {result.summary()}", result)
 
     # --------------------------------------------------
     # HOME

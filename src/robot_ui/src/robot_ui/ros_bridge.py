@@ -84,6 +84,7 @@ class RosBridge(QObject):
     calib_progress = pyqtSignal(dict)
     handeye_progress = pyqtSignal(dict)     # /handeye_calib/progress (sweep events)
     scan_progress = pyqtSignal(dict)    # /arm/scan_progress events (per point)
+    standoff_state = pyqtSignal(dict)   # /arm/standoff_state: live Keyence standoff
     tag_ids = pyqtSignal(str, object)   # (camera, [tag ids in latest frame])
     log = pyqtSignal(str)
 
@@ -142,6 +143,8 @@ class RosBridge(QObject):
                                             queue_size=1)
         self._pub_arm_cancel = rospy.Publisher('/arm/cancel', Bool,
                                                queue_size=1)
+        self._pub_arm_standoff = rospy.Publisher('/arm/standoff', String,
+                                                 queue_size=1)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
                                                queue_size=1)
         self._pub_lift_mm = rospy.Publisher('/lifter/height_cmd', Float32,
@@ -194,6 +197,11 @@ class RosBridge(QObject):
         # as the calibration progress — not cached, not replayed.
         self._sub('/arm/scan_progress', String,
                   self._cb_scan_progress, queue_size=64)
+        # Live Keyence standoff as arm_node interprets it (raw reading,
+        # perpendicular standoff, error vs the target, out-of-range side).
+        # Periodic like /lifter/state, so cached + replayed.
+        self._sub('/arm/standoff_state', String, self._cb_json,
+                  callback_args=self.standoff_state, queue_size=1)
         # Latest tag detections per camera, for scripts that need to ask
         # "what does the hand cam see right now" (e.g. the cross-tag
         # survey). Snapshot store only — no signal, poll via
@@ -427,6 +435,17 @@ class RosBridge(QObject):
 
     def arm_home(self, timeout=60.0):
         return self._call_trigger('/arm/move_home', timeout)
+
+    def arm_standoff(self, target_mm=None, timeout=120.0):
+        """Keyence-closed standoff correction from the current pose: arm_node
+        runs the scan's own loop (fresh median readings, capped approach
+        steps, travel budget) toward target_mm (None = the configured
+        target). Blocks until arm_node reports completion; cancel with
+        arm_cancel(). Returns (converged, message)."""
+        seq = self.arm_seq()
+        req = {} if target_mm is None else {'target_mm': float(target_mm)}
+        self._pub_arm_standoff.publish(String(json.dumps(req)))
+        return self.wait_for_motion(seq, timeout)
 
     def arm_cancel(self):
         """Abort whatever the arm is doing. Deliberately not a service call.

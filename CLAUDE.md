@@ -309,7 +309,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15 |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -1590,6 +1590,49 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — robot_ui: distance-sensor assist (live Keyence standoff + "Auto standoff" from the current pose)
+
+User: "在 UI 中添加使用距离传感器进行辅助的功能". The Keyence DL-EN1 was
+only ever read inside a TASK scan; an operator jogging the tool over a
+surface by hand had no standoff readout and no way to let the sensor
+finish the approach. Now, on the Arm tab, group *Distance sensor assist*:
+
+- **Live line** from a new `/arm/standoff_state` (String JSON, one per
+  `/keyence/value` message, published by `ArmController.keyence_cb` via
+  `standoff_state(raw)`): `standoff: 12.21 mm (target 10: 2.21 mm too
+  far) raw −3.00`, `ON TARGET` inside 0.2 mm, or `OUT OF RANGE (too far /
+  too close)` from the ±99999 sentinel's sign, with an age-out after
+  1.5 s. Computed in the controller, not the UI, so the beam projection
+  (cos 42.6°), the sensor zero and the live target stay in ONE place:
+  `perp = raw·cos(beam)`, `standoff = zero − perp`, `err = target −
+  standoff` (approach-positive, the loop's own convention).
+- **Auto standoff** → `/arm/standoff` `{"target_mm": t}` →
+  `arm_node._run_standoff` → `ArmController.adjust_standoff(t)`: the
+  scan's own `StandoffController` run from wherever the arm is (fresh
+  median-of-5 readings after every move, approach capped at half the
+  measured gap / 1 mm fine, 25 mm travel budget, response check), result
+  through `motion_seq` like move_cart / jog, cancel through `/arm/cancel`.
+  The target typed in the UI (1–30 mm, default 10) is scoped to that one
+  call — `keyence_setpoint_mm` / `target_distance_mm` are restored
+  afterwards, so an experiment cannot change what the next TASK scans
+  at. Refused while a scan holds the worker, like jog.
+- Bridge: `standoff_state` signal (cached + replayed like `/lifter/state`),
+  `arm_standoff(target_mm, timeout)`.
+
+Verified offline only: `tools/check_scan_progress.py` 37 → **49**
+(projection and sign of `standoff_state`, both sentinels, `keyence_cb`
+publishing + sequence, `adjust_standoff` scoping the setpoint to −2 mm for
+a 12 mm target and restoring 0 / 10 afterwards, stale cancel cleared,
+non-converged result reported with its reason) and
+`src/robot_ui/tools/check_task_list_ui.py` 42 → **55** (label rendering for
+valid / on-target / sentinel, age-out, button disabled in flight and
+re-enabled, `arm_standoff` called once with the spinbox value, log line,
+Cancel → `arm_cancel`). Not run on the robot; `arm_node` and robot_ui
+restart required. First thing to watch: with the tool over the plate the
+line should read a plausible 8–12 mm and flip to OUT OF RANGE when lifted;
+the loop's `seek_enabled` is still off, so Auto standoff needs the surface
+inside the sensor's window before it will move.
 
 ### 2026-09-15 — The TF chain: no ROS TF exists; extrinsics.yaml now carries the physical (tilted) front_cam, and the chain picks the frame its detections are in
 
