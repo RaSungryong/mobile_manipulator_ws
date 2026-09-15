@@ -1863,6 +1863,22 @@ the crosshair (stop align) and 0.09° / 1.4 mm at the aim position
 (0.2 m ahead), all under the 0.2° align band. `robot_camera_node` and
 `mobile_node` restart required; the calibration nodes re-read
 extrinsics at launch.
+
+**Same afternoon, user question: is the camera-latency compensation
+applied?** Yes (`camera_latency_compensation: true`, every record carries
+`tag_age_s` / `latency_comp_px`) — but its frame-age cap was a hard-coded
+0.3 s and it was BINDING: 170 of the 173 records of 09-14/15 read exactly
+0.3. Probed live: the image arrives 0.09 s after its stamp, the detection
+0.33 s (0.29–0.36) — ~0.24 s inside `robot_camera_node`, which was at
+350 % CPU with two `tag_overlay` subscribers (robot_ui and the new
+robot_ui_web) and 21.5 Hz of detections vs 30 Hz of frames; the 2026-08
+figure was 109 ms end to end. Cost of the cap: 0.03 s × 0.01 m/s = 0.3 mm
+at the stop, ~1 mm while steering at 0.033 m/s. Now
+`camera_latency_max_s` (0.5) in robot.yaml and `tag_age_raw_s` in the
+records, so the next records show the true age. Not fixed: the node's
+latency itself — check it with one overlay subscriber, and whether the
+rectified overlay (`GroundPlane.rectify`, cv2.remap per frame per
+subscriber) is what costs the 0.24 s.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;

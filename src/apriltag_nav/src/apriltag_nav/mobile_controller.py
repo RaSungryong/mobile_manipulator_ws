@@ -90,6 +90,12 @@ class MobileController:
             self.cfg['robot'].get('stop_measure_frames', 3)))
         self.camera_latency_compensation = bool(
             self.cfg['robot'].get('camera_latency_compensation', True))
+        # A frame older than this is treated as this old (a stale, stuck
+        # detection must not be extrapolated indefinitely). 0.3 until
+        # 2026-09-15, when the pipeline was measured at 0.33 s and every
+        # record read the cap — now 0.5, and records carry the raw age too.
+        self.camera_latency_max_s = float(
+            self.cfg['robot'].get('camera_latency_max_s', 0.5))
         # Steering law while the target tag is in view (2026-09-04):
         # 'state_feedback' = omega = -(v * k_y) * e_y - k_theta * e_theta on
         # the BASE-referenced lateral and the PREDICTED heading (current +
@@ -995,9 +1001,11 @@ class MobileController:
             view = dict(cur)
         view['age_s'] = 0.0
         view['comp_px'] = 0.0
+        view['age_raw_s'] = (max(now - view['stamp'], 0.0)
+                             if view.get('stamp') is not None else 0.0)
         if (self.camera_latency_compensation and self.camera_params is not None
                 and view.get('stamp') is not None):
-            age = min(max(now - view['stamp'], 0.0), 0.3)
+            age = min(view['age_raw_s'], self.camera_latency_max_s)
             fx = self.camera_params[0]
             depth = view.get('z') or 0.30
             if age > 0.0 and fx > 0 and depth > 0:
@@ -2754,6 +2762,7 @@ class MobileController:
                                'launch_peak_yaw_err_deg': round(launch_peak_yaw_err, 3),
                                'tag_age_s': round(float(tag.get('age_s', 0.0)), 3),
                                'latency_comp_px': round(float(tag.get('comp_px', 0.0)), 2),
+                               'tag_age_raw_s': round(float(tag.get('age_raw_s', 0.0)), 3),
                                'steer_mode': self.steer_mode,
                                'reseat': bool(self._reseat_active),
                                'aim': ({k: (round(v, 3) if isinstance(v, float) else v)
