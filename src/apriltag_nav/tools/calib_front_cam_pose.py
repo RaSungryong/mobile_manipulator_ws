@@ -825,6 +825,7 @@ def cmd_collect(args):
         total = S.rotation_since(ref)
         if total is None:
             sys.exit("pivot: no calibration tag in view — stop here, solve what exists")
+        stalled = 0
         for attempt in range(6):
             rem = target - total
             if abs(rem) <= pivot_tol:
@@ -839,8 +840,12 @@ def cmd_collect(args):
                 print("    remaining %+.2f deg exceeds the lateral room (%.2f deg) — stopping this step short" % (rem, cap))
                 cmd = math.copysign(cap * abs(gain), cmd)
             cmd = max(-args.pivot_max * 2.5, min(args.pivot_max * 2.5, cmd))
-            if not mc.pivot_angle(cmd):
-                sys.exit("pivot command %+.2f deg failed — stop here, solve what exists" % cmd)
+            # mobile_node verifies the pivot against ODOM and reports a move
+            # that ended more than shortfall_frac short as a failure — the
+            # base under-executes small pivots, so that is the normal case
+            # here. What matters is what the TAGS say: a short move is
+            # progress, only "nothing moved twice" stops the session.
+            ok = mc.pivot_angle(cmd)
             rospy.sleep(S.settle_s)
             ex = S.rotation_since(ref)
             if ex is None:
@@ -849,8 +854,15 @@ def cmd_collect(args):
             total = ex
             if abs(step) > 0.15:
                 gain = max(-6.0, min(6.0, cmd / step))
+                stalled = 0
             else:
                 gain *= 1.5              # nothing moved: push harder
+                stalled += 1
+                if stalled >= 2:
+                    sys.exit("pivot: two commands in a row moved the tags by < 0.15 deg%s — stop here, "
+                             "solve what exists" % ("" if ok else " (mobile_node reported the command failed)"))
+            if not ok:
+                print("    (mobile_node reported the pivot short of its odom target — using the tag reading)")
             print("    attempt %d: commanded %+.2f -> executed %+.2f deg (total %+.2f / %+.2f, gain %.2f)"
                   % (attempt + 1, cmd, step, total, target, gain))
             if abs(rem) > cap:
