@@ -658,7 +658,12 @@ robot:
   # measured against the true 0.33 s frame age, nine forward stops rested
   # -0.2..-2.6 mm (mean -1.0) SHORT of the tag, i.e. the lead was ~1 mm
   # (0.1 s at 0.010 m/s) generous; 0.15 s = 1.5 mm of lead aims at 0.
-  stop_latency_linear_s: 0.15
+  # Then 0.15 -> 0.08 the same hour: with the 1.5 mm lead five stops
+  # (3 fwd, 2 rev) still rolled only 0.3-1.3 mm (mean 0.7) past the
+  # trigger, i.e. the true post-trigger roll at 0.010 m/s is ~0.07 s now
+  # that the frame age is compensated in full — the 2.1 mm of 09-09 was
+  # measured with the age capped at 0.3 s. 0.08 s = 0.8 mm of lead.
+  stop_latency_linear_s: 0.08
 
   # Delays (seconds)
   stop_sleep_duration: 1.0
