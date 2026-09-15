@@ -71,6 +71,7 @@ detail and the reasoning; HANDOVER.md holds the checklist.
 catkin_make && source devel/setup.bash
 roslaunch apriltag_nav mobile_manipulator.launch   # starts all nine nodes
                                                    # + rosbridge on :9090 (use_rosbridge:=false to skip)
+                                                   # + the WEB operator UI on :8080 (use_web_ui:=false)
 ```
 
 The Navifra systemd service already runs `roscore` — do not start one.
@@ -350,6 +351,22 @@ only `websocket-client`; task commands, `/task_state` watch, and generic
 `topics / type / fields / sub / pub / call / param`) and the Korean
 operator guide **`docs/ROSBRIDGE_kr.md`** (reboot procedure for both PCs,
 usage, topic table, rules, troubleshooting).
+
+**Since 2026-09-15 the launch also starts the WEB operator UI,
+`robot_ui_web_node` on port 8080** (`use_web_ui`, `web_ui_port`): the
+whole `robot_ui` operator UI (camera panes with the tag overlays, Collect /
+Arm / Task / Mobile / Calibration / Scripts tabs, STOP ALL, log) served as
+a page — `http://192.168.1.100:8080` on the LAN, `http://192.168.0.20:8080`
+from the Windows PC once the Phoenix bridge forwards TCP 8080 like 9090.
+Every browser tab sees ONE shared state (preview, lamp hold, calibration
+session, plugin run, log) and any tab may act; frames go out as JPEG on
+the same WebSocket (10 fps / 1400 px per camera, one frame in flight per
+client), so the "no raw images through rosbridge" rule is not touched.
+It owns no device — same `RosBridge` as the PyQt window — needs no X
+display, and is a client of the stack: `roslaunch robot_ui
+robot_ui_web.launch` restarts it alone. No authentication, same LAN-only
+rule as 9090. Operator guide **`docs/ROBOT_UI_WEB_kr.md`**; design in
+`src/robot_ui/src/robot_ui/web_server.py`'s docstring.
 
 The calibration nodes (`path_tag_locator` + `map_calibrator`, plus
 `handeye_calib` behind `use_handeye_calib:=false`) live in a SEPARATE
@@ -735,9 +752,14 @@ between the tag's surface normal and the optical axis — is the number for
 that: 0 = dead square, and it is invariant to spinning the tag in its own
 plane (verified: 45° in-plane rotation still gives tilt 0).
 
-### Looking at the cameras — robot_ui, or `camera_viewer_node`
+### Looking at the cameras — robot_ui (web or PyQt), or `camera_viewer_node`
 
-**Since 2026-09-04 the operator UI is the camera viewer.** Its left pane
+**Since 2026-09-04 the operator UI is the camera viewer, and since
+2026-09-15 that UI is a web page** (`robot_ui_web_node`, port 8080, in
+the main launch — any browser on the LAN; the PyQt window
+`robot_ui.launch` still exists with the same panes and shares every line
+of behaviour through `robot_ui.web_ui.UiController` / `MainWindow` on
+one Qt-free `RosBridge`). Its left pane
 shows the Basler plus all three tag cameras; each tag camera defaults to
 `robot_camera_node`'s `/<cam>/tag_overlay` (crosshair, stop columns in mm,
 per-tag ID / offset (mm) / degree) with a `tags` box to fall back to the raw stream, an `on` box
@@ -1643,6 +1665,65 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — robot_ui on the web: every feature of the PyQt window as a page any LAN computer can open
+
+User (pinyin): "robot ui 重构, 保留所有功能, 把 UI 显示在 web 上, 使局域网内
+其他人可以连接". The site LAN has no internet and the robot PC has no
+Node, so the constraint was: nothing new to install anywhere. Tornado is
+already on the PC (rosbridge_server depends on it) and the page is plain
+HTML/JS/CSS served from `robot_ui/web/` — no CDN, no build step.
+
+**Shape.** Three layers, and the split is the point:
+- `RosBridge` lost its Qt: it was a `QObject` with `pyqtSignal`s, i.e. the
+  one ROS boundary of the package could only feed a Qt event loop. Its
+  outputs are now `robot_ui.signals.Signal` (connect/emit, synchronous on
+  rospy's thread; `SIGNALS` / `STATE_SIGNALS` name them, the cache is keyed
+  by name, `cached_states()` is the web replay). `MainWindow` marshals
+  every handler through ONE `pyqtSignal(object, object)` — the same
+  mechanism `append_log` already used — so the desktop window is
+  unchanged in behaviour (`check_task_list_ui.py` 71/71 still).
+- `web_ui.UiController` is `MainWindow` minus the widgets: capture → save →
+  Ra with the preview PAUSED (not released) for the shot, the 5 Hz
+  lamp-off preview loop that skips a tick while any call is in flight,
+  jog / MOVE with blank axes taken from the live pose / standoff, task +
+  lift, manual base moves with the in-flight flags, the map-calibration
+  session with the plate↔ref pairing and the yaw-sweep warning, hand-eye,
+  plugins (hot-reload, run ON THE ROBOT PC whoever pressed RUN), STOP ALL,
+  ROI in image pixels persisted to `roi_config.json`, a 500-line log ring.
+  It talks to a `sink` (state / event / ui-patch / log / frame) and holds
+  the SHARED ui dict every browser renders — so two tabs on two PCs show
+  one robot and either may act (last press wins, documented).
+- `web_server` (tornado, one port): static page, `/ws` JSON protocol
+  (hello = replay of cached states + ui + log history; state / event / ui
+  / log broadcasts; `call` → `api_<name>` on a pool → `reply` to the
+  caller only), `/api/health`. Frames: the encoder thread JPEGs the NEWEST
+  frame per camera once (downscaled to `stream_max_width` 1400, capped at
+  `stream_fps` 10, nothing encoded with no client), fanned out with ONE
+  outstanding frame per camera per client — the browser acks after
+  decode, so a slow Wi-Fi link drops frames instead of lagging. The
+  full-res Basler frame stays server-side for the ROI crop, the PNG and
+  inference.
+
+**Verified.** `tools/check_web_ui.py` **106** (controller + real tornado
+server over a WebSocket client: replay, broadcast to two clients, reply
+routing, unknown/private methods refused, packet format, the ack holding
+the second frame and releasing frame #3 not #2, late joiner gets the last
+frame) and `tools/check_web_ui_browser.py` **65** — a REAL headless
+Chrome driven over DevTools against the same server: chips from live
+states, every tab's buttons producing the bridge calls, a pushed frame
+drawn on the canvas and acknowledged, ROI drag landing on the server in
+image pixels, thumbnail click / double-click maximise, STOP ALL, zero JS
+exceptions; screenshot in `src/robot_ui/tools/web_ui_screenshot.png`.
+Then **the real node against the running stack, view-only** (robot idle
+on dock 500, camera closed): all ten states rendered, the nine real tasks
+listed with their detail lines, calibration nodes ONLINE / hand-eye
+OFFLINE, front_cam overlay on tag 500 + side/hand cams at 8 fps in the
+browser, ~50 % of one core with one client (the three 30 Hz cv_bridge
+conversions the Qt window also paid, plus JPEG), clean SIGINT exit with
+the port released. Not yet used by an operator from another PC; the
+Phoenix bridge needs a TCP 8080 forward before the Windows PC can reach
+it. `catkin_make` clean (`web/` and the new script are installed).
 
 ### 2026-09-15 — Pose calibration on the 90 mm tags 149/150; tags are 1 mm plates (tz = height_m + tag_thickness, cross tags z +0.001)
 

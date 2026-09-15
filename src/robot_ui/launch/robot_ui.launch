@@ -1,8 +1,11 @@
 <launch>
-  <!-- Operator UI. Starts nothing else on purpose: it is a client of the
-       stack, not part of it, so it can be restarted mid-session without
-       disturbing a running task. Bring the stack up first with
-       `roslaunch apriltag_nav mobile_manipulator.launch`.
+  <!-- Operator UI as a PyQt WINDOW on this PC's screen. The same UI is also
+       served as a web page by robot_ui_web.launch (in the main launch since
+       2026-09-15, http://<robot PC>:8080) — that is the default way to use
+       it; this window remains for the robot PC's own screen. Starts nothing
+       else on purpose: it is a client of the stack, not part of it, so it
+       can be restarted mid-session without disturbing a running task. Bring
+       the stack up first with `roslaunch apriltag_nav mobile_manipulator.launch`.
 
        inference_node is NOT started here either — it belongs to apriltag_nav
        and is shared with anything else wanting Ra, not owned by the UI. -->

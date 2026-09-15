@@ -463,6 +463,7 @@ pull + `catkin_make` before anything below.
 | `docs/keyence_scan_chain.md` | Keyence standoff loop record |
 | `docs/lift_arm_base_z_analysis.md` | lift-vs-transform analysis |
 | `docs/architecture_slides_kr.md` | presentation material |
+| `docs/ROSBRIDGE_kr.md` / `docs/ROBOT_UI_WEB_kr.md` | operator guides for the two external interfaces: rosbridge JSON on :9090 (Windows `robot_cmd.py`) and the **web operator UI on :8080** (any LAN browser, 2026-09-15 — the whole robot_ui, shared state across tabs) |
 | `results/` (`README.md` there) | Ra maps (versioned), per-run scan frames, robot_ui captures |
 | `log/` | nav records, calibration sessions / locate runs / hand-eye runs, `ros/<run_id>` node logs, `apriltag_nav/calib_pair` |
 | `docs/all_tags_position.csv` | generated design positions for all 78 tags |

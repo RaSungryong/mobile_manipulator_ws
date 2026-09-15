@@ -1,0 +1,96 @@
+/* Operator UI — dark, dense, keyboard-free. Colours mirror the Qt window's
+   chip tints (#553311 busy, #1b3a1b ok, #7a1f1f / #b02020 fault). */
+:root {
+  --bg: #202124;
+  --panel: #2a2b2e;
+  --border: #555;
+  --text: #e6e6e6;
+  --muted: #888;
+  --accent: #3b7dd8;
+  --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.35 system-ui, "Segoe UI", "Noto Sans", sans-serif; }
+#app { display: flex; flex-direction: column; height: 100vh; padding: 6px; gap: 6px; }
+
+.group { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px 8px;
+  background: var(--panel); position: relative; margin-top: 8px; }
+.group-title { position: absolute; top: -9px; left: 10px; background: var(--panel);
+  padding: 0 4px; font-size: 12px; color: #bbb; }
+.note { color: var(--muted); margin: 4px 0 6px; font-size: 12px; }
+.detail { color: #aaa; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.warn { color: #e39a2d; font-weight: bold; white-space: pre-wrap; }
+.bold { font-weight: bold; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.row .grow, .grow { flex: 1 1 120px; min-width: 80px; }
+.spacer { flex: 1; }
+.form { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; }
+label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+input[type=text], input[type=number], select {
+  background: #1b1b1b; color: var(--text); border: 1px solid var(--border);
+  border-radius: 3px; padding: 4px 6px; font: inherit; }
+input[type=number] { width: 6.5em; }
+button { background: #3a3b3f; color: var(--text); border: 1px solid #666;
+  border-radius: 3px; padding: 5px 10px; font: inherit; cursor: pointer; }
+button:hover { background: #4a4b50; }
+button:disabled { opacity: 0.45; cursor: default; }
+.btn-stop { background: #b02020; color: white; font-weight: bold; padding: 6px 12px; }
+.btn-stop:hover { background: #c83030; }
+.btn-capture { background: #205020; color: white; font-weight: bold; padding: 10px; }
+.btn-capture:hover { background: #2a6a2a; }
+.btn-warn { background: #8a4a00; color: white; font-weight: bold; }
+
+/* ---- system bar ---- */
+#sysbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 3px 7px;
+  border: 1px solid var(--border); border-radius: 3px; white-space: nowrap; }
+.chip.conn { color: var(--muted); }
+.chip.conn.ok { color: #7bd88f; }
+.chip.conn.bad { background: #7a1f1f; color: white; }
+
+/* ---- layout ---- */
+#main { display: flex; flex: 1; min-height: 0; gap: 6px; }
+#viewpanel { flex: 3 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#controlpanel { flex: 0 0 520px; display: flex; flex-direction: column; min-height: 0;
+  max-width: 45vw; }
+#controlpanel.hidden { display: none; }
+#ctl-pages { flex: 3 1 0; overflow-y: auto; min-height: 0; padding-right: 2px; }
+#logbox { flex: 2 1 0; display: flex; flex-direction: column; min-height: 120px; }
+#log { flex: 1; overflow: auto; margin: 0; font-family: var(--mono); font-size: 11px;
+  white-space: pre-wrap; word-break: break-word; background: #1b1b1b; padding: 4px; }
+
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.tab { border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0;
+  background: #2a2b2e; padding: 4px 10px; }
+.tab.active { background: #3f4046; font-weight: bold; }
+
+/* ---- camera panel ---- */
+.view-page { flex: 7 1 0; min-height: 0; display: flex; flex-direction: column; }
+.view-page[hidden] { display: none; }
+#thumb-strip { flex: 2 1 0; min-height: 0; display: flex; gap: 4px; margin-top: 4px; }
+#thumb-strip.hidden { display: none; }
+.cell { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1 1 0; }
+.cell canvas { flex: 1; min-height: 0; width: 100%; background: #000;
+  border: 1px solid #444; display: block; cursor: pointer; }
+.cell .ctl { display: flex; align-items: center; gap: 8px; padding: 2px; font-size: 12px; }
+.cell .ctl .tags { color: #aaa; font-family: var(--mono); flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.cell .ctl .hint { color: var(--muted); }
+#ra-label { text-align: center; font-family: var(--mono); font-size: 15px; font-weight: bold;
+  padding: 4px; }
+.readout { font-family: var(--mono); border: 1px solid var(--border); padding: 4px; }
+.pose-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
+.pose-grid .val { font-family: var(--mono); font-size: 13px; border: 1px solid var(--border);
+  padding: 4px; }
+.jog-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
+.jog-grid button { width: 100%; font-size: 15px; }
+.target-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
+.target-grid input { width: 100%; }
+
+@media (max-width: 1000px) {
+  #main { flex-direction: column; }
+  #controlpanel { flex: 1 1 auto; max-width: none; }
+  #viewpanel { flex: 0 0 55vh; }
+}

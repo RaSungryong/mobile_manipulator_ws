@@ -4,10 +4,13 @@
   <version>1.0.0</version>
   <description>
     Operator UI for the mobile manipulator: data collection, manual arm
-    teaching, task control. Integration only — it owns no device and opens no
-    hardware. Every capability it exposes is reached over ROS from the node
-    that owns the device (arm_node, basler_camera_node, lifter_node,
-    mobile_node, inference_node, task_executor).
+    teaching, task control, calibration. Integration only — it owns no device
+    and opens no hardware. Every capability it exposes is reached over ROS
+    from the node that owns the device (arm_node, basler_camera_node,
+    lifter_node, mobile_node, inference_node, task_executor). Two fronts on
+    one RosBridge: robot_ui_web_node.py serves the UI as a web page to every
+    computer on the site LAN (the default since 2026-09-15), robot_ui_node.py
+    is the same UI as a PyQt window on the robot PC's own screen.
   </description>
   <maintainer email="user@example.com">User</maintainer>
   <license>TODO</license>
@@ -25,6 +28,10 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>robot_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <!-- web UI: HTTP + WebSocket server (already on the robot PC as a
+       dependency of rosbridge_server) -->
+  <exec_depend>python3-tornado</exec_depend>
+  <!-- desktop window only -->
   <exec_depend>python3-pyqt5</exec_depend>
 
   <!-- Runtime peers. Not build deps: this package imports none of their code,

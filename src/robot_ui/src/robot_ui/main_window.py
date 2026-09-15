@@ -71,6 +71,9 @@ class MainWindow(QMainWindow):
     # Every log line goes through here so append_log can be called from the
     # plugin worker thread and rospy callback threads. See append_log.
     _log_line = pyqtSignal(str)
+    # (handler, args): every bridge signal is delivered to its handler
+    # through this, so the handler runs on the GUI thread. See _connect_bridge.
+    _dispatch = pyqtSignal(object, object)
 
     def __init__(self, bridge, plugin_dir=None, save_dir=None):
         super().__init__()
@@ -1280,22 +1283,36 @@ class MainWindow(QMainWindow):
     # BRIDGE WIRING
     # ==========================================================
     def _connect_bridge(self):
-        self.bridge.image_received.connect(self._on_image)
-        self.bridge.arm_state.connect(self._on_arm_state)
-        self.bridge.standoff_state.connect(self._on_standoff_state)
-        self.bridge.task_state.connect(self._on_task_state)
-        self.bridge.task_list.connect(self._on_task_list)
-        self.bridge.lift_state.connect(self._on_lift_state)
-        self.bridge.mobile_state.connect(self._on_mobile_state)
-        self.bridge.battery_state.connect(self._on_battery)
-        self.bridge.estop_state.connect(self._on_estop)
-        self.bridge.camera_state.connect(self._on_camera_state)
-        self.bridge.lamp_state.connect(self._on_lamp_state)
-        self.bridge.calib_progress.connect(self._on_calib_progress)
-        self.bridge.scan_progress.connect(self._on_scan_progress)
-        self.bridge.handeye_progress.connect(self._on_handeye_progress)
-        self.bridge.tag_ids.connect(self._on_tag_ids)
-        self.bridge.log.connect(self.append_log)
+        # RosBridge's outputs are plain `Signal`s since 2026-09-15 (the
+        # bridge is shared with the web server and no longer a QObject), so
+        # they fire SYNCHRONOUSLY on rospy's callback threads. Every handler
+        # below touches widgets, which Qt allows only from the GUI thread —
+        # so each connection is routed through ONE pyqtSignal, which Qt
+        # queues across the thread boundary (the same mechanism append_log
+        # already relies on). A signal emitted on the GUI thread itself
+        # (the offscreen checks' fake bridge) is delivered directly.
+        self._dispatch.connect(self._dispatch_gui)
+
+        def link(signal, handler):
+            signal.connect(
+                lambda *args, h=handler: self._dispatch.emit(h, args))
+
+        link(self.bridge.image_received, self._on_image)
+        link(self.bridge.arm_state, self._on_arm_state)
+        link(self.bridge.standoff_state, self._on_standoff_state)
+        link(self.bridge.task_state, self._on_task_state)
+        link(self.bridge.task_list, self._on_task_list)
+        link(self.bridge.lift_state, self._on_lift_state)
+        link(self.bridge.mobile_state, self._on_mobile_state)
+        link(self.bridge.battery_state, self._on_battery)
+        link(self.bridge.estop_state, self._on_estop)
+        link(self.bridge.camera_state, self._on_camera_state)
+        link(self.bridge.lamp_state, self._on_lamp_state)
+        link(self.bridge.calib_progress, self._on_calib_progress)
+        link(self.bridge.scan_progress, self._on_scan_progress)
+        link(self.bridge.handeye_progress, self._on_handeye_progress)
+        link(self.bridge.tag_ids, self._on_tag_ids)
+        self.bridge.log.connect(self.append_log)     # already thread-safe
 
         # Ask for whatever already arrived. The bridge subscribes in its own
         # constructor, which runs before these connects, so a LATCHED topic's
@@ -1305,6 +1322,10 @@ class MainWindow(QMainWindow):
         # the window until something changed them. Also populates every other
         # field immediately rather than after the next periodic update.
         self.bridge.replay()
+
+    @pyqtSlot(object, object)
+    def _dispatch_gui(self, handler, args):
+        handler(*args)
 
     def _on_image(self, name, bgr):
         view = self._views.get(name)

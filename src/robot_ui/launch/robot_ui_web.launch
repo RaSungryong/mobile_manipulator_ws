@@ -1,0 +1,29 @@
+<launch>
+  <!-- WEB operator UI (2026-09-15): the same operator UI as robot_ui.launch,
+       served as a web page instead of a PyQt window, so any computer on the
+       site LAN can open it (http://<robot PC>:8080). Owns no device; a
+       client of the stack, restartable mid-session. Bring the stack up
+       first with `roslaunch apriltag_nav mobile_manipulator.launch`, which
+       also includes this file (use_web_ui:=false to skip it).
+
+       Needs no X display. No authentication — keep the port inside the
+       LAN, like rosbridge's 9090. -->
+  <arg name="port"       default="8080"/>
+  <arg name="address"    default="0.0.0.0"/>
+  <arg name="plugin_dir" default="$(find robot_ui)/plugins"/>
+  <!-- Captures go into the workspace (2026-09-14): <ws>/results/captures. -->
+  <arg name="save_dir"   default="$(eval optenv('MM_WS', dirname() + '/../../..') + '/results/captures')"/>
+  <arg name="stream_max_width" default="1400"/>
+  <arg name="stream_fps"       default="10"/>
+  <arg name="jpeg_quality"     default="80"/>
+
+  <node pkg="robot_ui" type="robot_ui_web_node.py" name="robot_ui_web" output="screen">
+    <param name="port"             value="$(arg port)"/>
+    <param name="address"          value="$(arg address)"/>
+    <param name="plugin_dir"       value="$(arg plugin_dir)"/>
+    <param name="save_dir"         value="$(arg save_dir)"/>
+    <param name="stream_max_width" value="$(arg stream_max_width)"/>
+    <param name="stream_fps"       value="$(arg stream_fps)"/>
+    <param name="jpeg_quality"     value="$(arg jpeg_quality)"/>
+  </node>
+</launch>

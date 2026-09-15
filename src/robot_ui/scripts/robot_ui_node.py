@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Entry point for the operator UI.
+Entry point for the operator UI as a PyQt WINDOW.
 
     rosrun robot_ui robot_ui_node.py
     roslaunch robot_ui robot_ui.launch
+
+(The same UI as a web page for any computer on the LAN is
+robot_ui_web_node.py / robot_ui_web.launch, in the main launch since
+2026-09-15; both share RosBridge and the UI logic.)
 
 This is a ROS node that happens to have a window. It owns no device: every
 capability it offers is a topic or a service on the node that owns the

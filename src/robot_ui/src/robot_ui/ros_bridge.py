@@ -10,15 +10,18 @@ owner of four devices that already have owners here. Running both at once meant
 fighting for the arm and the camera with nothing in either process aware of it.
 
 So: no other module in robot_ui may import rospy, and this module may not
-import PyQt widgets. If a new capability needs a device, it gets a topic or a
-service on the owner node — it does not get a direct handle here.
+import a UI toolkit (neither PyQt nor tornado — it serves both the desktop
+window and the web server, 2026-09-15). If a new capability needs a device,
+it gets a topic or a service on the owner node — it does not get a direct
+handle here.
 
 Threading
 ---------
-rospy callbacks arrive on rospy's own threads; Qt widgets may only be touched
-from the GUI thread. Every inbound message is therefore re-emitted as a Qt
-signal, which Qt queues across the thread boundary for us. Nothing in this file
-touches a widget.
+rospy callbacks arrive on rospy's own threads. Every inbound message is
+re-emitted on a `robot_ui.signals.Signal`, SYNCHRONOUSLY on that thread; the
+consumer marshals onto its own thread (MainWindow: one pyqtSignal; the web
+server: tornado add_callback). Nothing in this file touches a widget or a
+socket.
 
 Outbound service calls BLOCK. Call them from a worker thread (see
 main_window.CallWorker), never straight from a button handler, or the window
@@ -38,7 +41,7 @@ import threading
 import numpy as np
 import rospy
 from cv_bridge import CvBridge
-from PyQt5.QtCore import QObject, pyqtSignal
+from robot_ui.signals import Signal
 
 from sensor_msgs.msg import BatteryState, Image
 from std_msgs.msg import Bool, Float32, String
@@ -68,29 +71,47 @@ OVERLAY_TOPICS = {name: f'/{name}/tag_overlay' for name in STREAM_CAMERAS}
 ARM_AXES = ('x', 'y', 'z', 'rx', 'ry', 'rz')
 
 
-class RosBridge(QObject):
-    """Qt-facing view of the robot. Owns no device; calls the nodes that do."""
+class RosBridge:
+    """Consumer-facing view of the robot. Owns no device; calls the nodes
+    that do. Toolkit-free since 2026-09-15: the outputs below are
+    `robot_ui.signals.Signal`s, emitted synchronously on rospy's callback
+    threads — the Qt window marshals them onto its GUI thread, the web
+    server onto its IO loop. (They were pyqtSignals on a QObject before,
+    which made a web UI impossible without a Qt event loop.)"""
 
-    # name, bgr image
-    image_received = pyqtSignal(str, object)
-    arm_state = pyqtSignal(dict)
-    task_state = pyqtSignal(dict)
-    task_list = pyqtSignal(dict)        # /task_list: registered tasks (latched)
-    lift_state = pyqtSignal(dict)
-    mobile_state = pyqtSignal(dict)
-    battery_state = pyqtSignal(dict)
-    estop_state = pyqtSignal(bool)
-    camera_state = pyqtSignal(str)
-    lamp_state = pyqtSignal(bool)       # /camera/lamp_state: VISION lamp on (latched)
-    calib_progress = pyqtSignal(dict)
-    handeye_progress = pyqtSignal(dict)     # /handeye_calib/progress (sweep events)
-    scan_progress = pyqtSignal(dict)    # /arm/scan_progress events (per point)
-    standoff_state = pyqtSignal(dict)   # /arm/standoff_state: live Keyence standoff
-    tag_ids = pyqtSignal(str, object)   # (camera, [tag ids in latest frame])
-    log = pyqtSignal(str)
+    # Names of every output; each becomes a Signal attribute in __init__.
+    #   image_received(name, bgr)      per frame, per camera
+    #   tag_ids(camera, [ids])         per detection frame
+    #   everything else(value)         a dict / bool / str
+    SIGNALS = (
+        'image_received',
+        'arm_state',
+        'task_state',
+        'task_list',        # /task_list: registered tasks (latched)
+        'lift_state',
+        'mobile_state',
+        'battery_state',
+        'estop_state',
+        'camera_state',
+        'lamp_state',       # /camera/lamp_state: VISION lamp on (latched)
+        'calib_progress',
+        'handeye_progress',  # /handeye_calib/progress (sweep events)
+        'scan_progress',    # /arm/scan_progress events (per point)
+        'standoff_state',   # /arm/standoff_state: live Keyence standoff
+        'tag_ids',          # (camera, [tag ids in latest frame])
+        'log',
+    )
+    # The subset that is STATE (latest value cached, replayed to a late
+    # consumer). Event streams and images are deliberately not in it.
+    STATE_SIGNALS = (
+        'arm_state', 'task_state', 'task_list', 'lift_state',
+        'mobile_state', 'battery_state', 'estop_state', 'camera_state',
+        'lamp_state', 'standoff_state',
+    )
 
     def __init__(self, node_name='robot_ui', init_node=True):
-        super().__init__()
+        for name in self.SIGNALS:
+            setattr(self, name, Signal(name))
         if init_node:
             # disable_signals: Qt owns SIGINT here, otherwise rospy's handler
             # and Qt's race on Ctrl-C and the window survives a "shutdown".
@@ -99,11 +120,11 @@ class RosBridge(QObject):
         self._bridge = CvBridge()
 
         # Cleared first thing in shutdown(). rospy delivers callbacks on its own
-        # threads and keeps doing so after Qt has begun tearing the window down,
-        # at which point emitting a signal from a half-destroyed QObject raises
-        # "wrapped C/C++ object of type RosBridge has been deleted" — once per
-        # frame, from three cameras. Unregistering is not enough on its own:
-        # messages already handed to a callback thread still arrive.
+        # threads and keeps doing so after the consumer has begun tearing
+        # itself down (a Qt window being destroyed, a web server closing its
+        # sockets); emitting into it then raises — once per frame, from three
+        # cameras. Unregistering is not enough on its own: messages already
+        # handed to a callback thread still arrive.
         self._alive = True
 
         # Every subscriber, so shutdown() can unregister all of them. Keeping
@@ -111,7 +132,8 @@ class RosBridge(QObject):
         # battery subscriptions firing into the same destroyed object.
         self._subs = []
 
-        # Last value emitted on each state signal, so replay() can re-send it.
+        # Last value emitted on each state signal, keyed by signal NAME, so
+        # replay() / cached_states() can re-send it.
         #
         # ⚠️ THIS IS WHAT MAKES LATCHED TOPICS WORK. Subscriptions are created
         # here in __init__, but a consumer (MainWindow) connects its slots
@@ -128,10 +150,7 @@ class RosBridge(QObject):
         self._arm_lock = threading.Lock()
         self._arm_latest = None
         self._arm_event = threading.Event()
-        # Latest /mobile/state dict, for wait_for_mobile(). Kept in its own
-        # slot rather than looked up in _cache: PyQt returns a NEW bound
-        # signal object on every `self.mobile_state` access, so a dict keyed
-        # by it cannot be read back.
+        # Latest /mobile/state dict, for wait_for_mobile().
         self._mobile_lock = threading.Lock()
         self._mobile_latest = None
 
@@ -263,15 +282,21 @@ class RosBridge(QObject):
         Images are deliberately not cached or replayed: they are large, and a
         live camera sends another one within ~33 ms anyway.
         """
-        for signal, value in list(self._cache.items()):
+        for name, value in list(self._cache.items()):
             try:
-                signal.emit(value)
+                getattr(self, name).emit(value)
             except Exception:
                 pass
 
+    def cached_states(self):
+        """{signal name: latest value} for every state signal seen so far —
+        what a NEW web client is sent on connect (the web server's
+        replay())."""
+        return dict(self._cache)
+
     def _emit(self, signal, value):
         """Emit and remember, so replay() can re-send it to a later consumer."""
-        self._cache[signal] = value
+        self._cache[signal.name] = value
         signal.emit(value)
 
     # ==========================================================
