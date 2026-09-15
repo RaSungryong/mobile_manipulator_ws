@@ -359,10 +359,11 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// One-line summary: the native <option label> tooltip on the datalist
-// dropdown can only show plain single-line text, so this stays compact.
-// The rich, multi-field view below (taskDetailHtml) is what a SELECTED
-// task actually renders in #lbl-task-detail.
+// One-line summary: the small grey line under each task's NAME in the
+// combo dropdown (see renderTaskDropdown), so it stays compact rather
+// than wrapping across several lines per entry. The rich, multi-field
+// view below (taskDetailHtml) is what a SELECTED task renders in
+// #lbl-task-detail.
 function taskSummary(info) {
   const mode = info.scan_mode || info.kind || '?';
   const tags = info.tags || [];
@@ -437,15 +438,68 @@ function renderTaskList(payload) {
   for (const k of Object.keys(taskInfos)) delete taskInfos[k];
   for (const t of tasks) if (t.name) taskInfos[t.name] = t;
   const names = Object.keys(taskInfos);
-  const dl = $('task-list');
-  dl.innerHTML = '';
-  for (const n of names) { const o = document.createElement('option'); o.value = n; o.label = taskSummary(taskInfos[n]); dl.appendChild(o); }
   const input = $('txt-task');
   input.placeholder = names.length ? 'task name' : 'no tasks in /task_list';
   // A hand-typed name survives a republish; the placeholder does not.
   if (firstTime && !input.value.trim() && names.length) input.value = names[0];
+  // If the dropdown is open (an operator browsing while a republish
+  // arrives), keep it showing whatever they've typed so far rather than
+  // resetting to the full list under their cursor.
+  if (!$('task-dropdown').hidden) renderTaskDropdown(input.value);
   updateTaskDetail();
   appendLog('[task] /task_list: ' + names.length + ' task(s) from ' + (payload.task_dir || '?'));
+}
+
+// ---- Task combo dropdown ----
+// A plain `<input list=datalist>` only suggests options that contain the
+// input's CURRENT text as a substring — so once the field already holds a
+// full task name (set above on first load, or left behind after a pick),
+// opening it showed exactly that one self-match and every other task
+// silently vanished. This dropdown is opened un-filtered on focus/click
+// (every known task, always) and only narrows as the operator actively
+// types afterward.
+function renderTaskDropdown(filterText) {
+  const box = $('task-dropdown');
+  const q = (filterText || '').trim().toLowerCase();
+  const names = Object.keys(taskInfos).filter((n) => !q || n.toLowerCase().includes(q));
+  box.innerHTML = '';
+  if (!names.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = Object.keys(taskInfos).length ? 'no match' : 'no tasks in /task_list';
+    box.appendChild(empty);
+    return;
+  }
+  for (const n of names) {
+    const item = document.createElement('div');
+    item.className = 'item';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'name';
+    nameEl.textContent = n;
+    const sumEl = document.createElement('div');
+    sumEl.className = 'summary';
+    sumEl.textContent = taskSummary(taskInfos[n]);
+    item.append(nameEl, sumEl);
+    item.addEventListener('mousedown', (ev) => {
+      // mousedown (not click) fires BEFORE the input's blur, so the pick
+      // lands before the outside-click handler would otherwise close this
+      // on the same interaction and drop it.
+      ev.preventDefault();
+      $('txt-task').value = n;
+      closeTaskDropdown();
+      updateTaskDetail();
+    });
+    box.appendChild(item);
+  }
+}
+
+function openTaskDropdown() {
+  renderTaskDropdown('');           // always the full list on open
+  $('task-dropdown').hidden = false;
+}
+
+function closeTaskDropdown() {
+  $('task-dropdown').hidden = true;
 }
 
 function updateTaskDetail() {
@@ -785,7 +839,16 @@ function init() {
   $('btn-arm-cancel').addEventListener('click', () => call('arm_cancel', []).catch(() => {}));
 
   // ---- Task ----
-  $('txt-task').addEventListener('input', updateTaskDetail);
+  $('txt-task').addEventListener('input', () => {
+    updateTaskDetail();
+    if (!$('task-dropdown').hidden) renderTaskDropdown($('txt-task').value);
+  });
+  $('txt-task').addEventListener('focus', openTaskDropdown);
+  $('txt-task').addEventListener('click', openTaskDropdown);
+  $('txt-task').addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeTaskDropdown(); });
+  document.addEventListener('mousedown', (ev) => {
+    if (!$('task-combo').contains(ev.target)) closeTaskDropdown();
+  });
   $('btn-task').addEventListener('click', () => call('task_command', ['TASK ' + $('txt-task').value.trim()]).catch(() => {}));
   $('btn-reload-tasks').addEventListener('click', () => call('task_command', ['RELOAD_TASKS']).catch(() => {}));
   $('btn-goto').addEventListener('click', () => call('task_command', ['GOTO ' + parseInt($('num-goto').value, 10)]).catch(() => {}));

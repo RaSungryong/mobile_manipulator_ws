@@ -184,9 +184,42 @@ async def scenario(cdp, url, bridge, holder):
          'lift_height_mm': None, 'files': []},
         {'name': 'weird&<name>', 'scan_mode': 'pose', 'kind': 'scan', 'tags': [104], 'points': 1,
          'traverse_points': 0, 'lift_height_mm': 0, 'files': ['a&b<c>.csv'], 'groups_filter': [104]}]})
-    check(await wait_js(cdp, "document.getElementById('task-list').options.length === 4 && "
-                            "document.getElementById('txt-task').value === 'scan_pose_a'"),
-          'task list fills the datalist and picks the first (pose) task')
+    check(await wait_js(cdp, "document.getElementById('txt-task').value === 'scan_pose_a'"),
+          'task list picks the first (pose) task into the field')
+    # ---- combo dropdown: opening it must list EVERY task, not just the one
+    # already typed (a plain <input list=datalist> only suggests options
+    # that contain the CURRENT text as a substring, so with the field
+    # already holding a full task name it showed exactly that one
+    # self-match and every other task silently vanished — the reported bug).
+    check(await cdp.js("document.getElementById('task-dropdown').hidden"), 'dropdown starts closed')
+    await cdp.js("document.getElementById('txt-task').dispatchEvent(new MouseEvent('click', {bubbles: true}))")
+    check(await wait_js(cdp, "!document.getElementById('task-dropdown').hidden"), 'a click opens the dropdown')
+    check(await cdp.js("document.getElementById('txt-task').value === 'scan_pose_a'"),
+          'the field still holds a full task name while opening (the exact failure state)')
+    check(await cdp.js("document.querySelectorAll('#task-dropdown .item').length === 4"),
+          '…yet the dropdown lists all 4 tasks, not just the one matching the current text')
+    check(await cdp.js("[...document.querySelectorAll('#task-dropdown .item .name')].map(e => e.textContent).includes('go_home')"),
+          'go_home (which does not contain "scan_pose_a") is still listed')
+    await cdp.js("document.getElementById('txt-task').value = 'joint'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
+    check(await wait_js(cdp, "document.querySelectorAll('#task-dropdown .item').length === 1 && "
+                            "document.querySelector('#task-dropdown .item .name').textContent === 'scan_joint_a'"),
+          'typing narrows the dropdown by substring')
+    await cdp.js("""(() => {
+        const item = document.querySelector('#task-dropdown .item');
+        item.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+    })()""")
+    check(await wait_js(cdp, "document.getElementById('txt-task').value === 'scan_joint_a' && "
+                            "document.getElementById('task-dropdown').hidden"),
+          'clicking an item selects it and closes the dropdown')
+    check(await cdp.js("document.getElementById('lbl-task-detail').innerHTML.includes('joint mode')"),
+          'the detail view follows the pick')
+    await cdp.js("document.getElementById('txt-task').dispatchEvent(new MouseEvent('click', {bubbles: true}))")
+    check(await wait_js(cdp, "!document.getElementById('task-dropdown').hidden"), 'dropdown reopens on click')
+    await cdp.js("document.getElementById('btn-task').dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))")
+    check(await wait_js(cdp, "document.getElementById('task-dropdown').hidden"), 'a click outside the combo closes it')
+    await cdp.js("document.getElementById('txt-task').value = 'scan_pose_a'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
     # ---- task detail: field-by-field, not the old dense one-liner (2026-09-15) ----
     check(await cdp.js("document.getElementById('lbl-task-detail').querySelector('.task-detail-mode').textContent"
                        ".includes('pose mode') && document.getElementById('lbl-task-detail')"

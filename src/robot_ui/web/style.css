@@ -34,6 +34,24 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .task-detail-table .dim { color: #888; }
 .task-detail-warn { color: #e39a2d; font-size: 12px; margin-top: 6px;
   border-left: 3px solid #e39a2d; padding-left: 6px; }
+
+/* Task combo (2026-09-15): a native <input list=datalist> only suggests
+   options that contain the input's CURRENT text as a substring, so once
+   the field holds a full task name (set on load, or after picking one)
+   opening it showed just that one self-match — every other task vanished.
+   This is our own dropdown instead: click/focus always lists every task,
+   typing narrows it, a pick or an outside click closes it. */
+.combo { position: relative; }
+.combo-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+  margin-top: 2px; background: #2a2b2e; border: 1px solid var(--border);
+  border-radius: 3px; max-height: 260px; overflow-y: auto;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+.combo-list .item { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #3a3b3f; }
+.combo-list .item:last-child { border-bottom: none; }
+.combo-list .item:hover, .combo-list .item.active { background: #3f4046; }
+.combo-list .item .name { font-family: var(--mono); font-weight: bold; font-size: 12px; }
+.combo-list .item .summary { color: #aaa; font-size: 11px; }
+.combo-list .empty { padding: 6px 8px; color: var(--muted); font-size: 12px; }
 .warn { color: #e39a2d; font-weight: bold; white-space: pre-wrap; }
 .bold { font-weight: bold; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }

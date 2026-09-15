@@ -1686,6 +1686,50 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-15 — Web Task combo: the dropdown showed ONE task; now a real dropdown that always lists them all
+
+User (pinyin): "下拉框中只有一个" — the Task tab's task dropdown offered a
+single entry although /task_list carries nine. Cause is the widget, not the
+data: the web UI used a plain `<input list=datalist>`, and a browser's
+native datalist only suggests options whose value contains the input's
+CURRENT text as a substring. The field is pre-filled with the first task's
+full name on load (and holds a full name after any pick), and no other task
+name contains that whole string — so opening it showed exactly one
+self-match and the other eight silently vanished. (The Qt window's
+editable `QComboBox` lists everything regardless of the edit text, so it
+never had this; the web port inherited the browser's filtering.)
+
+Replaced with our own dropdown (`renderTaskDropdown` /
+`openTaskDropdown` in `web/app.js`, `.combo` / `.combo-list` in
+`style.css`, `#task-combo` / `#task-dropdown` in `index.html`; the
+datalist is gone): a click or focus opens it UN-filtered — every task,
+always, each with its one-line summary underneath — and only typing
+afterwards narrows it by substring; a pick sets the field, closes it and
+updates the detail view; an outside click or Escape closes it; a
+`/task_list` republish while it is open re-renders it with the current
+filter instead of resetting under the cursor. The item handler is on
+`mousedown`, not `click`, so the pick lands before the input's blur /
+the outside-click close could drop it on the same gesture. Free typing of
+a name the list does not show still works (same field, same `input`
+handler).
+
+Verified: `check_web_ui_browser.py` 76 → **86** — a real headless Chrome
+reproduces the failure state (field already holding a full task name)
+and asserts the opened dropdown lists all 4 fixture tasks including one
+whose name shares nothing with the field text; typing narrows to the one
+substring match; a pick sets the field, closes the list and updates the
+detail; an outside mousedown closes it. Two harness lessons on the way,
+recorded in the test's comments: headless Chrome does not move DOM focus
+on a programmatic `.focus()` (no tab activation), so the test dispatches
+the click the handler also listens for; and `.click()` synthesises only a
+`click`, never the `mousedown` a real click starts with, so the
+outside-close test dispatches `mousedown` explicitly. Then **live against
+the running stack**: the field pre-filled with
+`scan_joint_errorX_p000mm_standoff_010mm_height_652mm`, a click on it
+listed all **9** real tasks. Web-only change; `check_web_ui.py` 106 and
+the Qt `check_task_list_ui.py` 85 unchanged. Browser tabs pick the new
+`app.js` up on reload (served `no-store`); no node restart needed.
+
 ### 2026-09-15 — Task tab shows what a task actually IS; Ra map CSVs moved from results/ to log/
 
 Two small user requests about the web UI (pinyin): what does a listed scan

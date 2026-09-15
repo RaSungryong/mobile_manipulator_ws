@@ -127,8 +127,10 @@
             <div class="group-title">Task command</div>
             <p class="note">Tasks are the path-data files in task/csv, as task_executor reports them on /task_list: assigned_workpoints_* (end-effector poses) → scan_pose_*, rrt_final_path_* (joint angles) → scan_joint_*. A task never returns to the start tag on its own — "scan then come back" is two commands. Send TASK go_home separately.</p>
             <div class="row">
-              <input type="text" id="txt-task" list="task-list" class="grow" placeholder="waiting for /task_list from task_executor …">
-              <datalist id="task-list"></datalist>
+              <div class="combo grow" id="task-combo">
+                <input type="text" id="txt-task" class="grow" autocomplete="off" placeholder="waiting for /task_list from task_executor …">
+                <div class="combo-list" id="task-dropdown" hidden></div>
+              </div>
               <button id="btn-task">Send TASK</button>
               <button id="btn-reload-tasks" title="RELOAD_TASKS: task_executor re-scans task/csv (refused while a task is running).">Reload tasks</button>
             </div>
