@@ -138,21 +138,30 @@ def recentre_m(det, tags, fx, h, width, x_min_px=DEFAULT_LEFT_EDGE_PX):
     return float((np.mean(xs) - 0.5 * (x_min_px + width)) * h / fx)
 
 
-def max_pivot_from_corners(det, tags, camera_offset, fx, fy, cxK, h, height, margin=0.010, keep='both'):
+PIVOT_MARGIN_M = 0.012         # quiet zone: at 8.7 deg on 2026-09-15 a tag 6 mm from the edge was still detected
+
+
+def max_pivot_from_corners(det, tags, camera_offset, fx, fy, cxK, h, height, margin=PIVOT_MARGIN_M,
+                           keep='both', direction=0):
     """Largest body rotation (deg) from the pose of `det` that keeps both
     tags (keep='both') or at least one (keep='one') inside the image's
     vertical extent: a tag centre is camera_offset + (its distance ahead
     of the principal point) from the rotation centre and swings sideways
-    (image y) by that times sin(angle); the room is the smaller of its
-    distances to the top and bottom edges minus `margin`. None when no
-    tag is present. This is the physical limit of the pivot sweep — with
-    the 0.24 m tall view at 0.30 m and a ~0.6 m lever it is ~7 deg."""
+    (image y) by that times sin(angle); the room is its distance to the
+    edge it moves toward minus `margin`. `direction` is the sign of the
+    rotation in IMAGE-ANGLE terms (+ = the tags' edge angle grows = the
+    tags move DOWN the image, toward the bottom edge; − = up; 0 = the
+    smaller of the two, for a sweep either way). None when no tag is
+    present. This is the physical limit of the pivot sweep — with the
+    0.24 m tall view at 0.30 m and a ~0.6 m lever it is ~7 deg."""
     caps = []
     for tg in tags:
         if tg not in det:
             continue
         c = np.asarray(det[tg]['c'], float)
-        lat = min(c[:, 1].min(), height - c[:, 1].max()) * h / fy - margin
+        top, bottom = c[:, 1].min(), height - c[:, 1].max()
+        room_px = bottom if direction > 0 else top if direction < 0 else min(top, bottom)
+        lat = room_px * h / fy - margin
         lever = abs(camera_offset) + max(0.0, (c[:, 0].mean() - cxK) * h / fx)
         caps.append(math.degrees(math.asin(min(1.0, max(0.0, lat) / max(lever, 0.3)))))
     if not caps:
@@ -623,7 +632,7 @@ class Session:
             return None
         return float(np.mean(ds))
 
-    def max_pivot_deg(self, camera_offset, spacing, keep='both'):
+    def max_pivot_deg(self, camera_offset, spacing, keep='both', direction=0):
         """The largest body rotation (deg) from the CURRENT pose that keeps
         both tags (keep='both') or at least one tag (keep='one') inside
         the lateral room: a tag is camera_offset + (its distance ahead of
@@ -637,7 +646,26 @@ class Session:
         cxK = float(self._ci.K[2]) if self._ci is not None else 0.5 * m.image_width
         det = {d.id: dict(c=np.asarray(d.corners, float).reshape(4, 2)) for d in m.detections}
         return max_pivot_from_corners(det, self.tags, camera_offset, fx, fy, cxK, self.gp_height_cfg,
-                                      m.image_height, keep=keep)
+                                      m.image_height, keep=keep, direction=direction)
+
+    def lateral_offset_deg(self, camera_offset):
+        """Body rotation (deg, image-angle sign) that would bring the
+        visible tags' mean row onto the principal row: + moves the tags
+        DOWN the image. None when no tag is seen."""
+        m = self.wait_tags(1, timeout=2.0)
+        if m is None:
+            return None
+        fx = float(self._ci.K[0]) if self._ci is not None else 910.0
+        fy = float(self._ci.K[4]) if self._ci is not None else fx
+        cxK = float(self._ci.K[2]) if self._ci is not None else 0.5 * m.image_width
+        cyK = float(self._ci.K[5]) if self._ci is not None else 0.5 * m.image_height
+        rows, levers = [], []
+        for d in m.detections:
+            if d.id in self.tags:
+                rows.append(d.center_y)
+                levers.append(abs(camera_offset) + max(0.0, (d.center_x - cxK) * self.gp_height_cfg / fx))
+        dy = (cyK - np.mean(rows)) * self.gp_height_cfg / fy
+        return math.degrees(math.asin(max(-1.0, min(1.0, dy / np.mean(levers)))))
 
     def recentre(self):
         """Drive distance that recentres the pair in the usable image, or
@@ -754,8 +782,9 @@ def cmd_collect(args):
         print("  1. snapshot at rest, then %d moves of %s m with a snapshot after each" % (len(scans), scans))
     if 'piv' in only:
         print("  2. %d closed-loop pivots to the cumulative EXECUTED angles %s x F deg (±%.1f) with a snapshot after "
-              "each, F = the largest rotation that keeps one tag in view (≤ %.0f deg, read from the frame)"
-              % (len(pivs_unit), pivs_unit, pivot_tol, args.pivot_max))
+              "each, F = the largest rotation that keeps %s in view (≤ %.0f deg, read from the frame), at %.2f rad/s"
+              % (len(pivs_unit), pivs_unit, pivot_tol, "ONE tag" if args.pivot_one_tag else "BOTH tags",
+                 args.pivot_max, args.pivot_speed))
     if 'drive' in only:
         print("  3. %d drives of %s m, detections recorded throughout" % (len(drives), drives))
     print("  output: %s%s" % (d, "  (only: %s; that phase's old files are renamed old_*)" % ",".join(sorted(only)) if args.only else ""))
@@ -815,6 +844,8 @@ def cmd_collect(args):
                 sys.exit("%s: recentre move failed — stop here, solve what exists" % what)
             rospy.sleep(S.settle_s)
 
+    keep = 'both'
+
     def pivot_to(target, gain, ref):
         """Pivot until the tags' square angles are `target` deg away from
         the reference reading `ref` (image sign convention; cumulative
@@ -830,9 +861,10 @@ def cmd_collect(args):
             rem = target - total
             if abs(rem) <= pivot_tol:
                 break
-            # the cap keeps ONE tag in view; the sign of rem in image terms
-            # vs the body is unknown here, so cap the magnitude only
-            cap = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep='one')
+            # the cap keeps ONE tag in view in the direction this rotation
+            # moves the tags (rem is in image-angle terms: + = down the image)
+            cap = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep=keep,
+                                  direction=1 if rem > 0 else -1)
             if cap is None:
                 sys.exit("pivot: no calibration tag in view — stop here, solve what exists")
             cmd = rem * gain
@@ -840,12 +872,14 @@ def cmd_collect(args):
                 print("    remaining %+.2f deg exceeds the lateral room (%.2f deg) — stopping this step short" % (rem, cap))
                 cmd = math.copysign(cap * abs(gain), cmd)
             cmd = max(-args.pivot_max * 2.5, min(args.pivot_max * 2.5, cmd))
+            if abs(cmd) < 0.3:
+                break
             # mobile_node verifies the pivot against ODOM and reports a move
             # that ended more than shortfall_frac short as a failure — the
             # base under-executes small pivots, so that is the normal case
             # here. What matters is what the TAGS say: a short move is
             # progress, only "nothing moved twice" stops the session.
-            ok = mc.pivot_angle(cmd)
+            ok = mc.pivot_angle(cmd, speed=args.pivot_speed)
             rospy.sleep(S.settle_s)
             ex = S.rotation_since(ref)
             if ex is None:
@@ -869,14 +903,36 @@ def cmd_collect(args):
                 break
         return total, gain
 
+    def level_pivot():
+        """Pivot until the tags sit on the principal row (a previous
+        sweep may have left them at an edge, one even out of view)."""
+        gain = 1.8
+        for attempt in range(5):
+            need = S.lateral_offset_deg(cam_off_prior)
+            if need is None:
+                sys.exit("pivot: no calibration tag in view — re-park with the pair in view")
+            if abs(need) < 0.4:
+                return
+            lim = 3.0 if attempt == 0 else args.pivot_max * 2.5   # first: small, until the sign is learned
+            cmd = max(-lim, min(lim, need * gain))
+            print("  levelling the pair on the principal row: %+.2f deg needed, commanding %+.2f" % (need, cmd))
+            before = S.tag_angles_deg()
+            mc.pivot_angle(cmd, speed=args.pivot_speed)
+            rospy.sleep(S.settle_s)
+            ex = S.rotation_since(before)
+            if ex is not None and abs(ex) > 0.15:
+                gain = max(-6.0, min(6.0, cmd / ex))
+
     if 'piv' in only:
+        level_pivot()
         recentre("before the pivots")
         snap('piv_00_%s' % time.strftime('%H%M%S'))
         ref = S.tag_angles_deg()
         if len(ref) < 2:
             sys.exit("pivot: pair not in view — stop here, solve what exists")
-        full = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep='one')
-        full = min(args.pivot_max, (full or 0.0) - 0.5)
+        keep = 'one' if args.pivot_one_tag else 'both'
+        full = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep=keep)
+        full = min(args.pivot_max, (full or 0.0) - 0.7)      # the loop lands within ±0.5 and overshoots a little
         if full < 3.0:
             sys.exit("pivot: the lateral room allows only %.1f deg of rotation — re-park with the pair "
                      "vertically centred (overlay y offsets near 0)" % full)
@@ -886,7 +942,7 @@ def cmd_collect(args):
         for k, ang in enumerate(pivs):
             reached, gain = pivot_to(ang, gain, ref)
             print("  pivot %d: cumulative target %+.1f, at %+.2f deg" % (k + 1, ang, reached))
-            snap('piv_%02d_%s' % (k + 1, time.strftime('%H%M%S')), min_tags=1)
+            snap('piv_%02d_%s' % (k + 1, time.strftime('%H%M%S')), min_tags=1 if args.pivot_one_tag else None)
     if 'drive' not in only:
         print("collect done: %s" % d)
         return
@@ -1048,6 +1104,11 @@ def main():
     p.add_argument('--dry-run', action='store_true'); p.add_argument('--yes', action='store_true')
     p.add_argument('--pivot-max', type=float, default=12.0,
                    help='largest cumulative executed pivot (deg); the frame room may allow less')
+    p.add_argument('--pivot-one-tag', action='store_true',
+                   help='size the sweep so only ONE tag has to stay in view (~+25 %% of spread; the far tag '
+                        'leaves at the extremes and those snapshots are single-tag)')
+    p.add_argument('--pivot-speed', type=float, default=0.08,
+                   help='angular speed of the pivot commands (rad/s; mobile_node default 0.2 was too fast, user 2026-09-15)')
     p.add_argument('--only', default=None,
                    help='redo only these phases (comma list of scan,piv,drive) INTO an existing session dir; '
                         'that phase\'s previous files are renamed old_*')
