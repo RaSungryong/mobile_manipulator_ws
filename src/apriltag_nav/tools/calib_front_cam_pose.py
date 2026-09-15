@@ -46,11 +46,14 @@ Preconditions
     (outer extent + inner gap) / 2 so the printed size drops out, and pass
     it to `solve --spacing`. The fit's lens height is above the TAG-TOP
     plane; extrinsics.yaml's tz adds robot.yaml robot.tag_thickness (1 mm).
-  * frame room: 90 mm tags fill 271 px each at 0.30 m, so with 0.12 m of
-    centre spacing the pair spans 0.21 m of the 0.42 m wide view and the
-    base can drive ~0.09 m either way before a tag leaves the frame.
-    `check` prints the room; `collect` caps every move and drive to it
-    (the base is never asked to drive a tag out of view).
+  * frame room: the body / front bumper hides the LEFT THIRD of the
+    image (`--left-edge-px`, 430), and 90 mm tags fill ~225 px each at
+    0.30 m, so with 0.12 m of centre spacing the pair spans 0.21 m of the
+    0.34 m usable width. `check` prints the room; `collect` caps every
+    scan move to the room that keeps BOTH tags in view and every drive
+    track to the room that keeps ONE tag in view — the yaw fit places a
+    frame from a single tag (its square orientation + fitted laying
+    angle), so a track can run ~0.15 m instead of ~0.05.
 
 Commands
   check               preconditions only (nothing moves)
@@ -59,7 +62,7 @@ Commands
   record DIR NAME     record every frame for --seconds while YOU drive
                       (robot_ui Mobile tab, ≤ 0.1 m, straight) -> drive_NAME
   collect DIR         the whole session through mobile_node: 8 small moves
-                      with snapshots, 8 pivots of ±3 deg (cumulative ±6)
+                      with snapshots, 8 pivots of ±2 deg (cumulative ±4)
                       with snapshots,
                       then --drive-repeat x forward/back drives of --drive m
                       (0.10, capped to the frame room) recorded as tracks.
@@ -95,21 +98,44 @@ from fit_front_cam_ground import (fit_ground, load_snapshots, parse_camera_info,
 DEFAULT_TAGS = (149, 150)      # 2026-09-15: the 90 mm tags on hand (the 60 mm 15/16 pair is gone); user's pick
 DEFAULT_SIZE = 0.090
 DEFAULT_SPACING = None         # no default on purpose — the measured centre distance is the ruler
-ROOM_MARGIN_M = 0.015          # keep every tag this far inside the frame edge
+ROOM_MARGIN_M = 0.015          # keep every tag this far inside the usable frame
+DEFAULT_LEFT_EDGE_PX = 430     # the body / front bumper hides the left third of the
+                               # image (user, 2026-09-15: "화면 좌측의 1/3까지는 가려져")
 
 
-def frame_room_m(det, tags, fx, fy, h, width, height):
-    """How far the base may drive before a tag corner reaches the frame
-    edge, from one raw detection dict {id: {'c': corners(4,2)}}: dict(fwd,
-    rev, left, right) in metres at lens height h. Driving FORWARD the floor
-    moves toward image LEFT (image right = forward), so the forward room is
-    the smallest corner x; reverse is the room to the right edge; left /
-    right are the lateral rooms (image up / down = robot left / right)."""
-    cs = np.vstack([np.asarray(det[t]['c'], float) for t in tags])
-    return dict(fwd=float(cs[:, 0].min() * h / fx),
-                rev=float((width - cs[:, 0].max()) * h / fx),
-                left=float(cs[:, 1].min() * h / fy),
-                right=float((height - cs[:, 1].max()) * h / fy))
+def frame_room_m(det, tags, fx, fy, h, width, height, x_min_px=DEFAULT_LEFT_EDGE_PX, keep='both'):
+    """How far the base may drive before a tag corner leaves the USABLE
+    frame (x from x_min_px — the bumper edge — to width), from one raw
+    detection dict {id: {'c': corners(4,2)}}: dict(fwd, rev, left, right)
+    in metres at lens height h. Driving FORWARD the floor moves toward
+    image LEFT (image right = forward), so the forward room is the corner
+    nearest the bumper edge; reverse is the room to the right edge; left /
+    right are the lateral rooms (image up / down = robot left / right).
+    keep='both': every tag must stay in view (snapshots); keep='one': at
+    least one tag must (drive tracks, which use single-tag frames)."""
+    per = []
+    for tg in tags:
+        if tg not in det:
+            continue
+        c = np.asarray(det[tg]['c'], float)
+        per.append((c[:, 0].min() - x_min_px, width - c[:, 0].max(), c[:, 1].min(), height - c[:, 1].max()))
+    if not per:
+        raise ValueError("no calibration tag in the frame")
+    if keep != 'one' and len(per) < len(tags):
+        return dict(fwd=0.0, rev=0.0, left=0.0, right=0.0)     # a tag is already out of view
+    agg = max if keep == 'one' else min
+    return dict(fwd=float(agg(p[0] for p in per) * h / fx),
+                rev=float(agg(p[1] for p in per) * h / fx),
+                left=float(min(p[2] for p in per) * h / fy),
+                right=float(min(p[3] for p in per) * h / fy))
+
+
+def recentre_m(det, tags, fx, h, width, x_min_px=DEFAULT_LEFT_EDGE_PX):
+    """Signed body-x drive that puts the pair's centre in the middle of
+    the USABLE image (+ = the pair is ahead of that middle, drive
+    forward). Needs both tags."""
+    xs = [np.asarray(det[tg]['c'], float)[:, 0].mean() for tg in tags]
+    return float((np.mean(xs) - 0.5 * (x_min_px + width)) * h / fx)
 
 
 def cap_distance(dist, room, margin=ROOM_MARGIN_M):
@@ -140,13 +166,49 @@ def pair_pose_in_cam(gp, det, tags):
     return m, math.atan2(d[1], d[0])
 
 
+def square_angle(g):
+    """Orientation of a ground-projected square (4,2) in corner order:
+    the mean direction of its four edges, each brought back to the c0->c1
+    direction (edge k is turned k*90 deg the OTHER way round the square:
+    c0->c1 at +90, c1->c2 at 0, c2->c3 at -90 ...), i.e. the c0->c1 edge
+    direction with the noise of all four edges."""
+    vx = vy = 0.0
+    for k in range(4):
+        d = g[(k + 1) % 4] - g[k]
+        a = math.atan2(d[1], d[0]) + k * math.pi / 2
+        vx += math.cos(a)
+        vy += math.sin(a)
+    return math.atan2(vy, vx)
+
+
+def pair_pose_any(gp, det, tags, spacing, tag_rot):
+    """pair_pose_in_cam when both tags are in `det`; from ONE tag when only
+    one is (2026-09-15 — the bumper hides the left third of front_cam's
+    view, so a drive track loses a tag long before the frame edge). A
+    single tag's square orientation is the pair direction + 90 deg + its
+    fitted laying angle (fit_ground's tag_rot), and the pair centre is
+    half a spacing from its centroid along that direction. Returns
+    (m, phi) or None when neither tag is present."""
+    have = [tg for tg in tags if tg in det]
+    if len(have) == 2:
+        return pair_pose_in_cam(gp, det, tags)
+    if not have:
+        return None
+    k = tags.index(have[0])
+    g = gp.to_ground(det[have[0]]['c'])
+    phi = square_angle(g) - math.pi / 2 - tag_rot[k]
+    u = np.array([math.cos(phi), math.sin(phi)])
+    m = g.mean(0) + (0.5 if k == 0 else -0.5) * spacing * u
+    return m, phi
+
+
 def lens_in_pair_frame(m, phi):
     """Lens nadir position in the pair frame T (origin pair centre, x along
     15 -> 16), from the pair's pose in C."""
     return -R2(phi).T @ m
 
 
-def rotation_centres(gp, piv_snaps, tags, min_deg=2.0):
+def rotation_centres(gp, piv_snaps, tags, min_deg=1.0):
     """For consecutive pivot snapshots: the centre of the arc the lens drew,
     relative to the lens nadir, in the LEVEL camera frame C of the first
     snapshot. Returns [(name0, name1, dtheta_rad, centre_C (2,))]."""
@@ -195,7 +257,7 @@ def fit_rotation_centre(gp, piv_snaps, tags, min_spread_deg=3.0):
 
 
 def fit_yaw_from_tracks(gp, tracks, tags, centre_C, min_step_m=0.0005,
-                        phi_smooth_frames=21):
+                        phi_smooth_frames=21, spacing=None, tag_rot=(0.0, 0.0)):
     """Camera yaw (rad, robot.yaml sign: the angle of the BODY x axis in the
     level camera frame C) from drive tracks — lists of detection dicts
     recorded frame by frame while the base drove roughly straight.
@@ -217,8 +279,16 @@ def fit_yaw_from_tracks(gp, tracks, tags, centre_C, min_step_m=0.0005,
     tracks both ways, and read the per-track spread as the uncertainty."""
     from scipy.optimize import least_squares
     tr_steps = []
+    n_single = 0
     for tr in tracks:
-        poses = [pair_pose_in_cam(gp, d, tags) for d in tr if tags[0] in d and tags[1] in d]
+        if spacing:
+            poses = [pair_pose_any(gp, d, tags, spacing, tag_rot) for d in tr]
+            n_single += sum(1 for d in tr if len([tg for tg in tags if tg in d]) == 1)
+        else:
+            poses = [pair_pose_in_cam(gp, d, tags) for d in tr if tags[0] in d and tags[1] in d]
+        poses = [p for p in poses if p is not None]
+        if len(poses) < 12:
+            continue
         # The pair angle carries ~0.04 deg of per-frame noise, which the
         # 0.55 m lens->centre lever turns into 0.4 mm of centre position —
         # more than the yaw signal over a whole track. The body heading
@@ -261,6 +331,7 @@ def fit_yaw_from_tracks(gp, tracks, tags, centre_C, min_step_m=0.0005,
     yaw = float(f.x[0])
     rms = math.sqrt(np.mean(resid(f.x, tr_steps) ** 2))
     per = [float(least_squares(resid, [0.0], args=([S],), method='lm').x[0]) for S in tr_steps]
+    fit_yaw_from_tracks.n_single = n_single      # frames placed from one tag (reported by solve)
     return yaw, rms, sum(len(S) for S in tr_steps), per
 
 
@@ -294,8 +365,10 @@ def solve_dir(dir_, tags, spacing, size0=DEFAULT_SIZE, h0=0.30):
         tracks.append(parse_track(f))
     res['n_tracks'] = len(tracks)
     if tracks and centres:
-        yaw, rms, n, per = fit_yaw_from_tracks(gp, tracks, tags, res['centre_C'])
-        res.update(yaw=yaw, yaw_rms_m=rms, yaw_pairs=n, yaw_per_track=per)
+        yaw, rms, n, per = fit_yaw_from_tracks(gp, tracks, tags, res['centre_C'],
+                                               spacing=spacing, tag_rot=F['tag_rot'])
+        res.update(yaw=yaw, yaw_rms_m=rms, yaw_pairs=n, yaw_per_track=per,
+                   yaw_single_tag_frames=getattr(fit_yaw_from_tracks, 'n_single', 0))
         res['tx'], res['ty'] = centre_to_lens_body(res['centre_C'], yaw)
     elif centres:
         res['yaw'] = None
@@ -379,13 +452,14 @@ def format_camera_info(ci):
 # ROS side
 # =====================================================================
 class Session:
-    def __init__(self, tags, settle_s=1.5):
+    def __init__(self, tags, settle_s=1.5, left_edge_px=DEFAULT_LEFT_EDGE_PX):
         import rospy
         from robot_msgs.msg import AprilTagDetectionArray
         from sensor_msgs.msg import CameraInfo
         self.rospy = rospy
         self.tags = tuple(tags)
         self.settle_s = settle_s
+        self.left_edge_px = int(left_edge_px)
         self._last = None
         self._recording = None
         self._ci = None
@@ -412,12 +486,17 @@ class Session:
         return bool(zs) and all(abs(z - self.gp_height_cfg) < 1e-6 for z in zs)
 
     def wait_pair(self, timeout=5.0):
+        return self.wait_tags(len(self.tags), timeout)
+
+    def wait_tags(self, min_tags, timeout=5.0):
+        """A fresh detection message showing at least `min_tags` of the
+        calibration tags (2 = the pair, 1 = either, for drive tracks)."""
         t0 = time.time()
         while time.time() - t0 < timeout and not self.rospy.is_shutdown():
             m = self._last
             if m is not None and (time.time() - m.header.stamp.to_sec()) < 0.5:
                 ids = {d.id for d in m.detections}
-                if set(self.tags) <= ids:
+                if len(set(self.tags) & ids) >= min_tags:
                     return m
             self.rospy.sleep(0.05)
         return None
@@ -443,33 +522,53 @@ class Session:
                     d.id, d.center_x, d.center_y,
                     max(d.corners[0::2]) - min(d.corners[0::2])))
         room = self.room(m)
-        print("  frame room before a tag corner leaves the view: forward %.3f m, reverse %.3f m, "
-              "left %.3f m, right %.3f m" % (room['fwd'], room['rev'], room['left'], room['right']))
-        d_ok = min(room['fwd'], room['rev']) - ROOM_MARGIN_M
-        print("  -> collect can drive %.3f m tracks; scans need 0.06, the pivots swing the lens ~0.05 m sideways"
-              % max(0.0, d_ok))
-        if d_ok < 0.06 or min(room['left'], room['right']) < 0.05:
-            print("FAIL: too little room — re-park with the pair centred (overlay offsets within ±30 mm), "
-                  "or lay the tags closer together")
+        room1 = self.room(m, keep='one')
+        xs = [d.center_x for d in m.detections if d.id in self.tags]
+        usable_mid = 0.5 * (self.left_edge_px + m.image_width)
+        print("  usable image x %d..%d px (bumper hides the left %d px); pair centre %.0f px, "
+              "%+.0f mm from the usable middle (+ = ahead; drive FORWARD to centre)"
+              % (self.left_edge_px, m.image_width, self.left_edge_px, np.mean(xs),
+                 (np.mean(xs) - usable_mid) * self.gp_height_cfg / (float(self._ci.K[0]) if self._ci else 910.0) * 1e3))
+        print("  room with BOTH tags in view (snapshots): forward %.3f m, reverse %.3f m, left %.3f m, right %.3f m"
+              % (room['fwd'], room['rev'], room['left'], room['right']))
+        print("  room with ONE tag in view (drive tracks): forward %.3f m, reverse %.3f m" % (room1['fwd'], room1['rev']))
+        d_ok = min(room1['fwd'], room1['rev']) - ROOM_MARGIN_M
+        print("  -> collect can drive %.3f m tracks; scans need ~0.04 each way with both tags, "
+              "the pivots swing the lens ~0.05 m sideways" % max(0.0, d_ok))
+        if min(room['fwd'], room['rev']) < 0.03 or min(room['left'], room['right']) < 0.05:
+            print("FAIL: too little room — re-park with the pair in the middle of the USABLE image "
+                  "(the offset printed above near 0), or lay the tags closer together")
             return False
         print("OK: raw detections, both tags, CameraInfo present")
         return True
 
-    def room(self, msg):
+    def room(self, msg, keep='both'):
         """frame_room_m for a live detection message (lens height from the
-        config, K from CameraInfo)."""
+        config, K from CameraInfo, the bumper edge from --left-edge-px)."""
         det = {d.id: dict(c=np.asarray(d.corners, float).reshape(4, 2)) for d in msg.detections}
         fx = float(self._ci.K[0]) if self._ci is not None else 910.0
         fy = float(self._ci.K[4]) if self._ci is not None else fx
-        return frame_room_m(det, self.tags, fx, fy, self.gp_height_cfg, msg.image_width, msg.image_height)
+        return frame_room_m(det, self.tags, fx, fy, self.gp_height_cfg, msg.image_width, msg.image_height,
+                            x_min_px=self.left_edge_px, keep=keep)
 
-    def capped(self, dist):
-        """`dist` clipped to the room the CURRENT frame leaves (None when
-        the pair is not in view)."""
+    def recentre(self):
+        """Drive distance that recentres the pair in the usable image, or
+        None when the pair is not in view."""
         m = self.wait_pair(timeout=2.0)
         if m is None:
+            return None
+        det = {d.id: dict(c=np.asarray(d.corners, float).reshape(4, 2)) for d in m.detections}
+        fx = float(self._ci.K[0]) if self._ci is not None else 910.0
+        return recentre_m(det, self.tags, fx, self.gp_height_cfg, m.image_width, self.left_edge_px)
+
+    def capped(self, dist, keep='both'):
+        """`dist` clipped to the room the CURRENT frame leaves (None when
+        no usable frame arrives). keep='one' for drive tracks: a single
+        tag in view is enough to plan the next track."""
+        m = self.wait_tags(1 if keep == 'one' else len(self.tags), timeout=2.0)
+        if m is None:
             return None, False
-        return cap_distance(dist, self.room(m))
+        return cap_distance(dist, self.room(m, keep=keep))
 
     def snap(self, dir_, name, n_frames=30):
         """One at-rest snapshot = the corner-wise MEAN of n_frames frames
@@ -527,7 +626,7 @@ def cmd_collect(args):
     import threading
     from apriltag_nav.mobile_client import MobileClient
     rospy.init_node('calib_front_cam_pose', anonymous=True)
-    S = Session(args.tags)
+    S = Session(args.tags, left_edge_px=args.left_edge_px)
     rospy.sleep(1.0)
     if not S.check():
         sys.exit(2)
@@ -535,10 +634,12 @@ def cmd_collect(args):
     if os.path.isdir(d) and glob.glob(os.path.join(d, '*.txt')):
         sys.exit("refusing to write into a non-empty session directory: %s" % d)
     scans = [+0.02, +0.02, +0.02, -0.02, -0.02, -0.04, -0.02, +0.04]
-    # 3 deg steps summing to +6 / 0 / -6 / 0: nine snapshots spanning ~9 deg
-    # of body rotation for the joint centre fit, with the lens never more
-    # than ~0.05 m (6 deg x 0.55 m, under-executed) off its start line.
-    pivs = [+3.0, +3.0, -3.0, -3.0, -3.0, -3.0, +3.0, +3.0]
+    # 2 deg steps summing to +4 / 0 / -4 / 0: nine snapshots spanning ~6 deg
+    # of executed body rotation for the joint centre fit. Larger swings
+    # push the far tag (0.13 m ahead of the nadir, 0.68 m from the
+    # rotation centre) out of the 0.07 m of lateral room the bumper-
+    # limited view leaves.
+    pivs = [+2.0, +2.0, -2.0, -2.0, -2.0, -2.0, +2.0, +2.0]
     drives = []
     for _ in range(args.drive_repeat):
         drives += [+args.drive, -args.drive]
@@ -565,10 +666,11 @@ def cmd_collect(args):
         fn = S.snap(d, name)
         print("  saved %s" % os.path.basename(fn))
 
-    def capped_or_exit(dist, what):
-        c, was = S.capped(dist)
+    def capped_or_exit(dist, what, keep='both'):
+        c, was = S.capped(dist, keep=keep)
         if c is None:
-            sys.exit("%s: pair not in view — stop here, solve what exists" % what)
+            sys.exit("%s: %s in view — stop here, solve what exists"
+                     % (what, "no calibration tag" if keep == 'one' else "pair not"))
         if was:
             print("  %s: %+.3f m capped to %+.3f m by the frame room" % (what, dist, c))
         return c
@@ -582,13 +684,28 @@ def cmd_collect(args):
         if not mc.drive_distance(dist, speed=args.speed):
             sys.exit("move %d (%+.3f m) failed — stop here, solve what exists" % (k, dist))
         snap('scan_%s' % time.strftime('%H%M%S'))
+    def recentre(what):
+        # the scans / drives leave the pair wherever the caps allowed; the
+        # pivots and each drive phase start with it in the middle of the
+        # usable image so the swing / the track has room both ways
+        r = S.recentre()
+        if r is None:
+            sys.exit("%s: pair not in view — stop here, solve what exists" % what)
+        if abs(r) >= 0.008:
+            print("  %s: recentring the pair, %+.3f m" % (what, r))
+            if not mc.drive_distance(r, speed=args.speed):
+                sys.exit("%s: recentre move failed — stop here, solve what exists" % what)
+            rospy.sleep(S.settle_s)
+
+    recentre("before the pivots")
     snap('piv_%s' % time.strftime('%H%M%S'))
     for k, ang in enumerate(pivs):
         if not mc.pivot_angle(ang):
             sys.exit("pivot %d (%+.1f deg) failed — stop here, solve what exists" % (k, ang))
         snap('piv_%s' % time.strftime('%H%M%S'))
+    recentre("before the drives")
     for k, dist in enumerate(drives):
-        dist = capped_or_exit(dist, "drive %d" % k)
+        dist = capped_or_exit(dist, "drive %d" % k, keep='one')
         if abs(dist) < 0.03:
             print("  drive %d skipped (%.3f m of room is too short for a track)" % (k, abs(dist)))
             continue
@@ -620,7 +737,7 @@ def cmd_snap(args):
 def cmd_record(args):
     import rospy
     rospy.init_node('calib_front_cam_pose', anonymous=True)
-    S = Session(args.tags)
+    S = Session(args.tags, left_edge_px=args.left_edge_px)
     rospy.sleep(1.0)
     if not S.check():
         sys.exit(2)
@@ -633,7 +750,7 @@ def cmd_record(args):
 def cmd_check(args):
     import rospy
     rospy.init_node('calib_front_cam_pose', anonymous=True)
-    S = Session(args.tags)
+    S = Session(args.tags, left_edge_px=args.left_edge_px)
     rospy.sleep(1.0)
     sys.exit(0 if S.check() else 2)
 
@@ -667,8 +784,9 @@ def cmd_solve(args):
     if r.get('yaw') is None:
         print("no drive_*.txt tracks — yaw not determined (tx/ty below assume yaw 0)")
     else:
-        print("camera yaw vs the travel axis: %+.3f deg (cumulative-lateral rms %.2f mm over %d steps; per track: %s)"
-              % (math.degrees(r['yaw']), r['yaw_rms_m'] * 1e3, r['yaw_pairs'],
+        print("camera yaw vs the travel axis: %+.3f deg (cumulative-lateral rms %.2f mm over %d steps, "
+              "%d frames placed from a single tag; per track: %s)"
+              % (math.degrees(r['yaw']), r['yaw_rms_m'] * 1e3, r['yaw_pairs'], r.get('yaw_single_tag_frames', 0),
                  ", ".join("%+.3f" % math.degrees(v) for v in r['yaw_per_track']) or "-"))
     print("\nlens relative to the ROTATION CENTRE, body frame: tx %+.4f m  ty %+.4f m" % (r['tx'], r['ty']))
     yaw_deg = math.degrees(r['yaw']) if r.get('yaw') is not None else None
@@ -726,14 +844,17 @@ def main():
     ap.add_argument('--spacing', type=float, default=DEFAULT_SPACING,
                     help='measured centre-to-centre distance (m); required by solve')
     ap.add_argument('--size', type=float, default=DEFAULT_SIZE, help='nominal printed tag size (m), refined by the fit')
+    ap.add_argument('--left-edge-px', type=int, default=DEFAULT_LEFT_EDGE_PX,
+                    help='first usable image column: the body / bumper hides everything left of it (default 430)')
     sp = ap.add_subparsers(dest='cmd', required=True)
     sp.add_parser('check').set_defaults(fn=cmd_check)
     p = sp.add_parser('snap'); p.add_argument('dir'); p.add_argument('name'); p.set_defaults(fn=cmd_snap)
     p = sp.add_parser('record'); p.add_argument('dir'); p.add_argument('name')
     p.add_argument('--seconds', type=float, default=15.0); p.set_defaults(fn=cmd_record)
     p = sp.add_parser('collect'); p.add_argument('dir')
-    p.add_argument('--drive', type=float, default=0.10, help='straight drive length per track (m), capped to the frame room')
-    p.add_argument('--drive-repeat', type=int, default=4, help='forward+back pairs (8 tracks of ~0.09 m -> yaw ±0.06 deg)')
+    p.add_argument('--drive', type=float, default=0.15,
+                   help='straight drive length per track (m), capped to the room in which ONE tag stays in view')
+    p.add_argument('--drive-repeat', type=int, default=4, help='forward+back pairs (8 tracks)')
     p.add_argument('--speed', type=float, default=0.03)
     p.add_argument('--dry-run', action='store_true'); p.add_argument('--yes', action='store_true')
     p.set_defaults(fn=cmd_collect)

@@ -1774,6 +1774,22 @@ synthetic plant (`check_front_cam_pose_calib.py` 16 → **27**):
   max 0.6 mm (15 frames: 0.85 / 1.5), ty 0.5 / 1 mm, yaw 0.04 / 0.1°;
   a single 0.09 m track is ±0.5° — the mean is the number, and the doc
   now says so.
+**Same afternoon, at the robot: the bumper hides the left third of
+front_cam's image** (user; the first `check` showed the pair 7 cm ahead
+of the nadir for exactly that reason). `--left-edge-px` (430) bounds the
+usable image; `check` prints the room with BOTH tags (snapshots) and with
+ONE tag (drive tracks) and the pair's offset from the usable middle;
+`collect` recentres the pair there before the pivots and before the
+drives, caps scan moves to the both-tag room and drives to the one-tag
+room, and the yaw fit places a frame from a single tag (`square_angle` of
+its four edges + the fitted laying angle, `pair_pose_any`), so a track
+runs ~0.15 m across the usable width instead of the ~0.04 m both tags
+allow. Pivots are ±2° (cumulative ±4): with the pair 7 cm ahead the far
+tag sits 0.68 m from the rotation centre and ±6° put it past the 0.07 m
+of lateral room in the plant. Eight seeds on the occluded plant: tx rms
+0.7 / max 1.3 mm, ty 0.5 / 0.9 mm, yaw 0.05 / 0.08°. One sign bug caught
+by the plant on the way: the square's edges turn −90° per corner, so
+edge k is brought back by +k·90°, not −.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
