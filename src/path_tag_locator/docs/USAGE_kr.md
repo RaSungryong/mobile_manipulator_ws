@@ -161,7 +161,7 @@ reference_tag:
 
 `T_ab2mb` (mb의 ab 표현), `T_mb2fc` (fc의 mb 표현) 의 기본값이 채워져 있음. **좌표 규약**: `T_X2Y` = "Y 프레임의 X 프레임 내 표현" = Y → X 좌표 변환. 플랫폼 개조(arm 마운트/카메라 마운트 변경) 시에만 수정.
 
-`T_ab2mb`는 실측값(2026-08-13 교체 베이스, arm base 652 mm, y −100 mm). `T_mb2fc`는 **2026-09-15부터 물리 카메라 자세(1.3° 틸트 포함)이며 손으로 고치지 않는다** — `robot.yaml`의 `camera_offset`(0.55) + `robot_camera.ground_plane.front_cam`(roll/pitch/yaw, `height_m` 0.302)에서 `scripts/make_front_cam_extrinsics.py --apply`가 생성한다. 카메라를 다시 마운트하면 `tools/fit_front_cam_ground.py`로 다시 피팅 → robot.yaml → 이 스크립트 순서. 노드들은 `robot_camera_node`가 수평 가상 카메라로 보정해 내보내는 검출을 소비하므로 로더(`load_extrinsics_full`)가 수평 프레임 `T_mb2fc_level`을 만들어 쓰고(`locator.yaml detector.front_cam_frame: auto`), 원본 프레임을 직접 재검출하는 도구(`verify_arm_pointing.py`)만 저장된 물리 행렬을 쓴다. 두 값이 어긋나면 로더가 거부한다(`scripts/check_front_cam_extrinsics.py`로 점검).
+`T_ab2mb`는 실측값(2026-08-13 교체 베이스, arm base 652 mm, y −100 mm). `T_mb2fc`는 **2026-09-15부터 물리 카메라 자세(1.3° 틸트 포함)이며 손으로 고치지 않는다** — `robot.yaml`의 `camera_offset`(0.55) + `robot_camera.ground_plane.front_cam`(roll/pitch/yaw, `height_m` 0.302 = 렌즈→태그 윗면) + `robot.tag_thickness`(0.001, 모든 태그가 1 mm 판이므로 tz = 0.303 = 렌즈→바닥)에서 `scripts/make_front_cam_extrinsics.py --apply`가 생성한다. 바닥 태그는 체인에서 mb z = +0.001에 놓인다. 카메라를 다시 마운트하면 `tools/fit_front_cam_ground.py`로 다시 피팅 → robot.yaml → 이 스크립트 순서. 노드들은 `robot_camera_node`가 수평 가상 카메라로 보정해 내보내는 검출을 소비하므로 로더(`load_extrinsics_full`)가 수평 프레임 `T_mb2fc_level`을 만들어 쓰고(`locator.yaml detector.front_cam_frame: auto`), 원본 프레임을 직접 재검출하는 도구(`verify_arm_pointing.py`)만 저장된 물리 행렬을 쓴다. 두 값이 어긋나면 로더가 거부한다(`scripts/check_front_cam_extrinsics.py`로 점검).
 
 ### 2c. 메인 설정 `config/locator.yaml`
 

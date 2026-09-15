@@ -2,24 +2,36 @@
 """Fit front_cam's ground-plane extrinsics from tag-pair snapshots.
 
 Method (2026-09-08): two tags are laid on the floor a precisely known
-distance apart, edges parallel to the line joining their centres. The base
-is parked so both are in the frame and the operator saves the raw
-detections at rest at several positions (small manual moves and small
-in-place pivots — the commanded motion is NOT used, only what the tags
-show). Every snapshot then constrains the camera with 8 corner points of
-known relative geometry at an unknown robot pose. The fit solves
-    roll, pitch, lens height, printed tag size (+ 3 pose params / snapshot)
+CENTRE distance apart. The base is parked so both are in the frame and the
+operator saves the raw detections at rest at several positions (small
+manual moves and small in-place pivots — the commanded motion is NOT used,
+only what the tags show). Every snapshot then constrains the camera with 8
+corner points of known relative geometry at an unknown robot pose. The fit
+solves
+    roll, pitch, lens height, printed tag size,
+    each tag's in-plane rotation vs the centre line (2026-09-15: the tags
+    no longer have to be laid edge-parallel — only the centre spacing is
+    the ruler; a tag laid a quarter turn round just fits with a 90 deg
+    angle, so the dt_apriltags corner order needs no special handling)
+    (+ 3 pose params / snapshot)
 against CameraInfo K / D, and reports the residual, the numbers for
 robot.yaml `robot_camera.ground_plane.front_cam`, the edge-angle error the
 UNCORRECTED pipeline would read vs fore-aft position, and — from any
 consecutive pivot snapshots — the lens-to-pivot lever (`camera_offset`).
 
+The fitted height is the lens above the TAG-TOP plane (the corners' plane);
+every tag is a 1 mm plate (robot.yaml robot.tag_thickness), which is why
+extrinsics.yaml's tz is height_m + tag_thickness.
+
 Snapshots: `rostopic echo -n1 /front_cam/tag_detections > dir/scan_<t>.txt`
 (the node must be publishing RAW detections, i.e. ground_plane disabled, or
 the fit sees already-corrected data). CameraInfo:
 `rostopic echo -n1 /front_cam/color/camera_info > dir/camera_info.txt`.
+The full session (moves, pivots, drives, solve, apply) is
+tools/calib_front_cam_pose.py; this script is the fit it reuses, and
+reproduces the 2026-09-08 record as is:
 
-    rosrun apriltag_nav fit_front_cam_ground.py log/apriltag_nav/calib_pair --spacing 0.150 --tags 15 16
+    rosrun apriltag_nav fit_front_cam_ground.py log/apriltag_nav/calib_pair --spacing 0.150 --tags 15 16 --size 0.060
 """
 import argparse
 import glob
@@ -53,13 +65,37 @@ def parse_camera_info(fn):
     return K[0], K[4], K[2], K[5], D
 
 
-def pair_corners(size, spacing):
-    """Corners of both tags in the PAIR frame (x along the pair, y right), in
-    dt_apriltags order as seen on this camera: c0 (x-, y-), c1 (x-, y+),
-    c2 (x+, y+), c3 (x+, y-)."""
+def pair_corners(size, spacing, deltas=(0.0, 0.0)):
+    """Corners of both tags in the PAIR frame (x along the centre line, y
+    right), in dt_apriltags order as seen on this camera: c0 (x-, y-),
+    c1 (x-, y+), c2 (x+, y+), c3 (x+, y-) for a tag laid edge-parallel;
+    `deltas` rotates each tag's square about its own centre (rad, the
+    tag's in-plane laying angle vs the centre line, fitted)."""
     h = size / 2.0
     base = np.array([[-h, -h], [-h, h], [h, h], [h, -h]])
-    return np.vstack([base, base + [spacing, 0.0]])
+    out = []
+    for k, d in enumerate(deltas):
+        c, s = math.cos(d), math.sin(d)
+        R = np.array([[c, -s], [s, c]])
+        out.append(base @ R.T + [k * spacing, 0.0])
+    return np.vstack(out)
+
+
+def _edge_angle(corners):
+    d = corners[1] - corners[0]
+    return math.atan2(d[1], d[0])
+
+
+def initial_tag_rotations(d, tags):
+    """Per-tag in-plane angle vs the centre line from one raw snapshot
+    (image geometry; the fit refines it). For an edge-parallel tag the
+    c0 -> c1 edge images at the pair direction + 90 deg."""
+    pair = math.atan2(d[tags[1]]['cy'] - d[tags[0]]['cy'], d[tags[1]]['cx'] - d[tags[0]]['cx'])
+    out = []
+    for t in tags:
+        a = _edge_angle(d[t]['c']) - (pair + math.pi / 2)
+        out.append(math.atan2(math.sin(a), math.cos(a)))
+    return out
 
 
 def load_snapshots(dir_, tags, prefixes=None):
@@ -78,35 +114,40 @@ def load_snapshots(dir_, tags, prefixes=None):
     return snaps
 
 
+N_GLOBAL = 6     # roll, pitch, h, size, delta_tag0, delta_tag1
+
+
 def fit_ground(snaps, tags, fx, fy, cx, cy, D, spacing, size0=0.060, h0=0.30):
-    """The tag-pair fit. Returns dict(roll, pitch, h, size, rms_px, max_px,
-    rms_level_px, gp) — angles in radians, gp a GroundPlane with yaw 0
-    (its x axis is the CAMERA x, not yet the travel axis)."""
+    """The tag-pair fit. Returns dict(roll, pitch, h, size, tag_rot, rms_px,
+    max_px, rms_level_px, gp) — angles in radians (tag_rot = each tag's
+    in-plane angle vs the centre line), h the lens height above the tag-top
+    plane, gp a GroundPlane with yaw 0 (its x axis is the CAMERA x, not yet
+    the travel axis)."""
     t0, t1 = tags
     obs = [np.vstack([d[t0]['c'], d[t1]['c']]) for _, d in snaps]
 
     def residuals(p):
-        roll, pitch, h, s = p[:4]
+        roll, pitch, h, s, d0, d1 = p[:N_GLOBAL]
         gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
-        pc = pair_corners(s, spacing)
+        pc = pair_corners(s, spacing, (d0, d1))
         res = []
         for k in range(len(snaps)):
-            X, Y, psi = p[4 + 3 * k: 7 + 3 * k]
+            X, Y, psi = p[N_GLOBAL + 3 * k: N_GLOBAL + 3 + 3 * k]
             c, sn = math.cos(psi), math.sin(psi)
             g = np.column_stack([X + c * pc[:, 0] - sn * pc[:, 1], Y + sn * pc[:, 0] + c * pc[:, 1]])
             res.append((gp.project(g) - obs[k]).ravel())
         return np.concatenate(res)
 
-    p0 = [0.0, 0.0, h0, size0]
+    p0 = [0.0, 0.0, h0, size0] + initial_tag_rotations(snaps[0][1], tags)
     for _, d in snaps:
         p0 += [(d[t0]['cx'] - cx) * h0 / fx, (d[t0]['cy'] - cy) * h0 / fy,
                math.atan2(d[t1]['cy'] - d[t0]['cy'], d[t1]['cx'] - d[t0]['cx'])]
     fit = least_squares(residuals, p0, method='lm', xtol=1e-12, ftol=1e-12)
-    roll, pitch, h, s = fit.x[:4]
+    roll, pitch, h, s, d0, d1 = fit.x[:N_GLOBAL]
     r = residuals(fit.x)
     lvl = least_squares(lambda q: residuals(np.concatenate([[0.0, 0.0], q])), p0[2:], method='lm')
     r0 = residuals(np.concatenate([[0.0, 0.0], lvl.x]))
-    return dict(roll=roll, pitch=pitch, h=h, size=s,
+    return dict(roll=roll, pitch=pitch, h=h, size=s, tag_rot=(float(d0), float(d1)),
                 rms_px=math.sqrt(np.mean(r ** 2)), max_px=float(np.abs(r).max()),
                 rms_level_px=math.sqrt(np.mean(r0 ** 2)),
                 gp=GroundPlane(fx, fy, cx, cy, D, roll, pitch, h))
@@ -134,8 +175,11 @@ def main():
 
     print(f"snapshots {len(snaps)}, corner points {8 * len(snaps)}, rms {F['rms_px']:.3f} px "
           f"(max {F['max_px']:.2f}); level camera would give {F['rms_level_px']:.3f} px")
-    print(f"roll {math.degrees(roll):+.3f} deg, pitch {math.degrees(pitch):+.3f} deg, height {h * 1000:.1f} mm, "
-          f"tag size {s * 1000:.2f} mm; optical axis meets the floor {ax[0] * 1000:+.1f} / {ax[1] * 1000:+.1f} mm from the nadir")
+    print(f"roll {math.degrees(roll):+.3f} deg, pitch {math.degrees(pitch):+.3f} deg, height {h * 1000:.1f} mm "
+          f"(lens above the tag-top plane), tag size {s * 1000:.2f} mm; optical axis meets the floor "
+          f"{ax[0] * 1000:+.1f} / {ax[1] * 1000:+.1f} mm from the nadir")
+    print(f"tags' in-plane angle vs the centre line: {t0} {math.degrees(F['tag_rot'][0]):+.2f} deg, "
+          f"{t1} {math.degrees(F['tag_rot'][1]):+.2f} deg (multiples of 90 = laid rotated; the rest = laying skew)")
     print("\nrobot.yaml:\n  robot_camera:\n    ground_plane:\n      front_cam:\n        enabled: true\n"
           f"        roll_deg: {math.degrees(roll):.3f}\n        pitch_deg: {math.degrees(pitch):.3f}\n"
           f"        height_m: {h:.3f}\n        yaw_deg: <keep the current value — not observable from tags; "
@@ -148,12 +192,12 @@ def main():
         ang = (math.degrees(math.atan2(c[1][1] - c[0][1], c[1][0] - c[0][0])) - 90.0 + 90.0) % 180.0 - 90.0
         print(f"   X {X:+.3f} m: {ang:+.3f} deg")
 
-    print("\nground-projected pair per snapshot (spacing should be the laid value, edges parallel):")
+    print("\nground-projected pair per snapshot (spacing should be the laid value; edges = c0->c1 angle - 90):")
     for (name, d) in snaps:
         g0 = gp.to_ground(d[t0]['c']); g1 = gp.to_ground(d[t1]['c'])
         sp = np.linalg.norm(g1.mean(0) - g0.mean(0)) * 1000
-        e0 = math.degrees(math.atan2(g0[1][1] - g0[0][1], g0[1][0] - g0[0][0])) - 90
-        e1 = math.degrees(math.atan2(g1[1][1] - g1[0][1], g1[1][0] - g1[0][0])) - 90
+        e0 = (math.degrees(math.atan2(g0[1][1] - g0[0][1], g0[1][0] - g0[0][0])) - 90 + 180) % 360 - 180
+        e1 = (math.degrees(math.atan2(g1[1][1] - g1[0][1], g1[1][0] - g1[0][0])) - 90 + 180) % 360 - 180
         print(f"   {name:18s} spacing {sp:7.2f} mm  edges {e0:+6.3f} / {e1:+6.3f} deg  centre {t0} at ({g0.mean(0)[0]:+.3f}, {g0.mean(0)[1]:+.3f}) m")
 
     piv = [(n, d) for n, d in snaps if n.startswith('piv')]

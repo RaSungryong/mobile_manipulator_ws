@@ -24,7 +24,7 @@ Ground truth
 Cameras
 -------
 A pinhole camera per T_mb2fc (front) and base∘TCP∘inv(hand-eye) (hand).
-Floor tags come from apriltag_nav map.yaml (z = floor_z, yaw from the
+Floor tags come from apriltag_nav map.yaml (z = floor_z + robot.tag_thickness, yaw from the
 zone convention A/DOCK=0, B/D=+90, C/E=-90); cross tags from the two
 reference_tags yamls (z = 0). All tags face-up (tag +z pointing DOWN,
 AprilTag body convention). Euler encoding matches robot_camera_node:
@@ -196,9 +196,14 @@ class SimNode:
         self.tags = []
         m = yaml.safe_load(open(MAP_PATH))['tags']
         floor_size = float(cfg['robot'].get('tag_size', 0.09))
+        # every laid tag is a plate (robot.tag_thickness, 1 mm): its top
+        # face, the plane the detector sees, is that much above the floor —
+        # the same convention extrinsics.yaml's tz (height_m + thickness)
+        # and the locator chain use.
+        floor_z = FLOOR_Z + float(cfg['robot'].get('tag_thickness', 0.0) or 0.0)
         for tid, info in m.items():
             yaw = ZONE_YAW_DEG.get(info.get('zone', 'A'), 0.0)
-            self.tags.append(Tag(tid, info['x'], info['y'], FLOOR_Z,
+            self.tags.append(Tag(tid, info['x'], info['y'], floor_z,
                                  yaw, floor_size, 'floor'))
         for fname in ('reference_tags.yaml', 'reference_tags_plate2.yaml'):
             try:

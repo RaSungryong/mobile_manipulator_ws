@@ -649,7 +649,8 @@ Consequences worth remembering:
 through a level virtual camera** (`robot_camera.ground_plane.front_cam` in
 `robot.yaml`, module `apriltag_nav/ground_plane.py`): the raw corners are
 undistorted with CameraInfo `D`, cast through the calibrated tilt (roll
-+1.228°, pitch −0.504°, lens 302 mm) onto the floor, and re-projected with
++1.228°, pitch −0.504°, lens 302 mm above the tag top — the tags are 1 mm
+plates, `robot.tag_thickness`) onto the floor, and re-projected with
 the same K at that height. `/front_cam/tag_detections` therefore carries
 flat-view pixels, `pose_x/pose_y` = floor position relative to the lens
 NADIR (m, robot frame), `pose_z` = 0.302; `mobile_controller` is
@@ -1463,13 +1464,21 @@ the unknown-height policy. Joint-mode tasks were never affected.
 now obsolete).
 
 **`T_mb2fc` is the PHYSICAL front_cam since 2026-09-15 — translation
-(0.55, 0, 0.302), rotation = level camera × the 2026-09-08 ground-plane
+(0.55, 0, 0.303), rotation = level camera × the 2026-09-08 ground-plane
 fit (roll +1.228°, pitch −0.504°, yaw −0.38°; optical axis 1.327° off
 vertical) — and it is GENERATED, never hand-edited:**
 `path_tag_locator/scripts/make_front_cam_extrinsics.py --apply` derives it
-from three `robot.yaml` numbers (`camera_offset`, `ground_plane.front_cam`
-roll/pitch/yaw, `height_m`). tz moved 0.300 → 0.302 the same day (user:
-the tape figure and the fit's lens height must be one value). Before that
+from `robot.yaml` (`camera_offset`, `camera_lateral`,
+`ground_plane.front_cam` roll/pitch/yaw, `height_m`, and
+**`robot.tag_thickness`**). **tz = height_m + tag_thickness = 0.302 + 0.001
+(user, 2026-09-15: every laid tag is a 1 mm plate, so the plane the
+corners are detected on — what the tag-pair fit measures `height_m`
+against — sits 1 mm above the floor / mb origin; a floor tag located
+through the chain therefore lands at z = +0.001 in mb, and `robot_sim`
+lays its floor tags there).** Navigation is untouched: `pose_z` and the
+`z / fx` pixel scale are lens-to-tag-plane distances. tz had moved
+0.300 → 0.302 earlier the same day (user: the tape figure and the fit's
+lens height must be one value). Before that
 the translation was (0.55, 0, 0.300) from 2026-08-21, `(0.547, 0, 0.300)`
 from 2026-08-13 and `(0.45, 0, 0.293)` before the base swap — the height
 moved only 7 mm across a 374 mm deck drop because the camera is mounted off
@@ -1617,7 +1626,7 @@ of editing the guide.
 | §7 topic tables | `/cmd_vel` and `/robot_pose` are published by **`mobile_node`**, not `mobile_manipulator_system`. New: `/mobile/goto_tag`, `/mobile/state`, `/mobile/busy` and the `/mobile/{stop,cancel,clear_stop}` services. |
 | Missing entirely | that `task_executor` now owns **no device at all** — drive, lift and arm are each reached through a client proxy. Worth a short section; it is the main structural change since the guide was written. |
 | Task list / §5 | `scan_joints_line1_lift` no longer exists (retired 2026-08-13). Both `optimized_joints_line*.csv` now carry `lift_height: 150`, so **every joint-mode scan raises the lift 150 mm** and pose-mode scans still do not. |
-| Appendix / §7 | robot footprint is **0.90 x 0.70 m** (was 0.80 x 0.50), `wheel_radius` 0.0825 / `wheel_separation` 0.65, and `T_mb2fc` is **(0.55, 0, 0.302) with the 1.3° tilt in its rotation, generated from robot.yaml** since 2026-09-15 (was `(0.45, 0, 0.293)`). |
+| Appendix / §7 | robot footprint is **0.90 x 0.70 m** (was 0.80 x 0.50), `wheel_radius` 0.0825 / `wheel_separation` 0.65, and `T_mb2fc` is **(0.55, 0, 0.303) with the 1.3° tilt in its rotation, generated from robot.yaml** since 2026-09-15 (was `(0.45, 0, 0.293)`); tz = lens 0.302 above the tag top + 1 mm tag thickness. |
 | Wherever wall clearance appears | `wall_dist_work_zone` is **0.45** (was 0.35). `wall_dist_zone_a` is **0.52** (was 0.6275) since the 2026-08-21 cell change. |
 | §7 / Appendix, transform block | `arm_body_offset_y` is **−0.100 m** — the arm mount was moved 100 mm toward the wall 2026-08-13, so `T_ab2mb` t is `(0, −0.100, −0.652)`. Explain that this corrects **pose mode only**. |
 | Wherever `camera_offset` appears | it is **0.55 m** (was 0.45, briefly 0.547) and it is the only key in the `robot:` block that any code reads. |
@@ -1634,6 +1643,59 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — Pose calibration on the 90 mm tags 147/148; tags are 1 mm plates (tz = height_m + tag_thickness)
+
+User: the 60 mm pair 15/16 is gone, four 90 mm tags 147–150 are on hand;
+and every tag is a 1 mm thick plate, "로봇 베이스로부터 태그는 z축으로 1mm
+위에 있다고 보면 돼".
+
+**Thickness.** The tag-pair fit measures the lens above the plane the
+corners lie on — the tag TOP — so `height_m` (0.302) is not the lens
+height above the floor. New `robot.tag_thickness: 0.001`;
+`make_front_cam_extrinsics.py` writes tz = height_m + thickness (0.303),
+`load_extrinsics_full` checks that sum (the old tz == height_m is now
+refused, pinned by `check_front_cam_extrinsics.py` 22 → **23**, which
+also renders the floor tag at z = +0.001 and asserts the level chain
+returns exactly that), `robot_sim` lays floor tags at floor + thickness.
+Nothing in navigation reads the sum. Not changed: `reference_tags*.yaml`
+z = 0 for the cross tags — they sit in machined slots on the plate, and
+whether their top face is flush or +1 mm is a question for the user.
+
+**The tool** (`calib_front_cam_pose.py`, doc §1–§4 rewritten): defaults
+147 → 148, 0.090; `--spacing` has NO default (it is the scale ruler;
+measure (outer extent + inner gap) / 2 so the print size drops out).
+Three changes the bigger tags forced or allowed, each measured on the
+synthetic plant (`check_front_cam_pose_calib.py` 16 → **27**):
+- **Frame room.** A 90 mm tag is 271 px at 0.30 m; a 0.12 m pair spans
+  half the view and a 0.12 m drive would push a tag out. `check` prints
+  the room (fwd / rev / left / right, from the corners), `collect` caps
+  every scan move and drive to the room of the moment (`frame_room_m` /
+  `cap_distance`); the plant confirms zero lost frames with the cap and
+  733 without.
+- **Laying angle is fitted.** `fit_ground` gained one in-plane rotation
+  per tag, so the tags no longer need parallel edges and a tag laid a
+  quarter turn round fits with a 90° angle instead of scrambling the
+  corner order (91.5° / −2.0° recovered to 0.005°; roll / pitch / tx /
+  yaw unchanged). On the 2026-09-08 record this absorbs tag 15's known
+  0.4° skew: rms 0.33 → 0.22 px, roll +1.206 / pitch −0.495 / 302.1 mm
+  (0.02° from the values in robot.yaml — inside the stated precision,
+  robot.yaml left as is since the user is re-calibrating anyway).
+- **Rotation centre as one linear least squares** over all pivot
+  snapshots (`fit_rotation_centre`: l_i + R(−φ_i)·centre_C = c_T) with
+  the pivot pattern +3 +3 −3 −3 −3 −3 +3 +3 (nine snapshots, ~9° of
+  spread, lens ≤ 5 cm off its line — the ±4°×3 pattern gave 3.5°), and
+  30-frame snapshots instead of 15. Over eight noise seeds: tx rms 0.3 /
+  max 0.6 mm (15 frames: 0.85 / 1.5), ty 0.5 / 1 mm, yaw 0.04 / 0.1°;
+  a single 0.09 m track is ±0.5° — the mean is the number, and the doc
+  now says so.
+Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
+(manual moves only) but `/robot_pose` and `last_known_tag` will point at
+zone E until `mobile_node` is restarted, which the procedure does anyway;
+149/150 serve the §6 mechanical yaw cross-check (one frame cannot hold
+two tags 0.5 m apart, so two snapshots). Verified offline only; the
+suites that read the loader still pass (ground_plane 17, repose 10,
+error_budget, yaw-sweep 4/4). `catkin_make` not needed. Not driven.
 
 ### 2026-09-15 — Collect tab VISION lamp switch; black frames in bursts explained and fixed
 

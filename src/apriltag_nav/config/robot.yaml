@@ -170,6 +170,19 @@ robot:
   # 0.09 = the floor tags, the majority case.
   tag_size: 0.09
   tag_family: "tag36h11"
+  # Every laid tag (floor tags, the calibration pair, the cross tags) is a
+  # 1 mm thick plate (user, 2026-09-15), so a tag's TOP surface — the plane
+  # its corners are detected on — sits 1 mm above the mobile-base origin
+  # (the floor). Consequences, all handled by code that reads this key:
+  #   * robot_camera.ground_plane.front_cam.height_m is the lens height
+  #     above the TAG-TOP plane (that is what the tag-pair fit measures and
+  #     what pose_z reports), so the lens is height_m + tag_thickness above
+  #     the floor: make_front_cam_extrinsics.py writes T_mb2fc tz as that
+  #     sum and path_tag_locator's loader checks it.
+  #   * a floor tag located through the front_cam chain therefore lands at
+  #     z = +tag_thickness in the mb frame, not 0.
+  #   * robot_sim renders floor tags at floor + tag_thickness.
+  tag_thickness: 0.001
 
   # Wall Distance Safety (meters)
   # Robot's right side is always facing the wall
@@ -942,11 +955,17 @@ robot_camera:
   # 0.2 m tag-held drive drifted ~1.3 mm. Re-measure with the same test
   # (ground_plane enabled is fine for that one — the residual drift is
   # then the error of this number).
+  # height_m is the lens height above the TAG-TOP plane (the plane the
+  # corners lie on) — the fit cannot see the floor itself. With every tag
+  # 1 mm thick (robot.tag_thickness) the lens is height_m + 0.001 above
+  # the floor / mb origin; nothing in navigation needs that sum (pose_z and
+  # the z / fx pixel scale are lens-to-tag-plane), only T_mb2fc's tz does.
   # ⚠️ These four numbers are ALSO baked into path_tag_locator/config/
-  # extrinsics.yaml T_mb2fc (the physical, tilted camera; tz = height_m)
-  # by scripts/make_front_cam_extrinsics.py --apply. Re-run it after any
-  # edit here — the locator's loader refuses a matrix that no longer
-  # matches (0.01 deg / 1e-6 m) rather than apply the tilt twice.
+  # extrinsics.yaml T_mb2fc (the physical, tilted camera; tz = height_m +
+  # robot.tag_thickness) by scripts/make_front_cam_extrinsics.py --apply.
+  # Re-run it after any edit here — the locator's loader refuses a matrix
+  # that no longer matches (0.01 deg / 1e-6 m) rather than apply the tilt
+  # twice.
   ground_plane:
     front_cam:
       enabled: true

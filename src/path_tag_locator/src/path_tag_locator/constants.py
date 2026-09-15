@@ -236,14 +236,21 @@ def load_front_cam_ground_plane(robot_yaml_path=None):
     """robot.yaml ``robot_camera.ground_plane.front_cam`` as a dict, or None
     when the block is absent. Defaults to the same file robot_camera_node
     reads (apriltag_nav.paths.CONFIG_PATH), so "what frame are the
-    detections in" is answered by the publisher's own config."""
+    detections in" is answered by the publisher's own config. The dict
+    also carries ``tag_thickness_m`` (robot.tag_thickness, 0 if absent):
+    ``height_m`` is the lens height above the TAG-TOP plane, and the lens
+    sits height_m + tag_thickness above the floor / mb origin."""
     if robot_yaml_path is None:
         from apriltag_nav.paths import CONFIG_PATH  # exec_depend
         robot_yaml_path = CONFIG_PATH
     with open(robot_yaml_path, "r") as fh:
         d = yaml.safe_load(fh) or {}
     gp = ((d.get("robot_camera") or {}).get("ground_plane") or {}).get("front_cam")
-    return dict(gp) if gp else None
+    if not gp:
+        return None
+    out = dict(gp)
+    out["tag_thickness_m"] = float((d.get("robot") or {}).get("tag_thickness", 0.0) or 0.0)
+    return out
 
 
 @dataclass
@@ -286,7 +293,7 @@ def load_extrinsics_full(yaml_path, front_cam_frame="auto",
 
     Consistency is enforced, not assumed: the stored T_mb2fc must equal
     R_MB2FC_LEVEL @ inv(tilt) to 0.01 deg and its tz must equal the fit's
-    ``height_m`` — otherwise the yaml was hand-edited out of step with
+    ``height_m`` + ``tag_thickness_m`` — otherwise the yaml was hand-edited out of step with
     robot.yaml and the caller gets a ValueError naming
     scripts/make_front_cam_extrinsics.py.
     """
@@ -302,6 +309,8 @@ def load_extrinsics_full(yaml_path, front_cam_frame="auto",
                                  math.radians(float(ground_plane.get("yaw_deg", 0.0))))
         enabled = bool(ground_plane.get("enabled", False))
         h = ground_plane.get("height_m")
+        if h is not None:
+            h = float(h) + float(ground_plane.get("tag_thickness_m", 0.0) or 0.0)
     else:
         tilt = np.eye(4)
         enabled = False
@@ -321,8 +330,8 @@ def load_extrinsics_full(yaml_path, front_cam_frame="auto",
     if h is not None and abs(float(T_mb2fc[2, 3]) - float(h)) > 1e-6:
         raise ValueError(
             "extrinsics.yaml T_mb2fc tz %.4f != robot.yaml ground_plane."
-            "front_cam.height_m %.4f — they are the same lens height; "
-            "regenerate with make_front_cam_extrinsics.py --apply."
+            "front_cam.height_m + robot.tag_thickness %.4f — the lens height "
+            "above the floor; regenerate with make_front_cam_extrinsics.py --apply."
             % (float(T_mb2fc[2, 3]), float(h)))
     T_level[:3, :3] = R_MB2FC_LEVEL  # exact, the check above bounds the residual
 

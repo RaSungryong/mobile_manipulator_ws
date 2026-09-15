@@ -92,6 +92,7 @@ gp = robot_cfg["robot_camera"]["ground_plane"]["front_cam"]
 cam_off = float(robot_cfg["robot"]["camera_offset"])
 roll, pitch, yaw = (math.radians(float(gp[k])) for k in ("roll_deg", "pitch_deg", "yaw_deg"))
 H = float(gp["height_m"])
+THICK = float(robot_cfg["robot"].get("tag_thickness", 0.0))
 
 print("== 1. stored matrix == generator(robot.yaml) ==")
 T_ab2mb, T_stored = load_extrinsics(EXTRINSICS)
@@ -100,8 +101,8 @@ check("T_mb2fc equals the generator's output", np.abs(T_stored - T_gen).max() < 
       "max |diff| %.1e" % np.abs(T_stored - T_gen).max())
 check("tx == robot.camera_offset", abs(T_stored[0, 3] - cam_off) < 1e-9, "%.3f" % T_stored[0, 3])
 check("ty == 0", abs(T_stored[1, 3]) < 1e-9)
-check("tz == ground_plane.front_cam.height_m", abs(T_stored[2, 3] - H) < 1e-9,
-      "%.3f" % T_stored[2, 3])
+check("tz == ground_plane.front_cam.height_m + robot.tag_thickness (lens above the FLOOR)",
+      abs(T_stored[2, 3] - (H + THICK)) < 1e-9, "%.3f = %.3f + %.3f" % (T_stored[2, 3], H, THICK))
 ax = math.degrees(math.acos(-T_stored[2, 2]))
 check("optical axis tilted off vertical by the fit's magnitude", 1.2 < ax < 1.5,
       "%.3f deg" % ax)
@@ -119,7 +120,7 @@ check("level == physical @ T_tilted_to_level to 1e-9",
       np.abs(ext.T_mb2fc @ T_tilted_to_level(roll, pitch, yaw) - ext.T_mb2fc_level).max() < 1e-9)
 check("auto with ground_plane enabled -> level", ext.front_cam_frame == "level"
       and ext.T_mb2fc_chain is ext.T_mb2fc_level, ext.note)
-gp_off = dict(gp, enabled=False)
+gp_off = dict(gp, enabled=False, tag_thickness_m=THICK)
 e2 = load_extrinsics_full(EXTRINSICS, ground_plane=gp_off)
 check("auto with ground_plane disabled -> physical", e2.front_cam_frame == "physical"
       and e2.T_mb2fc_chain is e2.T_mb2fc)
@@ -148,7 +149,7 @@ def _write_tmp(T):
 # a level matrix (the pre-2026-09-15 file) no longer matches the fit
 T_old = np.eye(4)
 T_old[:3, :3] = R_MB2FC_LEVEL
-T_old[:3, 3] = [cam_off, 0, H]
+T_old[:3, 3] = [cam_off, 0, H + THICK]
 try:
     load_extrinsics_full(_write_tmp(T_old))
     check("a LEVEL matrix in the yaml is refused while the fit is non-zero", False)
@@ -156,12 +157,12 @@ except ValueError as e:
     check("a LEVEL matrix in the yaml is refused while the fit is non-zero", True,
           str(e)[:60] + "…")
 T_bad = T_stored.copy()
-T_bad[2, 3] = 0.300
+T_bad[2, 3] = H          # the pre-thickness value: lens above the TAG plane, not the floor
 try:
     load_extrinsics_full(_write_tmp(T_bad))
-    check("tz 0.300 against height_m 0.302 is refused", False)
+    check("tz == height_m alone (tag thickness forgotten) is refused", False)
 except ValueError:
-    check("tz 0.300 against height_m 0.302 is refused", True)
+    check("tz == height_m alone (tag thickness forgotten) is refused", True)
 # with NO ground-plane block the stored (tilted) matrix must also be refused —
 # it is not level, and nothing would un-tilt the detections
 try:
@@ -179,7 +180,7 @@ CX, CY = 640.0, 360.0
 K = np.array([[FX, 0, CX], [0, FY, CY], [0, 0, 1]], float)
 TAG = 0.090
 gpl = GroundPlane(FX, FY, CX, CY, None, roll, pitch, H, yaw=yaw)
-worst = dict(raw_t=0.0, raw_R=0.0, lvl_t=0.0, lvl_R=0.0, x_t=0.0, x_R=0.0, px=0.0)
+worst = dict(raw_t=0.0, raw_R=0.0, lvl_t=0.0, lvl_R=0.0, x_t=0.0, x_R=0.0, px=0.0, lvl_z=0.0)
 rng = np.random.RandomState(7)
 for i in range(40):
     # base somewhere on the floor, heading anything; tag laid flat ahead
@@ -192,7 +193,7 @@ for i in range(40):
     d_fwd, d_right = rng.uniform(0.35, 0.75), rng.uniform(-0.09, 0.09)
     T_mb2B = np.eye(4)
     T_mb2B[:3, :3] = rz(tag_yaw)
-    T_mb2B[:3, 3] = [d_fwd, -d_right, 0.0]     # mb y is LEFT
+    T_mb2B[:3, 3] = [d_fwd, -d_right, THICK]   # mb y is LEFT; the tag's top face is a plate-thickness up
     T_wB = T_wmb @ T_mb2B
     # a face-UP tag's +z points up; the camera looks down -> z_tag = +mb.z
     T_wfc_phys = T_wmb @ ext.T_mb2fc
@@ -220,6 +221,7 @@ for i in range(40):
     T_est_l = T_wfc_lvl @ T_fc2B_l
     worst["lvl_t"] = max(worst["lvl_t"], np.linalg.norm(T_est_l[:3, 3] - T_wB[:3, 3]) * 1e3)
     worst["lvl_R"] = max(worst["lvl_R"], angdiff(T_est_l[:3, :3], T_wB[:3, :3]))
+    worst["lvl_z"] = float((invert_T(T_wmb) @ T_est_l)[2, 3])
     # (c) the wrong pairing: level corners with the physical matrix
     T_est_x = T_wfc_phys @ T_fc2B_l
     worst["x_t"] = max(worst["x_t"], np.linalg.norm(T_est_x[:3, 3] - T_wB[:3, 3]) * 1e3)
@@ -236,6 +238,8 @@ check("CORRECTED corners + T_mb2fc_level land on the true tag pose",
 check("cross pairing is off by the full tilt (selection matters)",
       worst["x_R"] > 1.2 and worst["x_t"] > 3.0,
       "worst %.2f mm / %.3f deg" % (worst["x_t"], worst["x_R"]))
+check("the located floor tag sits at z = tag_thickness in mb, not on the floor",
+      abs(worst["lvl_z"] - THICK) < 1e-4, "z %.4f m (tag_thickness %.3f)" % (worst["lvl_z"], THICK))
 
 print("\n%d checks, %d failed" % (_n[0], _bad[0]))
 sys.exit(1 if _bad[0] else 0)
