@@ -199,8 +199,8 @@ class TaskManager:
     def __init__(self, task_dir: str, result_dir: str = None):
         # result_dir: where <task>_ra_map_<ts>.csv is written. None keeps the
         # old behaviour (next to the input CSVs); task_executor passes
-        # paths.RA_MAP_DIR (<ws>/results/ra_maps, 2026-09-14) so results never
-        # sit in the directory the task discovery scans.
+        # paths.RA_MAP_DIR (<ws>/log/apriltag_nav/ra_maps, 2026-09-15) so
+        # results never sit in the directory the task discovery scans.
         self.result_dir = result_dir or task_dir
 
         self.task_dir = task_dir

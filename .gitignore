@@ -25,9 +25,11 @@ __pycache__/
 *.pth
 *.pdf
 
-# Runtime / backup output. Result CSVs are written to results/ra_maps/
-# since 2026-09-14 and ARE versioned there (the deliverable, ~100 KB each);
-# a stray copy next to the input path files in task/csv is not.
+# Runtime / backup output. Result CSVs are written to
+# log/apriltag_nav/ra_maps/ (results/ra_maps/ before 2026-09-15, moved on
+# user request — see results/README.md) and ARE versioned there (the
+# deliverable, ~100 KB each); a stray copy next to the input path files in
+# task/csv is not.
 src/apriltag_nav/task/csv/*_result_*.csv
 src/apriltag_nav/task/csv/*_ra_map_*.csv
 # The bulk that goes with them is not versioned (gitignore has no trailing

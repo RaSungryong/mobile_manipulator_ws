@@ -174,16 +174,52 @@ async def scenario(cdp, url, bridge, holder):
     check(await wait_js(cdp, "[...document.querySelectorAll('.cell .tags')].some(e => e.textContent === 'tags: 0, 3')"),
           'tag ids under the hand_cam pane')
     bridge.emit_state('task_list', {'task_dir': '/ws/task/csv', 'tasks': [
-        {'name': 'scan_pose_a', 'scan_mode': 'pose', 'tags': [104, 105], 'points': 12, 'traverse_points': 0,
-         'lift_height_mm': 0, 'files': ['assigned_workpoints_a.csv'], 'paired_file': 'rrt_final_path_a.csv'},
-        {'name': 'scan_joint_a', 'scan_mode': 'joint', 'tags': [104, 105], 'points': 12, 'traverse_points': 5,
-         'lift_height_mm': 0, 'files': ['rrt_final_path_a.csv']}]})
-    check(await wait_js(cdp, "document.getElementById('task-list').options.length === 2 && "
+        {'name': 'scan_pose_a', 'scan_mode': 'pose', 'kind': 'scan', 'tags': [104, 105], 'points': 12,
+         'traverse_points': 0, 'lift_height_mm': 0, 'files': ['assigned_workpoints_a.csv'],
+         'paired_file': 'rrt_final_path_a.csv', 'ik_seeded_points': 12},
+        {'name': 'scan_joint_a', 'scan_mode': 'joint', 'kind': 'scan', 'tags': [104, 105, 118], 'points': 12,
+         'traverse_points': 5, 'lift_height_mm': 0, 'files': ['rrt_final_path_a.csv'],
+         'paired_file': 'assigned_workpoints_a.csv', 'points_with_world_xyz': 12},
+        {'name': 'go_home', 'kind': 'system', 'tags': [500], 'points': 0, 'traverse_points': 0,
+         'lift_height_mm': None, 'files': []},
+        {'name': 'weird&<name>', 'scan_mode': 'pose', 'kind': 'scan', 'tags': [104], 'points': 1,
+         'traverse_points': 0, 'lift_height_mm': 0, 'files': ['a&b<c>.csv'], 'groups_filter': [104]}]})
+    check(await wait_js(cdp, "document.getElementById('task-list').options.length === 4 && "
                             "document.getElementById('txt-task').value === 'scan_pose_a'"),
-          'task list fills the datalist and picks the first task')
-    check(await cdp.js("document.getElementById('lbl-task-detail').textContent === "
-                       "'scan_pose_a: pose · tags 104,105 · 12 pts · lift 0 mm · assigned_workpoints_a.csv · paired rrt_final_path_a.csv'"),
-          'task detail line')
+          'task list fills the datalist and picks the first (pose) task')
+    # ---- task detail: field-by-field, not the old dense one-liner (2026-09-15) ----
+    check(await cdp.js("document.getElementById('lbl-task-detail').querySelector('.task-detail-mode').textContent"
+                       ".includes('pose mode') && document.getElementById('lbl-task-detail')"
+                       ".querySelector('.task-detail-mode').textContent.includes('IK solved per point')"),
+          'pose task: plain-language mode line')
+    detail = await cdp.js("document.getElementById('lbl-task-detail').innerHTML")
+    check('104, 105' in detail and 'drives to each stop' in detail, 'pose task: tags row spells out the order')
+    check('12 scan point' in detail and 'IK seeded' in detail and '12 / 12' in detail,
+          'pose task: points + IK-seeded rows, no traverse note (traverse_points 0)')
+    check('rrt_final_path_a.csv' in detail and 'IK seed' in detail, "pose task: paired file names WHY it's paired")
+    check('JOINT PATH REPLAY' not in detail, 'pose task shows no joint warning')
+    await cdp.js("document.getElementById('txt-task').value = 'scan_joint_a'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
+    detail = await wait_js(cdp, "document.getElementById('lbl-task-detail').innerHTML", 3.0)
+    check('joint mode' in detail and 'MoveJ' in detail, 'joint task: plain-language mode line')
+    check('+ 5 traverse' in detail and 'not scanned' in detail, 'joint task: traverse note on the points row')
+    check('world x y z for the Ra map' in detail, "joint task: paired file says it's the world-xyz source")
+    check('world xyz' in detail and '12 / 12' in detail, 'joint task: world-xyz-points row')
+    check('⚠️ JOINT PATH REPLAY' in detail and 'reach nor' in detail and '104, 105, 118' in detail,
+          'joint task: the reach/collision warning is shown, tags included')
+    await cdp.js("document.getElementById('txt-task').value = 'go_home'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
+    detail = await wait_js(cdp, "document.getElementById('lbl-task-detail').innerHTML", 3.0)
+    check('system task' in detail and 'no scan' in detail and 'JOINT PATH REPLAY' not in detail,
+          'system task (go_home): plain-language line, no warning')
+    await cdp.js("document.getElementById('txt-task').value = 'weird&<name>'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
+    detail = await wait_js(cdp, "document.getElementById('lbl-task-detail').innerHTML", 3.0)
+    check('<script>' not in detail.lower() and 'a&amp;b&lt;c&gt;.csv' in detail
+          and 'weird&amp;&lt;name&gt;' in detail and 'explicit subset' in detail,
+          'a task name / file with < & is HTML-escaped, and the groups_filter row renders')
+    await cdp.js("document.getElementById('txt-task').value = 'scan_pose_a'; "
+                 "document.getElementById('txt-task').dispatchEvent(new Event('input'))")
 
     # ---- buttons → bridge ----
     bridge.calls.clear()

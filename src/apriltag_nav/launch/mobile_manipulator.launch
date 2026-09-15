@@ -92,7 +92,9 @@
         <param name="stabilization_time"    value="0.5"/>
         <param name="save_images"           value="true"/>
         <!-- Frames land in <output_dir>/<task>_ra_map_<ts>/ per run;
-             the Ra map CSV itself goes to <ws>/results/ra_maps. -->
+             the Ra map CSV itself goes to <ws>/log/apriltag_nav/ra_maps
+             (paths.RA_MAP_DIR — 2026-09-15, moved out of results/ since
+             it is a per-run RECORD, not scan-image bulk). -->
         <param name="output_dir"            value="$(arg ws_dir)/results/scan_images"/>
 
         <!-- Lift compensation for POSE-mode IK (2026-09-11). arm_base_z is

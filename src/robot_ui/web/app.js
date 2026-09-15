@@ -355,6 +355,14 @@ function renderPlugins(p) {
 }
 
 // ---------- /task_list -> Task tab ----------
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// One-line summary: the native <option label> tooltip on the datalist
+// dropdown can only show plain single-line text, so this stays compact.
+// The rich, multi-field view below (taskDetailHtml) is what a SELECTED
+// task actually renders in #lbl-task-detail.
 function taskSummary(info) {
   const mode = info.scan_mode || info.kind || '?';
   const tags = info.tags || [];
@@ -370,6 +378,56 @@ function taskSummary(info) {
   if (files.length) parts.push(files.length === 1 ? files[0] : files.length + ' files');
   if (info.paired_file) parts.push('paired ' + info.paired_file);
   return parts.join(' · ');
+}
+
+// What the task actually IS, spelled out field by field (2026-09-15 — the
+// dense one-liner above was unreadable for the long RRT-set names). Field
+// choice mirrors task_manager._record_task_info / CLAUDE.md's RRT-dialect
+// section, so a "joint" task always carries the reach/collision warning.
+function taskDetailHtml(info) {
+  const kind = info.kind || 'scan';
+  const mode = info.scan_mode;
+  const tags = info.tags || [];
+  const rows = [];
+  let modeLine;
+  if (kind === 'system') {
+    modeLine = 'system task — drives to the start/dock tag, no scan, writes no CSV';
+  } else if (kind === 'move') {
+    modeLine = 'move only — drives through the tags below in order, no scan';
+  } else if (mode === 'pose') {
+    modeLine = 'pose mode — end-effector poses (x y z rx ry rz) from the CSV, IK solved per point';
+  } else if (mode === 'joint') {
+    modeLine = 'joint mode — absolute joint angles (q1..q6) replayed with MoveJ';
+  } else {
+    modeLine = String(mode || kind);
+  }
+  rows.push(['tags', tags.length ? tags.join(', ') + '  (drives to each stop, in order)' : '—']);
+  if (info.points) {
+    let pts = info.points + ' scan point' + (info.points === 1 ? '' : 's');
+    if (info.traverse_points) pts += ' <span class="dim">+ ' + info.traverse_points + ' traverse (driven through, not scanned)</span>';
+    rows.push(['points', pts]);
+  }
+  const lift = info.lift_height_mm;
+  rows.push(['lift', lift == null ? '— (left alone)' : Number(lift) + ' mm']);
+  const files = info.files || [];
+  if (files.length) rows.push(['source', files.map(esc).join('<br>')]);
+  if (info.paired_file) {
+    const why = mode === 'pose' ? 'IK seed' : mode === 'joint' ? 'world x y z for the Ra map' : 'paired file';
+    rows.push(['paired', esc(info.paired_file) + '  <span class="dim">(' + why + ')</span>']);
+  }
+  if (info.ik_seeded_points != null) rows.push(['IK seeded', info.ik_seeded_points + ' / ' + info.points + ' points']);
+  if (info.points_with_world_xyz != null) rows.push(['world xyz', info.points_with_world_xyz + ' / ' + info.points + ' points']);
+  if (info.groups_filter) rows.push(['groups', info.groups_filter.join(', ') + '  <span class="dim">(explicit subset)</span>']);
+  if (info.result_name) rows.push(['result file', esc(info.result_name)]);
+
+  let html = '<div class="task-detail-mode">' + esc(modeLine) + '</div>'
+    + '<table class="task-detail-table">' + rows.map(([k, v]) => '<tr><td>' + esc(k) + '</td><td>' + v + '</td></tr>').join('') + '</table>';
+  if (mode === 'joint') {
+    html += '<div class="task-detail-warn">⚠️ JOINT PATH REPLAY: MoveJ checks neither reach nor '
+      + 'collision — only safe if the base is at the planned stop of every tag above. Verify the '
+      + 'group→tag assignment before running (CLAUDE.md, scan-CSV section).</div>';
+  }
+  return html;
 }
 
 function renderTaskList(payload) {
@@ -398,7 +456,7 @@ function updateTaskDetail() {
     lbl.textContent = !name ? '' : (taskListSeen ? name + ': not in /task_list' : name + ': task list not received yet');
     return;
   }
-  lbl.textContent = name + ': ' + taskSummary(info);
+  lbl.innerHTML = '<div class="task-detail-name">' + esc(name) + '</div>' + taskDetailHtml(info);
 }
 
 // ------------------------------------------------------------------

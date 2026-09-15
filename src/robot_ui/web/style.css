@@ -20,6 +20,20 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   padding: 0 4px; font-size: 12px; color: #bbb; }
 .note { color: var(--muted); margin: 4px 0 6px; font-size: 12px; }
 .detail { color: #aaa; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+
+/* Task tab: the field-by-field detail for the selected task (2026-09-15) —
+   replaces a single dense "mode · tags · N pts · ..." line, since the
+   RRT-set task names (scan_joint_errorX_p000mm_standoff_010mm_height_652mm)
+   are long enough that a one-liner ran off-screen. */
+#lbl-task-detail { margin-top: 4px; }
+.task-detail-name { font-family: var(--mono); font-weight: bold; margin-bottom: 3px; }
+.task-detail-mode { color: #cfcfcf; font-size: 12px; margin-bottom: 4px; }
+.task-detail-table { border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+.task-detail-table td { padding: 1px 8px 1px 0; vertical-align: top; }
+.task-detail-table td:first-child { color: #888; white-space: nowrap; }
+.task-detail-table .dim { color: #888; }
+.task-detail-warn { color: #e39a2d; font-size: 12px; margin-top: 6px;
+  border-left: 3px solid #e39a2d; padding-left: 6px; }
 .warn { color: #e39a2d; font-weight: bold; white-space: pre-wrap; }
 .bold { font-weight: bold; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }

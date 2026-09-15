@@ -87,9 +87,15 @@ NAV_LOG_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'nav_log')
 PTL_LOG_DIR = os.path.join(LOG_DIR, 'path_tag_locator')
 # roslaunch / node logs (ROS_LOG_DIR, set by the env hook): <run_id>/*.log
 ROS_LOG_DIR = os.path.join(LOG_DIR, 'ros')
-# task_manager: <task>_ra_map_<ts>.csv (versioned — the deliverable)
-RA_MAP_DIR = os.path.join(RESULTS_DIR, 'ra_maps')
-# arm_node save_images: <ra_map stem>/point_<id>_sample_<n>_ra_<x>.png
+# task_manager: <task>_ra_map_<ts>.csv (versioned — the deliverable).
+# Under log/, not results/, since 2026-09-15 (user request) — same file,
+# same content, just alongside the other per-run RECORDS (nav_log,
+# path_tag_locator) rather than in results/ next to the large, unversioned
+# scan_images bulk. `results/README.md` and CLAUDE.md's "Where run output
+# lives" table both name this path; keep them in step with any change here.
+RA_MAP_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'ra_maps')
+# arm_node save_images: <ra_map stem>/point_<id>_sample_<n>_ra_<x>.png —
+# unaffected: the bulk frames stay in results/ (unversioned, large).
 SCAN_IMAGE_DIR = os.path.join(RESULTS_DIR, 'scan_images')
 
 

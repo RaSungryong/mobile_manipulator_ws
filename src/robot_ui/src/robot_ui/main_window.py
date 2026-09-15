@@ -22,6 +22,7 @@ QThreadPool; button handlers only ever start work and return. Results come back
 as Qt signals on the GUI thread.
 """
 
+import html
 import os
 import time
 from datetime import datetime
@@ -689,9 +690,14 @@ class MainWindow(QMainWindow):
 
         # What the selected task is: mode, tags in order, point counts, lift
         # height, source file(s). Read from /task_list, never guessed.
+        # Rich text (2026-09-15): a field-by-field table instead of one
+        # dense line — the RRT-set names are long enough that a one-liner
+        # ran off the panel width. setTextFormat is explicit rather than
+        # relying on QLabel's HTML auto-detection, which a name starting
+        # with a plain word (most task names) would not trigger.
         self.lbl_task_detail = QLabel('')
+        self.lbl_task_detail.setTextFormat(Qt.RichText)
         self.lbl_task_detail.setWordWrap(True)
-        self.lbl_task_detail.setStyleSheet('color:#aaa; font-family: monospace;')
         task_layout.addWidget(self.lbl_task_detail)
         self._update_task_detail(self.combo_task.currentText())
 
@@ -1450,6 +1456,85 @@ class MainWindow(QMainWindow):
             parts.append(f'paired {paired}')
         return ' · '.join(parts)
 
+    @staticmethod
+    def task_detail_html(info):
+        """What the task actually IS, field by field — the rich content of
+        `lbl_task_detail` for a SELECTED task (the tooltip above stays a
+        compact one-liner). Field choice mirrors
+        task_manager._record_task_info / CLAUDE.md's RRT-dialect section,
+        so a 'joint' task always carries the reach/collision warning."""
+        kind = info.get('kind') or 'scan'
+        mode = info.get('scan_mode')
+        tags = info.get('tags') or []
+        rows = []
+        if kind == 'system':
+            mode_line = ('system task — drives to the start/dock tag, '
+                         'no scan, writes no CSV')
+        elif kind == 'move':
+            mode_line = ('move only — drives through the tags below in '
+                         'order, no scan')
+        elif mode == 'pose':
+            mode_line = ('pose mode — end-effector poses (x y z rx ry rz) '
+                         'from the CSV, IK solved per point')
+        elif mode == 'joint':
+            mode_line = ('joint mode — absolute joint angles (q1..q6) '
+                         'replayed with MoveJ')
+        else:
+            mode_line = str(mode or kind)
+        rows.append(('tags', ', '.join(str(t) for t in tags)
+                    + '  (drives to each stop, in order)' if tags else '—'))
+        pts = info.get('points')
+        if pts:
+            val = f'{pts} scan point{"" if pts == 1 else "s"}'
+            trav = info.get('traverse_points')
+            if trav:
+                val += (f' <span style="color:#888;">+ {trav} traverse (driven '
+                        'through, not scanned)</span>')
+            rows.append(('points', val))
+        lift = info.get('lift_height_mm')
+        rows.append(('lift', '— (left alone)' if lift is None
+                    else f'{float(lift):g} mm'))
+        files = info.get('files') or []
+        if files:
+            rows.append(('source', '<br>'.join(html.escape(f) for f in files)))
+        paired = info.get('paired_file')
+        if paired:
+            why = ('IK seed' if mode == 'pose' else
+                  'world x y z for the Ra map' if mode == 'joint' else
+                  'paired file')
+            rows.append(('paired',
+                        f'{html.escape(paired)}  <span style="color:#888;">'
+                        f'({why})</span>'))
+        seeded = info.get('ik_seeded_points')
+        if seeded is not None:
+            rows.append(('IK seeded', f'{seeded} / {pts} points'))
+        xyz = info.get('points_with_world_xyz')
+        if xyz is not None:
+            rows.append(('world xyz', f'{xyz} / {pts} points'))
+        groups = info.get('groups_filter')
+        if groups:
+            rows.append(('groups', ', '.join(str(g) for g in groups)
+                        + '  <span style="color:#888;">(explicit subset)</span>'))
+        result_name = info.get('result_name')
+        if result_name:
+            rows.append(('result file', html.escape(result_name)))
+
+        row_html = ''.join(
+            f'<tr><td style="color:#888; white-space:nowrap; '
+            f'padding-right:8px;">{html.escape(k)}</td><td>{v}</td></tr>'
+            for k, v in rows)
+        out = (f'<div style="color:#cfcfcf;">{html.escape(mode_line)}</div>'
+              f'<table style="font-family:monospace; font-size:11px; '
+              f'border-collapse:collapse;">{row_html}</table>')
+        if mode == 'joint':
+            out += (
+                '<div style="color:#e39a2d; margin-top:4px;">⚠️ JOINT PATH '
+                'REPLAY: MoveJ checks neither reach nor collision — only '
+                'safe if the base is at the planned stop of every tag '
+                'above. Verify the group→tag assignment before running '
+                '(CLAUDE.md, scan-CSV section).</div>')
+        return out
+
     def _on_task_list(self, payload):
         """Rebuild the task combo from task_executor's /task_list."""
         tasks = payload.get('tasks') or []
@@ -1496,7 +1581,8 @@ class MainWindow(QMainWindow):
                 (f'{name}: not in /task_list' if self._task_list_seen
                  else f'{name}: task list not received yet'))
             return
-        self.lbl_task_detail.setText(f'{name}: {self.task_summary(info)}')
+        self.lbl_task_detail.setText(
+            f'<b>{html.escape(name)}</b>' + self.task_detail_html(info))
 
     def _on_task_state(self, state):
         name = state.get('task') or '—'

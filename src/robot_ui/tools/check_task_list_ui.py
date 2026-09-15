@@ -104,6 +104,11 @@ PAYLOAD = {
          'source': 'system', 'tags': [500], 'points': 0, 'traverse_points': 0,
          'lift_height_mm': None, 'files': [], 'paired_file': None,
          'result_name': None, 'groups_filter': None},
+        {'name': 'weird&<name>', 'kind': 'scan', 'scan_mode': 'pose',
+         'source': 'explicit', 'tags': [104], 'points': 1,
+         'traverse_points': 0, 'lift_height_mm': 0.0,
+         'files': ['a&b<c>.csv'], 'paired_file': None,
+         'result_name': None, 'groups_filter': [104]},
     ],
     'stamp': 1.0,
 }
@@ -137,24 +142,57 @@ def main():
     app.processEvents()
     names = [t['name'] for t in PAYLOAD['tasks']]
     check([combo.itemText(i) for i in range(combo.count())] == names,
-          f'combo lists the 3 reported tasks in order')
+          f'combo lists the {len(names)} reported tasks in order')
     tip = combo.itemData(0, Qt.ToolTipRole)
     check(tip == MainWindow.task_summary(PAYLOAD['tasks'][0]),
           f'item tooltip is the task summary: {tip}')
     check('joint' in tip and '1035 pts (+422 traverse)' in tip
           and 'lift 0 mm' in tip and 'paired assigned_workpoints_' in tip,
           'joint summary shows mode, work + traverse counts, lift, pairing')
-    check(combo.currentIndex() == 0 and win.lbl_task_detail.text().startswith(
-        names[0] + ': joint · tags 104,105,106,107,118,119'),
-          f'detail line follows the selection: {win.lbl_task_detail.text()[:60]}…')
     tip2 = MainWindow.task_summary(PAYLOAD['tasks'][2])
     check(tip2 == 'system · tags 500 · lift —', f'go_home summary: {tip2}')
+
+    print('== task detail: field-by-field (2026-09-15), not the old one-liner')
+    check(win.lbl_task_detail.textFormat() == Qt.RichText,
+          'lbl_task_detail is explicitly RichText, not relying on HTML auto-detection')
+    detail = win.lbl_task_detail.text()
+    check(combo.currentIndex() == 0 and f'<b>{names[0]}</b>' in detail,
+          f'joint task selected first; name shown bold: {detail[:60]}…')
+    check('joint mode' in detail and 'MoveJ' in detail,
+          'joint task: plain-language mode line, not the raw "joint" enum')
+    check('104, 105, 106, 107, 118, 119' in detail and 'drives to each stop' in detail,
+          'joint task: tags row spells out the drive order')
+    check('1035 scan point' in detail and '+ 422 traverse' in detail
+          and 'not scanned' in detail, 'joint task: points row separates scan from traverse')
+    check('world x y z for the Ra map' in detail,
+          "joint task: paired file names WHY it's paired")
+    check('world xyz' in detail and '1035 / 1035 points' in detail,
+          'joint task: world-xyz-points row')
+    check('⚠️ JOINT PATH REPLAY' in detail and 'reach nor collision' in detail,
+          'joint task: reach/collision warning shown next to the task, not only at registration')
 
     print('== selection / typed names')
     combo.setCurrentIndex(1)
     app.processEvents()
-    check(win.lbl_task_detail.text().startswith(names[1] + ': pose'),
-          'selecting the pose task updates the detail line')
+    detail = win.lbl_task_detail.text()
+    check(f'<b>{names[1]}</b>' in detail, 'selecting the pose task updates the detail line')
+    check('pose mode' in detail and 'IK solved per point' in detail,
+          'pose task: plain-language mode line')
+    check('IK seed' in detail and 'IK seeded' in detail and '1035 / 1035 points' in detail,
+          "pose task: paired file says IK seed, IK-seeded-points row present")
+    check('+ 0 traverse' not in detail, 'pose task (0 traverse points): no traverse note')
+    check('JOINT PATH REPLAY' not in detail, 'pose task shows no joint warning')
+
+    print('== a task name / file containing < and & is escaped, not injected as markup')
+    combo.setCurrentIndex(3)
+    app.processEvents()
+    detail = win.lbl_task_detail.text()
+    check('<script>' not in detail.lower() and '<b>weird&amp;&lt;name&gt;</b>' in detail,
+          f'task name escaped: {detail[:80]}…')
+    check('a&amp;b&lt;c&gt;.csv' in detail, 'source file name escaped')
+    check('104' in detail and 'explicit subset' in detail, 'groups_filter row renders')
+    combo.setCurrentIndex(1)
+    app.processEvents()
     bridge.task_list.emit(PAYLOAD)
     app.processEvents()
     check(combo.currentText() == names[1], 're-publish keeps the current selection')

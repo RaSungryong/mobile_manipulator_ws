@@ -86,7 +86,7 @@ output (2026-09-02..14) was moved in the same session; what was not worth
 keeping was deleted (see the Work Log entry).
 
 ```
-<ws>/results/ra_maps/<task>_ra_map_<ts>.csv        task_manager result_dir   (versioned)
+<ws>/log/apriltag_nav/ra_maps/<task>_ra_map_<ts>.csv task_manager result_dir  (versioned)
 <ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored)
 <ws>/results/captures/                              robot_ui Collect tab       (ignored)
 <ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
@@ -95,6 +95,12 @@ keeping was deleted (see the Work Log entry).
                                                     locator default_save_dir / handeye run_root / map_out
 <ws>/log/ros/<run_id>/                              roslaunch + node logs, ROS_LOG_DIR (ignored)
 ```
+
+⚠️ **`ra_maps/` moved from `<ws>/results/` to `<ws>/log/apriltag_nav/` on
+2026-09-15** (user request) — same `<task>_ra_map_<ts>.csv` file, still
+`paths.RA_MAP_DIR`, still versioned; it now sits with the other per-run
+RECORDS (`nav_log`, `path_tag_locator`) instead of next to the large,
+unversioned `scan_images` bulk in `results/`. See the Work Log entry.
 
 How the root is found, three ways that must agree: **`MM_WS`** is exported
 by the catkin env hook `apriltag_nav/env-hooks/50.apriltag_nav.sh.in`
@@ -113,8 +119,8 @@ that has no `MM_WS` and its roslaunch still logs to `~/.ros/log`.
 
 The navifra driver's systemd service does not source this workspace and
 keeps writing `~/.ros/log/<run_id>/` — leave that directory alone; only
-this workspace's runs moved. `.gitignore`: `results/ra_maps` and every
-yaml / csv / npz record under `log/` are versioned, plus the hand-eye
+this workspace's runs moved. `.gitignore`: `log/apriltag_nav/ra_maps` and
+every yaml / csv / npz record under `log/` are versioned, plus the hand-eye
 `samples/*.png` (the input `calibrate()` re-detects over — `!log/path_tag_
 locator/handeye_calib/**/*.png`); frames, captures, other png, video and
 `log/ros` are not.
@@ -1657,7 +1663,7 @@ of editing the guide.
 | Missing entirely | the `lift_height` CSV column and the task flow it drives; that a task ends with lift origin homing and then **stays put** (`go_home` is a separate task); that absolute lift moves are refused before origin homing. |
 | Everywhere | **node names renamed 2026-08-11**: `arm_controller_node` → `arm_node`, `base_lifter_node` → `lifter_node`. Also `robot_controller.py` → `mobile_controller.py` and `RobotController` → `MobileController`. Affects §2.1, §2.4 (line 268 sample output), §5, §7 topic/service tables and the troubleshooting table. |
 | Everywhere | **`/base_lifter/*` → `/lifter/*`** in the same pass, and `robot.yaml`'s `base_lifter:` block key is now `lifter:`. Appendix A must follow. |
-| Wherever output paths appear | **Every result / record lives in the workspace since 2026-09-14**: `results/ra_maps`, `results/scan_images/<run>/`, `log/apriltag_nav/nav_log`, `log/path_tag_locator/…`, `log/ros` (`ROS_LOG_DIR`). `~/.ros/…`, `~/scan_results`, `/tmp/robot_ui_captures` and result CSVs in `task/csv` are all gone. |
+| Wherever output paths appear | **Every result / record lives in the workspace since 2026-09-14**: `log/apriltag_nav/ra_maps` (moved from `results/ra_maps` 2026-09-15), `results/scan_images/<run>/`, `log/apriltag_nav/nav_log`, `log/path_tag_locator/…`, `log/ros` (`ROS_LOG_DIR`). `~/.ros/…`, `~/scan_results`, `/tmp/robot_ui_captures` and result CSVs in `task/csv` are all gone. |
 | §2.1 node table + line 295 | node count is now **8개 중 7개 필수** — `mobile_node` was added 2026-08-11 and is required. |
 | §7 topic tables | `/cmd_vel` and `/robot_pose` are published by **`mobile_node`**, not `mobile_manipulator_system`. New: `/mobile/goto_tag`, `/mobile/state`, `/mobile/busy` and the `/mobile/{stop,cancel,clear_stop}` services. |
 | Missing entirely | that `task_executor` now owns **no device at all** — drive, lift and arm are each reached through a client proxy. Worth a short section; it is the main structural change since the guide was written. |
@@ -1679,6 +1685,75 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-15 — Task tab shows what a task actually IS; Ra map CSVs moved from results/ to log/
+
+Two small user requests about the web UI (pinyin): what does a listed scan
+task option actually do — the names are long, cryptic RRT-set strings
+(`scan_joint_errorX_p000mm_standoff_010mm_height_652mm`) and the old detail
+line squeezed mode/tags/points/lift/files into one dense `·`-joined row —
+and don't write each scan's result CSV under `results/`, put it under
+`log/`.
+
+**Task detail is now field-by-field, not one line.** New
+`taskDetailHtml()` (web, `robot_ui/web/app.js`) /
+`MainWindow.task_detail_html()` (Qt, mirrored so both fronts show the same
+thing — same source data, `/task_list`, just rendered by each toolkit):
+a plain-language mode line (pose / joint / move-only / system, spelled out
+rather than the raw enum), then a small table — tags (with "drives to each
+stop, in order"), points (scan vs. traverse, traverse marked "driven
+through, not scanned"), lift, source file(s), paired file (labelled *why*
+it's paired — IK seed for pose mode, world xyz for joint mode), IK-seeded /
+world-xyz point counts when present, an explicit subset note for
+`groups_filter`, and — only for joint-mode tasks — the reach/collision
+warning from CLAUDE.md's RRT-dialect section, now always visible next to
+the task rather than only in a log line at registration. `taskSummary()` /
+`task_summary()` (the compact one-liner) survive unchanged as the
+`<option>` tooltip on the datalist / combo, which can't render multi-line
+HTML. Qt's `QLabel` needed `setTextFormat(Qt.RichText)` set explicitly —
+relying on its HTML auto-detection would have missed any task name that
+doesn't start with a tag-like token, i.e. almost every real name.
+
+**`paths.RA_MAP_DIR` moved: `<ws>/results/ra_maps` → `<ws>/log/apriltag_nav/
+ra_maps`.** Same file (`<task>_ra_map_<ts>.csv`), same 13-column format,
+same writer (`task_executor` → `arm_node`'s `ScanResultWriter`), still
+versioned — just filed next to the other per-run RECORDS (`nav_log`,
+`path_tag_locator`) instead of sitting in `results/` beside the large,
+unversioned `scan_images` bulk. `tools/ra_map_plotter.py` takes the csv
+path as an argument, so it needed no change. The three CSVs already
+tracked under `results/ra_maps/` were `git mv`'d, not copied, so their
+history follows them. Updated in the same pass: `paths.py` (the one
+definition), `task_manager.py`'s docstring, `mobile_manipulator.launch`'s
+comment, `results/README.md`, `.gitignore`'s comment (the pattern itself
+needed no change — nothing under `log/` was excluding `*.csv`), and this
+file's *Where run output lives* table + the Korean-guide backlog row.
+Left alone, per the standing rule that Work Log entries are historical
+narrative: the 2026-09-14 entries that named `results/ra_maps` as where
+that day's CSVs landed — they were true when written.
+
+Verified offline: `tools/check_web_ui.py` 106 → **still 106** (task-detail
+rendering isn't covered by the fake-bridge suite, since it never emits a
+`/task_list` payload with `scan_mode`/`kind` set — task-detail is instead
+exercised through `check_web_ui_browser.py`, which now asserts, against a
+real headless Chrome, the plain-language mode line for pose / joint /
+system tasks, the tags/points/lift/paired-file table rows (traverse points
+called out as "not scanned", the paired file naming *why* it's paired),
+the joint-only reach/collision warning present on a joint task and absent
+on a pose/system one, and that a task name or file name containing `<`/`&`
+comes through HTML-escaped rather than as live markup: 65 → **76**.
+`check_task_list_ui.py` (Qt) got the same coverage against the same
+`PAYLOAD` fixture, plus `lbl_task_detail.textFormat() == Qt.RichText`
+(explicit, not relying on QLabel's HTML auto-detection — which a name not
+starting with a tag-like token, i.e. almost every real one, would miss):
+71 → **85**. `paths.py`'s `RA_MAP_DIR` change needs no test beyond the
+existing suites resolving through it — confirmed by re-running
+`check_task_discovery.py` (47/48, unchanged from before this change: the
+one failure is the pre-existing "assumes three file pairs" mismatch noted
+in the 2026-09-14 entry, not a directory-path assertion). Not run against
+the live stack; `task_executor` restart required before the next TASK run
+writes to the new location — its own `RA_MAP_DIR` import is process-start-
+time, so an
+already-running node keeps writing to the old path until restarted.
 
 ### 2026-09-15 — robot_ui on the web: every feature of the PyQt window as a page any LAN computer can open
 
