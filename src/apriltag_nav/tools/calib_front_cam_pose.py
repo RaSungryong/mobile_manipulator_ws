@@ -138,6 +138,28 @@ def recentre_m(det, tags, fx, h, width, x_min_px=DEFAULT_LEFT_EDGE_PX):
     return float((np.mean(xs) - 0.5 * (x_min_px + width)) * h / fx)
 
 
+def max_pivot_from_corners(det, tags, camera_offset, fx, fy, cxK, h, height, margin=0.010, keep='both'):
+    """Largest body rotation (deg) from the pose of `det` that keeps both
+    tags (keep='both') or at least one (keep='one') inside the image's
+    vertical extent: a tag centre is camera_offset + (its distance ahead
+    of the principal point) from the rotation centre and swings sideways
+    (image y) by that times sin(angle); the room is the smaller of its
+    distances to the top and bottom edges minus `margin`. None when no
+    tag is present. This is the physical limit of the pivot sweep — with
+    the 0.24 m tall view at 0.30 m and a ~0.6 m lever it is ~7 deg."""
+    caps = []
+    for tg in tags:
+        if tg not in det:
+            continue
+        c = np.asarray(det[tg]['c'], float)
+        lat = min(c[:, 1].min(), height - c[:, 1].max()) * h / fy - margin
+        lever = abs(camera_offset) + max(0.0, (c[:, 0].mean() - cxK) * h / fx)
+        caps.append(math.degrees(math.asin(min(1.0, max(0.0, lat) / max(lever, 0.3)))))
+    if not caps:
+        return None
+    return max(caps) if keep == 'one' else min(caps)
+
+
 def cap_distance(dist, room, margin=ROOM_MARGIN_M):
     """Clip a signed body-x distance to the frame room in its direction
     (room dict from frame_room_m). Returns (capped, was_capped)."""
@@ -208,12 +230,17 @@ def lens_in_pair_frame(m, phi):
     return -R2(phi).T @ m
 
 
-def rotation_centres(gp, piv_snaps, tags, min_deg=1.0):
+def rotation_centres(gp, piv_snaps, tags, min_deg=1.0, spacing=None, tag_rot=(0.0, 0.0)):
     """For consecutive pivot snapshots: the centre of the arc the lens drew,
     relative to the lens nadir, in the LEVEL camera frame C of the first
-    snapshot. Returns [(name0, name1, dtheta_rad, centre_C (2,))]."""
+    snapshot. Returns [(name0, name1, dtheta_rad, centre_C (2,))]. With
+    `spacing` given a snapshot showing ONE tag is placed from it."""
     out = []
-    poses = [(n, pair_pose_in_cam(gp, d, tags)) for n, d in piv_snaps]
+    if spacing:
+        poses = [(n, pair_pose_any(gp, d, tags, spacing, tag_rot)) for n, d in piv_snaps]
+        poses = [(n, p) for n, p in poses if p is not None]
+    else:
+        poses = [(n, pair_pose_in_cam(gp, d, tags)) for n, d in piv_snaps]
     for (n0, (m0, p0)), (n1, (m1, p1)) in zip(poses, poses[1:]):
         dphi = p1 - p0
         dtheta = -dphi                      # body yaw in T = -(pair angle in C) + const
@@ -227,7 +254,7 @@ def rotation_centres(gp, piv_snaps, tags, min_deg=1.0):
     return out
 
 
-def fit_rotation_centre(gp, piv_snaps, tags, min_spread_deg=3.0):
+def fit_rotation_centre(gp, piv_snaps, tags, min_spread_deg=3.0, spacing=None, tag_rot=(0.0, 0.0)):
     """The rotation centre from ALL pivot snapshots jointly (2026-09-15):
     the lens nadir l_i and pair angle phi_i of snapshot i (pair frame T /
     level camera frame C) satisfy  l_i + R(-phi_i) centre_C = c_T  with
@@ -236,7 +263,11 @@ def fit_rotation_centre(gp, piv_snaps, tags, min_spread_deg=3.0):
     so one least squares over every snapshot instead of pairing them.
     Returns (centre_C (2,), rms_m, spread_deg) or None when the snapshots
     span less than `min_spread_deg` of body rotation."""
-    poses = [pair_pose_in_cam(gp, d, tags) for _, d in piv_snaps]
+    if spacing:
+        poses = [pair_pose_any(gp, d, tags, spacing, tag_rot) for _, d in piv_snaps]
+        poses = [p for p in poses if p is not None]
+    else:
+        poses = [pair_pose_in_cam(gp, d, tags) for _, d in piv_snaps]
     if len(poses) < 2:
         return None
     phis = np.unwrap([p for _, p in poses])
@@ -347,10 +378,15 @@ def solve_dir(dir_, tags, spacing, size0=DEFAULT_SIZE, h0=0.30):
     gp = F['gp']
     res = dict(fit=F, n_snaps=len(snaps))
 
-    piv = [(n, d) for n, d in snaps if n.startswith('piv')]
-    centres = rotation_centres(gp, piv, tags)
+    # pivot snapshots: the pair is placed from ONE tag when the other has
+    # swung out of the (bumper-limited) view, so the pivots can span more
+    # than the both-in-view ±6 deg (2026-09-15)
+    piv = load_snapshots(dir_, tags, prefixes=('piv',), min_tags=1)
+    res['n_piv'] = len(piv)
+    res['n_piv_single'] = sum(1 for _, d in piv if len([tg for tg in tags if tg in d]) == 1)
+    centres = rotation_centres(gp, piv, tags, spacing=spacing, tag_rot=F['tag_rot'])
     res['centres'] = centres
-    joint = fit_rotation_centre(gp, piv, tags)
+    joint = fit_rotation_centre(gp, piv, tags, spacing=spacing, tag_rot=F['tag_rot'])
     if centres and joint is not None:
         C = np.array([c for _, _, _, c in centres])
         res['centre_C'] = joint[0]           # the joint solution; the pairwise list is for the sd
@@ -551,42 +587,57 @@ class Session:
         return frame_room_m(det, self.tags, fx, fy, self.gp_height_cfg, msg.image_width, msg.image_height,
                             x_min_px=self.left_edge_px, keep=keep)
 
-    def pair_angle_deg(self, timeout=2.0):
-        """Angle of the 149 -> 150 line in the RAW image (deg), from a
-        30-frame mean — the body's rotation between two at-rest readings
-        is its change (sign as the image gives it; the pivot loop learns
-        the sign together with the gain). None if the pair is not seen."""
-        vals, t0, last = [], time.time(), None
-        while len(vals) < 30 and time.time() - t0 < 4.0 and not self.rospy.is_shutdown():
-            m = self.wait_pair(timeout=1.0)
+    def tag_angles_deg(self, timeout=2.0):
+        """{id: square orientation in the RAW image (deg)} for every
+        calibration tag in view, each a 30-frame mean of the four-edge
+        angle (square_angle). The body's rotation between two at-rest
+        readings is the change per tag (image sign; the pivot loop learns
+        the sign with the gain), so the feedback survives one tag
+        swinging out of view. {} if none is seen."""
+        acc = {tg: [] for tg in self.tags}
+        t0, last, n = time.time(), None, 0
+        while n < 30 and time.time() - t0 < 4.0 and not self.rospy.is_shutdown():
+            m = self.wait_tags(1, timeout=1.0)
             if m is None:
                 break
             if m.header.stamp != last:
                 last = m.header.stamp
-                c = {d.id: (d.center_x, d.center_y) for d in m.detections if d.id in self.tags}
-                (x0, y0), (x1, y1) = c[self.tags[0]], c[self.tags[1]]
-                vals.append(math.atan2(y1 - y0, x1 - x0))
+                n += 1
+                for d in m.detections:
+                    if d.id in acc:
+                        acc[d.id].append(square_angle(np.asarray(d.corners, float).reshape(4, 2)))
             self.rospy.sleep(0.01)
-        if not vals:
-            return None
-        return math.degrees(math.atan2(np.mean(np.sin(vals)), np.mean(np.cos(vals))))
+        out = {}
+        for tg, vals in acc.items():
+            if len(vals) >= 5:
+                out[tg] = math.degrees(math.atan2(np.mean(np.sin(vals)), np.mean(np.cos(vals))))
+        return out
 
-    def max_pivot_deg(self, camera_offset, spacing, margin=ROOM_MARGIN_M):
-        """The largest body rotation (deg) that keeps both tags inside the
-        lateral room, from the current frame: the far tag is
-        camera_offset + (its distance ahead of the nadir) from the
-        rotation centre and swings sideways by that times the angle."""
-        m = self.wait_pair(timeout=2.0)
+    def rotation_since(self, ref):
+        """Body rotation (deg, image sign) since the reference reading
+        `ref` (a tag_angles_deg dict), averaged over the tags visible in
+        both; None when no tag is common."""
+        now = self.tag_angles_deg()
+        ds = [(now[tg] - ref[tg] + 180.0) % 360.0 - 180.0 for tg in ref if tg in now]
+        if not ds:
+            return None
+        return float(np.mean(ds))
+
+    def max_pivot_deg(self, camera_offset, spacing, keep='both'):
+        """The largest body rotation (deg) from the CURRENT pose that keeps
+        both tags (keep='both') or at least one tag (keep='one') inside
+        the lateral room: a tag is camera_offset + (its distance ahead of
+        the nadir) from the rotation centre and swings sideways by that
+        times the angle. None when no tag is in view."""
+        m = self.wait_tags(1 if keep == 'one' else len(self.tags), timeout=2.0)
         if m is None:
             return None
-        room = self.room(m)
         fx = float(self._ci.K[0]) if self._ci is not None else 910.0
+        fy = float(self._ci.K[4]) if self._ci is not None else fx
         cxK = float(self._ci.K[2]) if self._ci is not None else 0.5 * m.image_width
-        xs = [d.center_x for d in m.detections if d.id in self.tags]
-        far_ahead = (max(xs) - cxK) * self.gp_height_cfg / fx
-        lever = abs(camera_offset) + max(0.0, far_ahead) + 0.5 * spacing * 0.7   # far tag's far corners
-        lat = max(0.0, min(room['left'], room['right']) - margin)
-        return math.degrees(math.asin(min(1.0, lat / max(lever, 0.3))))
+        det = {d.id: dict(c=np.asarray(d.corners, float).reshape(4, 2)) for d in m.detections}
+        return max_pivot_from_corners(det, self.tags, camera_offset, fx, fy, cxK, self.gp_height_cfg,
+                                      m.image_height, keep=keep)
 
     def recentre(self):
         """Drive distance that recentres the pair in the usable image, or
@@ -607,17 +658,19 @@ class Session:
             return None, False
         return cap_distance(dist, self.room(m, keep=keep))
 
-    def snap(self, dir_, name, n_frames=30):
+    def snap(self, dir_, name, n_frames=30, min_tags=None):
         """One at-rest snapshot = the corner-wise MEAN of n_frames frames
         (0.3 px single-frame noise cost the 2026-09-08 single-frame fit
         ~0.07 deg of roll / 2 mm of lever in the synthetic check; 30
         frames — one second — bring tx under 0.6 mm worst case over eight
-        noise seeds, where 15 frames left 1.5 mm)."""
+        noise seeds, where 15 frames left 1.5 mm). min_tags 1 accepts a
+        single-tag snapshot (pivots)."""
         frames = []
         t0 = time.time()
         last_stamp = None
+        need = len(self.tags) if min_tags is None else min_tags
         while len(frames) < n_frames and time.time() - t0 < 5.0 and not self.rospy.is_shutdown():
-            m = self.wait_pair(timeout=1.0)
+            m = self.wait_tags(need, timeout=1.0)
             if m is None:
                 break
             if m.header.stamp != last_stamp:
@@ -625,7 +678,10 @@ class Session:
                 frames.append(m)
             self.rospy.sleep(0.01)
         if not frames:
-            raise RuntimeError("snapshot %s: both tags not in view" % name)
+            raise RuntimeError("snapshot %s: %s in view" % (name, "no tag" if need == 1 else "both tags not"))
+        # keep only the frames showing the same tag set as the last one
+        ids_last = {d.id for d in frames[-1].detections} & set(self.tags)
+        frames = [f for f in frames if ({d.id for d in f.detections} & set(self.tags)) == ids_last]
         m = frames[-1]
         if self.is_corrected(m):
             raise RuntimeError("detections are ground-plane corrected — refuse (see check)")
@@ -683,19 +739,23 @@ def cmd_collect(args):
     # as ~3.7, so each step is a closed loop: command, read the pair
     # angle at rest, learn the gain, repeat until inside pivot_tol. Each
     # command is capped by the lateral frame room of the moment.
-    pivs = [+3.0, +6.0, +3.0, 0.0, -3.0, -6.0, -3.0, 0.0]     # CUMULATIVE vs the first pivot snapshot
+    # CUMULATIVE executed targets vs the first pivot snapshot, in units of
+    # the largest rotation the frame allows with ONE tag still in view —
+    # decided at run time from the room (`pivot_full`, ≤ --pivot-max deg).
+    pivs_unit = [+0.5, +1.0, +0.5, 0.0, -0.5, -1.0, -0.5, 0.0]
     pivot_tol = 0.5
     drives = []
     for _ in range(args.drive_repeat):
         drives += [+args.drive, -args.drive]
     print("\nPlan (every move through mobile_node, odometry-closed, ≤ %.2f m / %.0f deg; "
           "each move is capped to the frame room of the moment):" %
-          (max(abs(x) for x in scans + [args.drive]), max(pivs)))
+          (max(abs(x) for x in scans + [args.drive]), args.pivot_max))
     if 'scan' in only:
         print("  1. snapshot at rest, then %d moves of %s m with a snapshot after each" % (len(scans), scans))
     if 'piv' in only:
-        print("  2. %d closed-loop pivots to the cumulative EXECUTED angles %s deg (±%.1f) with a snapshot after each"
-              % (len(pivs), pivs, pivot_tol))
+        print("  2. %d closed-loop pivots to the cumulative EXECUTED angles %s x F deg (±%.1f) with a snapshot after "
+              "each, F = the largest rotation that keeps one tag in view (≤ %.0f deg, read from the frame)"
+              % (len(pivs_unit), pivs_unit, pivot_tol, args.pivot_max))
     if 'drive' in only:
         print("  3. %d drives of %s m, detections recorded throughout" % (len(drives), drives))
     print("  output: %s%s" % (d, "  (only: %s; that phase's old files are renamed old_*)" % ",".join(sorted(only)) if args.only else ""))
@@ -710,9 +770,9 @@ def cmd_collect(args):
     if not ok:
         sys.exit("mobile_node: %s" % why)
 
-    def snap(name):
+    def snap(name, min_tags=None):
         rospy.sleep(S.settle_s)
-        fn = S.snap(d, name)
+        fn = S.snap(d, name, min_tags=min_tags)
         print("  saved %s" % os.path.basename(fn))
 
     def capped_or_exit(dist, what, keep='both'):
@@ -755,35 +815,36 @@ def cmd_collect(args):
                 sys.exit("%s: recentre move failed — stop here, solve what exists" % what)
             rospy.sleep(S.settle_s)
 
-    def pivot_to(target, gain, a0):
-        """Pivot until the pair angle is `target` deg away from the
-        reference reading a0 (image sign convention; cumulative targets
-        so per-step errors do not add up). Returns (reached, gain) —
-        gain = commanded / executed, learned from every attempt with a
-        measurable result."""
-        a = S.pair_angle_deg()
-        if a is None:
-            sys.exit("pivot: pair not in view — stop here, solve what exists")
-        total = (a - a0 + 180.0) % 360.0 - 180.0
+    def pivot_to(target, gain, ref):
+        """Pivot until the tags' square angles are `target` deg away from
+        the reference reading `ref` (image sign convention; cumulative
+        targets so per-step errors do not add up; per-tag reference, so
+        one tag out of view is fine). Returns (reached, gain) — gain =
+        commanded / executed, learned from every attempt with a measurable
+        result."""
+        total = S.rotation_since(ref)
+        if total is None:
+            sys.exit("pivot: no calibration tag in view — stop here, solve what exists")
         for attempt in range(6):
             rem = target - total
             if abs(rem) <= pivot_tol:
                 break
-            cap = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12)
+            # the cap keeps ONE tag in view; the sign of rem in image terms
+            # vs the body is unknown here, so cap the magnitude only
+            cap = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep='one')
             if cap is None:
-                sys.exit("pivot: pair not in view — stop here, solve what exists")
+                sys.exit("pivot: no calibration tag in view — stop here, solve what exists")
             cmd = rem * gain
             if abs(rem) > cap:
                 print("    remaining %+.2f deg exceeds the lateral room (%.2f deg) — stopping this step short" % (rem, cap))
                 cmd = math.copysign(cap * abs(gain), cmd)
-            cmd = max(-10.0, min(10.0, cmd))
+            cmd = max(-args.pivot_max * 2.5, min(args.pivot_max * 2.5, cmd))
             if not mc.pivot_angle(cmd):
                 sys.exit("pivot command %+.2f deg failed — stop here, solve what exists" % cmd)
             rospy.sleep(S.settle_s)
-            a1 = S.pair_angle_deg()
-            if a1 is None:
-                sys.exit("pivot: pair lost after a command — stop here, solve what exists")
-            ex = (a1 - a0 + 180.0) % 360.0 - 180.0
+            ex = S.rotation_since(ref)
+            if ex is None:
+                sys.exit("pivot: tags lost after a command — stop here, solve what exists")
             step = (ex - total + 180.0) % 360.0 - 180.0
             total = ex
             if abs(step) > 0.15:
@@ -799,14 +860,21 @@ def cmd_collect(args):
     if 'piv' in only:
         recentre("before the pivots")
         snap('piv_00_%s' % time.strftime('%H%M%S'))
-        a_ref = S.pair_angle_deg()
-        if a_ref is None:
+        ref = S.tag_angles_deg()
+        if len(ref) < 2:
             sys.exit("pivot: pair not in view — stop here, solve what exists")
+        full = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12, keep='one')
+        full = min(args.pivot_max, (full or 0.0) - 0.5)
+        if full < 3.0:
+            sys.exit("pivot: the lateral room allows only %.1f deg of rotation — re-park with the pair "
+                     "vertically centred (overlay y offsets near 0)" % full)
+        pivs = [u * full for u in pivs_unit]
+        print("  pivot targets (cumulative, executed): %s deg" % ", ".join("%+.1f" % v for v in pivs))
         gain = 1.8                                   # the base executes ~40-75 % of a 3-6 deg command
         for k, ang in enumerate(pivs):
-            reached, gain = pivot_to(ang, gain, a_ref)
+            reached, gain = pivot_to(ang, gain, ref)
             print("  pivot %d: cumulative target %+.1f, at %+.2f deg" % (k + 1, ang, reached))
-            snap('piv_%02d_%s' % (k + 1, time.strftime('%H%M%S')))
+            snap('piv_%02d_%s' % (k + 1, time.strftime('%H%M%S')), min_tags=1)
     if 'drive' not in only:
         print("collect done: %s" % d)
         return
@@ -881,7 +949,8 @@ def cmd_solve(args):
         print("pivot snapshots span too little body rotation for the centre fit (need >= 3 deg; "
               "redo them: collect DIR --only piv) — tx/ty not determined")
         return
-    print("rotation centre relative to the lens nadir, level camera frame (x fwd, y right), per pivot pair:")
+    print("rotation centre relative to the lens nadir, level camera frame (x fwd, y right), per pivot pair "
+          "(%d pivot snapshots, %d of them from a single tag):" % (r['n_piv'], r['n_piv_single']))
     for n0, n1, dth, c in r['centres']:
         print("  %s -> %s: %+5.2f deg  (%+7.1f, %+6.1f) mm" % (n0, n1, math.degrees(dth), c[0] * 1e3, c[1] * 1e3))
     cC, sd = r['centre_C'], r['centre_C_sd']
@@ -965,6 +1034,8 @@ def main():
     p.add_argument('--drive-repeat', type=int, default=4, help='forward+back pairs (8 tracks)')
     p.add_argument('--speed', type=float, default=0.03)
     p.add_argument('--dry-run', action='store_true'); p.add_argument('--yes', action='store_true')
+    p.add_argument('--pivot-max', type=float, default=12.0,
+                   help='largest cumulative executed pivot (deg); the frame room may allow less')
     p.add_argument('--only', default=None,
                    help='redo only these phases (comma list of scan,piv,drive) INTO an existing session dir; '
                         'that phase\'s previous files are renamed old_*')

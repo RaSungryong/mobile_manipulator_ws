@@ -98,9 +98,11 @@ def initial_tag_rotations(d, tags):
     return out
 
 
-def load_snapshots(dir_, tags, prefixes=None):
-    """[(basename, parsed)] for every snapshot in `dir_` that shows BOTH
-    tags (sorted by name; `prefixes` restricts to e.g. ('scan', 'piv'))."""
+def load_snapshots(dir_, tags, prefixes=None, min_tags=2):
+    """[(basename, parsed)] for every snapshot in `dir_` that shows at
+    least `min_tags` of the pair (2 = both, the fit's requirement; 1 =
+    either, for the rotation-centre fit which can place the pair from one
+    tag). Sorted by name; `prefixes` restricts to e.g. ('scan', 'piv')."""
     snaps = []
     for f in sorted(glob.glob(os.path.join(dir_, '*.txt'))):
         base = os.path.basename(f)
@@ -109,7 +111,7 @@ def load_snapshots(dir_, tags, prefixes=None):
         if prefixes and not base.startswith(tuple(prefixes)):
             continue
         d = parse_snapshot(f)
-        if tags[0] in d and tags[1] in d:
+        if len([tg for tg in tags if tg in d]) >= min_tags:
             snaps.append((base, d))
     return snaps
 

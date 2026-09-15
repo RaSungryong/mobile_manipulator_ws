@@ -1803,7 +1803,17 @@ per attempt, sign included, each command capped by the lateral room
 (`max_pivot_deg`), and `collect --only piv|scan|drive` redoes one phase
 into the existing directory (old files renamed `old_*`). Fake-base test
 (stiction under 1°, 25–75 % execution): 9 snapshots at 0 / −3.4 / −5.7 /
-−3.0 / −0.3 / +3.3 / +6.1 / +2.7 / −0.3°, 21 commands.
+−3.0 / −0.3 / +3.3 / +6.1 / +2.7 / −0.3°, 21 commands. **User then asked
+for bigger pivots: the sweep is physically bounded by the 0.24 m tall
+view — a tag 0.6 m from the rotation centre swings 10 mm per degree and
+has ±75 mm of room, so ~±6–7° even keeping only ONE tag in view.** The
+targets are now ±F/2, ±F with F = `max_pivot_from_corners(keep='one')`
+read off the frame (≤ `--pivot-max` 12), the feedback is per-tag
+(`square_angle` of whichever tags are visible, referenced per tag), and
+pivot snapshots may show one tag (`pair_pose_any`). Plant: F 5.4°,
+spread 10.8°, eight seeds tx rms 0.36 / max 0.62 mm, ty 0.5 / 1.2, yaw
+0.05 / 0.11°. Going beyond needs a different layout (tags offset
+laterally), not a bigger command.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;

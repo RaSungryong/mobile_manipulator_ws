@@ -113,14 +113,15 @@ class Plant:
         self.th += math.radians(deg * self.rng.uniform(0.7, 0.85))
 
 
-def averaged_frame(P, n=30):          # the tool's snapshot: 30-frame corner mean
+def averaged_frame(P, n=30, min_tags=2):          # the tool's snapshot: 30-frame corner mean
     fs = [P.frame() for _ in range(n)]
-    if any(f is None or len(f) < 2 for f in fs):
+    if any(f is None or len(f) < min_tags for f in fs):
         return None
     out = {}
     for t in TAGS:
-        c = np.mean([f[t]['c'] for f in fs], axis=0)
-        out[t] = dict(cx=c[:, 0].mean(), cy=c[:, 1].mean(), c=c)
+        if all(t in f for f in fs):
+            c = np.mean([f[t]['c'] for f in fs], axis=0)
+            out[t] = dict(cx=c[:, 0].mean(), cy=c[:, 1].mean(), c=c)
     return out
 
 
@@ -134,7 +135,7 @@ def write_snapshot(fn, det):
     open(fn, 'a').write("\n".join(lines) + "\n---\n")
 
 
-def run_case(roll_deg, pitch_deg, h, yaw_deg, tx, ty, seed, tag_rot=(0.0, 0.0), drive=0.15, cap=True):
+def run_case(roll_deg, pitch_deg, h, yaw_deg, tx, ty, seed, tag_rot=(0.0, 0.0), drive=0.15, cap=True, pivot_full=None):
     P = Plant(math.radians(roll_deg), math.radians(pitch_deg), h, math.radians(yaw_deg), tx, ty, seed=seed,
               tag_rot=tag_rot)
     d = tempfile.mkdtemp(prefix='fcpose_')
@@ -156,11 +157,19 @@ def run_case(roll_deg, pitch_deg, h, yaw_deg, tx, ty, seed, tag_rot=(0.0, 0.0), 
         P.move(C.recentre_m(f0, TAGS, FX, h, W, LEFT_EDGE))
 
     recentre()
-    for ang in [0.0, +2, +2, -2, -2, -2, -2, +2, +2]:      # the tool's pattern
-        if ang:
-            P.pivot(ang)
-        f = averaged_frame(P)
-        assert f is not None, "pair left the frame during pivots"
+    # the tool's closed-loop pattern: cumulative EXECUTED ±F/2, ±F with F
+    # the one-tag lateral room (~9 deg here); the plant executes exactly
+    # (the loop's job on the robot), single-tag snapshots allowed
+    th0 = P.th
+    n_single_piv = 0
+    if pivot_full is None:            # what the tool does: the one-tag room of the frame, minus 0.5
+        f0 = averaged_frame(P)
+        pivot_full = C.max_pivot_from_corners(f0, TAGS, 0.55, FX, FY, CX, h, H, keep='one') - 0.5
+    for u in [0.0, +0.5, +1.0, +0.5, 0.0, -0.5, -1.0, -0.5, 0.0]:
+        P.th = th0 + math.radians(u * pivot_full)
+        f = averaged_frame(P, min_tags=1)
+        assert f is not None, "no tag in the frame during pivots"
+        n_single_piv += int(len(f) == 1)
         write_snapshot(os.path.join(d, 'piv_%02d.txt' % k), f); k += 1
     n_capped, lost = 0, 0
     recentre()
@@ -184,6 +193,8 @@ def run_case(roll_deg, pitch_deg, h, yaw_deg, tx, ty, seed, tag_rot=(0.0, 0.0), 
                 lost += 1
     r = C.solve_dir(d, TAGS, SPACING, SIZE, 0.30)
     r['n_capped'], r['lost'] = n_capped, lost
+    r['n_single_piv'] = n_single_piv
+    r['pivot_full'] = pivot_full
     r['track_len_m'] = abs(dist)
     shutil.rmtree(d)
     return r
@@ -197,10 +208,13 @@ check("roll/pitch recovered within 0.02 deg",
       "%.3f / %.3f" % (math.degrees(F['roll']), math.degrees(F['pitch'])))
 check("lens height within 0.5 mm", abs(F['h'] - 0.302) < 5e-4, "%.1f mm" % (F['h'] * 1e3))
 check("lever within 1.5 mm", abs(r['lever'] - math.hypot(0.552, 0.004)) < 1.5e-3, "%.4f m" % r['lever'])
-check("tx within 1.5 mm (eight seeds, bumper-limited view, ±4 deg pivots: rms 0.7, max 1.3)", abs(r['tx'] - 0.552) < 1.5e-3,
-      "%.4f m (pivot spread %.1f deg)" % (r['tx'], r['centre_spread_deg']))
-check("ty within 1.2 mm AND the right sign (lens right of centre -> ty negative; eight seeds max 0.9)",
-      abs(r['ty'] + 0.004) < 1.2e-3, "%.4f m" % r['ty'])
+check("tx within 1 mm (eight seeds, pivots to the one-tag room ~±6 deg)", abs(r['tx'] - 0.552) < 1e-3,
+      "%.4f m (pivot full %.1f deg, spread %.1f deg, %d single-tag pivot snapshots)"
+      % (r['tx'], r['pivot_full'], r['centre_spread_deg'], r['n_single_piv']))
+check("the room-sized pivot is 5-7 deg — the physical limit of the 0.24 m tall view", 5.0 < r['pivot_full'] < 7.5,
+      "%.2f deg" % r['pivot_full'])
+check("ty within 1.5 mm AND the right sign (lens right of centre -> ty negative; eight seeds rms 0.5 max 1.2)",
+      abs(r['ty'] + 0.004) < 1.5e-3, "%.4f m" % r['ty'])
 check("yaw within 0.1 deg (0.3 px, eight ~0.15 m single-tag-extended tracks: rms 0.05, max 0.08 over eight seeds)",
       abs(math.degrees(r['yaw']) + 0.40) < 0.10,
       "%.3f deg (rms %.2f mm, %d pairs)" % (math.degrees(r['yaw']), r['yaw_rms_m'] * 1e3, r['yaw_pairs']))
