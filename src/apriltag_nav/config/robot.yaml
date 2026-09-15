@@ -25,6 +25,12 @@ robot:
   # This is the ONE key in this block that code actually reads
   # (mobile_controller.calculate_robot_pose).
   camera_offset: 0.55
+  # Lens lateral offset from the base's rotation centre (m, body y = LEFT
+  # positive). Measured by tools/calib_front_cam_pose.py from the arc the
+  # lens draws during pivots (2026-09-08 data: -0.005 ± 0.005 m, i.e. inside
+  # the noise). Read by make_front_cam_extrinsics.py (T_mb2fc ty) ONLY —
+  # mobile_controller still assumes the lens is on the centreline.
+  camera_lateral: 0.0
 
   # Movement limits
   max_linear_speed: 0.1    # Maximum linear velocity (m/s)

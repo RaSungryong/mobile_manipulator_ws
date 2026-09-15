@@ -1591,6 +1591,56 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-15 — front_cam pose calibration as a procedure: `tools/calib_front_cam_pose.py` (tx, ty, yaw, roll, pitch, height) + the rotation-centre question
+
+User: is there a record of the 2026-09-08 lever measurement, how to know
+whether the rotation centre is the chassis centre, and a full T_mb2fc
+calibration procedure to run now. The record is
+`log/apriltag_nav/calib_pair/` (15 snapshots + `front_cam_fit.npy`);
+re-running `fit_front_cam_ground.py` on it reproduces roll +1.228 /
+pitch −0.504 / 302.0 mm / lever 0.552 ± 0.001 m from six ±4° pivot pairs.
+Solving the arc CENTRE (not just its radius) from the same pivots puts the
+rotation centre (−552.2, −4.5) mm from the nadir in the level camera frame,
+sd (1.4, 4.9) — the lateral term is inside its noise.
+
+**The tool** (`collect` / `snap` / `record` / `solve [--apply]`, doc
+`docs/FRONT_CAM_POSE_CALIBRATION_kr.md`): snapshots are 15-frame corner
+means (single frames cost the 09-08 fit ~0.07° of roll / 2 mm of lever in
+the plant); tx, ty come from the pivot arc centre; **yaw from straight
+drive tracks by a cumulative-lateral least squares** — the rotation
+centre `c_i = l_i + R(−φ_i)·centre_C` may only move along the body x axis,
+and yaw is the one rotation that makes the accumulated lateral drift
+vanish. Two things the plant taught: per-step differencing amplifies
+corner noise 20× (drop it), and the pair angle's 0.04° frame noise times
+the 0.55 m lever is 0.4 mm of centre position per frame — smooth φ over
+~21 frames before placing the centre. With that, 0.3 px noise and six
+0.12 m tracks give yaw ±0.05–0.08°; per-track spread is the honest
+uncertainty, and **lateral slip of the rotation centre is
+indistinguishable from camera yaw** (1 mm per 0.1 m = 0.57°), so several
+tracks both ways and a mechanical cross-check (doc §6) are part of the
+procedure. `robot.yaml` gained `camera_lateral` (ty; read by the
+extrinsics generator only — `mobile_controller` still assumes the lens
+on the centreline), `MobileClient.pivot_angle` was added beside
+`drive_distance`, and `fit_front_cam_ground.py` exposes
+`load_snapshots` / `fit_ground` for reuse (output unchanged).
+
+**Rotation centre vs geometric centre** is a mechanical question (doc
+§5): plumb the front/rear bumper centres to the floor, pivot 90°, plumb
+again; the perpendicular bisectors meet at the rotation centre, the
+bumper midpoint is the geometric centre. The camera's tx is to the
+rotation centre; `T_ab2mb` and the cell's stop poses are chassis-centre
+figures, so a difference goes 1:1 into the arm's world position.
+
+Verified offline only: `tools/check_front_cam_pose_calib.py` (16 —
+synthetic plant with the real D, tilt, yaw −0.4 / +0.7 / 0, lens 4 mm
+right / 8 mm left / on-centre, under-executed moves, heading wander,
+0.3 px noise: roll/pitch 0.02°, height 0.5 mm, tx 1 mm, ty with the right
+sign, yaw within 0.08° and the model exact at zero noise; `--apply`
+round-trips a copy of robot.yaml through the generator and the loader).
+`check_front_cam_extrinsics.py` 22 still pass with `camera_lateral` in the
+generator. `collect --dry-run` against the live master refused correctly
+(tags 15/16 not laid, correction on). Not driven.
+
 ### 2026-09-15 — robot_ui: distance-sensor assist (live Keyence standoff + "Auto standoff" from the current pose)
 
 User: "在 UI 中添加使用距离传感器进行辅助的功能". The Keyence DL-EN1 was

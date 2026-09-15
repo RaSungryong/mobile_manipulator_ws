@@ -182,13 +182,25 @@ class MobileClient:
         (negative = reverse), through mobile_node's /mobile/move_cmd — the
         same handshake as move_to_tag (seq read before publishing, ack,
         then completion). Returns bool; the reason is logged."""
+        req = {'type': 'move', 'distance_m': float(distance_m)}
+        return self._manual_move(req, f"manual move {distance_m:+.3f} m",
+                                 speed, timeout_s)
+
+    def pivot_angle(self, angle_deg, speed=None, timeout_s=120.0):
+        """In-place odometry-closed pivot of `angle_deg` (CCW positive),
+        through the same /mobile/move_cmd handshake as drive_distance
+        (2026-09-15, for the front_cam pose calibration tool)."""
+        req = {'type': 'pivot', 'angle_deg': float(angle_deg)}
+        return self._manual_move(req, f"manual pivot {angle_deg:+.2f} deg",
+                                 speed, timeout_s)
+
+    def _manual_move(self, req, label, speed, timeout_s):
         ok, why = self.wait_for_node()
         if not ok:
             rospy.logerr(f"[MobileClient] {why}")
             return False
         st = self.state
         seq_before = st.get('seq', 0) if st else 0
-        req = {'type': 'move', 'distance_m': float(distance_m)}
         if speed:
             req['speed'] = float(speed)
         try:
@@ -196,7 +208,7 @@ class MobileClient:
         except Exception as e:
             rospy.logerr(f"[MobileClient] could not publish move_cmd: {e}")
             return False
-        rospy.loginfo(f"[MobileClient] manual move {distance_m:+.3f} m — waiting")
+        rospy.loginfo(f"[MobileClient] {label} — waiting")
         ack_deadline = rospy.get_time() + self.ack_timeout_s
         acked = False
         while rospy.get_time() < ack_deadline and not rospy.is_shutdown():
@@ -206,7 +218,7 @@ class MobileClient:
                 break
             rospy.sleep(0.05)
         if not acked:
-            rospy.logerr("[MobileClient] mobile_node never acknowledged the manual move")
+            rospy.logerr(f"[MobileClient] mobile_node never acknowledged the {label}")
             return False
         deadline = rospy.get_time() + float(timeout_s)
         while not rospy.is_shutdown():
@@ -214,12 +226,12 @@ class MobileClient:
             if st is not None and st.get('seq', 0) > seq_before:
                 break
             if rospy.get_time() >= deadline:
-                rospy.logerr(f"[MobileClient] manual move timed out after {timeout_s:.0f}s")
+                rospy.logerr(f"[MobileClient] {label} timed out after {timeout_s:.0f}s")
                 return False
             rospy.sleep(0.05)
         result = (self.state or {}).get('result') or {}
         if not result.get('ok'):
-            rospy.logwarn(f"[MobileClient] manual move failed: {result.get('message')}")
+            rospy.logwarn(f"[MobileClient] {label} failed: {result.get('message')}")
             return False
         rospy.loginfo(f"[MobileClient] {result.get('message')}")
         return True

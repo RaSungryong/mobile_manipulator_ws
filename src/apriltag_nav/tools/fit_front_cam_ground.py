@@ -62,6 +62,56 @@ def pair_corners(size, spacing):
     return np.vstack([base, base + [spacing, 0.0]])
 
 
+def load_snapshots(dir_, tags, prefixes=None):
+    """[(basename, parsed)] for every snapshot in `dir_` that shows BOTH
+    tags (sorted by name; `prefixes` restricts to e.g. ('scan', 'piv'))."""
+    snaps = []
+    for f in sorted(glob.glob(os.path.join(dir_, '*.txt'))):
+        base = os.path.basename(f)
+        if base.startswith('camera_info'):
+            continue
+        if prefixes and not base.startswith(tuple(prefixes)):
+            continue
+        d = parse_snapshot(f)
+        if tags[0] in d and tags[1] in d:
+            snaps.append((base, d))
+    return snaps
+
+
+def fit_ground(snaps, tags, fx, fy, cx, cy, D, spacing, size0=0.060, h0=0.30):
+    """The tag-pair fit. Returns dict(roll, pitch, h, size, rms_px, max_px,
+    rms_level_px, gp) — angles in radians, gp a GroundPlane with yaw 0
+    (its x axis is the CAMERA x, not yet the travel axis)."""
+    t0, t1 = tags
+    obs = [np.vstack([d[t0]['c'], d[t1]['c']]) for _, d in snaps]
+
+    def residuals(p):
+        roll, pitch, h, s = p[:4]
+        gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
+        pc = pair_corners(s, spacing)
+        res = []
+        for k in range(len(snaps)):
+            X, Y, psi = p[4 + 3 * k: 7 + 3 * k]
+            c, sn = math.cos(psi), math.sin(psi)
+            g = np.column_stack([X + c * pc[:, 0] - sn * pc[:, 1], Y + sn * pc[:, 0] + c * pc[:, 1]])
+            res.append((gp.project(g) - obs[k]).ravel())
+        return np.concatenate(res)
+
+    p0 = [0.0, 0.0, h0, size0]
+    for _, d in snaps:
+        p0 += [(d[t0]['cx'] - cx) * h0 / fx, (d[t0]['cy'] - cy) * h0 / fy,
+               math.atan2(d[t1]['cy'] - d[t0]['cy'], d[t1]['cx'] - d[t0]['cx'])]
+    fit = least_squares(residuals, p0, method='lm', xtol=1e-12, ftol=1e-12)
+    roll, pitch, h, s = fit.x[:4]
+    r = residuals(fit.x)
+    lvl = least_squares(lambda q: residuals(np.concatenate([[0.0, 0.0], q])), p0[2:], method='lm')
+    r0 = residuals(np.concatenate([[0.0, 0.0], lvl.x]))
+    return dict(roll=roll, pitch=pitch, h=h, size=s,
+                rms_px=math.sqrt(np.mean(r ** 2)), max_px=float(np.abs(r).max()),
+                rms_level_px=math.sqrt(np.mean(r0 ** 2)),
+                gp=GroundPlane(fx, fy, cx, cy, D, roll, pitch, h))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('dir')
@@ -73,45 +123,17 @@ def main():
     a = ap.parse_args()
 
     fx, fy, cx, cy, D = parse_camera_info(a.camera_info or os.path.join(a.dir, 'camera_info.txt'))
-    files = sorted(glob.glob(os.path.join(a.dir, '*.txt')))
-    snaps = []
-    for f in files:
-        if os.path.basename(f).startswith('camera_info'):
-            continue
-        d = parse_snapshot(f)
-        if a.tags[0] in d and a.tags[1] in d:
-            snaps.append((os.path.basename(f), d))
+    snaps = load_snapshots(a.dir, a.tags)
     if len(snaps) < 3:
         sys.exit(f"need at least 3 snapshots with both tags, found {len(snaps)}")
     t0, t1 = a.tags
-    obs = [np.vstack([d[t0]['c'], d[t1]['c']]) for _, d in snaps]
-
-    def residuals(p):
-        roll, pitch, h, s = p[:4]
-        gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
-        pc = pair_corners(s, a.spacing)
-        res = []
-        for k in range(len(snaps)):
-            X, Y, psi = p[4 + 3 * k: 7 + 3 * k]
-            c, sn = math.cos(psi), math.sin(psi)
-            g = np.column_stack([X + c * pc[:, 0] - sn * pc[:, 1], Y + sn * pc[:, 0] + c * pc[:, 1]])
-            res.append((gp.project(g) - obs[k]).ravel())
-        return np.concatenate(res)
-
-    p0 = [0.0, 0.0, a.height, a.size]
-    for _, d in snaps:
-        p0 += [(d[t0]['cx'] - cx) * a.height / fx, (d[t0]['cy'] - cy) * a.height / fy,
-               math.atan2(d[t1]['cy'] - d[t0]['cy'], d[t1]['cx'] - d[t0]['cx'])]
-    fit = least_squares(residuals, p0, method='lm', xtol=1e-12, ftol=1e-12)
-    roll, pitch, h, s = fit.x[:4]
-    r = residuals(fit.x)
-    lvl = least_squares(lambda q: residuals(np.concatenate([[0.0, 0.0], q])), p0[2:], method='lm')
-    r0 = residuals(np.concatenate([[0.0, 0.0], lvl.x]))
+    F = fit_ground(snaps, a.tags, fx, fy, cx, cy, D, a.spacing, a.size, a.height)
+    roll, pitch, h, s = F['roll'], F['pitch'], F['h'], F['size']
     gp = GroundPlane(fx, fy, cx, cy, D, roll, pitch, h)
     ax = gp.axis_offset_m()
 
-    print(f"snapshots {len(snaps)}, corner points {8 * len(snaps)}, rms {math.sqrt(np.mean(r ** 2)):.3f} px "
-          f"(max {np.abs(r).max():.2f}); level camera would give {math.sqrt(np.mean(r0 ** 2)):.3f} px")
+    print(f"snapshots {len(snaps)}, corner points {8 * len(snaps)}, rms {F['rms_px']:.3f} px "
+          f"(max {F['max_px']:.2f}); level camera would give {F['rms_level_px']:.3f} px")
     print(f"roll {math.degrees(roll):+.3f} deg, pitch {math.degrees(pitch):+.3f} deg, height {h * 1000:.1f} mm, "
           f"tag size {s * 1000:.2f} mm; optical axis meets the floor {ax[0] * 1000:+.1f} / {ax[1] * 1000:+.1f} mm from the nadir")
     print("\nrobot.yaml:\n  robot_camera:\n    ground_plane:\n      front_cam:\n        enabled: true\n"
