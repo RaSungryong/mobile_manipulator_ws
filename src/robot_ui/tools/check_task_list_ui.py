@@ -347,6 +347,46 @@ def main():
         app.processEvents(); _time.sleep(0.02)
     check(('set_vision_lamp', False) in bridge.calls, 'STOP ALL releases the lamp hold')
 
+    print('== CAPTURE while the live preview runs (2026-09-15)')
+    import numpy as _np
+    import threading as _thr
+    gate = _thr.Event()
+    def slow_capture(n=1, delay=-1.0, use_led=False, timeout=30.0):
+        bridge.calls.append(('capture', n, use_led))
+        if not use_led:
+            gate.wait(2.0)           # a preview grab that is still outstanding
+        return True, 'captured 1/1', [_np.zeros((8, 8), _np.uint8)]
+    bridge.capture = slow_capture
+    win.chk_save.setChecked(False); win.chk_infer.setChecked(False)
+    # let the STOP ALL section's pooled calls (mobile_stop, lift_stop) finish
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and win._busy_calls:
+        app.processEvents(); _time.sleep(0.02)
+    check(win._busy_calls == 0, 'no call in flight before the preview starts')
+    bridge.calls.clear()
+    win.chk_preview.setChecked(True)
+    app.processEvents()
+    win._preview_tick()              # one preview grab now in flight (blocked on gate)
+    app.processEvents()
+    check(win._preview_calls == 1 and win._busy_calls == 1,
+          f'a preview grab is in flight (busy {win._busy_calls}, preview {win._preview_calls}, live {len(win._live_workers)})')
+    check(win.btn_capture.isEnabled(), 'CAPTURE stays enabled while only a preview grab is in flight')
+    check(win._preview_timer.isActive(), 'preview timer running')
+    click(win.chk_lamp.parentWidget().parentWidget(), 'CAPTURE')
+    check(not win._preview_timer.isActive(), 'capture PAUSES the preview timer (device stays held)')
+    check(win.chk_preview.isChecked() and win._preview_on, 'preview is not switched off')
+    check(not win.btn_capture.isEnabled(), 'CAPTURE disabled while the real capture runs')
+    gate.set()
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and not win._preview_timer.isActive():
+        app.processEvents(); _time.sleep(0.02)
+    check(win._preview_timer.isActive(), 'preview timer resumes after the capture')
+    check(('capture', 1, True) in bridge.calls, 'the real capture went out with the lamp')
+    check(not any(c[0] == 'set_camera_active' and c[1] is False for c in bridge.calls),
+          'the device was NOT released around the capture')
+    win.chk_preview.setChecked(False)
+    app.processEvents()
+
     win.close()
     print(f'\n{N_OK} ok, {N_FAIL} failed')
     return 1 if N_FAIL else 0

@@ -83,6 +83,15 @@ class MainWindow(QMainWindow):
         self._last_capture = None       # newest captured BGR frame
         self._arm_pose = [0.0] * 6
         self._preview_on = False
+        self._preview_calls = 0
+        # Strong refs to in-flight CallWorkers. QThreadPool auto-deletes the
+        # C++ QRunnable after run(); without a Python reference the wrapper
+        # and its _WorkerSignals could be collected while run() is still
+        # emitting ('wrapped C/C++ object ... has been deleted'), the
+        # finished slot never fires, and _busy_calls leaks — which greys
+        # out CAPTURE for the rest of the session (seen in the offscreen
+        # check's startup call, 2026-09-15).
+        self._live_workers = set()
         self._busy_calls = 0
 
         self.plugins = PluginRunner(
@@ -1570,18 +1579,27 @@ class MainWindow(QMainWindow):
     # ACTIONS
     # ==========================================================
     def _run(self, fn, *args, label=None, on_done=None, on_error=None,
-             **kwargs):
+             preview=False, **kwargs):
         """Run a blocking bridge call on the pool and log its result.
 
         `on_done(result)` runs only when the call returned; `on_error(msg)`
         only when it raised — kept separate because every existing on_done
-        unpacks its result and would not survive a None."""
+        unpacks its result and would not survive a None. `preview=True`
+        marks a live-preview grab: it is counted separately so the CAPTURE
+        button is not greyed out by the 5 Hz preview (2026-09-15 — with the
+        preview on the button was disabled almost continuously)."""
         worker = CallWorker(fn, *args, **kwargs)
+        self._live_workers.add(worker)
         self._busy_calls += 1
+        if preview:
+            self._preview_calls += 1
         self._update_busy()
 
         def _finished(result):
+            self._live_workers.discard(worker)
             self._busy_calls -= 1
+            if preview:
+                self._preview_calls -= 1
             self._update_busy()
             if label:
                 if isinstance(result, tuple) and len(result) >= 2:
@@ -1594,7 +1612,10 @@ class MainWindow(QMainWindow):
                 on_done(result)
 
         def _failed(message):
+            self._live_workers.discard(worker)
             self._busy_calls -= 1
+            if preview:
+                self._preview_calls -= 1
             self._update_busy()
             self.append_log(f'[{label or "call"}] ERROR: {message}')
             if on_error is not None:
@@ -1605,7 +1626,10 @@ class MainWindow(QMainWindow):
         self._pool.start(worker)
 
     def _update_busy(self):
-        self.btn_capture.setEnabled(self._busy_calls == 0)
+        # Preview grabs do not block CAPTURE; a capture (or any other call)
+        # in flight does.
+        self.btn_capture.setEnabled(
+            self._busy_calls - self._preview_calls == 0)
 
     # ---------- Keyence standoff assist ----------
     @staticmethod
@@ -1742,7 +1766,7 @@ class MainWindow(QMainWindow):
         if self._busy_calls > 0:
             return
         self._run(self.bridge.capture, 1, -1.0, False,
-                  on_done=self._on_preview_frame)
+                  on_done=self._on_preview_frame, preview=True)
 
     def _on_preview_frame(self, result):
         ok, _message, frames = result
@@ -1752,15 +1776,25 @@ class MainWindow(QMainWindow):
     # ---------- capture ----------
     def _on_capture(self):
         if self._preview_on:
-            # The lamp state and the open/close cycle both belong to the
-            # capture service; letting a preview grab interleave with a real
-            # capture would mix lamp-off and lamp-on frames in one shot.
-            self.chk_preview.setChecked(False)
-        self.append_log('[UI] capture requested')
+            # PAUSE the preview for the shot instead of switching it off:
+            # the device stays held open (no close + reopen in the middle
+            # of the capture) and no preview grab is queued behind the real
+            # one, so lamp-off and lamp-on frames cannot interleave in one
+            # shot. The timer resumes in _on_captured.
+            self._preview_timer.stop()
+        self.append_log('[UI] capture requested'
+                        + (' (preview paused)' if self._preview_on else ''))
         self._run(self.bridge.capture, self.spin_samples.value(), -1.0,
-                  self.chk_led.isChecked(), on_done=self._on_captured)
+                  self.chk_led.isChecked(), on_done=self._on_captured,
+                  on_error=lambda _m: self._resume_preview())
+
+    def _resume_preview(self):
+        if self._preview_on and not self._preview_timer.isActive():
+            self._preview_timer.start(
+                int(1000 / max(0.2, self.spin_preview_hz.value())))
 
     def _on_captured(self, result):
+        self._resume_preview()
         ok, message, frames = result
         if not ok or not frames:
             self.append_log(f'[capture] FAILED: {message}')

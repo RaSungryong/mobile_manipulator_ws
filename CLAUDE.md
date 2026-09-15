@@ -1148,6 +1148,26 @@ shutter is open. So:
   re-grabbed`, `lamp held`). Cost: one extra frame (~200 ms) per lamp-on
   capture. `tools/check_basler_lamp.py` reproduces the defect against a
   one-period-delayed camera model and pins the fix.
+  **The dark check is per horizontal BAND (8), not the whole-frame mean**
+  (same day, second report: "part of the image black" on fast repeated
+  captures): the acA5472's IMX183 is a rolling-shutter sensor, its rows
+  are exposed one after another across the ~200 ms readout, so a lamp
+  switch inside that window leaves a frame lit on one side and black on
+  the other — mean ~90, passes a whole-frame threshold. With flush 1 that
+  straddling frame is the NEXT one about a quarter of the time; the band
+  check re-grabs it.
+- **CAPTURE works during the live preview (2026-09-15).** It used to be
+  greyed out whenever any pooled call was in flight, which at 5 Hz is
+  almost always; preview grabs are now counted separately
+  (`_run(..., preview=True)`), and a capture PAUSES the preview timer for
+  the shot instead of switching the preview off (the device stays held,
+  no close/reopen mid-capture, no interleaved lamp-off frame) and resumes
+  it afterwards. `_live_workers` keeps a strong reference to every
+  in-flight `CallWorker`: the pool auto-deletes the C++ runnable and the
+  Python wrapper with its `_WorkerSignals` could be collected mid-run
+  (`wrapped C/C++ object has been deleted` — seen in the offscreen check),
+  after which `finished` never fired and `_busy_calls` leaked, greying
+  CAPTURE for the rest of the session.
 
 LED ownership is split by channel: `STATUS_{red,green,blue}` → `task_executor`,
 `VISION` → `basler_camera_node`. Use `devices.shutdown(leds='status')` from any
@@ -1637,6 +1657,20 @@ after lamp-on plus a mean-intensity dark check with bounded re-grabs;
 promoted to the camera-lifecycle section. Not changed: the exposure — the
 frames are dim overall (median mean 18/255) but that is what the model was
 trained on, and the user did not ask.
+
+**Follow-up, same day: "相机在 live 下无法 capture，快速点击 capture 时还是
+有部分图像中有黑色部分".** Two more defects, both fixed and promoted into
+the camera-lifecycle section: (1) the CAPTURE button was disabled by the
+preview's own grabs (`_update_busy` counted every pooled call) — preview
+calls are counted separately and a capture pauses the preview instead of
+releasing the device; a worker-GC bug that could leak the same counter
+for a whole session was found by the offscreen check and fixed with
+strong references (`_live_workers`). (2) PART of a frame black = a
+rolling-shutter frame that straddled the lamp switch; the dark check is
+now per band (8 rows bands) and the offline camera model is a rolling
+shutter — with flush alone the second frame comes out half lit (mean
+~90) and the band check re-grabs it. `check_basler_lamp.py` 18 → **20**,
+`check_task_list_ui.py` 61 → **71**.
 
 **The lamp switch.** `basler_camera_node` stays the sole owner:
 `/camera/set_lamp` (Bool) holds the lamp on, `/camera/lamp_state` (latched

@@ -134,15 +134,18 @@ class FakeDevices:
 
 
 class FakeCamera:
-    """Free-running 5 fps camera: every RetrieveResult returns the frame
-    exposed ONE period earlier (readout + GigE transfer ~ the whole period),
-    lit or not according to the lamp at THAT exposure."""
+    """Free-running 5 fps ROLLING-shutter camera (IMX183): every RetrieveResult
+    returns the frame exposed over the PREVIOUS period (readout + GigE
+    transfer ~ the whole period), its top half under the lamp as it was at
+    the start of that period and its bottom half as it was at the end. A
+    lamp switch inside the window therefore yields a half-lit frame — the
+    "part of the image black" the operator saw."""
     encoding = 'mono8'
 
     def __init__(self, devices):
         self.devices = devices
         self.grabs = 0
-        self._exposed_lit = devices.lit          # the frame already in flight
+        self._states = [devices.lit, devices.lit]   # lamp at the last two ticks
 
     def initialize(self):
         return True
@@ -158,11 +161,14 @@ class FakeCamera:
 
     def grab_frame(self, timeout=0):
         self.grabs += 1
-        lit_at_exposure = self._exposed_lit
-        # the NEXT frame is exposed now, under the lamp as it is now
+        top, bottom = self._states[-2], self._states[-1]
+        frame = np.empty((64, 64), dtype=np.uint8)
+        frame[:32] = 180 if top else 1
+        frame[32:] = 180 if bottom else 1
+        # the next period starts now, under the lamp as it is now
         self.devices.tick()
-        self._exposed_lit = self.devices.lit
-        return np.full((64, 64), 180 if lit_at_exposure else 1, dtype=np.uint8)
+        self._states = [self._states[-1], self.devices.lit]
+        return frame
 
 
 def make_node(devices, flush=1, dark_mean=4.0, retries=2):
@@ -201,27 +207,41 @@ def check(cond, what):
         N_FAIL += 1; print(f'  FAIL {what}')
 
 
-print('== the defect: no flush, no dark check -> first lamp-on frame is black')
+print('== the defect: no flush, no dark check -> first lamp-on frame black, second half-lit')
 dev = FakeDevices(); node = make_node(dev, flush=0, dark_mean=0.0)
 r = node._handle_capture(req(3))
-check(r.success and means(r)[0] < 4 and all(m > 100 for m in means(r)[1:]),
-      f'burst of 3 with the old behaviour: means {means(r)} — first frame exposed before the lamp')
+m = means(r)
+check(r.success and m[0] < 4 and 60 < m[1] < 120 and m[2] > 170,
+      f'burst of 3, old behaviour: means {m} — black, then a half-lit (rolling shutter) frame, then lit')
 check(dev.calls == [True, False], 'lamp bracketed on/off around the burst')
 
-print('== fix 1: flush one frame after lamp-on')
+print('== flush alone is not enough: the frame after the flushed one straddles the lamp switch')
 dev = FakeDevices(); node = make_node(dev, flush=1, dark_mean=0.0)
+r = node._handle_capture(req(2))
+m = means(r)
+check(60 < m[0] < 120 and m[1] > 170,
+      f'flush 1 + whole-frame mean disabled: first kept frame is half lit: {m}')
+
+print('== fix: flush + band check -> every frame fully lit')
+dev = FakeDevices(); node = make_node(dev, flush=1, dark_mean=4.0, retries=2)
 r = node._handle_capture(req(3))
-check(r.success and all(m > 100 for m in means(r)), f'all three frames lit: {means(r)}')
-check('flushed 1 pre-lamp frame' in r.message, f'message says so: {r.message!r}')
-check(node._camera.grabs == 4, '4 grabs for 3 frames (one discarded)')
+m = means(r)
+check(r.success and all(v > 170 for v in m), f'all three frames fully lit: {m}')
+check('flushed 1 pre-lamp frame' in r.message and 'dark frame re-grabbed' in r.message,
+      f'message says so: {r.message!r}')
+check(node._camera.grabs == 5, '5 grabs for 3 frames (one flushed, one half-lit re-grabbed)')
+half = np.empty((64, 64), dtype=np.uint8); half[:32] = 1; half[32:] = 180
+check(node._is_dark(half) and not node._is_dark(np.full((64, 64), 180, np.uint8))
+      and node._is_dark(np.full((64, 64), 1, np.uint8)),
+      'band check flags half-lit and black frames, passes a lit one')
 
 print('== fix 2: dark re-grab covers a slow relay (lights 2 frames after the command)')
-dev = FakeDevices(on_latency_frames=2); node = make_node(dev, flush=1, dark_mean=4.0, retries=2)
+dev = FakeDevices(on_latency_frames=2); node = make_node(dev, flush=1, dark_mean=4.0, retries=3)
 r = node._handle_capture(req(2))
-check(r.success and all(m > 100 for m in means(r)), f'both frames lit despite the late relay: {means(r)}')
+check(r.success and all(m > 170 for m in means(r)), f'both frames fully lit despite the late relay: {means(r)}')
 check('dark frame' in r.message and 're-grabbed' in r.message, f'message reports the re-grab: {r.message!r}')
 check(any('exposed unlit' in w for w in LOG['warn']), 'a warning names the unlit frame')
-dev = FakeDevices(on_latency_frames=6); node = make_node(dev, flush=1, dark_mean=4.0, retries=2)
+dev = FakeDevices(on_latency_frames=8); node = make_node(dev, flush=1, dark_mean=4.0, retries=2)
 r = node._handle_capture(req(1))
 check(r.success and means(r)[0] < 4, 'retries are bounded: a relay that never lights in time still returns a frame')
 
@@ -241,12 +261,12 @@ check(node._is_open and node._lamp_hold and dev.lit and node._lamp_pub.sent[-1] 
 node._handle_capture(req(1, led=False))
 g0 = node._camera.grabs
 r = node._handle_capture(req(2, led=True))
-check(r.success and all(m > 100 for m in means(r)) and node._camera.grabs - g0 == 2,
+check(r.success and all(m > 170 for m in means(r)) and node._camera.grabs - g0 == 2,
       f'capture under a hold: no flush, no toggling, frames lit: {means(r)}')
 check(dev.calls == [True] and dev.lit, 'the relay was switched once (the hold) and is still on')
 check('lamp held' in r.message, f'message notes the hold: {r.message!r}')
 r = node._handle_capture(req(1, led=False))
-check(r.success and means(r)[0] > 100 and dev.lit, 'a lamp-off request under a hold leaves the lamp on')
+check(r.success and means(r)[0] > 170 and dev.lit, 'a lamp-off request under a hold leaves the lamp on')
 node._cb_set_lamp(types.SimpleNamespace(data=False))
 check(not node._lamp_hold and not dev.lit and node._lamp_pub.sent[-1] is False,
       'set_lamp false releases the hold and publishes false')

@@ -57,9 +57,17 @@ ROS parameters (defaults come from robot.yaml `camera:` when present):
                              whole 200 ms period, i.e. every delivered frame is
                              ~200 ms old): a completely black image. Seen by
                              the operator in bursts, 2026-09-15.
-  ~dark_frame_mean   (float) with the lamp on, a frame whose mean intensity is
-                             under this (0..255) is treated as exposed unlit
-                             and grabbed again (default 4.0; 0 disables)
+  ~dark_frame_mean   (float) with the lamp on, a frame ANY horizontal band of
+                             which (8 bands) has a mean intensity under this
+                             (0..255) is treated as exposed (partly) unlit and
+                             grabbed again (default 4.0; 0 disables). Bands,
+                             not the whole-frame mean: the IMX183 in this
+                             acA5472 is a ROLLING-shutter sensor, its rows are
+                             exposed one after another over the ~200 ms
+                             readout, so a lamp switch inside that window
+                             leaves a frame lit on one side and black on the
+                             other — "part of the image black" (operator,
+                             2026-09-15, fast repeated captures).
   ~dark_frame_retries (int)  how many extra grabs per frame (default 2)
   ~publish_last      (bool)  also publish each frame on /basler/image_raw
 """
@@ -352,10 +360,18 @@ class BaslerCameraNode:
             return resp
 
     def _is_dark(self, frame):
-        """Mean intensity on a 1/64 subsample — a lamp-on frame under
-        dark_frame_mean was exposed unlit (stale buffer / relay latency)."""
+        """True when any of 8 horizontal bands of the frame has a mean under
+        dark_frame_mean (1/64 subsample). A wholly unlit frame fails every
+        band; a rolling-shutter frame that straddled the lamp switch fails
+        the bands exposed before it — the whole-frame mean would pass such
+        a half-lit frame."""
         try:
-            return float(frame[::8, ::8].mean()) < self._dark_frame_mean
+            sub = frame[::8, ::8]
+            if sub.ndim == 3:
+                sub = sub.mean(axis=2)
+            n = max(1, sub.shape[0] // 8)
+            bands = [float(sub[i:i + n].mean()) for i in range(0, sub.shape[0], n)]
+            return min(bands) < self._dark_frame_mean
         except Exception:
             return False
 
@@ -372,8 +388,8 @@ class BaslerCameraNode:
                    and tries < self._dark_frame_retries and self._is_dark(frame)):
                 tries += 1
                 dark_retries += 1
-                rospy.logwarn(f"[BaslerCamera] Sample {i + 1}/{n}: frame exposed "
-                              f"unlit (mean < {self._dark_frame_mean}), "
+                rospy.logwarn(f"[BaslerCamera] Sample {i + 1}/{n}: frame (partly) "
+                              f"exposed unlit (a band under {self._dark_frame_mean}), "
                               f"re-grabbing ({tries}/{self._dark_frame_retries})")
                 frame = self._camera.grab_frame(timeout=self._grab_timeout_ms)
             if frame is None:
