@@ -24,7 +24,7 @@ robot:
   # Must equal the tx of path_tag_locator/config/extrinsics.yaml `T_mb2fc`.
   # This is the ONE key in this block that code actually reads
   # (mobile_controller.calculate_robot_pose).
-  camera_offset: 0.55
+  camera_offset: 0.550
   # Lens lateral offset from the base's rotation centre (m, body y = LEFT
   # positive). Measured by tools/calib_front_cam_pose.py from the arc the
   # lens draws during pivots (2026-09-08 data: -0.005 ± 0.005 m, i.e. inside
@@ -939,6 +939,16 @@ robot_camera:
   # by tools/fit_front_cam_ground.py from a 60 mm tag pair laid 0.150 m
   # apart, 15 snapshots, 0.33 px rms (0.74 with a level camera); the same
   # session put the lens-to-pivot lever at 0.552 m (camera_offset 0.55 ok).
+  # RE-MEASURED 2026-09-15 with tools/calib_front_cam_pose.py (90 mm tags
+  # 149/150 laid 0.120 m apart, 17 snapshots 0.24 px rms, nine pivots over
+  # 12.5 deg, eight 0.145 m drive tracks): roll +1.406 / pitch -0.323,
+  # lens 301.8 mm, rotation centre (-550.3, +4.6) mm from the nadir ->
+  # camera_offset 0.550 confirmed, camera_lateral inside its 4 mm noise
+  # (kept 0). The 0.18 deg tilt change vs 09-08 is floor-flatness /
+  # chassis-loading sized (different floor spot), 1.4 mm / 0.09 deg in
+  # the pipeline. yaw_deg was measured -0.31 (fwd/rev split 0.56 deg from
+  # a 1 mm floor step, honest range -0.3..-0.7) and the driving-verified
+  # -0.38 is KEPT.
   # Re-fit after any camera remount. The angles live in the tool's frame
   # convention (see apriltag_nav/ground_plane.py) — do not read them as
   # spirit-level angles. The optical axis meets the floor ~7 mm from the
@@ -969,8 +979,8 @@ robot_camera:
   ground_plane:
     front_cam:
       enabled: true
-      roll_deg: 1.228
-      pitch_deg: -0.504
+      roll_deg: 1.406
+      pitch_deg: -0.323
       height_m: 0.302
       yaw_deg: -0.38
     side_cam: null

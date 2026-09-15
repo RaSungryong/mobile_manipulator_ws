@@ -666,8 +666,9 @@ Consequences worth remembering:
 through a level virtual camera** (`robot_camera.ground_plane.front_cam` in
 `robot.yaml`, module `apriltag_nav/ground_plane.py`): the raw corners are
 undistorted with CameraInfo `D`, cast through the calibrated tilt (roll
-+1.228°, pitch −0.504°, lens 302 mm above the tag top — the tags are 1 mm
-plates, `robot.tag_thickness`) onto the floor, and re-projected with
++1.406°, pitch −0.323° since 2026-09-15 — +1.228 / −0.504 on 09-08, the
+0.18° difference being floor-flatness sized; lens 302 mm above the tag
+top — the tags are 1 mm plates, `robot.tag_thickness`) onto the floor, and re-projected with
 the same K at that height. `/front_cam/tag_detections` therefore carries
 flat-view pixels, `pose_x/pose_y` = floor position relative to the lens
 NADIR (m, robot frame), `pose_z` = 0.302; `mobile_controller` is
@@ -1487,8 +1488,9 @@ now obsolete).
 
 **`T_mb2fc` is the PHYSICAL front_cam since 2026-09-15 — translation
 (0.55, 0, 0.303), rotation = level camera × the 2026-09-08 ground-plane
-fit (roll +1.228°, pitch −0.504°, yaw −0.38°; optical axis 1.327° off
-vertical) — and it is GENERATED, never hand-edited:**
+fit — re-measured 2026-09-15: roll +1.406°, pitch −0.323°, yaw −0.38°
+kept from 09-09; optical axis 1.443° off vertical — and it is
+GENERATED, never hand-edited:**
 `path_tag_locator/scripts/make_front_cam_extrinsics.py --apply` derives it
 from `robot.yaml` (`camera_offset`, `camera_lateral`,
 `ground_plane.front_cam` roll/pitch/yaw, `height_m`, and
@@ -1850,9 +1852,17 @@ centre's body-frame lateral position along every track is flat with a
 — a floor feature — and 1 mm over 0.145 m is 0.4°, so a straight-drive
 yaw on this floor is ±0.3° at best; the both-tag middle segments alone
 give −0.71 (fwd −0.80 / rev −0.60, consistent), the whole tracks −0.31.
-Verdict: yaw −0.3…−0.7, the configured −0.38 is inside it; nothing
-applied yet (user to decide: today's tilt per the "measured = config"
-rule, or keep 09-08's — 1 mm either way).
+Verdict: yaw −0.3…−0.7, the configured −0.38 is inside it. **Applied
+(user's call): roll +1.406 / pitch −0.323 / height_m 0.302 /
+camera_offset 0.550, camera_lateral kept 0 (ty is noise), yaw_deg kept
+at the driving-verified −0.38; extrinsics.yaml regenerated (tz 0.303),
+`ground_plane.front_cam.enabled` back to true.** Effect on driving: no
+code changed and `camera_offset` is unchanged, only the corrected
+detections move — a square-laid tag reads 0.03° / 1 mm differently on
+the crosshair (stop align) and 0.09° / 1.4 mm at the aim position
+(0.2 m ahead), all under the 0.2° align band. `robot_camera_node` and
+`mobile_node` restart required; the calibration nodes re-read
+extrinsics at launch.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
