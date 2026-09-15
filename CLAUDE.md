@@ -1883,7 +1883,15 @@ with the compensation OFF the forward stops rested +1.3…+3.3 mm PAST the
 tag (mean +2.3; reverse 3.5–4.6 mm further than the trigger) against
 −0.2…−2.6 mm (mean −1.0) with it ON on the same lane an hour earlier —
 a 3.3 mm difference = the 0.33 s frame age × the 0.01 m/s stop speed,
-exactly. The raw ages now recorded: 0.30–0.36 s. Kept ON.**
+exactly. The raw ages now recorded: 0.30–0.36 s. Kept ON.** Then
+`stop_latency_linear_s` 0.22 → 0.15 → **0.08** (the post-trigger roll at
+0.010 m/s is ~0.7 mm / 1.3 px now, not the 2.1 mm fitted on 09-09 under
+the capped age) and `center_x_stop_tolerance` 4 → **2 px**: with a 2 px
+lead the 4 px floor was the firing line, and the 112→109→112 check run
+(4 fwd, 3 rev) rested 1.5–4.4 px short of its column both ways, lateral
++0.5 ± 1.4 / +0.2 ± 0.5 mm, yaw within ±0.2°, 1–3 align passes. Expect
+the rest within ~1 px of the column after the tolerance change; the
+tolerance is not driven yet.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;

@@ -631,7 +631,13 @@ robot:
   # trigger line at 0.010 m/s before it actually stopped. If the goal is the
   # tag exactly on the target column, that overshoot is what to compensate
   # (raise center_x_stop_offset by ~18 px), not this tolerance.
-  center_x_stop_tolerance: 4.0
+  # 4 -> 2 px on 2026-09-15: with the frame age compensated in full and
+  # stop_latency_linear_s at 0.08 s (2 px of lead), this 4 px floor was
+  # what fired the stop, and seven stops (112->109->112) rested 1.5-4.4 px
+  # (0.6-1.7 mm) SHORT of their column in both directions — the base rolls
+  # only ~1.3 px after the trigger. The condition is a line crossing, so a
+  # smaller floor cannot be skipped by the 20 Hz loop (1.3 px per tick).
+  center_x_stop_tolerance: 2.0
   # Stop-roll compensation (2026-09-02, "자꾸 태그를 지나쳐서 멈춰"). After the
   # stop command the base keeps rolling for about this long: measured from
   # arrival-vs-aligned records, forward rolled 5.8 mm (median, 23 hops) at
