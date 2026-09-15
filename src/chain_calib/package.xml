@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>chain_calib</name>
+  <version>0.1.0</version>
+  <description>
+    Measures the error of the front_cam - hand_cam transform chain
+    (T_hc2ee, T_ab2mb, T_mb2fc) against two floor tags laid a known
+    distance apart, and fits a constant correction. Semi-automatic: the
+    operator jogs the arm to each view, the tool captures. Hardware is
+    reached only through apriltag_nav's owner nodes.
+  </description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>rospy</build_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>apriltag_nav</exec_depend>
+  <exec_depend>path_tag_locator</exec_depend>
+  <exec_depend>robot_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+</package>

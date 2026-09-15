@@ -1,6 +1,6 @@
 """
-chain_calib.py
-==============
+solver.py
+=========
 Measure the error of the front_cam <-> hand_cam transform chain with two
 floor tags laid a known distance apart, and fit a constant correction
 (2026-09-15, user request: "T_fc2hc 사이의 tf들은 블랙박스 — 이상값과
@@ -42,9 +42,10 @@ error is the hand-eye; if only the joint fit does, both sides carry
 error; if the base-only fit is as good as the hand-only one the poses
 did not have enough rotation diversity and the split is undetermined.
 
-Pure numpy / scipy — no ROS. ``scripts/calib_fc_hc_chain.py`` collects
-the samples with the arm; ``scripts/check_chain_calib.py`` verifies this
-module on a synthetic chain with planted errors.
+Pure numpy / scipy — no ROS. ``scripts/chain_calib.py`` collects the
+samples (operator-jogged views, one ``capture`` each);
+``scripts/check_chain_calib.py`` verifies this module on a synthetic chain
+with planted errors.
 """
 import math
 from dataclasses import dataclass, field
@@ -54,7 +55,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as _Rot
 
-from .geometry import invert_T, pose_fr5_to_matrix_m, rot2rpy_deg
+from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m, rot2rpy_deg
 
 
 # ----------------------------------------------------------------------

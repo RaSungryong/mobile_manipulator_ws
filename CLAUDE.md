@@ -2051,9 +2051,16 @@ User: the matrices between front_cam and hand_cam are a black box — no
 way to tell any of them from its ideal value — so measure the whole
 T_fc2hc against two 90 mm tags (149 / 150) laid at a known spacing, one
 under each camera, and use the ideal-vs-measured difference as a
-correction. Built as `path_tag_locator/chain_calib.py` (pure numpy) +
-`scripts/calib_fc_hc_chain.py` (check / collect / solve) +
-`docs/FC_HC_CHAIN_CALIBRATION_kr.md`.
+correction. Built as its own package **`src/chain_calib`** (2026-09-15 evening:
+`solver.py` pure numpy, `session.py` persistence + coverage advice,
+`scripts/chain_calib.py` check / capture / status / drop / solve,
+`README.md` = the operator guide, sessions under `log/chain_calib/`).
+**Operator-jogged only**: the automatic sweep collided the arm (below)
+and was removed; `capture` saves one sample at the current pose and
+prints the view (tilt, direction, spin), that view's raw chain error
+and a coverage line saying which tilt directions / spins are still
+missing for a determined hand/base split. `catkin_make` once for
+`rosrun chain_calib`.
 
 The design point: with the base still, tag B under front_cam is one
 constant observation and the arm poses are the only excitation, which
@@ -2104,9 +2111,10 @@ without a base-body / link clearance model, or take the tilted views by
 hand (jog + capture). `solve` now drops outliers (> 4× the median raw
 residual, `--exclude`). Nine clean samples: raw 11.0 mm / 0.94° rms,
 hand-only 7.4, base-only 6.3, joint 4.3 (jackknife 7–16 mm) — **verdict
-UNDETERMINED**: only spin views survived (diversity 85°, all about the
-vertical), under which a hand-eye offset along the optical axis and an
-arm-base height offset are the same thing. What stands: no 100 mm-class
+UNDETERMINED**: the nine views were 8 tilted (11–23°) but ALL toward
+the tag's −x / −y sides (the +x / +y views were the rejected / failed
+ones), and without the opposite tilts a hand-eye offset along the
+optical axis and an arm-base height offset are the same thing. What stands: no 100 mm-class
 error anywhere (mount −100, camera_offset 0.55, hand-eye all mm-true);
 the chain is ~5 mm in the floor plane and ~12 mm in height, the latter
 consistent with the 09-14 hand-eye absolute check (z 5 mm). Nothing

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Offline check of chain_calib.py on a synthetic front_cam <-> hand_cam
+"""Offline check of chain_calib.solver on a synthetic front_cam <-> hand_cam
 chain with PLANTED errors: the true hand-eye differs from the file by a
 known D, the true arm mount from T_ab2mb by a known F, the hand camera is
 placed over tag A at the views the hand-eye sweep produces, and both tag
 observations get pixel-level noise. The fit must recover D and F and the
 residuals must say which side carries the error.
 
-    python3 src/path_tag_locator/scripts/check_chain_calib.py
+    python3 src/chain_calib/scripts/check_chain_calib.py
 """
 import math
 import os
@@ -16,8 +16,10 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "src"))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "path_tag_locator", "src"))
 
-from path_tag_locator import chain_calib as CC                       # noqa: E402
+from chain_calib import solver as CC                                 # noqa: E402
+from chain_calib.session import coverage, describe_view, load_samples, save_samples  # noqa: E402
 from path_tag_locator.chain import compensate_T_ab2mb                # noqa: E402
 from path_tag_locator.constants import load_extrinsics_full          # noqa: E402
 from path_tag_locator.detections import _CORNER_ORDER, pose_from_corners  # noqa: E402
@@ -30,7 +32,7 @@ def check(name, ok, detail=""):
     _n[0] += 1; _bad[0] += (not ok)
     print(f"  [{'ok ' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
 
-CFG = os.path.join(_HERE, "..", "config")
+CFG = os.path.join(_HERE, "..", "..", "path_tag_locator", "config")
 ext = load_extrinsics_full(os.path.join(CFG, "extrinsics.yaml"))
 T_ab2mb, T_mb2fc = ext.T_ab2mb, ext.T_mb2fc_level
 H_file = load_T_hc2ee(os.path.join(CFG, "hand_eye", "T_hc2ee.npz"))
@@ -185,6 +187,25 @@ report(truth, res)
 e = CC.pose_error(res['hand'].D, D_true)
 check("attribution still right with single frames", res['base'].rms_pos_m > 2 * res['hand'].rms_pos_m)
 check("but D only within ~8 mm / 0.8 deg — hence the 20-frame mean per sample", e[0] < 10e-3 and e[1] < 1.0, "%.2f mm / %.3f deg" % (e[0] * 1e3, e[1]))
+
+print("\n== 7. session persistence + coverage advice (the operator-jogged workflow) ==")
+import tempfile, shutil
+samples, tr = make_world(D_true, np.eye(4), seed=7, n_views=18)
+d = tempfile.mkdtemp()
+save_samples(d, samples[:3], dict(spacing_m=SPACING, hand_tag=150, front_tag=149))
+s2, m2 = load_samples(d)
+check("save / load round trip", len(s2) == 3 and m2["hand_tag"] == 150 and np.allclose(s2[1].T_hc2A, samples[1].T_hc2A))
+ok, lines = coverage(samples[:3])
+check("3 straight-ish samples: not ready, says what is missing", not ok and "still needed" in lines[1], lines[1])
+ok, lines = coverage(samples)
+check("the full grid: ready", ok, lines[0])
+v = describe_view(samples[0].T_hc2A)
+check("describe_view reads a square view as straight down at the planned range", v.tilt_deg < 2.0 and 0.35 < v.range_m < 0.55,
+      "tilt %.1f range %.2f" % (v.tilt_deg, v.range_m))
+tilted = [describe_view(s.T_hc2A) for s in samples if ' t22 ' in s.label]
+check("22 deg views read as ~22 deg tilt", tilted and all(abs(x.tilt_deg - 22.0) < 1.0 for x in tilted),
+      "%s" % [round(x.tilt_deg, 1) for x in tilted[:4]])
+shutil.rmtree(d)
 
 print("\n%d checks, %d failed" % (_n[0], _bad[0]))
 sys.exit(1 if _bad[0] else 0)
