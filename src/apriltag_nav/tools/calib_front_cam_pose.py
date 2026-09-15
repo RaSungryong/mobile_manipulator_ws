@@ -551,6 +551,43 @@ class Session:
         return frame_room_m(det, self.tags, fx, fy, self.gp_height_cfg, msg.image_width, msg.image_height,
                             x_min_px=self.left_edge_px, keep=keep)
 
+    def pair_angle_deg(self, timeout=2.0):
+        """Angle of the 149 -> 150 line in the RAW image (deg), from a
+        30-frame mean — the body's rotation between two at-rest readings
+        is its change (sign as the image gives it; the pivot loop learns
+        the sign together with the gain). None if the pair is not seen."""
+        vals, t0, last = [], time.time(), None
+        while len(vals) < 30 and time.time() - t0 < 4.0 and not self.rospy.is_shutdown():
+            m = self.wait_pair(timeout=1.0)
+            if m is None:
+                break
+            if m.header.stamp != last:
+                last = m.header.stamp
+                c = {d.id: (d.center_x, d.center_y) for d in m.detections if d.id in self.tags}
+                (x0, y0), (x1, y1) = c[self.tags[0]], c[self.tags[1]]
+                vals.append(math.atan2(y1 - y0, x1 - x0))
+            self.rospy.sleep(0.01)
+        if not vals:
+            return None
+        return math.degrees(math.atan2(np.mean(np.sin(vals)), np.mean(np.cos(vals))))
+
+    def max_pivot_deg(self, camera_offset, spacing, margin=ROOM_MARGIN_M):
+        """The largest body rotation (deg) that keeps both tags inside the
+        lateral room, from the current frame: the far tag is
+        camera_offset + (its distance ahead of the nadir) from the
+        rotation centre and swings sideways by that times the angle."""
+        m = self.wait_pair(timeout=2.0)
+        if m is None:
+            return None
+        room = self.room(m)
+        fx = float(self._ci.K[0]) if self._ci is not None else 910.0
+        cxK = float(self._ci.K[2]) if self._ci is not None else 0.5 * m.image_width
+        xs = [d.center_x for d in m.detections if d.id in self.tags]
+        far_ahead = (max(xs) - cxK) * self.gp_height_cfg / fx
+        lever = abs(camera_offset) + max(0.0, far_ahead) + 0.5 * spacing * 0.7   # far tag's far corners
+        lat = max(0.0, min(room['left'], room['right']) - margin)
+        return math.degrees(math.asin(min(1.0, lat / max(lever, 0.3))))
+
     def recentre(self):
         """Drive distance that recentres the pair in the usable image, or
         None when the pair is not in view."""
@@ -631,25 +668,37 @@ def cmd_collect(args):
     if not S.check():
         sys.exit(2)
     d = args.dir
-    if os.path.isdir(d) and glob.glob(os.path.join(d, '*.txt')):
-        sys.exit("refusing to write into a non-empty session directory: %s" % d)
+    only = set(args.only.split(',')) if args.only else {'scan', 'piv', 'drive'}
+    if not only <= {'scan', 'piv', 'drive'}:
+        sys.exit("--only takes a comma list of scan, piv, drive")
+    existing = glob.glob(os.path.join(d, '*.txt'))
+    if existing and not args.only:
+        sys.exit("refusing to write into a non-empty session directory: %s "
+                 "(use --only piv|scan|drive to redo one phase in place)" % d)
     scans = [+0.02, +0.02, +0.02, -0.02, -0.02, -0.04, -0.02, +0.04]
-    # 2 deg steps summing to +4 / 0 / -4 / 0: nine snapshots spanning ~6 deg
-    # of executed body rotation for the joint centre fit. Larger swings
-    # push the far tag (0.13 m ahead of the nadir, 0.68 m from the
-    # rotation centre) out of the 0.07 m of lateral room the bumper-
-    # limited view leaves.
-    pivs = [+2.0, +2.0, -2.0, -2.0, -2.0, -2.0, +2.0, +2.0]
+    # EXECUTED body-rotation targets (deg, measured on the tags, not
+    # commanded): 3 deg steps summing to +6 / 0 / -6 / 0, nine snapshots
+    # spanning ~12 deg for the joint centre fit. The base executes a
+    # commanded 2 deg pivot as 0.3-0.8 deg (2026-09-15 session) and 5 deg
+    # as ~3.7, so each step is a closed loop: command, read the pair
+    # angle at rest, learn the gain, repeat until inside pivot_tol. Each
+    # command is capped by the lateral frame room of the moment.
+    pivs = [+3.0, +6.0, +3.0, 0.0, -3.0, -6.0, -3.0, 0.0]     # CUMULATIVE vs the first pivot snapshot
+    pivot_tol = 0.5
     drives = []
     for _ in range(args.drive_repeat):
         drives += [+args.drive, -args.drive]
     print("\nPlan (every move through mobile_node, odometry-closed, ≤ %.2f m / %.0f deg; "
           "each move is capped to the frame room of the moment):" %
           (max(abs(x) for x in scans + [args.drive]), max(pivs)))
-    print("  1. snapshot at rest, then %d moves of %s m with a snapshot after each" % (len(scans), scans))
-    print("  2. %d pivots of %s deg with a snapshot after each" % (len(pivs), pivs))
-    print("  3. %d drives of %s m, detections recorded throughout" % (len(drives), drives))
-    print("  output: %s" % d)
+    if 'scan' in only:
+        print("  1. snapshot at rest, then %d moves of %s m with a snapshot after each" % (len(scans), scans))
+    if 'piv' in only:
+        print("  2. %d closed-loop pivots to the cumulative EXECUTED angles %s deg (±%.1f) with a snapshot after each"
+              % (len(pivs), pivs, pivot_tol))
+    if 'drive' in only:
+        print("  3. %d drives of %s m, detections recorded throughout" % (len(drives), drives))
+    print("  output: %s%s" % (d, "  (only: %s; that phase's old files are renamed old_*)" % ",".join(sorted(only)) if args.only else ""))
     if args.dry_run:
         return
     if not args.yes:
@@ -675,15 +724,24 @@ def cmd_collect(args):
             print("  %s: %+.3f m capped to %+.3f m by the frame room" % (what, dist, c))
         return c
 
-    snap('scan_%s' % time.strftime('%H%M%S'))
-    for k, dist in enumerate(scans):
-        dist = capped_or_exit(dist, "move %d" % k)
-        if abs(dist) < 0.008:
-            print("  move %d skipped (no room)" % k)
-            continue
-        if not mc.drive_distance(dist, speed=args.speed):
-            sys.exit("move %d (%+.3f m) failed — stop here, solve what exists" % (k, dist))
+    if args.only:
+        for ph in only:
+            for f in glob.glob(os.path.join(d, ph + '_*.txt')):
+                os.rename(f, os.path.join(d, 'old_' + os.path.basename(f)))
+    cfg = yaml.safe_load(open(CONFIG_PATH))
+    cam_off_prior = float(cfg['robot'].get('camera_offset', 0.55))
+
+    if 'scan' in only:
         snap('scan_%s' % time.strftime('%H%M%S'))
+        for k, dist in enumerate(scans):
+            dist = capped_or_exit(dist, "move %d" % k)
+            if abs(dist) < 0.008:
+                print("  move %d skipped (no room)" % k)
+                continue
+            if not mc.drive_distance(dist, speed=args.speed):
+                sys.exit("move %d (%+.3f m) failed — stop here, solve what exists" % (k, dist))
+            snap('scan_%s' % time.strftime('%H%M%S'))
+
     def recentre(what):
         # the scans / drives leave the pair wherever the caps allowed; the
         # pivots and each drive phase start with it in the middle of the
@@ -697,12 +755,61 @@ def cmd_collect(args):
                 sys.exit("%s: recentre move failed — stop here, solve what exists" % what)
             rospy.sleep(S.settle_s)
 
-    recentre("before the pivots")
-    snap('piv_%s' % time.strftime('%H%M%S'))
-    for k, ang in enumerate(pivs):
-        if not mc.pivot_angle(ang):
-            sys.exit("pivot %d (%+.1f deg) failed — stop here, solve what exists" % (k, ang))
-        snap('piv_%s' % time.strftime('%H%M%S'))
+    def pivot_to(target, gain, a0):
+        """Pivot until the pair angle is `target` deg away from the
+        reference reading a0 (image sign convention; cumulative targets
+        so per-step errors do not add up). Returns (reached, gain) —
+        gain = commanded / executed, learned from every attempt with a
+        measurable result."""
+        a = S.pair_angle_deg()
+        if a is None:
+            sys.exit("pivot: pair not in view — stop here, solve what exists")
+        total = (a - a0 + 180.0) % 360.0 - 180.0
+        for attempt in range(6):
+            rem = target - total
+            if abs(rem) <= pivot_tol:
+                break
+            cap = S.max_pivot_deg(cam_off_prior, args.spacing or 0.12)
+            if cap is None:
+                sys.exit("pivot: pair not in view — stop here, solve what exists")
+            cmd = rem * gain
+            if abs(rem) > cap:
+                print("    remaining %+.2f deg exceeds the lateral room (%.2f deg) — stopping this step short" % (rem, cap))
+                cmd = math.copysign(cap * abs(gain), cmd)
+            cmd = max(-10.0, min(10.0, cmd))
+            if not mc.pivot_angle(cmd):
+                sys.exit("pivot command %+.2f deg failed — stop here, solve what exists" % cmd)
+            rospy.sleep(S.settle_s)
+            a1 = S.pair_angle_deg()
+            if a1 is None:
+                sys.exit("pivot: pair lost after a command — stop here, solve what exists")
+            ex = (a1 - a0 + 180.0) % 360.0 - 180.0
+            step = (ex - total + 180.0) % 360.0 - 180.0
+            total = ex
+            if abs(step) > 0.15:
+                gain = max(-6.0, min(6.0, cmd / step))
+            else:
+                gain *= 1.5              # nothing moved: push harder
+            print("    attempt %d: commanded %+.2f -> executed %+.2f deg (total %+.2f / %+.2f, gain %.2f)"
+                  % (attempt + 1, cmd, step, total, target, gain))
+            if abs(rem) > cap:
+                break
+        return total, gain
+
+    if 'piv' in only:
+        recentre("before the pivots")
+        snap('piv_00_%s' % time.strftime('%H%M%S'))
+        a_ref = S.pair_angle_deg()
+        if a_ref is None:
+            sys.exit("pivot: pair not in view — stop here, solve what exists")
+        gain = 1.8                                   # the base executes ~40-75 % of a 3-6 deg command
+        for k, ang in enumerate(pivs):
+            reached, gain = pivot_to(ang, gain, a_ref)
+            print("  pivot %d: cumulative target %+.1f, at %+.2f deg" % (k + 1, ang, reached))
+            snap('piv_%02d_%s' % (k + 1, time.strftime('%H%M%S')))
+    if 'drive' not in only:
+        print("collect done: %s" % d)
+        return
     recentre("before the drives")
     for k, dist in enumerate(drives):
         dist = capped_or_exit(dist, "drive %d" % k, keep='one')
@@ -771,7 +878,8 @@ def cmd_solve(args):
         print("  ⚠️ fitted tag size is %.1f mm off the nominal %.0f mm — check --spacing / --size" %
               ((F['size'] - args.size) * 1e3, args.size * 1e3))
     if not r['centres']:
-        print("no pivot pairs with >= 2 deg of rotation — tx/ty not determined")
+        print("pivot snapshots span too little body rotation for the centre fit (need >= 3 deg; "
+              "redo them: collect DIR --only piv) — tx/ty not determined")
         return
     print("rotation centre relative to the lens nadir, level camera frame (x fwd, y right), per pivot pair:")
     for n0, n1, dth, c in r['centres']:
@@ -857,6 +965,9 @@ def main():
     p.add_argument('--drive-repeat', type=int, default=4, help='forward+back pairs (8 tracks)')
     p.add_argument('--speed', type=float, default=0.03)
     p.add_argument('--dry-run', action='store_true'); p.add_argument('--yes', action='store_true')
+    p.add_argument('--only', default=None,
+                   help='redo only these phases (comma list of scan,piv,drive) INTO an existing session dir; '
+                        'that phase\'s previous files are renamed old_*')
     p.set_defaults(fn=cmd_collect)
     p = sp.add_parser('solve'); p.add_argument('dir'); p.add_argument('--apply', action='store_true')
     p.set_defaults(fn=cmd_solve)

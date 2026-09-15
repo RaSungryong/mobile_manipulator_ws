@@ -1790,6 +1790,20 @@ of lateral room in the plant. Eight seeds on the occluded plant: tx rms
 0.7 / max 1.3 mm, ty 0.5 / 0.9 mm, yaw 0.05 / 0.08°. One sign bug caught
 by the plant on the way: the square's edges turn −90° per corner, so
 edge k is brought back by +k·90°, not −.
+**First real session (13:56–13:58, `calib_pair_20260915_a`): the fit
+is excellent (17 snapshots, rms 0.133 px, roll +1.334 / pitch −0.277 /
+302.0 mm, tag size 89.71 mm, laying angles 0.10 / 0.18°) and the eight
+drive tracks ran 145 mm each with single-tag frames doing real work
+(105 of 168 frames) — but the commanded ±2° pivots executed 0.3–0.8°
+each, 2.1° of spread in all, giving a centre of (−548.8, +3.2) mm with a
+jackknife sd of (2.2, 9.0) mm: unusable.** The pivots are therefore a
+CLOSED LOOP now: cumulative executed targets +3 +6 +3 0 −3 −6 −3 0°
+measured on the pair angle at rest, gain (commanded / executed) learned
+per attempt, sign included, each command capped by the lateral room
+(`max_pivot_deg`), and `collect --only piv|scan|drive` redoes one phase
+into the existing directory (old files renamed `old_*`). Fake-base test
+(stiction under 1°, 25–75 % execution): 9 snapshots at 0 / −3.4 / −5.7 /
+−3.0 / −0.3 / +3.3 / +6.1 / +2.7 / −0.3°, 21 commands.
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
