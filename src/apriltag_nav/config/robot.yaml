@@ -654,7 +654,11 @@ robot:
   # the same over-lead); stop_latency_s above stays for the yaw lead, the
   # align settle and the pivot. Re-fit from the arrival records:
   # (fore at arrival - fore at rest) / commanded_speed_at_stop_mps.
-  stop_latency_linear_s: 0.22
+  # 0.22 -> 0.15 on 2026-09-15 (user): with the camera-latency compensation
+  # measured against the true 0.33 s frame age, nine forward stops rested
+  # -0.2..-2.6 mm (mean -1.0) SHORT of the tag, i.e. the lead was ~1 mm
+  # (0.1 s at 0.010 m/s) generous; 0.15 s = 1.5 mm of lead aims at 0.
+  stop_latency_linear_s: 0.15
 
   # Delays (seconds)
   stop_sleep_duration: 1.0
