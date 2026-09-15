@@ -745,7 +745,8 @@ following frame); side_cam / hand_cam detect at 10 Hz (they only serve
 the calibration session — its 5-frame medians now take 0.5 s instead of
 0.2); front_cam's detector runs 2 threads. Measured before: front_cam
 detections 0.33 s after the image stamp (image 0.09) with the node at
-350 % CPU. `tools/check_robot_camera_latency.py` (13) pins the
+350 % CPU; after the restart 0.12 s (0.10–0.27) at 30.2 Hz, side / hand
+10.0 Hz, node 244 %. `tools/check_robot_camera_latency.py` (13) pins the
 behaviour offline.
 
 **front_cam runs at 1280x720, not the driver's 1920x1080 default.** Measured
@@ -1900,9 +1901,13 @@ exactly. The raw ages now recorded: 0.30–0.36 s. Kept ON.** Then
 the capped age) and `center_x_stop_tolerance` 4 → **2 px**: with a 2 px
 lead the 4 px floor was the firing line, and the 112→109→112 check run
 (4 fwd, 3 rev) rested 1.5–4.4 px short of its column both ways, lateral
-+0.5 ± 1.4 / +0.2 ± 0.5 mm, yaw within ±0.2°, 1–3 align passes. Expect
-the rest within ~1 px of the column after the tolerance change; the
-tolerance is not driven yet.
++0.5 ± 1.4 / +0.2 ± 0.5 mm, yaw within ±0.2°, 1–3 align passes. **Driven
+(15:26–15:28, 112→109→112, after the tolerance change and the camera-node
+restart): at rest forward −2.6 / −1.2 / −0.3 / +1.9 px from the column
+(mean −0.6 px = −0.2 mm), reverse +0.5 / +1.0 / +0.6 px; lateral
+−1.2…+2.5 mm; yaw ±0.16°; align 1–2 passes; frame ages 0.11–0.22 s (one
+0.41 s frame, compensated to +1.9 px). The stop is on the column within
+1 mm both ways.**
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
