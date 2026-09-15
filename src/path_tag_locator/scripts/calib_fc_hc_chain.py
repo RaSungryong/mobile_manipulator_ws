@@ -265,6 +265,22 @@ def cmd_solve(args):
           "rotation diversity %.0f deg)" % (len(samples), meta.get("date"), meta.get("hand_tag"), meta.get("front_tag"),
                                             spacing, meta.get("frames_per_sample", 0), CC.rotation_diversity_deg(samples)))
     print("hand-eye: %s\nextrinsics: %s" % (_resolve(args.hand_eye or meta.get("hand_eye_npz")), ext.note))
+    # Outliers: a sample taken while the arm was being stopped or pushed
+    # (2026-09-15: the collision samples read 414 mm against 10 mm for the
+    # rest) would dominate every fit. Drop --exclude'd labels and anything
+    # whose RAW residual is > outlier_factor x the median, then re-solve.
+    if args.exclude:
+        samples = [s for s in samples if s.label not in set(args.exclude)]
+    truth0, res0 = CC.fit_corrections(samples, H, ext.T_ab2mb, ext.T_mb2fc_chain, spacing, compensate_T_ab2mb, jackknife=False)
+    med = float(np.median([dp for _, dp, _ in res0['raw'].per_sample]))
+    bad = [lab for lab, dp, dr in res0['raw'].per_sample if dp > args.outlier_factor * med]
+    if bad:
+        print("\nexcluding %d outlier sample(s) whose raw residual exceeds %.0fx the median (%.1f mm): %s"
+              % (len(bad), args.outlier_factor, med * 1e3, ", ".join(bad)))
+        samples = [s for s in samples if s.label not in set(bad)]
+    if len(samples) < 4:
+        sys.exit("only %d usable samples" % len(samples))
+    print("%d samples used, rotation diversity %.0f deg" % (len(samples), CC.rotation_diversity_deg(samples)))
     truth, res = CC.fit_corrections(samples, H, ext.T_ab2mb, ext.T_mb2fc_chain, spacing, compensate_T_ab2mb)
     print("\nlaid truth (snapped: B %d quarter turns vs A, A->B %d quarter turns along A's x): %s"
           % (truth.k90, truth.a90, CC.describe_T(truth.T_A2B, "B in A")))
@@ -337,6 +353,9 @@ def main():
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--yes", action="store_true")
     p.set_defaults(fn=cmd_collect)
     p = sp.add_parser("solve"); p.add_argument("dir")
+    p.add_argument("--exclude", nargs="*", default=None, help="sample labels to drop (e.g. v09 v10)")
+    p.add_argument("--outlier-factor", type=float, default=4.0,
+                   help="drop samples whose raw residual is more than this times the median")
     p.add_argument("--write-hand-eye", choices=["hand", "joint"], default=None,
                    help="write config/hand_eye/T_hc2ee_chain_<date>.npz from this fit's D")
     p.set_defaults(fn=cmd_solve)

@@ -2071,7 +2071,37 @@ the joint fit; the per-sample noise floor is 2–3 mm / 0.3° because a
 0.7 m A→B lever — hence 20-frame means per camera per view, without
 which D is only good to ~4 mm). Live `check` ran against the master
 (arm state, extrinsics, both K, hand_cam topic) and failed correctly on
-the unlaid tag. Not run with the tags yet.
+the unlaid tag.
+
+**Run on the robot the same evening (three layouts).** Two lessons and
+one result. (1) The user's E / g tape readings came out 100 mm over the
+chain twice (left: chain 790.7 vs 889.5; right: 1005 vs 1100) — the
+SAME sign on both sides, which an arm-mount offset cannot produce
+(it would flip) — and a direct centre-to-centre read agreed with the
+chain; the layout is now read as outer-edge-to-outer-edge minus the
+fitted 89.75 mm tag width (spacing 1.01025 m, tag 150 under hand_cam,
+149 under front_cam, 150 to the robot's RIGHT). `check` at three arm
+poses gave the chain 10.9–13.2 mm / 1.0° off, almost all of it +8…+14 mm
+in HEIGHT and constant under a 90° wrist spin — so not a hand-eye
+lateral error. (2) **The sweep collided the arm** (`20260915_c`: 12
+planned, 6 rejected, 2 move failures, 11 captured of which v09/v10 are
+the collision, 414 mm residual): the planner's safety rules model only
+the flange and vision tip against the TAG PLANE — the mobile base body,
+lift and the arm's own elbow are not modelled at all — and with the tag
+1 m beside the base near the reach limit the tilted views swung the
+elbow into the robot. ⚠️ Do not run `collect` again in that geometry
+without a base-body / link clearance model, or take the tilted views by
+hand (jog + capture). `solve` now drops outliers (> 4× the median raw
+residual, `--exclude`). Nine clean samples: raw 11.0 mm / 0.94° rms,
+hand-only 7.4, base-only 6.3, joint 4.3 (jackknife 7–16 mm) — **verdict
+UNDETERMINED**: only spin views survived (diversity 85°, all about the
+vertical), under which a hand-eye offset along the optical axis and an
+arm-base height offset are the same thing. What stands: no 100 mm-class
+error anywhere (mount −100, camera_offset 0.55, hand-eye all mm-true);
+the chain is ~5 mm in the floor plane and ~12 mm in height, the latter
+consistent with the 09-14 hand-eye absolute check (z 5 mm). Nothing
+applied. The arm controller refused connections from 18:06 (fault after
+the collision) — recover on the pendant first.
 
 ### 2026-09-15 — Collect tab VISION lamp switch; black frames in bursts explained and fixed
 
