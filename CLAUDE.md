@@ -737,6 +737,17 @@ is open. The prepared RViz layout shows front_cam's overlay first.
 from `pose_R`, which the node previously discarded. The overlay shows only
 yaw; roll/pitch/tilt stay in the message for anything that needs them.
 
+**Latency levers (2026-09-15, `robot_camera.detect_max_hz` /
+`detector_threads` / `overlay_hz`):** the `tag_overlay` is rendered on a
+timer thread at 10 Hz from the newest frame, never inside the detection
+callback (rectify 16 ms + drawing 15 ms used to sit in front of every
+following frame); side_cam / hand_cam detect at 10 Hz (they only serve
+the calibration session — its 5-frame medians now take 0.5 s instead of
+0.2); front_cam's detector runs 2 threads. Measured before: front_cam
+detections 0.33 s after the image stamp (image 0.09) with the node at
+350 % CPU. `tools/check_robot_camera_latency.py` (13) pins the
+behaviour offline.
+
 **front_cam runs at 1280x720, not the driver's 1920x1080 default.** Measured
 on the real robot, 1080p cost 140 ms of latency inside the driver alone (MJPG
 decode) and held detection to 17 Hz against a 30 Hz stream; 720p publishes

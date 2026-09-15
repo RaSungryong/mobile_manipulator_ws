@@ -1012,6 +1012,29 @@ robot_camera:
     front_cam: 2.0
     side_cam:  1.0
     hand_cam:  1.0
+  # Latency budget (2026-09-15). Measured on the robot with all three
+  # cameras detecting at 30 Hz in one process and two tag_overlay
+  # subscribers: front_cam's detection arrived 0.33 s after its image
+  # stamp (the image itself 0.09 s) — a frame took ~85 ms to process
+  # (detect 50, rectify 16, draw 15) against a 33 ms period, so each frame
+  # also waited for the previous one. Three levers, each independent:
+  #   detect_max_hz    frames are skipped so a camera detects at most this
+  #                    often (null = every frame). side/hand only serve the
+  #                    calibration session; 10 Hz there is plenty and frees
+  #                    the CPU front_cam's latency was made of.
+  #   detector_threads dt_apriltags nthreads (front_cam 50 -> 43 ms).
+  #   overlay_hz       the overlay is rendered on its own thread at this
+  #                    rate from the newest frame, never in the detection
+  #                    callback (0 = never render).
+  detect_max_hz:
+    front_cam: null
+    side_cam:  10.0
+    hand_cam:  10.0
+  detector_threads:
+    front_cam: 2
+    side_cam:  1
+    hand_cam:  1
+  overlay_hz: 10.0
 
   # Per-camera on/off for the detectors, and the persistent default for each
   # camera. This controls robot_camera_node only; the driver that publishes

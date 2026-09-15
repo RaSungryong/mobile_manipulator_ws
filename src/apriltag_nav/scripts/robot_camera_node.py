@@ -57,6 +57,16 @@ null so every camera shares the existing navigation tag settings by default):
                  robot.tag_size.
   enabled:       {front_cam, side_cam, hand_cam}  -- startup on/off
   driver_toggle: {front_cam, side_cam, hand_cam}  -- vendor stream service
+  detect_max_hz: {front_cam, side_cam, hand_cam}  -- frames are skipped so
+                 detection runs at most this often (null = every frame).
+                 side/hand only matter in a calibration session; at 30 Hz
+                 they cost the CPU that front_cam's latency is made of.
+  detector_threads: {front_cam, side_cam, hand_cam} -- dt_apriltags nthreads
+  overlay_hz     -- the tag_overlay is rendered on its OWN thread at this
+                 rate from the latest frame + detections (2026-09-15),
+                 never on the detection callback: rectify + draw cost
+                 ~30 ms per frame, which used to sit in front of every
+                 following frame and doubled the detection latency.
 
 Each camera is independent: a disabled one runs no Detector and holds no
 subscribers, and a missing camera never blocks the others, since a worker
@@ -78,6 +88,7 @@ so robot.yaml decides among the cameras the launch did start.
 
 import cv2
 import math
+import threading
 import numpy as np
 import rospy
 from sensor_msgs.msg import Image, CameraInfo
@@ -148,8 +159,21 @@ class _CameraTagWorker:
 
     def __init__(self, name, image_topic, info_topic, detections_topic,
                  tag_family, tag_size, bridge, driver_service, enabled,
-                 quad_decimate=1.0, stop_columns=None, ground_plane=None):
+                 quad_decimate=1.0, stop_columns=None, ground_plane=None,
+                 detect_max_hz=None, detector_threads=1, overlay_hz=10.0):
         self.name = name
+        # Latency budget (2026-09-15): a frame's processing must stay under
+        # the frame period or every following frame queues behind it.
+        self.detect_min_period = (1.0 / float(detect_max_hz)) if detect_max_hz else 0.0
+        self.detector_threads = max(1, int(detector_threads))
+        self._last_detect_stamp = None
+        # Overlay: the detection callback only stores its inputs; a timer
+        # thread renders the newest ones at overlay_hz while subscribed.
+        self._overlay_lock = threading.Lock()
+        self._overlay_src = None          # (header, cv_img, detections)
+        self._overlay_rendered = None     # header.stamp last rendered
+        self._overlay_timer = None
+        self.overlay_hz = float(overlay_hz)
         # Ground-plane correction (2026-09-08): {enabled, roll_deg,
         # pitch_deg, height_m} from robot.yaml robot_camera.ground_plane.
         # Built once CameraInfo (K + D) has arrived. See
@@ -223,9 +247,15 @@ class _CameraTagWorker:
         if enable:
             if self.detector is None:
                 self.detector = Detector(families=self.tag_family,
-                                         quad_decimate=self.quad_decimate)
+                                         quad_decimate=self.quad_decimate,
+                                         nthreads=self.detector_threads)
                 rospy.loginfo(f"[RobotCamera] {self.name}: detector "
-                              f"quad_decimate={self.quad_decimate}")
+                              f"quad_decimate={self.quad_decimate} "
+                              f"nthreads={self.detector_threads} "
+                              f"detect_max_hz={'every frame' if not self.detect_min_period else round(1.0 / self.detect_min_period, 1)}")
+            if self._overlay_timer is None and self.overlay_hz > 0:
+                self._overlay_timer = rospy.Timer(
+                    rospy.Duration(1.0 / self.overlay_hz), self._overlay_tick)
             # Re-read the intrinsics: a driver restarted at a different
             # resolution publishes a different K, and reusing the stale one
             # would silently skew every tag pose.
@@ -240,6 +270,11 @@ class _CameraTagWorker:
             for sub in self._subs:
                 sub.unregister()
             self._subs = []
+            if self._overlay_timer is not None:
+                self._overlay_timer.shutdown()
+                self._overlay_timer = None
+            with self._overlay_lock:
+                self._overlay_src = None
 
         self.enabled = enable
         rospy.loginfo(f"[RobotCamera] {self.name}: "
@@ -296,6 +331,12 @@ class _CameraTagWorker:
     def _image_cb(self, msg):
         if self.camera_params is None or not self.enabled:
             return
+        if self.detect_min_period:
+            st = msg.header.stamp.to_sec()
+            if (self._last_detect_stamp is not None
+                    and st - self._last_detect_stamp < self.detect_min_period - 1e-3):
+                return
+            self._last_detect_stamp = st
         try:
             cv_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
@@ -339,15 +380,32 @@ class _CameraTagWorker:
 
             self.pub.publish(out)
 
-            # Drawing a 1920x1080 overlay at 30 Hz is not free, so it happens
-            # only while something is actually looking (RViz, rqt, a rosbag).
+            # The overlay is rendered by _overlay_tick on its own thread —
+            # only the inputs are handed over here, so the ~30 ms of
+            # rectify + drawing never delays the next frame's detection.
             if self.overlay_pub.get_num_connections() > 0:
-                self._publish_overlay(msg, cv_img, out.detections)
+                with self._overlay_lock:
+                    self._overlay_src = (msg.header, cv_img, out.detections)
 
         except Exception as e:
             rospy.logerr(f"[RobotCamera] {self.name} processing error: {e}")
 
-    def _publish_overlay(self, src_msg, cv_img, detections):
+    def _overlay_tick(self, _event=None):
+        """Timer thread: render + publish the newest frame once."""
+        if self.overlay_pub.get_num_connections() <= 0:
+            return
+        with self._overlay_lock:
+            src = self._overlay_src
+        if src is None or src[0].stamp == self._overlay_rendered:
+            return
+        header, cv_img, detections = src
+        try:
+            self._publish_overlay(header, cv_img, detections)
+            self._overlay_rendered = header.stamp
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[RobotCamera] {self.name} overlay error: {e}")
+
+    def _publish_overlay(self, src_header, cv_img, detections):
         # With the ground-plane correction on, the overlay is drawn on the
         # frame RECTIFIED to the level virtual camera, so the crosshair
         # (= the lens nadir), the stop columns, the boxes and the mm
@@ -359,7 +417,7 @@ class _CameraTagWorker:
                          self.stop_columns,
                          ground_height=(self.ground.h if self.ground is not None else None)),
             "bgr8")
-        out_msg.header = src_msg.header
+        out_msg.header = src_header
         self.overlay_pub.publish(out_msg)
 
 
@@ -484,6 +542,9 @@ class RobotCameraNode:
         enabled_cfg = cam_cfg.get('enabled') or {}
         driver_cfg = cam_cfg.get('driver_toggle') or {}
         ground_cfg = cam_cfg.get('ground_plane') or {}
+        hz_cfg = cam_cfg.get('detect_max_hz') or {}
+        threads_cfg = cam_cfg.get('detector_threads') or {}
+        overlay_hz = float(cam_cfg.get('overlay_hz', 10.0) or 0.0)
         # The columns mobile_controller stops the tag on, read from the SAME
         # keys it reads (robot.yaml `robot:`), drawn on front_cam's overlay
         # only — it is the navigation camera. Same fallback rule as the
@@ -526,7 +587,10 @@ class RobotCameraNode:
                 quad_decimate=decimate_cfg.get(name, 1.0),
                 stop_columns=(nav_stop_columns if name == 'front_cam'
                               else None),
-                ground_plane=ground_cfg.get(name))
+                ground_plane=ground_cfg.get(name),
+                detect_max_hz=hz_cfg.get(name),
+                detector_threads=threads_cfg.get(name, 1),
+                overlay_hz=overlay_hz)
 
         active = [n for n, w in self.workers.items() if w.enabled]
         if not active:
