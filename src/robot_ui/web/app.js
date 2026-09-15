@@ -170,7 +170,11 @@ function renderTask(st) {
   $('chip-task').textContent = 'TASK ' + (st.state || '?') + ' ' + name + (total ? ' ' + idx + '/' + total : '');
   if ('charge_phase' in st) {
     const phase = st.charge_phase || '?';
-    const pct = st.battery_pct;
+    // The percentage comes from the LIVE /bms/state (BAT chip), not from the
+    // latched /task_state — that one is republished only on changes, so the
+    // two chips disagreed (2026-09-15). task_state's own figure is the fallback.
+    const bat = state['battery_state'];
+    const pct = (bat && bat.percentage != null) ? bat.percentage : st.battery_pct;
     const pctS = pct != null ? ' ' + Math.round(pct) + '%' : '';
     let text, colour;
     if (st.charging) { text = 'CHARGE charging' + pctS; colour = '#4a1a4a'; }
@@ -212,6 +216,8 @@ function renderBattery(st) {
   $('chip-battery').textContent = 'BAT ' + Math.round(pct) + '% ' + st.voltage.toFixed(1) + 'V';
   // 20% is navifra.low_battery_pct in robot.yaml, kept in step by hand.
   tint($('chip-battery'), pct < 20 ? '#553311' : '');
+  // the CHARGE chip shows the same percentage: re-render it with the new value
+  if (state['task_state']) renderTask(state['task_state']);
 }
 
 function renderEstop(active) {

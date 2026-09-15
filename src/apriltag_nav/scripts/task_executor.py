@@ -98,6 +98,7 @@ class MobileManipulatorTaskExecutor:
         self._charge_enabled = bool(self._charge_cfg.get('enabled', False))
         # unknown | working | charging | full | returning | stopped | dock_failed
         self._charge_phase = 'unknown'
+        self._last_state_pct = None       # battery_pct last put on /task_state
         self._charge_next_eval = 0.0
         self._lamp_key = None
         self._task_completed = False
@@ -434,15 +435,27 @@ class MobileManipulatorTaskExecutor:
         pct = self._charge_pct()
         if pct is None:
             return
+        # Keep /task_state's battery_pct live: it is latched and otherwise
+        # republished only on a state / lamp change, so a UI reading the
+        # CHARGE chip from it drifted away from the BMS (user, 2026-09-15).
+        last_pct = getattr(self, '_last_state_pct', None)
+        if last_pct is None or abs(pct - last_pct) >= 0.5:
+            self._last_state_pct = pct
+            self._publish_task_state()
         full_pct = float(self._charge_cfg.get('full_pct', 85.0))
         return_pct = float(self._charge_cfg.get('return_pct', 30.0))
+        # The automatic low-battery return (<= return_pct) is OFF unless
+        # low_battery_return is true (user, 2026-09-15: "20 % 이하 자동
+        # 복귀 발동 안 되게"). CHARGE on /task_command, the 85 % undock and
+        # return_after_task are unaffected.
+        low_return = bool(self._charge_cfg.get('low_battery_return', False))
         charging = self._is_charging()
         phase = self._charge_phase
 
         if self._task_running:
             # Only a USER task is abandoned for the battery; the return task
             # itself, or the undock, is left to finish.
-            if (self._current_task_name not in INTERNAL_TASKS
+            if (low_return and self._current_task_name not in INTERNAL_TASKS
                     and pct <= return_pct and phase != 'returning'):
                 rospy.logwarn(f"[Charge] battery {pct:.1f}% <= {return_pct:.0f}%: "
                               "stopping work and returning to the charger")
@@ -473,7 +486,7 @@ class MobileManipulatorTaskExecutor:
             # returning: the return task ended without current (failed /
             # preempted) — same as dock_failed until something else happens.
             return
-        if pct <= return_pct:
+        if low_return and pct <= return_pct:
             rospy.logwarn(f"[Charge] battery {pct:.1f}% <= {return_pct:.0f}%: returning to the charger")
             self._queue_internal_task('battery_return', self._battery_return_task())
             self._charge_phase = 'returning'

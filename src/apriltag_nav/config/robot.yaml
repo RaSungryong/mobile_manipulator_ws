@@ -745,6 +745,10 @@ navifra:
     enabled: true
     full_pct: 85.0
     return_pct: 20.0            # user: 20 % (2026-09-09); low_battery_pct's warning fires at the same level
+    low_battery_return: false   # 2026-09-15 (user): the automatic return at return_pct is DISABLED —
+                                # both the mid-task abandon and the idle return. CHARGE / UNDOCK on
+                                # /task_command, the 85 % undock and return_after_task still work.
+                                # true re-arms it.
     return_after_task: true     # after a TASK completes (not after a GOTO)
     return_after_goto: false    # GOTO is positioning, not work — leave it where it stops
     dock_tag: 500               # = TaskManager.START_TAG; arrival = docked

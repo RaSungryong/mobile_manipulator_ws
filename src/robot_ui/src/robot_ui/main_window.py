@@ -141,6 +141,8 @@ class MainWindow(QMainWindow):
         self.lbl_estop = self._status_chip('E-STOP —')
         self.lbl_battery = self._status_chip('BAT —')
         self.lbl_charge = self._status_chip('CHARGE —')
+        self._battery_pct_live = None       # /bms/state percentage, the CHARGE chip's source
+        self._last_task_state = None
         self.lbl_arm = self._status_chip('ARM —')
         self.lbl_lift = self._status_chip('LIFT —')
         self.lbl_mobile = self._status_chip('BASE —')
@@ -1585,6 +1587,7 @@ class MainWindow(QMainWindow):
             f'<b>{html.escape(name)}</b>' + self.task_detail_html(info))
 
     def _on_task_state(self, state):
+        self._last_task_state = state
         name = state.get('task') or '—'
         idx, total = state.get('group_index', 0), state.get('group_total', 0)
         progress = f' {idx}/{total}' if total else ''
@@ -1602,7 +1605,9 @@ class MainWindow(QMainWindow):
             return
         phase = state.get('charge_phase') or '?'
         charging = state.get('charging')
-        pct = state.get('battery_pct')
+        # Live BMS figure first (the BAT chip's), /task_state's latched
+        # battery_pct only as the fallback — the two drifted apart (2026-09-15).
+        pct = self._battery_pct_live if self._battery_pct_live is not None else state.get('battery_pct')
         pct_s = f' {float(pct):.0f}%' if pct is not None else ''
         if charging:
             text, tint = f'CHARGE charging{pct_s}', '#4a1a4a'      # magenta, like the lamp
@@ -1654,6 +1659,9 @@ class MainWindow(QMainWindow):
         # 20% is navifra.low_battery_pct in robot.yaml. Kept in step by hand;
         # the UI has no reader for that file and should not grow one.
         self._tint(self.lbl_battery, '#553311' if pct < 20.0 else '')
+        self._battery_pct_live = float(pct)
+        if self._last_task_state is not None:
+            self._update_charge_chip(self._last_task_state)   # same number on both chips
 
     def _on_estop(self, active):
         self.lbl_estop.setText('E-STOP ACTIVE' if active else 'E-STOP clear')

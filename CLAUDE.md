@@ -1075,6 +1075,16 @@ current within `charge_confirm_s`. Lamp: `status_colors.charging`
 stays green and error red, so the four rest states are distinguishable
 (user's colour choice, 2026-09-09). Task states keep their colours.
 
+**Since 2026-09-15 the automatic low-battery return is OFF**
+(`low_battery_return: false`, user: "20 % 이하 자동 복귀 발동 안 되게"):
+neither the mid-task abandon nor the idle return at `return_pct` fires;
+`CHARGE` / `UNDOCK`, the 85 % undock and `return_after_task` are
+unchanged, `true` re-arms it. Same day: `/task_state` is republished
+whenever the battery moves 0.5 % (it is latched and was otherwise only
+resent on a state change, so robot_ui's CHARGE chip showed a stale
+percentage next to the live BAT chip), and both UIs now print the LIVE
+`/bms/state` figure on the CHARGE chip, `/task_state`'s as the fallback.
+
 Mechanics: `_charge_tick()` runs every main-loop tick (`_tick()`, the
 old `run()` body) and only QUEUES two internal tasks — `battery_return`
 (lift origin home → `move_to_tag(dock_tag)` → optional `dock_reverse_m`

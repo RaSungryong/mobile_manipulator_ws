@@ -153,7 +153,7 @@ class Battery:
         return self.relay and self.docked
 
 
-def make(pct, docked=True):
+def make(pct, docked=True, low_battery_return=True):
     CLK.t = 1000.0; LOG.clear()
     ex = te.MobileManipulatorTaskExecutor.__new__(te.MobileManipulatorTaskExecutor)
     # minimal init without ROS: reuse the real constructor pieces we need
@@ -161,7 +161,9 @@ def make(pct, docked=True):
     cfg = yaml.safe_load(open(os.path.join(WS, 'config', 'robot.yaml')))
     ex._navifra_cfg = cfg['navifra']
     ex._status_colors = ex._navifra_cfg['status_colors']
-    ex._charge_cfg = ex._navifra_cfg['charging']
+    # The automatic low-battery return is OFF in robot.yaml since 2026-09-15
+    # (low_battery_return: false); the cases that exercise it turn it on here.
+    ex._charge_cfg = dict(ex._navifra_cfg['charging'], low_battery_return=bool(low_battery_return))
     ex._charge_enabled = True
     ex._charge_phase = 'unknown'; ex._charge_next_eval = 0.0; ex._lamp_key = None; ex._task_completed = False
     ex._state = te.MobileManipulatorState.IDLE
@@ -291,6 +293,25 @@ def main():
     ex, b = make(15.0, docked=False); ex._charge_enabled = False
     ticks(ex, 15)
     check('9 disabled: no motion, no relay', ex.mobile.calls == [] and not b.relay)
+
+    # ---- 9b. low_battery_return OFF (the robot.yaml default since 2026-09-15):
+    # a 15 % battery queues nothing while idle, and a running task is not abandoned
+    ex, b = make(15.0, docked=False, low_battery_return=False); ex._charge_phase = 'working'
+    for _ in range(6):
+        ex._charge_tick(); CLK.t += 2.5
+    check('9b low_battery_return off: 15 % idle -> no return queued', ex._pending_task_name is None and ex._charge_phase == 'working',
+          f'pending {ex._pending_task_name} phase {ex._charge_phase}')
+    ex._task_running = True; ex._current_task_name = 'scan_test'
+    for _ in range(6):
+        ex._charge_tick(); CLK.t += 2.5
+    check('9c low_battery_return off: 15 % mid-task -> task not abandoned', not ex._stop_requested and ex._pending_task_name is None,
+          f'stop {ex._stop_requested} pending {ex._pending_task_name}')
+    ex._task_running = False; ex._current_task_name = None
+    # the key OFF still republishes /task_state as the battery moves (live battery_pct)
+    n0 = len([l for l in LOG if 'task_state' in l])
+    b.pct = 14.0
+    for _ in range(3):
+        ex._charge_tick(); CLK.t += 2.5
 
     # ---- 10. operator CHARGE at 55 % (well above return_pct), manager disabled
     ex, b = make(55.0, docked=False); ex._charge_enabled = False
