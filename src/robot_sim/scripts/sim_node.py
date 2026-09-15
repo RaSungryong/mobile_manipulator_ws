@@ -26,7 +26,7 @@ Cameras
 A pinhole camera per T_mb2fc (front) and base∘TCP∘inv(hand-eye) (hand).
 Floor tags come from apriltag_nav map.yaml (z = floor_z + robot.tag_thickness, yaw from the
 zone convention A/DOCK=0, B/D=+90, C/E=-90); cross tags from the two
-reference_tags yamls (z = 0). All tags face-up (tag +z pointing DOWN,
+reference_tags yamls (z = +0.001, the plate's top face). All tags face-up (tag +z pointing DOWN,
 AprilTag body convention). Euler encoding matches robot_camera_node:
 ``as_euler('zyx', degrees=True)[::-1]`` with the as_dcm scipy-1.3
 fallback. pose_t is scaled by detector_size/actual_size exactly like

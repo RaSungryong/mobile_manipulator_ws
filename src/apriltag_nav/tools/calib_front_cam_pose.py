@@ -41,7 +41,7 @@ Preconditions
     and the first -> second direction along the robot's FORWARD axis
     (image right). Since 2026-09-15 the tags need not be edge-parallel:
     the fit solves each tag's in-plane angle, only the centre spacing is
-    the ruler. Defaults are the 90 mm tags 147 -> 148 (the 60 mm pair
+    the ruler. Defaults are the 90 mm tags 149 -> 150 (the 60 mm pair
     15 / 16 of 2026-09-08 is gone); measure the spacing as
     (outer extent + inner gap) / 2 so the printed size drops out, and pass
     it to `solve --spacing`. The fit's lens height is above the TAG-TOP
@@ -92,7 +92,7 @@ from apriltag_nav.paths import CONFIG_PATH, WS_DIR  # noqa: E402
 from fit_front_cam_ground import (fit_ground, load_snapshots, parse_camera_info,  # noqa: E402
                                   parse_snapshot)
 
-DEFAULT_TAGS = (147, 148)      # 2026-09-15: the 90 mm tags on hand (the 60 mm 15/16 pair is gone)
+DEFAULT_TAGS = (149, 150)      # 2026-09-15: the 90 mm tags on hand (the 60 mm 15/16 pair is gone); user's pick
 DEFAULT_SIZE = 0.090
 DEFAULT_SPACING = None         # no default on purpose — the measured centre distance is the ruler
 ROOM_MARGIN_M = 0.015          # keep every tag this far inside the frame edge
@@ -722,7 +722,7 @@ def apply_to_robot_yaml(r, yaw_deg, path=CONFIG_PATH):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--tags', type=int, nargs=2, default=list(DEFAULT_TAGS),
-                    help='tag ids, first -> second along the robot FORWARD axis (default 147 148)')
+                    help='tag ids, first -> second along the robot FORWARD axis (default 149 150)')
     ap.add_argument('--spacing', type=float, default=DEFAULT_SPACING,
                     help='measured centre-to-centre distance (m); required by solve')
     ap.add_argument('--size', type=float, default=DEFAULT_SIZE, help='nominal printed tag size (m), refined by the fit')

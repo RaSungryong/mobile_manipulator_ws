@@ -40,7 +40,7 @@ def check(name, ok, detail=""):
 FX, FY, CX, CY = 910.0, 910.0, 642.7, 361.4
 D = [0.0830745, -0.1101505, 5.28e-05, -0.000334, 0.0454777]   # the real front_cam D
 W, H = 1280, 720
-TAGS = (147, 148)                 # the 90 mm tags on hand (2026-09-15)
+TAGS = (149, 150)                 # the 90 mm tags on hand (2026-09-15), the tool's default pair
 SPACING, SIZE = 0.120, 0.090      # centre spacing 0.12 m = 30 mm gap; fills half the 0.42 m view
 THICK = 0.001                     # every tag is a 1 mm plate; the fit's h is above the tag top
 
@@ -197,7 +197,7 @@ check("tx within 1 mm", abs(r['tx'] - 0.548) < 1e-3, "%.4f" % r['tx'])
 check("ty +8 mm recovered with sign (±1.5 mm)", abs(r['ty'] - 0.008) < 1.5e-3, "%.4f" % r['ty'])
 check("yaw +0.70 recovered within 0.1 deg", abs(math.degrees(r['yaw']) - 0.70) < 0.10, "%.3f" % math.degrees(r['yaw']))
 
-print("\n== tags laid a quarter turn round and skewed (147 at +91.5 deg, 148 at -2.0 deg): only the centre spacing is the ruler ==")
+print("\n== tags laid a quarter turn round and skewed (149 at +91.5 deg, 150 at -2.0 deg): only the centre spacing is the ruler ==")
 r = run_case(1.228, -0.504, 0.302, -0.40, 0.552, -0.004, seed=5, tag_rot=(math.radians(91.5), math.radians(-2.0)))
 F = r['fit']
 check("in-plane angles recovered within 0.05 deg",

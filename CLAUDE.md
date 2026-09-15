@@ -1644,7 +1644,7 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
-### 2026-09-15 — Pose calibration on the 90 mm tags 147/148; tags are 1 mm plates (tz = height_m + tag_thickness)
+### 2026-09-15 — Pose calibration on the 90 mm tags 149/150; tags are 1 mm plates (tz = height_m + tag_thickness, cross tags z +0.001)
 
 User: the 60 mm pair 15/16 is gone, four 90 mm tags 147–150 are on hand;
 and every tag is a 1 mm thick plate, "로봇 베이스로부터 태그는 z축으로 1mm
@@ -1658,12 +1658,16 @@ height above the floor. New `robot.tag_thickness: 0.001`;
 refused, pinned by `check_front_cam_extrinsics.py` 22 → **23**, which
 also renders the floor tag at z = +0.001 and asserts the level chain
 returns exactly that), `robot_sim` lays floor tags at floor + thickness.
-Nothing in navigation reads the sum. Not changed: `reference_tags*.yaml`
-z = 0 for the cross tags — they sit in machined slots on the plate, and
-whether their top face is flush or +1 mm is a question for the user.
+Nothing in navigation reads the sum. **The cross tags too (user, same
+message): they sit in machined slots but their top face is 1 mm above
+the plate top, so `reference_tags.yaml` / `_plate2.yaml` z went 0 →
++0.001** (the chain measures that face; the expected path-tag z is now
+−0.079, the floor tags' top face). The calibration plans were NOT
+regenerated — the generator would reset plate 1's session-measured seeds
+for a 1 mm change the align loop absorbs anyway.
 
 **The tool** (`calib_front_cam_pose.py`, doc §1–§4 rewritten): defaults
-147 → 148, 0.090; `--spacing` has NO default (it is the scale ruler;
+149 → 150 (the user's pick), 0.090; `--spacing` has NO default (it is the scale ruler;
 measure (outer extent + inner gap) / 2 so the print size drops out).
 Three changes the bigger tags forced or allowed, each measured on the
 synthetic plant (`check_front_cam_pose_calib.py` 16 → **27**):
@@ -1692,7 +1696,7 @@ synthetic plant (`check_front_cam_pose_calib.py` 16 → **27**):
 Also noted in the doc: 147–150 are zone-E map ids, harmless for the tool
 (manual moves only) but `/robot_pose` and `last_known_tag` will point at
 zone E until `mobile_node` is restarted, which the procedure does anyway;
-149/150 serve the §6 mechanical yaw cross-check (one frame cannot hold
+147/148 serve the §6 mechanical yaw cross-check (one frame cannot hold
 two tags 0.5 m apart, so two snapshots). Verified offline only; the
 suites that read the loader still pass (ground_plane 17, repose 10,
 error_budget, yaw-sweep 4/4). `catkin_make` not needed. Not driven.

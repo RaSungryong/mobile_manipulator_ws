@@ -49,9 +49,14 @@ format: "pose"
 # +y north, z = 0 at the PLATE TOP surface. Verified against
 # "1번정반 중심 기준 모든 태그들의 위치.csv", which matches
 # apriltag_nav/config/map.yaml exactly (72/72 tags), so calibrated world
-# outputs are directly comparable with map.yaml x/y. Floor tags sit 80 mm
-# below the plate top — a healthy first session should report path-tag
-# z ≈ -0.080.
+# outputs are directly comparable with map.yaml x/y.
+#
+# z = +0.001 (2026-09-15, user): the cross tags sit in machined slots but
+# every tag is a 1 mm plate (robot.yaml robot.tag_thickness) and their
+# TOP face — the plane the hand camera measures — is 1 mm above the plate
+# top, not flush with it. Floor tags sit 80 mm below the plate top and
+# are the same 1 mm plates, so a healthy session should report path-tag
+# z ≈ -0.079 (their top face), not -0.080.
 #
 # The tags lie ON the plate, printed face UP (hand-cam reads them from
 # above) -> rpy [180, 0, 0] per the convention block above.
@@ -69,21 +74,21 @@ format: "pose"
 reference_tags:
   # West column (x = -0.600), south -> north
   - id: 0                      # origin-column tag, south
-    position_m: [-0.600, -1.200, 0.0]
+    position_m: [-0.600, -1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 1
-    position_m: [-0.600, 0.000, 0.0]
+    position_m: [-0.600, 0.000, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 2
-    position_m: [-0.600, 1.200, 0.0]
+    position_m: [-0.600, 1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   # East column (x = +0.600), north -> south
   - id: 3
-    position_m: [0.600, 1.200, 0.0]
+    position_m: [0.600, 1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 4
-    position_m: [0.600, 0.000, 0.0]
+    position_m: [0.600, 0.000, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 5
-    position_m: [0.600, -1.200, 0.0]
+    position_m: [0.600, -1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]

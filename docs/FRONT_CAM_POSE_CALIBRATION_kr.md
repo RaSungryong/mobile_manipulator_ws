@@ -21,12 +21,13 @@
 까지는 그보다 1 mm 더 높고, `extrinsics.yaml`의 `T_mb2fc` tz는 생성기가
 `height_m + tag_thickness`로 쓴다(로더가 검사). 내비게이션은 렌즈→태그면
 거리만 쓰므로 바뀌는 것이 없다. 이 절차에서 신경 쓸 것은 없다 — 값은
-그대로 `height_m`에 들어간다.
+그대로 `height_m`에 들어간다. 정반의 십자 태그도 같은 1 mm 판이라
+`reference_tags*.yaml`의 z는 +0.001(정반면 위 윗면)이다.
 
 ## 1. 준비물
 
 - 같은 규격으로 인쇄한 AprilTag 2장. **2026-09-15 현재 보유: 90 mm, ID
-  147·148·149·150** (60 mm 15·16은 없음). 쌍으로는 **147 → 148**을 쓴다
+  147·148·149·150** (60 mm 15·16은 없음). 쌍으로는 **149 → 150**을 쓴다
   (도구 기본값). 바닥에 평평하게 고정(테이프).
 - **중심 간격 120 mm 권장** (변 사이 빈틈 30 mm). 90 mm 태그는 0.30 m 높이
   에서 화면 1280 px 중 271 px씩 차지하므로, 간격 150 mm면 쌍이 화면 폭
@@ -37,15 +38,15 @@
   값을 `solve --spacing`에 넣는다(기본값 없음, 필수).
 - 변을 평행하게 맞출 필요 없다 (2026-09-15부터 피팅이 태그별 회전을
   같이 푼다 — 90° 돌려 깔아도 된다). 중심 간격만 정확하면 된다.
-- 배치 방향: **147 → 148이 로봇의 전진 방향** (화면에서 147이 왼쪽,
-  148이 오른쪽). 쌍이 화면 가운데 오도록 베이스를 세운다
+- 배치 방향: **149 → 150이 로봇의 전진 방향** (화면에서 149가 왼쪽,
+  150이 오른쪽). 쌍이 화면 가운데 오도록 베이스를 세운다
   (`/front_cam/tag_overlay`에서 두 태그 offset의 평균이 ±30 mm 안).
-- 나머지 149·150은 §6 기계적 교차검증에 쓴다.
+- 나머지 147·148은 §6 기계적 교차검증에 쓴다.
 - 스택 기동 상태 (`mobile_manipulator.launch`), **`path_tag_locator.launch`는
   내려둔다** (베이스의 두 번째 명령자). e-stop에 손.
 - ⚠️ 147–150은 map.yaml zone E의 태그 ID이기도 하다. 도구는 수동 이동만
   쓰므로 문제없지만, 세션 중 `/robot_pose`는 zone E 좌표를 가리키고
-  `mobile_node`의 last-known tag가 147이 된다 — 세션 후 어차피
+  `mobile_node`의 last-known tag가 149가 된다 — 세션 후 어차피
   `mobile_node`를 재시작한다(§4).
 
 ## 2. robot_camera_node를 RAW 검출로 전환
@@ -92,8 +93,8 @@ robot_ui Mobile 탭으로 몰면서 `record DIR 01 --seconds 15`.
 rosrun apriltag_nav calib_front_cam_pose.py --spacing 0.120 solve log/apriltag_nav/calib_pair_<date>
 ```
 
-(`--spacing`은 §1에서 잰 값. 태그 ID·크기가 기본값과 다르면 `--tags 149
-150 --size 0.09`처럼 같이 준다.) 출력을 읽는 법:
+(`--spacing`은 §1에서 잰 값. 태그 ID·크기가 기본값과 다르면 `--tags 147
+148 --size 0.09`처럼 같이 준다.) 출력을 읽는 법:
 
 - `rms` 0.3 px 근처, `level camera` rms가 그보다 확실히 커야 틸트가 실제로
   관측된 것. `tags' in-plane angle`은 깔린 각도(90의 배수 + 비뚤어진
@@ -139,7 +140,7 @@ rosrun apriltag_nav calib_front_cam_pose.py --spacing 0.120 solve log/apriltag_n
 1. 베이스를 세우고 **앞 범퍼 중앙**과 **뒤 범퍼 중앙**의 바닥 투영점을
    다림추로 찍어 표시한다 (F0, R0). 두 점의 중점이 기하 중심 G, 두 점을 잇는
    선이 섀시 축.
-2. 그 상태에서 `snap`을 한 장 찍는다 (또는 overlay에서 태그 147의 offset을
+2. 그 상태에서 `snap`을 한 장 찍는다 (또는 overlay에서 태그 149의 offset을
    기록) — 렌즈 나디르와 태그의 관계.
 3. robot_ui Mobile 탭으로 **+90° 피벗** (한 번에 큰 각이 좋다). 다시 앞·뒤
    범퍼 중앙을 찍는다 (F1, R1).
@@ -147,7 +148,7 @@ rosrun apriltag_nav calib_front_cam_pose.py --spacing 0.120 solve log/apriltag_n
    (90°면 교점이 명확). C와 G의 거리·방향이 답이다. 1 mm 자로 읽힌다.
 5. 같은 자리에서 90°씩 3번 더 돌려 4점을 얻으면 C의 산포도 나온다.
 
-렌즈 → 기하 중심 거리는 별도로: 태그 147 중심을 overlay `offset: (0, 0)`에
+렌즈 → 기하 중심 거리는 별도로: 태그 149 중심을 overlay `offset: (0, 0)`에
 맞춰 렌즈 나디르 바로 아래 두고, 그 태그 중심에서 F0까지 줄자로 잰 값 +
 (F0–R0 길이의 절반)이 tx_geometric. 이것과 `solve`의 tx(회전중심 기준)의
 차이는 위 4의 C–G 거리와 같아야 한다 — 두 방법이 맞으면 측정을 믿어도 된다.
@@ -159,7 +160,7 @@ rosrun apriltag_nav calib_front_cam_pose.py --spacing 0.120 solve log/apriltag_n
 
 ## 6. 기계적 교차검증 (선택)
 
-yaw는 주행으로만 잰다. 주행이 의심스러우면: 나머지 태그 2장(149·150)을
+yaw는 주행으로만 잰다. 주행이 의심스러우면: 나머지 태그 2장(147·148)을
 섀시 옆면과 평행하게 (양 끝에서 옆면까지 거리를 자로 같게) 0.5 m 이상
 떨어뜨려 깔고 — 두 장이 한 프레임(0.42 × 0.24 m)에 같이 안 들어가므로
 베이스를 옆면과 평행하게 둔 채 `snap` 두 장(각 태그 하나씩) 또는

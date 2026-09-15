@@ -10,7 +10,8 @@
 # 2026-09-04, so the plate spans 2.64..5.16. The D/E FLOOR lanes in
 # map.yaml were left at 2.18 / 5.6 (those tags were not re-laid); only
 # these cross-tag poses follow the plate. So these poses are the 정반 1
-# values + 3.900 in x. z = 0 is the plate top; face-up -> rpy [180, 0, 0];
+# values + 3.900 in x. z = 0 is the plate top and the tags' TOP face is
+# +0.001 (1 mm plates in slots, user 2026-09-15); face-up -> rpy [180, 0, 0];
 # yaw assumed 0 (same caveat as reference_tags.yaml).
 #
 # ⚠️ SAME IDs 0-5 EXIST ON BOTH PLATES. A calibration session must load
@@ -22,20 +23,20 @@ format: "pose"
 
 reference_tags:
   - id: 0
-    position_m: [3.300, -1.200, 0.000]
+    position_m: [3.300, -1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 1
-    position_m: [3.300, 0.000, 0.000]
+    position_m: [3.300, 0.000, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 2
-    position_m: [3.300, 1.200, 0.000]
+    position_m: [3.300, 1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 3
-    position_m: [4.500, 1.200, 0.000]
+    position_m: [4.500, 1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 4
-    position_m: [4.500, 0.000, 0.000]
+    position_m: [4.500, 0.000, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]
   - id: 5
-    position_m: [4.500, -1.200, 0.000]
+    position_m: [4.500, -1.200, 0.001]
     rpy_deg:    [180.0, 0.0, 0.0]

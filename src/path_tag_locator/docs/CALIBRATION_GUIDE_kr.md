@@ -134,7 +134,7 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
   sig_yaw ≈ 0.07° 예상). yaw 는 front-cam 회전이 1:1로 기여(위치와 반대)
 - 검증: `rosrun path_tag_locator verify_map_world.py`
   — 상대 기하 5 cm 초과 항목 표시
-- **첫 세션 건강 체크**: 바닥 태그 z ≈ **−0.080** 이어야 정상.
+- **첫 세션 건강 체크**: 바닥 태그 z ≈ **−0.079** 이어야 정상 (바닥은 −0.080, 태그가 1 mm 판이라 윗면은 −0.079; 십자 태그 z도 같은 이유로 +0.001).
   전체가 회전되어 보이면 참조 태그 yaw 가정(0°)부터 의심 →
   `reference_tags.yaml` yaw 수정 후 재실행.
 
@@ -157,7 +157,7 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
 1. 드라이런 (`DRY_RUN = True`)
 2. 단일 locate, `auto_align: false`
 3. 단일 locate, `auto_align: true` (정렬 수렴 확인)
-4. 정반 1 배치 세션 → `verify_map_world.py` + z ≈ −0.080 확인
+4. 정반 1 배치 세션 → `verify_map_world.py` + z ≈ −0.079 확인
 5. 정반 2 배치 세션
 
 설정/계획을 바꿨으면 손으로 고치지 말고 생성기를 다시 돌리세요:
