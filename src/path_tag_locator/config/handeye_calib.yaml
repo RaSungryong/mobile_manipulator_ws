@@ -74,3 +74,26 @@ handeye_calib:
     align_max_iterations: 6           # square-up before the sweep
     align_position_tol_m: 0.003
     align_angle_tol_deg:  1.0
+    # Divergence guard (2026-09-18): the mm-equivalent error (xy_mm +
+    # 10 * tilt_deg) growing over the best seen by the ratio AND by more
+    # than the minimum growth, a tag lost after a step, or a stall,
+    # retreats to the best pose seen — the aiming hand-eye describes a
+    # different mount (the camera was moved) and the loop would
+    # otherwise walk the tag out of the frame or plan the views wrong.
+    align_diverge_ratio:  1.25
+    align_diverge_min_growth_mm: 30.0
+    align_stall_min_improvement: 0.25   # unconverged after all iterations with < 25 % of the error gone = the same
+    # What to do then. auto: bootstrap a provisional aiming hand-eye at
+    # the start pose — capture there and at +/- bootstrap_angle_deg
+    # about each FLANGE axis (pure flange rotations, no hand-eye needed
+    # to plan them, the camera moves a few cm), solve over just those
+    # samples, and aim the square-up and the views with it (they
+    # re-detect anyway; the clearance rule gets the extra margin).
+    # always: skip the file. never: fail and name the manual procedure.
+    # Also used when hand_eye_npz cannot be loaded. The camera must be
+    # >= bootstrap_min_depth_m from the tag (start from ~0.6-1.2 m up).
+    bootstrap:            auto
+    bootstrap_angle_deg:  10.0
+    bootstrap_min_depth_m: 0.5
+    bootstrap_min_samples: 5
+    bootstrap_clearance_extra_m: 0.05

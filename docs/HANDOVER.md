@@ -209,6 +209,12 @@ pull + `catkin_make` before anything below.
   prediction and its scatter over the 23 poses is 2.1 mm rms (was 15 mm
   with the 09-02 file).** Restart the calibration nodes (they cache the
   npz) and treat the 2026-09-02 hand-eye caveats as closed.
+  **⚠️ 2026-09-18: the hand camera was MOVED — that file is the OLD mount
+  until the next `Compute & save`.** The first sweep after the remount
+  diverged (the file aims the wrong way); the sweep now retreats and
+  bootstraps its own aiming hand-eye from six ±10° flange rotations at
+  the start pose (`auto.bootstrap: auto`), so re-run Auto-sample from
+  ≥ 0.5 m above the tag, then Compute. Not yet run on the robot.
 - **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
   operator versions of the charging manager's dock-and-charge / undock
   tasks; the charger starts only on the `/crevis/charging true` that

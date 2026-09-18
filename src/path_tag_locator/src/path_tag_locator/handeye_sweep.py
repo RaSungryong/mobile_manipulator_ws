@@ -44,14 +44,42 @@ The procedure
    actually is. Cancel is checked before every move. Finally the arm
    returns to the start pose.
 
-⚠️ The hand-eye used to AIM the sweep is the current estimate (the
-interim 2026-09-02 file): an error there only mis-centres the tag in
-the image, which the per-view re-detection catches (skip), and the
-clearance rule is evaluated with the same estimate, hence the generous
-margin. The captured samples themselves do not depend on it.
+⚠️ The hand-eye used to AIM the sweep is the current estimate: an
+error there only mis-centres the tag in the image, which the per-view
+re-detection catches (skip), and the clearance rule is evaluated with
+the same estimate, hence the generous margin. The captured samples
+themselves do not depend on it.
+
+Bootstrap (2026-09-18) — when the current hand-eye describes a DIFFERENT
+mount (the camera was moved: the 2026-09-18 session, xy 289 -> 373 mm,
+tilt 3 -> 7.7 deg, tag lost on the second step; the 2026-09-02 session
+with the 180 deg-spun May file was the same signature), the square-up
+does not converge, it DIVERGES, and it used to run until the tag left
+the frame. Now every align step is checked against the best one so far: an
+error that grows by ``align_diverge_ratio`` (and by more than
+``align_diverge_min_growth_mm`` in mm-equivalent, so detection noise
+near convergence cannot trip it), a tag lost right after a step, or
+the iterations running out with less than ``align_stall_min_improvement``
+of the initial error removed (a spun hand-eye moves the camera
+SIDEWAYS to the error, and the number never changes) retreats to the
+best pose seen and raises ``AimDiverged``. With
+``bootstrap: auto`` the runner then makes its own aiming estimate at
+that pose: it captures the current view and, about the FLANGE axes
+(x, y, z, +/- ``bootstrap_angle_deg``), six more — pure flange
+rotations, so the moves are small and need no hand-eye to plan — and
+``solve`` (cv2.calibrateHandEye over just those samples) returns a
+provisional T_hc2ee. It is only cm / degree accurate, which is all the
+aim needs: the square-up re-measures every step, the views re-detect,
+and the clearance rule gets ``bootstrap_clearance_extra_m`` on top.
+Those samples stay in the set (they are real samples of the new mount).
+``bootstrap: always`` skips the file entirely; ``never`` fails with the
+manual procedure named (jog + ~capture at >= 8 poses with tilt and
+spin, ~compute, then the sweep). Precondition: the camera at least
+``bootstrap_min_depth_m`` from the tag, so a 10 deg flange rotation
+(the tool tip moves a few cm) has room.
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
 
 import numpy as np
@@ -86,6 +114,20 @@ class SweepCfg:
     align_angle_tol_deg: float = 1.0
     align_max_step_m: float = 0.10
     align_max_step_deg: float = 15.0
+    # divergence guard: mm-equivalent error = xy_mm + 10 * tilt_deg; a step
+    # after which it grew by the ratio AND by the minimum growth retreats
+    align_diverge_ratio: float = 1.25
+    align_diverge_min_growth_mm: float = 30.0
+    # ... and the loop ending unconverged with less than this fraction of
+    # the initial error removed is a stall (same treatment)
+    align_stall_min_improvement: float = 0.25
+    # provisional aiming hand-eye from small flange rotations when the
+    # file's one diverges ('auto'), always ('always'), or never ('never')
+    bootstrap: str = 'auto'
+    bootstrap_angle_deg: float = 10.0
+    bootstrap_min_depth_m: float = 0.5
+    bootstrap_min_samples: int = 5
+    bootstrap_clearance_extra_m: float = 0.05
 
 
 @dataclass
@@ -111,12 +153,18 @@ class SweepResult:
     align_iterations: int = 0
     start_tcp: Optional[list] = None
     error: Optional[str] = None
+    aim_source: str = 'file'          # 'file' | 'bootstrap'
+    bootstrapped: bool = False
+    n_bootstrap: int = 0              # samples the bootstrap captured
+    diverged: bool = False            # the file's hand-eye diverged the square-up
 
     def summary(self) -> str:
         s = (f"sweep: {self.n_captured} captured, {self.n_skipped} skipped "
              f"(tag not seen), {self.n_move_failed} move failures of "
              f"{self.n_planned} planned ({self.n_rejected} views rejected by "
              f"the safety rules)")
+        if self.bootstrapped:
+            s += f"; aimed by a bootstrap hand-eye ({self.n_bootstrap} samples)"
         if self.cancelled:
             s += " — CANCELLED"
         if self.error:
@@ -269,6 +317,30 @@ def _move_cost(T_a, T_b):
     return t + 0.25 * ang        # 0.25 m per radian
 
 
+MANUAL_PROCEDURE = ("capture by hand instead: jog the camera over the tag, "
+                    "~capture at >= 8 poses that differ in tilt AND spin, "
+                    "~compute, then run the sweep again")
+
+# The bootstrap's flange-frame rotations: label, axis. Six pure rotations
+# about the flange origin; a hand-eye solve needs rotation diversity and
+# nothing else, and rotations about the flange move the camera by only
+# lever x angle (a few cm), so no hand-eye is needed to keep them safe.
+BOOTSTRAP_AXES = [('rx+', (1.0, 0.0, 0.0), +1.0), ('rx-', (1.0, 0.0, 0.0), -1.0),
+                  ('ry+', (0.0, 1.0, 0.0), +1.0), ('ry-', (0.0, 1.0, 0.0), -1.0),
+                  ('rz+', (0.0, 0.0, 1.0), +1.0), ('rz-', (0.0, 0.0, 1.0), -1.0)]
+
+
+class AimDiverged(RuntimeError):
+    """The square-up step made the error larger (or lost the tag): the
+    aiming hand-eye does not describe this camera mount."""
+
+
+def _align_error_mm(m) -> float:
+    """One scalar for the divergence guard: xy in mm plus tilt at ~10 mm
+    per degree (a 1 deg tilt at the 0.35-0.55 m working distance)."""
+    return float(m.xy_offset_m * 1000.0 + 10.0 * m.tilt_deg)
+
+
 # ----------------------------------------------------------------------
 class SweepRunner:
     """Drive the procedure through callables (all synchronous):
@@ -279,10 +351,15 @@ class SweepRunner:
     capture()            -> (ok: bool, message: str)  — one hand-eye sample
     cancelled()          -> bool
     progress(dict)       -> None
+    n_samples()          -> int, samples held so far (bootstrap bookkeeping)
+    solve(since)         -> T_hc2ee (4x4 m) from the samples captured from
+                            index ``since`` on, or None — the bootstrap's
+                            provisional hand-eye (cv2.calibrateHandEye)
     """
 
     def __init__(self, cfg: SweepCfg, *, get_tcp, move, detect, capture,
-                 cancelled=None, log_info=print, log_warn=print, progress=None):
+                 cancelled=None, log_info=print, log_warn=print, progress=None,
+                 n_samples=None, solve=None):
         self.cfg = cfg
         self.get_tcp = get_tcp
         self.move = move
@@ -292,6 +369,8 @@ class SweepRunner:
         self.log_info = log_info
         self.log_warn = log_warn
         self.progress = progress or (lambda d: None)
+        self.n_samples = n_samples
+        self.solve = solve
 
     # ------------------------------------------------------------------
     def _move_chunked(self, T_target) -> bool:
@@ -311,26 +390,60 @@ class SweepRunner:
         return True
 
     def _square_up(self, T_hc2ee, res: SweepResult):
-        """Align loop: tag centred, zero tilt, at distances_m[0]."""
+        """Align loop: tag centred, zero tilt, at distances_m[0].
+
+        Divergence guard (2026-09-18, remounted camera): the error after
+        every step is judged against the BEST one seen so far — a step
+        that made it worse by ``align_diverge_ratio`` and by more than
+        ``align_diverge_min_growth_mm`` (mm-equivalent) is a divergence,
+        and so is a tag lost right after a step, and so is the loop
+        running out of iterations with less than
+        ``align_stall_min_improvement`` of the initial error removed (a
+        90 deg-spun hand-eye moves the camera sideways to the error and
+        the number never changes). All three retreat to the pose where
+        the best error was measured — the tag was in view there — and
+        raise ``AimDiverged``, instead of walking the tag out of the
+        frame or handing a wrong hand-eye to the planner.
+        """
         cfg = self.cfg
         T_cam2tag = self.detect()
         if T_cam2tag is None:
             raise RuntimeError("calibration tag not visible from the current "
                                "pose — drive the hand camera over it first")
+        first_err = best_err = None
+        T_best = best_m = None
+        converged = False
         for it in range(1, int(cfg.align_max_iterations) + 1):
             res.align_iterations = it
             m = alignment_metrics(T_cam2tag)
+            err = _align_error_mm(m)
+            T_cur = pose_fr5_to_matrix_m(self.get_tcp())
             self.progress({'phase': 'align', 'iteration': it,
                            'xy_mm': m.xy_offset_m * 1000.0,
                            'tilt_deg': m.tilt_deg, 'z_m': m.z_distance_m})
             self.log_info(f"sweep: align {it}: xy {m.xy_offset_m * 1000:.1f} mm, "
                           f"tilt {m.tilt_deg:.2f} deg, z {m.z_distance_m:.3f} m")
+            if best_err is not None and self._diverged(best_err, err):
+                self.log_warn(f"sweep: align {it}: the steps made the error WORSE "
+                              f"({best_err:.0f} -> {err:.0f} mm-equivalent) — "
+                              "retreating to the best pose seen")
+                self.move(matrix_m_to_pose_fr5(T_best))
+                res.diverged = True
+                raise AimDiverged(
+                    f"the aiming hand-eye moves the tag the wrong way (align -> {it}: "
+                    f"xy {best_m.xy_offset_m * 1000:.0f} -> {m.xy_offset_m * 1000:.0f} mm, "
+                    f"tilt {best_m.tilt_deg:.1f} -> {m.tilt_deg:.1f} deg); "
+                    "it describes a different camera mount")
+            if first_err is None:
+                first_err = err
+            if best_err is None or err < best_err:
+                best_err, T_best, best_m = err, T_cur, m
             depth_ok = abs(m.z_distance_m - cfg.distances_m[0]) < 0.02
             if is_converged(m, cfg.align_position_tol_m, cfg.align_angle_tol_deg) and depth_ok:
+                converged = True
                 break
             if self.cancelled():
                 raise RuntimeError("cancelled during square-up")
-            T_cur = pose_fr5_to_matrix_m(self.get_tcp())
             T_tgt = compute_target_ee_pose(T_cur, T_hc2ee, T_cam2tag,
                                            target_distance_m=cfg.distances_m[0])
             step = clamp_step(T_cur, T_tgt, max_step_m=cfg.align_max_step_m,
@@ -338,22 +451,170 @@ class SweepRunner:
             self.move(matrix_m_to_pose_fr5(step.T_ab2ee_step))
             T_cam2tag = self.detect()
             if T_cam2tag is None:
-                raise RuntimeError(f"tag lost during square-up (iteration {it})")
+                self.log_warn(f"sweep: align {it}: tag lost after the step — "
+                              "retreating to the best pose seen")
+                self.move(matrix_m_to_pose_fr5(T_best))
+                res.diverged = True
+                raise AimDiverged(
+                    f"tag lost during square-up (iteration {it}, from xy "
+                    f"{m.xy_offset_m * 1000:.0f} mm / tilt {m.tilt_deg:.1f} deg): "
+                    "the aiming hand-eye describes a different camera mount")
+        if not converged and first_err is not None:
+            m = alignment_metrics(T_cam2tag)
+            err = _align_error_mm(m)
+            need = first_err * (1.0 - float(cfg.align_stall_min_improvement))
+            if err > need and first_err > 0:
+                self.log_warn(f"sweep: align made no progress in {res.align_iterations} "
+                              f"iterations ({first_err:.0f} -> {err:.0f} mm-equivalent) — "
+                              "retreating to the best pose seen")
+                self.move(matrix_m_to_pose_fr5(T_best))
+                res.diverged = True
+                raise AimDiverged(
+                    f"the aiming hand-eye makes no progress ({res.align_iterations} steps: "
+                    f"xy {best_m.xy_offset_m * 1000:.0f} mm / tilt {best_m.tilt_deg:.1f} deg "
+                    f"at best, now {m.xy_offset_m * 1000:.0f} mm / {m.tilt_deg:.1f} deg); "
+                    "it describes a different camera mount")
         return T_cam2tag
 
+    def _diverged(self, prev_err, err) -> bool:
+        cfg = self.cfg
+        return (err > prev_err * float(cfg.align_diverge_ratio)
+                and err - prev_err > float(cfg.align_diverge_min_growth_mm))
+
+    def _bootstrap(self, res: SweepResult):
+        """Provisional aiming hand-eye from small flange rotations at the
+        current pose. Captures the view here and six flange-frame
+        rotations (BOOTSTRAP_AXES x bootstrap_angle_deg), returns to the
+        start, and asks ``solve`` for T_hc2ee over just those samples."""
+        cfg = self.cfg
+        if self.solve is None or self.n_samples is None:
+            raise RuntimeError("bootstrap needs the solve / n_samples callables")
+        T_cam2tag = self.detect()
+        if T_cam2tag is None:
+            raise RuntimeError("bootstrap: calibration tag not visible from the "
+                               "current pose")
+        m = alignment_metrics(T_cam2tag)
+        if m.z_distance_m < float(cfg.bootstrap_min_depth_m):
+            raise RuntimeError(
+                f"bootstrap: the camera is {m.z_distance_m:.2f} m from the tag; "
+                f"it needs >= {cfg.bootstrap_min_depth_m:.2f} m of room for "
+                f"{cfg.bootstrap_angle_deg:.0f} deg flange rotations — raise it first")
+        T0 = pose_fr5_to_matrix_m(self.get_tcp())
+        since = int(self.n_samples())
+        n_views = len(BOOTSTRAP_AXES) + 1
+        self.log_info(f"bootstrap: provisional hand-eye from {n_views} views "
+                      f"(+/-{cfg.bootstrap_angle_deg:.0f} deg about the flange axes), "
+                      f"tag at {m.z_distance_m:.2f} m")
+        self.progress({'phase': 'bootstrap', 'index': 0, 'total': n_views,
+                       'label': 'start', 'ok': None, 'z_m': m.z_distance_m})
+        ok, msg = self.capture()
+        self.progress({'phase': 'bootstrap', 'index': 0, 'total': n_views,
+                       'label': 'start', 'ok': bool(ok), 'reason': msg})
+        a = math.radians(float(cfg.bootstrap_angle_deg))
+        try:
+            for i, (label, axis, sign) in enumerate(BOOTSTRAP_AXES, start=1):
+                if self.cancelled():
+                    raise RuntimeError("cancelled during bootstrap")
+                T_v = T0.copy()
+                T_v[:3, :3] = T0[:3, :3] @ _R_axis(axis, sign * a)
+                try:
+                    self.move(matrix_m_to_pose_fr5(T_v))
+                except Exception as e:
+                    self.log_warn(f"bootstrap: view {i}/{n_views} {label}: move failed: {e}")
+                    self.progress({'phase': 'bootstrap', 'index': i, 'total': n_views,
+                                   'label': label, 'ok': False, 'reason': f'move failed: {e}'})
+                    continue
+                seen = self.detect()
+                if seen is None:
+                    self.log_warn(f"bootstrap: view {i}/{n_views} {label}: tag not seen, skipped")
+                    self.progress({'phase': 'bootstrap', 'index': i, 'total': n_views,
+                                   'label': label, 'ok': False, 'reason': 'tag not seen'})
+                    continue
+                ms = alignment_metrics(seen)
+                ok, msg = self.capture()
+                self.log_info(f"bootstrap: view {i}/{n_views} {label}: "
+                              f"{'captured' if ok else 'capture failed: ' + msg} "
+                              f"(tag xy {ms.xy_offset_m * 1000:.0f} mm, tilt {ms.tilt_deg:.1f} deg)")
+                self.progress({'phase': 'bootstrap', 'index': i, 'total': n_views,
+                               'label': label, 'ok': bool(ok), 'reason': msg,
+                               'xy_mm': ms.xy_offset_m * 1000.0, 'tilt_deg': ms.tilt_deg})
+        finally:
+            # back where the operator left it, whatever happened
+            self.move(matrix_m_to_pose_fr5(T0))
+        n_new = int(self.n_samples()) - since
+        res.n_bootstrap = n_new
+        if n_new < int(cfg.bootstrap_min_samples):
+            raise RuntimeError(
+                f"bootstrap: only {n_new} of {n_views} views captured the tag "
+                f"(need {cfg.bootstrap_min_samples}) — centre the tag in the image "
+                f"and raise the camera, or {MANUAL_PROCEDURE}")
+        T_prov = self.solve(since)
+        if T_prov is None:
+            raise RuntimeError(f"bootstrap: the provisional hand-eye solve failed "
+                               f"over {n_new} samples — {MANUAL_PROCEDURE}")
+        T_prov = np.asarray(T_prov, dtype=np.float64)
+        res.bootstrapped = True
+        res.aim_source = 'bootstrap'
+        t = T_prov[:3, 3] * 1000.0
+        self.log_info(f"bootstrap: provisional T_hc2ee from {n_new} samples: "
+                      f"t = ({t[0]:.0f}, {t[1]:.0f}, {t[2]:.0f}) mm — aiming with it "
+                      f"(clearance margin +{cfg.bootstrap_clearance_extra_m * 1000:.0f} mm)")
+        self.progress({'phase': 'bootstrap', 'index': n_views, 'total': n_views,
+                       'label': 'solved', 'ok': True, 'n_bootstrap': n_new,
+                       't_mm': [float(v) for v in t]})
+        return T_prov
+
+    def _aim(self, T_hc2ee, res: SweepResult):
+        """Square up with the given hand-eye, falling back to a bootstrap
+        one when it diverges (bootstrap 'auto') — returns
+        (T_hc2ee_used, T_cam2tag_square)."""
+        cfg = self.cfg
+        mode = str(cfg.bootstrap or 'auto').lower()
+        if mode not in ('auto', 'always', 'never'):
+            raise RuntimeError(f"bootstrap must be auto / always / never, not {cfg.bootstrap!r}")
+        if T_hc2ee is None and mode == 'never':
+            raise RuntimeError("no aiming hand-eye and bootstrap is 'never' — "
+                               + MANUAL_PROCEDURE)
+        if mode == 'always' or T_hc2ee is None:
+            if T_hc2ee is None:
+                self.log_warn("sweep: no aiming hand-eye — bootstrapping one")
+            T_hc2ee = self._bootstrap(res)
+            return T_hc2ee, self._square_up(T_hc2ee, res)
+        try:
+            return T_hc2ee, self._square_up(T_hc2ee, res)
+        except AimDiverged as e:
+            if mode == 'never':
+                raise RuntimeError(f"{e} — {MANUAL_PROCEDURE}")
+            self.log_warn(f"sweep: {e} — bootstrapping a provisional hand-eye")
+            self.progress({'phase': 'diverged', 'reason': str(e)})
+            T_hc2ee = self._bootstrap(res)
+            try:
+                return T_hc2ee, self._square_up(T_hc2ee, res)
+            except AimDiverged as e2:
+                raise RuntimeError(f"bootstrap hand-eye diverges too ({e2}) — {MANUAL_PROCEDURE}")
+
     # ------------------------------------------------------------------
-    def run(self, T_hc2ee) -> SweepResult:
+    def run(self, T_hc2ee=None) -> SweepResult:
+        """``T_hc2ee`` is the aiming estimate (the file); None = none on
+        hand, bootstrap one (unless ``bootstrap: never``)."""
         cfg = self.cfg
         res = SweepResult()
-        T_hc2ee = np.asarray(T_hc2ee, dtype=np.float64)
+        if T_hc2ee is not None:
+            T_hc2ee = np.asarray(T_hc2ee, dtype=np.float64)
+        else:
+            res.aim_source = 'none'
         try:
-            T_cam2tag_sq = self._square_up(T_hc2ee, res)
+            T_hc2ee, T_cam2tag_sq = self._aim(T_hc2ee, res)
             start_tcp = self.get_tcp()
             res.start_tcp = list(start_tcp)
             T_start = pose_fr5_to_matrix_m(start_tcp)
             T_ab2tag = T_start @ invert_T(T_hc2ee) @ T_cam2tag_sq
 
-            views, rejected = plan_sweep(T_ab2tag, T_hc2ee, T_cam2tag_sq, T_start, cfg)
+            plan_cfg = cfg
+            if res.bootstrapped and cfg.bootstrap_clearance_extra_m > 0:
+                plan_cfg = replace(cfg, min_clearance_m=float(cfg.min_clearance_m)
+                                   + float(cfg.bootstrap_clearance_extra_m))
+            views, rejected = plan_sweep(T_ab2tag, T_hc2ee, T_cam2tag_sq, T_start, plan_cfg)
             res.n_planned = len(views)
             res.n_rejected = len(rejected)
             for v in rejected:
@@ -364,7 +625,8 @@ class SweepRunner:
             self.progress({'phase': 'start', 'n_planned': len(views),
                            'n_rejected': len(rejected),
                            'rejected': dict(res.rejected_reasons),
-                           'start_tcp': res.start_tcp})
+                           'start_tcp': res.start_tcp,
+                           'aim_source': res.aim_source})
 
             # sample 0: the square view itself
             ok, msg = self.capture()

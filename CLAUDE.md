@@ -1696,6 +1696,78 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-18 — Hand camera remounted: the sweep's square-up diverged on the old hand-eye; now it retreats and bootstraps its own aiming estimate
+
+User: "현재 handcam 위치 바꿔서 핸드아이 캘리브레이션 다시할려고하는대
+초기 이동으로 tag 위치인식하지 못함". The 14:23 sweep
+(`log/ros/…/handeye_calib-3.log`): align 1 xy 289 mm / tilt 2.98° at
+z 1.20 m → one 10 cm step → align 2 xy **373.5** mm / tilt **7.73°** →
+second step → `tag lost during square-up (iteration 2)`, 0 captured.
+The step made the error LARGER: the 2026-09-14 `T_hc2ee.npz` describes
+the mount the camera was on THEN, and `compute_target_ee_pose` applies
+the camera-frame correction through it, so a moved camera turns the
+correction the wrong way — the same signature as 2026-09-02's
+180°-spun May file (66→131 mm, 5→8.5°). The samples themselves never
+depended on that file (it only AIMS), but the square-up did, so a
+remount left the auto sweep unusable and the operator with the manual
+jog-and-capture procedure.
+
+Two changes in `handeye_sweep.py`, config `handeye_calib.yaml auto:`:
+
+- **Divergence guard in `_square_up`.** The mm-equivalent error
+  (`xy_mm + 10·tilt_deg`) after every step is compared with the BEST so
+  far: growth by `align_diverge_ratio` 1.25 AND more than
+  `align_diverge_min_growth_mm` 30 (so noise near convergence cannot
+  trip it) is a divergence; a tag lost right after a step is one; and
+  running out of iterations with less than `align_stall_min_improvement`
+  25 % of the initial error removed is one too — the plant showed a
+  90°-spun hand-eye at 1.2 m moves the camera SIDEWAYS to the error, so
+  the number never changes and the old loop handed a wrong hand-eye to
+  the planner after 6 quiet iterations. All three retreat to the pose
+  where the best error was measured (the tag was in view there) and
+  raise `AimDiverged`. Today's numbers trip the first rule after ONE
+  step (319 → 451); the 10 cm / 4° "interim file" case of the existing
+  check does not trip any.
+- **Bootstrap (`bootstrap: auto`, also `always` / `never`).** On
+  divergence — or when no file loads — the runner makes its own aiming
+  estimate at that pose: captures the current view and six ±10°
+  rotations about the FLANGE axes (`BOOTSTRAP_AXES`; pure flange
+  rotations, so they need no hand-eye to plan and move the camera only
+  lever × angle), returns to the start, and `solve(since)` — the node's
+  `calibrate()` over just those samples, `bootstrap_min_samples` 5 —
+  gives a provisional `T_hc2ee`. Aim-grade is all it needs: the
+  square-up re-measures every step, the views re-detect, and the plan's
+  clearance gets `bootstrap_clearance_extra_m` 50 mm on top. The seven
+  samples stay in the set (real samples of the new mount). Precondition
+  `bootstrap_min_depth_m` 0.5: the camera at least that far from the tag
+  so a 10° flange rotation (the tool tip moves a few cm) has room —
+  both real sweeps started at 1.2 m. `never` fails naming the manual
+  procedure; a second divergence with the bootstrap estimate does too.
+  Progress phases `diverged` / `bootstrap`; `SweepResult.aim_source`,
+  `bootstrapped`, `n_bootstrap`, `diverged`; the start event carries
+  `aim_source`; both UI fronts render them.
+
+Verified offline: `check_handeye_sweep.py` 36 → **71** — the fake solve
+is the real `cv2.calibrateHandEye` over the fake's (T_ab2ee, T_cam2tag)
+pairs with 0.7° / 3 mm per-frame noise: against a quarter-turned +
+15 cm-moved camera the file diverges (or stalls at 1.2 m), the arm is
+back at the start with the tag in view, `never` names the procedure and
+captures nothing; `auto` captures 7/7 bootstrap views at both 0.55 and
+1.2 m starts, the provisional hand-eye is within **40 mm / 3.7°** of the
+truth (worst of 6 seeds; the file was 155 mm / 90°), the square-up then
+converges in 3–6 iterations and every seed ends with 21–23 samples, no
+capture off-tag, tool ≥ 189 mm above the plate, arm back at the start;
+`always` and no-file bootstrap; a 0.30 m start is refused before any
+bootstrap move. A scan of mount changes: spins ≥ 90°, tilts ≥ 45° are
+all caught; a 45° spin and pure translations of 0.3–0.5 m still converge
+and are left alone. `check_task_list_ui.py` 85 → 86, `check_web_ui.py`
+106 → 109. Not run on the robot: restart the calibration launch
+(`use_handeye_calib:=true`), drive hand_cam over cross tag 0 from
+~0.6–1.2 m up, Auto-sample, watch for `sweep: align 2: … WORSE …
+retreating`, then `bootstrap: provisional T_hc2ee from 7 samples`, then
+the normal `N views planned`; `Compute & save` afterwards. Rename the
+09-14 file `T_hc2ee_2026-09-14_old_mount.npz` when the new one is in.
+
 ### 2026-09-15 — Web Task combo: the dropdown showed ONE task; now a real dropdown that always lists them all
 
 User (pinyin): "下拉框中只有一个" — the Task tab's task dropdown offered a

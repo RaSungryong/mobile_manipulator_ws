@@ -403,10 +403,31 @@ class UiController:
             patch['last'] = (
                 f"squaring up: iteration {ev.get('iteration')}, "
                 f"xy {ev.get('xy_mm', 0):.1f} mm, tilt {ev.get('tilt_deg', 0):.2f}°")
+        elif phase == 'diverged':
+            self.append_log(f"[handeye] {ev.get('reason', 'square-up diverged')} — "
+                            "bootstrapping a provisional hand-eye")
+            patch['last'] = 'square-up diverged (camera remounted?) — bootstrapping'
+        elif phase == 'bootstrap':
+            idx, total = ev.get('index', 0), ev.get('total', 0)
+            ok = ev.get('ok')
+            if ev.get('label') == 'solved':
+                t = ev.get('t_mm') or [0, 0, 0]
+                self.append_log(f"[handeye] bootstrap: provisional hand-eye from "
+                                f"{ev.get('n_bootstrap')} samples, t = ({t[0]:.0f}, {t[1]:.0f}, {t[2]:.0f}) mm")
+                patch['last'] = f"bootstrap: solved from {ev.get('n_bootstrap')} samples — squaring up"
+            elif ok is None:
+                patch['last'] = f"bootstrap: {total} views about the flange axes (tag at {ev.get('z_m', 0):.2f} m)"
+            else:
+                patch['last'] = (f"bootstrap: {idx}/{total} {ev.get('label', '')} — "
+                                 f"{'captured' if ok else 'skipped: ' + str(ev.get('reason', ''))}")
+                if not ok:
+                    self.append_log(f"[handeye] bootstrap view {idx}/{total} "
+                                    f"{ev.get('label', '')}: {ev.get('reason', '')}")
         elif phase == 'start':
             self.append_log(
                 f"[handeye] sweep: {ev.get('n_planned')} views planned, "
-                f"{ev.get('n_rejected')} rejected {ev.get('rejected') or ''}")
+                f"{ev.get('n_rejected')} rejected {ev.get('rejected') or ''}"
+                + (" (aimed by the bootstrap hand-eye)" if ev.get('aim_source') == 'bootstrap' else ''))
             patch['last'] = f"sweep: 0/{ev.get('n_planned')} views"
         elif phase == 'sample':
             idx, total = ev.get('index', 0), ev.get('total', 0)

@@ -38,6 +38,20 @@
 > the file now in use. Still not a proper calibration: `handeye_calib` on
 > this robot remains the real fix.
 
+> ⚠️ **2026-09-18 — the hand camera was MOVED, so the 09-14 file describes
+> the OLD mount and is only the aiming estimate until `compute` overwrites
+> it.** First sweep attempt that afternoon: the square-up DIVERGED (xy
+> 289 → 373 mm, tilt 3.0 → 7.7°, tag lost on the second step) — the
+> 09-02 signature again, a different mount. The sweep now catches that
+> (retreats to the pose where the tag was seen) and **bootstraps its own
+> aiming hand-eye**: it captures the start view and six ±10° rotations
+> about the flange axes, solves a provisional T_hc2ee from just those,
+> squares up with it and runs the normal sweep (`handeye_calib.yaml
+> auto.bootstrap: auto`). Nothing to configure after a remount — start
+> the sweep from ~0.6–1.2 m above the tag with the tag in view, as before.
+> `compute` then writes the real file. Keep the 09-14 file as
+> `T_hc2ee_2026-09-14_old_mount.npz` once the new one is in.
+
 This directory holds the hand-eye calibration result that the locator
 node loads at startup.
 

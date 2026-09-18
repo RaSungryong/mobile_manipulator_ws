@@ -51,6 +51,13 @@ rosrun path_tag_locator generate_calibration_artifacts.py --lift-mm 150
   시작 자세로 돌아온다(플랜지·비전 팁이 정반 위 12 cm 이상, 시작점
   반경 30 cm, 도달 1.25 m 이내인 뷰만 실행). 그 뒤 "Compute & save".
   이후 캘리브레이션 노드 재시작 + `generate_calibration_artifacts.py`.
+  **카메라를 옮긴 뒤(2026-09-18)** 파일의 hand-eye는 옛 마운트 것이라
+  정렬이 발산한다(xy 289→373 mm, 두 번째 스텝에 태그 상실). 이제 sweep이
+  이를 감지해 태그가 보이던 자세로 되돌아간 뒤, 그 자리에서 플랜지 축
+  ±10° 회전 6자세를 스스로 촬영해 임시 hand-eye를 풀고 그것으로 정렬·
+  sweep을 진행한다(`handeye_calib.yaml auto.bootstrap: auto`). 시작
+  자세는 태그 위 0.5 m 이상(평소처럼 0.6–1.2 m)이면 된다. 끝나면
+  "Compute & save"가 진짜 파일을 쓴다.
 
 ## 1. 실행 (순서 고정)
 

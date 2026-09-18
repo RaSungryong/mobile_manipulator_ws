@@ -122,8 +122,15 @@ roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
 # Safety rules and the progress topic: path_tag_locator/handeye_sweep.py,
 # config/handeye_calib.yaml `auto:`. robot_ui: Calibration tab, Hand-eye
 # group ("Auto-sample (sweep)").
+# After a camera REMOUNT the file on disk describes the old mount and the
+# square-up diverges; since 2026-09-18 the sweep detects that (retreats
+# to the pose where the tag was seen) and bootstraps a provisional
+# aiming hand-eye from six +/-10 deg flange rotations at the start pose
+# (`auto.bootstrap: auto`), then squares up and sweeps with it — start
+# >= 0.5 m above the tag (0.6-1.2 m is normal) so those rotations have
+# room. `compute` afterwards writes the real file as usual.
 rosservice call /handeye_calib/auto_sample "{}"
-rostopic echo /handeye_calib/progress             # align / start / sample / finished
+rostopic echo /handeye_calib/progress             # align / diverged / bootstrap / start / sample / finished
 # rosservice call /handeye_calib/cancel    "{}"   # stop after the current move
 
 # OR move the arm by hand (teach pendant / robot_ui jog) so the hand-cam

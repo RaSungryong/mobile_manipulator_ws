@@ -471,6 +471,18 @@ def part_a():
                                       'ok': False, 'reason': 'tag not seen', 'n_captured': 1, 'n_skipped': 1, 'n_samples': 2})
         check(c.ui()['handeye']['last'].startswith('sweep: 2/24') and c.ui()['handeye']['state'] == 'samples: 2',
               'sweep progress rendered')
+        bridge.handeye_progress.emit({'phase': 'diverged', 'reason': 'the aiming hand-eye makes no progress', 'n_samples': 2})
+        check(c.ui()['handeye']['last'].startswith('square-up diverged') and
+              any('makes no progress — bootstrapping' in l for l in sink.logs()), 'divergence rendered + logged')
+        bridge.handeye_progress.emit({'phase': 'bootstrap', 'index': 2, 'total': 7, 'label': 'rx-', 'ok': True,
+                                      'reason': 'sample 4', 'n_samples': 4})
+        check(c.ui()['handeye']['last'] == 'bootstrap: 2/7 rx- — captured' and c.ui()['handeye']['state'] == 'samples: 4',
+              'bootstrap view rendered')
+        bridge.handeye_progress.emit({'phase': 'bootstrap', 'index': 7, 'total': 7, 'label': 'solved', 'ok': True,
+                                      'n_bootstrap': 7, 't_mm': [26.3, 165.2, -157.1], 'n_samples': 9})
+        check(c.ui()['handeye']['last'].startswith('bootstrap: solved from 7 samples') and
+              any('provisional hand-eye from 7 samples, t = (26, 165, -157) mm' in l for l in sink.logs()),
+              'bootstrap solve rendered + logged')
         bridge.handeye = False
         r = c.api_handeye_auto()
         check(r['ok'] is False and not bridge.has('handeye_auto_sample'), 'auto-sample refused while the node is offline')

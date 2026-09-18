@@ -20,12 +20,17 @@ Services:
                            and capture at every view — see
                            path_tag_locator.handeye_sweep. Starts a
                            thread and returns; progress streams on
-                           ~progress (String JSON: align / start /
-                           sample / finished); ~cancel stops it after
-                           the current move. Needs the tag in view
-                           from the current pose, robot_camera_node's
-                           hand_cam detector, and the current T_hc2ee
-                           (aims the sweep only).
+                           ~progress (String JSON: align / diverged /
+                           bootstrap / start / sample / finished);
+                           ~cancel stops it after the current move.
+                           Needs the tag in view from the current
+                           pose and robot_camera_node's hand_cam
+                           detector. The current T_hc2ee only AIMS
+                           the sweep; since 2026-09-18 a file that
+                           diverges the square-up (camera remounted)
+                           or is missing makes the sweep bootstrap a
+                           provisional one from six small flange
+                           rotations at the start pose (auto: bootstrap).
   ~cancel      (Trigger) : stop a running auto_sample.
 
 Parameters (under ``~`` namespace, see ``config/handeye_calib.yaml``):
@@ -274,10 +279,16 @@ class HandeyeCalibNode:
             return TriggerResponse(success=False, message="a sweep is already running")
         try:
             T_hc2ee = load_T_hc2ee(self.auto_hand_eye_npz)
+            aim_note = f"aim: {self.auto_hand_eye_npz}"
         except Exception as e:
-            return TriggerResponse(success=False,
-                                   message=f"cannot load the current hand-eye ({e}); "
-                                           "the sweep needs it to aim")
+            if str(self.sweep_cfg.bootstrap).lower() == 'never':
+                return TriggerResponse(success=False,
+                                       message=f"cannot load the current hand-eye ({e}); "
+                                               "the sweep needs it to aim (bootstrap: never)")
+            rospy.logwarn("handeye_calib: cannot load the aiming hand-eye (%s) — "
+                          "the sweep will bootstrap one", e)
+            T_hc2ee = None
+            aim_note = "aim: none on file, bootstrapping"
         ok, why = self.tcp_client.wait_for_node(timeout_s=3.0)
         if not ok:
             return TriggerResponse(success=False, message=why)
@@ -294,6 +305,8 @@ class HandeyeCalibNode:
             log_info=lambda m: rospy.loginfo("handeye_calib: %s", m),
             log_warn=lambda m: rospy.logwarn("handeye_calib: %s", m),
             progress=self._publish_progress,
+            n_samples=lambda: len(self.samples),
+            solve=self._solve_provisional,
         )
 
         def _worker():
@@ -309,8 +322,26 @@ class HandeyeCalibNode:
             success=True,
             message=(f"sweep started: up to {cfg.max_samples} views, distances "
                      f"{cfg.distances_m} m, tilts {cfg.tilts_deg} deg, spins "
-                     f"{cfg.spins_deg} deg; progress on "
-                     f"{rospy.resolve_name('~progress')}"))
+                     f"{cfg.spins_deg} deg; {aim_note} (bootstrap: {cfg.bootstrap}); "
+                     f"progress on {rospy.resolve_name('~progress')}"))
+
+    def _solve_provisional(self, since):
+        """The sweep's bootstrap: a hand-eye over the samples captured from
+        index ``since`` on (the six flange rotations + the start view),
+        good to cm / degrees — enough to AIM. None when it fails."""
+        with self._sample_lock:
+            samples = list(self.samples[int(since):])
+        try:
+            result = calibrate(samples, tag_id=self.tag_id, tag_size_m=self.tag_size_m,
+                               family=self.tag_family,
+                               min_samples=int(self.sweep_cfg.bootstrap_min_samples))
+        except Exception as e:
+            rospy.logwarn("handeye_calib: bootstrap solve failed: %s", e)
+            return None
+        rospy.loginfo("handeye_calib: bootstrap hand-eye: %s residual %.4f over %d/%d samples",
+                      result.method, result.residual, result.num_samples_used,
+                      result.num_samples_total)
+        return result.T_hc2ee
 
     def _on_cancel(self, _req):
         if not self._sweep_running():
