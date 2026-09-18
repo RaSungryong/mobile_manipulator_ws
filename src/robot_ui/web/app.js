@@ -307,6 +307,7 @@ function renderUi(patch, full) {
   if (full || 'lift_max_mm' in patch) $('num-lift').max = u.lift_max_mm || 343;
   if (full || 'calib' in patch) renderCalib(u.calib || {}, full);
   if (full || 'handeye' in patch) renderHandeye(u.handeye || {});
+  if (full || 'basler_tip' in patch) renderBaslerTip(u.basler_tip || {}, full);
   if (full || 'plugins' in patch) renderPlugins(u.plugins || {});
 }
 
@@ -346,6 +347,19 @@ function renderHandeye(h) {
   $('lbl-handeye-state').textContent = h.state || 'samples: —';
   $('lbl-handeye-last').textContent = h.last || '—';
 }
+
+function renderBaslerTip(b, full) {
+  const dir = $('txt-bt-dir');
+  if (b.dir && (full || !dir.value || document.activeElement !== dir)) dir.value = b.dir;
+  $('lbl-bt-state').textContent = 'hand ' + (b.n_hand || 0) + ' · basler ' + (b.n_basler || 0) + (b.busy ? '   (working…)' : '');
+  $('lbl-bt-last').textContent = b.last || '—';
+  const pre = $('pre-bt-report');
+  pre.textContent = b.report || '';
+  pre.hidden = !b.report;
+  for (const el of document.querySelectorAll('button.bt')) el.disabled = !!b.busy;
+}
+
+function baslerTipArgs() { return $('txt-bt-dir').value.trim(); }
 
 function renderPlugins(p) {
   const sel = $('sel-plugin');
@@ -891,6 +905,14 @@ function init() {
   $('btn-he-load').addEventListener('click', () => call('handeye_load_latest', []).catch(() => {}));
   $('btn-he-reset').addEventListener('click', () => call('handeye_reset', []).catch(() => {}));
   $('btn-he-status').addEventListener('click', () => call('handeye_status', []).catch(() => {}));
+  $('btn-bt-check').addEventListener('click', () => call('basler_tip_check', [baslerTipArgs()]).catch(() => {}));
+  $('btn-bt-hand').addEventListener('click', () => call('basler_tip_capture_hand', [baslerTipArgs()]).catch(() => {}));
+  $('btn-bt-basler').addEventListener('click', () => {
+    const so = $('chk-bt-standoff').checked ? parseFloat($('num-bt-standoff').value) : null;
+    call('basler_tip_capture_basler', [baslerTipArgs(), so]).catch(() => {});
+  });
+  $('btn-bt-status').addEventListener('click', () => call('basler_tip_status', [baslerTipArgs()]).catch(() => {}));
+  $('btn-bt-solve').addEventListener('click', () => call('basler_tip_solve', [baslerTipArgs(), $('txt-bt-exclude').value]).catch(() => {}));
 
   // ---- Scripts ----
   $('btn-plugin-refresh').addEventListener('click', () => call('plugin_refresh', []).catch(() => {}));

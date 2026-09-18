@@ -340,6 +340,13 @@ rosrun chain_calib basler_tip_calib.py status log/chain_calib/basler_tip_<date> 
 rosrun chain_calib basler_tip_calib.py solve  log/chain_calib/basler_tip_<date>   # p_tip / psi, 잔차, jackknife, result.yaml
 ```
 
+**robot_ui에서도 똑같이** (Calibration 탭 → "Basler vision tip" 그룹, web/Qt
+동일): 세션 디렉터리(기본 `log/chain_calib/basler_tip_<날짜>`) → Check →
+Capture hand ×4–6 → Capture Basler ×6–10("standoff first" 체크 시 Keyence
+루프 16.5 mm 먼저) → Status → Solve. 같은 `BaslerTipSession`
+(`chain_calib/basler_tip_ros.py`)이 돌므로 결과·문구가 CLI와 같고, 보고서는
+그룹 아래 상자와 로그에 남는다. 명령행은 `catkin_make` 후 `rosrun`.
+
 읽는 법: `sheet pose … scatter`가 hand_cam 체인 자체의 정확도(모든 것의
 바닥; 스핀 간 불일치가 크면 hand-eye 오차가 드러난 것), `fit … rms`가
 Basler 샘플들의 일관성, `jackknife`가 결과의 불확실도. 결과는 자동 반영되지

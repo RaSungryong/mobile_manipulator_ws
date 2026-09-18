@@ -1020,6 +1020,87 @@ class MainWindow(QMainWindow):
         layout.addWidget(he_box)
         self._handeye_online = None
 
+        # Basler vision tip against the A4 20 mm tag sheet (2026-09-18):
+        # the same chain_calib.basler_tip_ros session the CLI drives.
+        bt_box = QGroupBox('Basler vision tip (Basler ↔ hand_cam, A4 20 mm tag sheet)')
+        bt_layout = QVBoxLayout(bt_box)
+        bt_note = QLabel(
+            'Sheet flat on the plate, base still for the whole session. '
+            '① hand_cam 0.25–0.35 m over the sheet (all 30 tags in view): '
+            'Capture hand ×4–6 with the wrist spun differently each time. '
+            '② Basler over ONE tag: Capture Basler runs the Keyence standoff '
+            'first (16.5 mm), then one lamp-on frame — ×6–10 over different '
+            'tags with the wrist spun 30–60°. ③ Solve → vision tip vs '
+            'robot.yaml (not applied automatically).')
+        bt_note.setWordWrap(True)
+        bt_note.setStyleSheet('color:#888;')
+        bt_layout.addWidget(bt_note)
+        row = QHBoxLayout()
+        row.addWidget(QLabel('session:'))
+        self.txt_bt_dir = QLineEdit()
+        try:
+            self.txt_bt_dir.setText(str(self.bridge.basler_tip_default_dir() or ''))
+        except Exception:       # noqa: BLE001 — a bridge without chain_calib
+            pass
+        row.addWidget(self.txt_bt_dir, 1)
+        bt_layout.addLayout(row)
+        row = QHBoxLayout()
+        self.btn_bt_check = QPushButton('Check')
+        self.btn_bt_check.setToolTip('both cameras see the sheet? Basler field of view, px/mm — nothing saved')
+        self.btn_bt_check.clicked.connect(lambda: self._basler_tip_step('check'))
+        row.addWidget(self.btn_bt_check)
+        self.btn_bt_hand = QPushButton('Capture hand')
+        self.btn_bt_hand.setToolTip('20 hand_cam detection frames at the current pose → sheet pose')
+        self.btn_bt_hand.clicked.connect(lambda: self._basler_tip_step('capture_hand'))
+        row.addWidget(self.btn_bt_hand)
+        self.chk_bt_standoff = QCheckBox('standoff first')
+        self.chk_bt_standoff.setChecked(True)
+        row.addWidget(self.chk_bt_standoff)
+        self.spin_bt_standoff = QDoubleSpinBox()
+        self.spin_bt_standoff.setRange(1.0, 30.0)
+        self.spin_bt_standoff.setDecimals(1)
+        self.spin_bt_standoff.setSingleStep(0.5)
+        self.spin_bt_standoff.setValue(16.5)
+        self.spin_bt_standoff.setSuffix(' mm')
+        row.addWidget(self.spin_bt_standoff)
+        self.btn_bt_basler = QPushButton('Capture Basler')
+        self.btn_bt_basler.setToolTip('Keyence standoff loop (moves the arm a few mm), then one Basler frame')
+        self.btn_bt_basler.clicked.connect(lambda: self._basler_tip_step('capture_basler'))
+        row.addWidget(self.btn_bt_basler)
+        row.addStretch(1)
+        bt_layout.addLayout(row)
+        row = QHBoxLayout()
+        self.btn_bt_status = QPushButton('Status')
+        self.btn_bt_status.clicked.connect(lambda: self._basler_tip_step('status'))
+        row.addWidget(self.btn_bt_status)
+        row.addWidget(QLabel('exclude:'))
+        self.txt_bt_exclude = QLineEdit()
+        self.txt_bt_exclude.setPlaceholderText('b3 h2')
+        self.txt_bt_exclude.setMaximumWidth(120)
+        row.addWidget(self.txt_bt_exclude)
+        self.btn_bt_solve = QPushButton('Solve')
+        self.btn_bt_solve.setToolTip('least squares over the vision tip + image roll; writes result.yaml')
+        self.btn_bt_solve.clicked.connect(lambda: self._basler_tip_step('solve'))
+        row.addWidget(self.btn_bt_solve)
+        row.addStretch(1)
+        bt_layout.addLayout(row)
+        self.lbl_bt_state = QLabel('hand 0 · basler 0')
+        self.lbl_bt_state.setStyleSheet('font-weight:bold;')
+        bt_layout.addWidget(self.lbl_bt_state)
+        self.lbl_bt_last = QLabel('—')
+        self.lbl_bt_last.setWordWrap(True)
+        self.lbl_bt_last.setStyleSheet('color:#888;')
+        bt_layout.addWidget(self.lbl_bt_last)
+        self.txt_bt_report = QPlainTextEdit()
+        self.txt_bt_report.setReadOnly(True)
+        self.txt_bt_report.setMaximumHeight(160)
+        self.txt_bt_report.setStyleSheet('font-family: monospace; font-size: 11px;')
+        self.txt_bt_report.hide()
+        bt_layout.addWidget(self.txt_bt_report)
+        layout.addWidget(bt_box)
+        self._bt_buttons = [self.btn_bt_check, self.btn_bt_hand, self.btn_bt_basler,
+                            self.btn_bt_status, self.btn_bt_solve]
+
         loc_box = QGroupBox('Single tag locate (debug)')
         loc_layout = QVBoxLayout(loc_box)
         lnote = QLabel(
@@ -1055,6 +1136,47 @@ class MainWindow(QMainWindow):
         self._poll_calib_nodes()
         self._refresh_calib_plan_note()
         return tab
+
+    def _basler_tip_step(self, cmd):
+        """One step of the Basler vision-tip measurement on the pool; the
+        report goes to the text box and, line by line, to the log."""
+        session_dir = self.txt_bt_dir.text().strip()
+        standoff = (self.spin_bt_standoff.value()
+                    if cmd == 'capture_basler' and self.chk_bt_standoff.isChecked() else None)
+        exclude = tuple(x for x in self.txt_bt_exclude.text().replace(',', ' ').split() if x)
+        for b in self._bt_buttons:
+            b.setEnabled(False)
+        self.lbl_bt_last.setText(f'{cmd.replace("_", " ")}…')
+
+        def _done(result):
+            for b in self._bt_buttons:
+                b.setEnabled(True)
+            ok, message, extra = (result if isinstance(result, tuple) and len(result) == 3
+                                  else (False, str(result), {}))
+            for line in str(message).splitlines():
+                self.append_log(f'[basler_tip] {line}')
+            self.txt_bt_report.setPlainText(str(message))
+            self.txt_bt_report.setVisible(bool(message))
+            first = str(message).splitlines()[0][:160] if message else ''
+            self.lbl_bt_last.setText(f'{cmd.replace("_", " ")}: {"ok" if ok else "FAILED"} — {first}')
+            if isinstance(extra, dict):
+                if 'n_hand' in extra:
+                    self.lbl_bt_state.setText(f'hand {extra.get("n_hand", 0)} · basler {extra.get("n_basler", 0)}')
+                if extra.get('dir'):
+                    self.txt_bt_dir.setText(str(extra['dir']))
+                if 'p_tip_mm' in extra:
+                    p = extra['p_tip_mm']
+                    self.lbl_bt_last.setText(
+                        f'solve: tip ({p[0]:+.1f}, {p[1]:+.1f}, {p[2]:+.1f}) mm, roll '
+                        f'{extra.get("psi_deg", 0):+.2f}°, fit {extra.get("rms_mm", 0):.1f} mm rms')
+
+        def _err(message):
+            for b in self._bt_buttons:
+                b.setEnabled(True)
+            self.lbl_bt_last.setText(f'{cmd} ERROR: {message}')
+
+        self._run(self.bridge.basler_tip, cmd, session_dir, standoff, exclude,
+                  label=None, on_done=_done, on_error=_err)
 
     def _on_handeye_auto(self):
         if not self.bridge.handeye_online():

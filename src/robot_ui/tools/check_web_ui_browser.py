@@ -303,6 +303,17 @@ async def scenario(cdp, url, bridge, holder):
                             "document.getElementById('lbl-calib-state').textContent.startsWith('finished OK')", 5.0),
           'counts + state from the session')
     check(await cdp.js("document.getElementById('log').textContent.includes('[calib] tag 106: FAIL')"), 'calib failure in the log')
+    # Basler vision tip group (2026-09-18): dir pre-filled, a click carries the dir + standoff, the report renders
+    check(await cdp.js("document.getElementById('txt-bt-dir').value") == '/ws/log/chain_calib/basler_tip_20260918',
+          'Basler tip: session dir pre-filled from the shared ui state')
+    await cdp.js("document.getElementById('num-bt-standoff').value = '17'; document.getElementById('btn-bt-basler').click()")
+    check(await wait_js(cdp, "document.getElementById('lbl-bt-state').textContent.startsWith('hand 1 · basler 1')", 3.0)
+          and bridge.has('basler_tip', 'capture_basler', '/ws/log/chain_calib/basler_tip_20260918', 17.0, ()),
+          'Basler tip: Capture Basler → bridge with the dir and the 17 mm standoff; counts rendered')
+    await cdp.js("document.getElementById('btn-bt-solve').click()")
+    check(await wait_js(cdp, "document.getElementById('lbl-bt-last').textContent.startsWith('solve: tip (+3.1')", 3.0)
+          and await cdp.js("!document.getElementById('pre-bt-report').hidden && document.getElementById('pre-bt-report').textContent.includes('fit over 6')"),
+          'Basler tip: Solve line + the multi-line report shown')
     await cdp.js("document.getElementById('btn-he-capture').click()")
     check(await wait_js(cdp, "document.getElementById('lbl-handeye-state').textContent === 'samples: 3'", 3.0),
           'hand-eye capture → status line')

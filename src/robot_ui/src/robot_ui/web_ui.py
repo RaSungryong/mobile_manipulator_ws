@@ -239,10 +239,18 @@ class UiController:
                 'last': '—',
             },
             'handeye': {'online': None, 'state': 'samples: —', 'last': '—'},
+            # Basler vision tip against the A4 20 mm sheet (2026-09-18)
+            'basler_tip': {'dir': '', 'n_hand': 0, 'n_basler': 0, 'last': '—',
+                           'report': '', 'busy': False},
             'plugins': {'dir': self.plugins.plugin_dir, 'names': [],
                         'running': False},
             'lift_max_mm': LIFT_MAX_MM,
         }
+
+        try:
+            self._ui['basler_tip']['dir'] = str(self.bridge.basler_tip_default_dir() or '')
+        except Exception:           # noqa: BLE001 — a bridge without chain_calib
+            pass
 
         self._connect_bridge()
         self.append_log('[UI] ready — this page owns no device; every action '
@@ -993,6 +1001,55 @@ class UiController:
                 + message.split('\n')[0])}})
         self.api_handeye_status()
         return self._result(res)
+
+    # ---------- Basler vision tip (chain_calib.basler_tip_ros) ----------
+    def _basler_tip_step(self, cmd, session_dir='', standoff_mm=None, exclude=()):
+        """One step on the pool; the report goes to the shared ui state
+        (every tab sees it) and, line by line, to the log."""
+        session_dir = (session_dir or '').strip() or self._ui['basler_tip'].get('dir') \
+            or self.bridge.basler_tip_default_dir()
+        self._patch_ui({'basler_tip': {'busy': True, 'dir': session_dir,
+                                       'last': f'{cmd.replace("_", " ")}…'}})
+        try:
+            res = self._run(self.bridge.basler_tip, cmd, session_dir, standoff_mm, exclude,
+                            label=None).result()
+        except Exception as e:      # noqa: BLE001
+            self._patch_ui({'basler_tip': {'busy': False, 'last': f'{cmd} ERROR: {e}'}})
+            return {'ok': False, 'message': str(e)}
+        ok, message, extra = (res if isinstance(res, tuple) and len(res) == 3
+                              else (False, str(res), {}))
+        for line in str(message).splitlines():
+            self.append_log(f'[basler_tip] {line}')
+        patch = {'busy': False, 'report': str(message),
+                 'last': f'{cmd.replace("_", " ")}: {"ok" if ok else "FAILED"} — '
+                         + str(message).splitlines()[0][:160]}
+        if isinstance(extra, dict):
+            for k in ('dir', 'n_hand', 'n_basler'):
+                if k in extra:
+                    patch[k] = extra[k]
+            if 'p_tip_mm' in extra:
+                p = extra['p_tip_mm']
+                patch['last'] = (f'solve: tip ({p[0]:+.1f}, {p[1]:+.1f}, {p[2]:+.1f}) mm, '
+                                 f'roll {extra.get("psi_deg", 0):+.2f}°, fit {extra.get("rms_mm", 0):.1f} mm rms')
+        self._patch_ui({'basler_tip': patch})
+        return {'ok': bool(ok), 'message': str(message)}
+
+    def api_basler_tip_check(self, session_dir=''):
+        return self._basler_tip_step('check', session_dir)
+
+    def api_basler_tip_capture_hand(self, session_dir=''):
+        return self._basler_tip_step('capture_hand', session_dir)
+
+    def api_basler_tip_capture_basler(self, session_dir='', standoff_mm=None):
+        so = None if standoff_mm in (None, '', False) else float(standoff_mm)
+        return self._basler_tip_step('capture_basler', session_dir, so)
+
+    def api_basler_tip_status(self, session_dir=''):
+        return self._basler_tip_step('status', session_dir)
+
+    def api_basler_tip_solve(self, session_dir='', exclude=''):
+        ex = tuple(x.strip() for x in str(exclude or '').replace(',', ' ').split() if x.strip())
+        return self._basler_tip_step('solve', session_dir, None, ex)
 
     def api_handeye_load_latest(self):
         res = self._run(self.bridge.handeye_load_latest,

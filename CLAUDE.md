@@ -1799,6 +1799,19 @@ frame centre and the image x angle; least squares over (p_tip, ψ) with
 `check` / `capture-hand` / `capture-basler [--standoff 16.5]` / `status`
 / `solve` → `result.yaml` with `vision_tip_offset_mm`; NOT applied
 (robot.yaml, set_tool_tcp.py, the planner URDF must move together).
+**Runnable from robot_ui too (user: "이 모든 것은 ui 로 실행할수있게")**:
+the ROS side moved into `chain_calib/basler_tip_ros.py`
+(`BaslerTipSession.check / capture_hand / capture_basler(standoff_mm) /
+status / solve`, each `(ok, report, extra)`), the CLI is a thin wrapper,
+`RosBridge.basler_tip(cmd, dir, standoff, exclude)` lazy-imports it, and
+both fronts got a Calibration-tab group "Basler vision tip": session dir
+(pre-filled `log/chain_calib/basler_tip_<date>`), Check / Capture hand /
+standoff-first box + target / Capture Basler / Status / exclude / Solve,
+counts line, last line, the multi-line report in a box and line by line
+in the log; the solve line shows the tip and roll. `check_web_ui` 112 →
+118, `check_task_list_ui` 87 → 93, `check_web_ui_browser` 84 → 87 (its two
+pre-existing failures — "TASK + CHARGE chips", "standoff line" — belong
+to the standoff 16.5 UI edits of the other session, not this).
 `check_basler_tip.py` 11: exact at zero noise, 0.15 mm / 0.04° worst
 under 0.3 px hand_cam + 2 px Basler + 0.02° arm noise, a rendered
 5472 × 3648 frame (aruco 36h11 bitmap is upside down vs dt_apriltags'

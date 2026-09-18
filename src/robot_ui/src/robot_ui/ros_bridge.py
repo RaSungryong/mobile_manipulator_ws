@@ -839,6 +839,47 @@ class RosBridge:
     # ==========================================================
     # SERVICE HELPERS
     # ==========================================================
+    # ------------------------------------------------------------------
+    # BASLER VISION TIP (chain_calib.basler_tip_ros, 2026-09-18)
+    # ------------------------------------------------------------------
+    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=()):
+        """One step of the vision-tip measurement against the A4 20 mm tag
+        sheet: 'check' | 'capture_hand' | 'capture_basler' | 'status' |
+        'solve'. Runs the SAME BaslerTipSession the command-line tool
+        does, on this node. Returns (ok, message, extra) — message is the
+        multi-line report, extra the counts (+ the solve numbers).
+
+        BLOCKS — worker thread. capture_basler with standoff_mm publishes
+        /arm/standoff (moves the arm a few mm, the Keyence loop); nothing
+        else moves anything. chain_calib is imported lazily so the UI
+        starts without it built."""
+        try:
+            from chain_calib.basler_tip_ros import BaslerTipSession, default_session_dir
+        except Exception as e:      # noqa: BLE001
+            return False, f'chain_calib not importable: {e} (catkin_make?)', {}
+        try:
+            S = BaslerTipSession(session_dir or default_session_dir())
+            if cmd == 'check':
+                return S.check()
+            if cmd == 'capture_hand':
+                return S.capture_hand()
+            if cmd == 'capture_basler':
+                return S.capture_basler(standoff_mm)
+            if cmd == 'status':
+                return S.status(exclude)
+            if cmd == 'solve':
+                return S.solve(exclude)
+            return False, f'unknown basler_tip command {cmd!r}', {}
+        except Exception as e:      # noqa: BLE001
+            return False, f'basler_tip {cmd} failed: {type(e).__name__}: {e}', {}
+
+    def basler_tip_default_dir(self):
+        try:
+            from chain_calib.basler_tip_ros import default_session_dir
+            return default_session_dir()
+        except Exception:           # noqa: BLE001
+            return ''
+
     def _call_trigger(self, name, timeout):
         try:
             rospy.wait_for_service(name, timeout=min(5.0, timeout))

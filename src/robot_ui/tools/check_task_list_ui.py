@@ -283,6 +283,31 @@ def main():
           'Cancel sweep calls handeye_cancel')
     check(click(ctab, 'Capture here') and (QTest.qWait(150) or True) and ('handeye_capture',) in bridge.calls,
           'Capture here calls handeye_capture')
+    # Basler vision tip group (2026-09-18)
+    bridge.basler_tip = lambda cmd, d, so, ex: (bridge.calls.append(('basler_tip', cmd, d, so, tuple(ex))) or
+                                                (True, 'vision tip (flange frame): x +3.1  y -257.4  z +230.9 mm\nfit 1.2 mm',
+                                                 {'dir': d, 'n_hand': 4, 'n_basler': 6, 'p_tip_mm': [3.1, -257.4, 230.9],
+                                                  'psi_deg': 1.75, 'rms_mm': 1.2} if cmd == 'solve' else
+                                                 {'dir': d, 'n_hand': 2, 'n_basler': 0}))
+    win.txt_bt_dir.setText('/tmp/bt')
+    bt = win.txt_bt_dir.parentWidget()      # the Basler-tip QGroupBox
+    check(click(bt, 'Capture hand') and (QTest.qWait(300) or True) and ('basler_tip', 'capture_hand', '/tmp/bt', None, ()) in bridge.calls,
+          'Capture hand → bridge.basler_tip(capture_hand, dir)')
+    app.processEvents()
+    check(win.lbl_bt_state.text() == 'hand 2 · basler 0', f'counts follow the reply: {win.lbl_bt_state.text()!r}')
+    win.spin_bt_standoff.setValue(17.0)
+    check(click(bt, 'Capture Basler') and (QTest.qWait(300) or True) and ('basler_tip', 'capture_basler', '/tmp/bt', 17.0, ()) in bridge.calls,
+          'Capture Basler passes the standoff spinbox value')
+    win.chk_bt_standoff.setChecked(False)
+    check(click(bt, 'Capture Basler') and (QTest.qWait(300) or True) and ('basler_tip', 'capture_basler', '/tmp/bt', None, ()) in bridge.calls,
+          'standoff box unticked → no standoff')
+    win.txt_bt_exclude.setText('b3 h2')
+    check(click(bt, 'Solve') and (QTest.qWait(300) or True) and ('basler_tip', 'solve', '/tmp/bt', None, ('b3', 'h2')) in bridge.calls,
+          'Solve passes the excludes')
+    app.processEvents()
+    check(win.lbl_bt_last.text().startswith('solve: tip (+3.1, -257.4, +230.9) mm, roll +1.75°')
+          and '[basler_tip] fit 1.2 mm' in win.log_view.toPlainText() and win.btn_bt_solve.isEnabled(),
+          f'solve line, report lines in the log, buttons re-enabled: {win.lbl_bt_last.text()!r}')
     check(click(ctab, 'Compute && save T_hc2ee') and (QTest.qWait(150) or True) and ('handeye_compute',) in bridge.calls,
           'Compute calls handeye_compute')
     for e in [{'phase': 'align', 'iteration': 2, 'xy_mm': 4.2, 'tilt_deg': 0.8, 'n_samples': 0},

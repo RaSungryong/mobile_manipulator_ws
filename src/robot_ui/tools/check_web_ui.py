@@ -219,6 +219,21 @@ class FakeBridge:
     def handeye_cancel(self):
         self.record('handeye_cancel'); return True, 'ok'
 
+    # Basler vision tip (2026-09-18): the bridge runs chain_calib's session
+    def basler_tip_default_dir(self):
+        return '/ws/log/chain_calib/basler_tip_20260918'
+
+    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=()):
+        self.record('basler_tip', cmd, session_dir, standoff_mm, tuple(exclude))
+        n = {'check': (0, 0), 'capture_hand': (1, 0), 'capture_basler': (1, 1), 'status': (4, 6), 'solve': (4, 6)}[cmd]
+        extra = {'dir': session_dir, 'n_hand': n[0], 'n_basler': n[1]}
+        if cmd == 'solve':
+            extra.update(p_tip_mm=[3.1, -257.4, 230.9], psi_deg=1.75, rms_mm=1.2, max_mm=2.4)
+            return True, 'vision tip (flange frame): x +3.1  y -257.4  z +230.9 mm\nfit over 6 basler samples: 1.2 mm rms', extra
+        if cmd == 'capture_basler' and standoff_mm is None:
+            return False, 'no tag in the Basler frame', extra
+        return True, f'{cmd} line 1\nline 2', extra
+
     def handeye_reset(self):
         self.record('handeye_reset'); return True, 'ok'
 
@@ -483,6 +498,25 @@ def part_a():
         check(c.ui()['handeye']['last'].startswith('bootstrap: solved from 7 samples') and
               any('provisional hand-eye from 7 samples, t = (26, 165, -157) mm' in l for l in sink.logs()),
               'bootstrap solve rendered + logged')
+        # ---- Basler vision tip ----
+        check(c.ui()['basler_tip']['dir'] == '/ws/log/chain_calib/basler_tip_20260918', 'session dir pre-filled from the bridge')
+        r = c.api_basler_tip_check('')
+        check(r['ok'] and bridge.has('basler_tip', 'check', '/ws/log/chain_calib/basler_tip_20260918', None, ())
+              and c.ui()['basler_tip']['report'] == 'check line 1\nline 2'
+              and any('[basler_tip] line 2' in l for l in sink.logs()), 'Check → bridge with the default dir; report + log lines')
+        r = c.api_basler_tip_capture_hand('/tmp/other')
+        check(bridge.has('basler_tip', 'capture_hand', '/tmp/other', None, ()) and c.ui()['basler_tip']['n_hand'] == 1
+              and c.ui()['basler_tip']['dir'] == '/tmp/other', 'Capture hand with a typed dir; counts + dir follow the reply')
+        r = c.api_basler_tip_capture_basler('/tmp/other', 16.5)
+        check(bridge.has('basler_tip', 'capture_basler', '/tmp/other', 16.5, ()) and c.ui()['basler_tip']['n_basler'] == 1,
+              'Capture Basler passes the standoff')
+        r = c.api_basler_tip_capture_basler('/tmp/other', None)
+        check(r['ok'] is False and c.ui()['basler_tip']['last'].startswith('capture basler: FAILED'), 'a failed capture is reported as FAILED')
+        r = c.api_basler_tip_solve('/tmp/other', 'b3, h2')
+        check(bridge.has('basler_tip', 'solve', '/tmp/other', None, ('b3', 'h2'))
+              and c.ui()['basler_tip']['last'].startswith('solve: tip (+3.1, -257.4, +230.9) mm, roll +1.75°')
+              and c.ui()['basler_tip']['busy'] is False, 'Solve with excludes; the tip line')
+
         bridge.handeye = False
         r = c.api_handeye_auto()
         check(r['ok'] is False and not bridge.has('handeye_auto_sample'), 'auto-sample refused while the node is offline')

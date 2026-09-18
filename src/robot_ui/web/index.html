@@ -225,6 +225,29 @@
             <div class="detail" id="lbl-handeye-last">—</div>
           </div>
           <div class="group">
+            <div class="group-title">Basler vision tip (Basler ↔ hand_cam, A4 20 mm tag sheet)</div>
+            <p class="note">Sheet flat on the plate, base still for the whole session. ① hand_cam 0.25–0.35 m over the sheet (all 30 tags in view): Capture hand ×4–6 with the wrist spun differently each time. ② Basler over ONE tag: Capture Basler runs the Keyence standoff first (16.5 mm), then one lamp-on frame — ×6–10 over different tags with the wrist spun 30–60°. ③ Solve → vision tip vs robot.yaml (not applied automatically). Same code as `rosrun chain_calib basler_tip_calib.py`.</p>
+            <div class="row">
+              <label>session:</label>
+              <input type="text" id="txt-bt-dir" class="grow" title="session directory (default log/chain_calib/basler_tip_&lt;date&gt;)">
+            </div>
+            <div class="row">
+              <button id="btn-bt-check" class="bt" title="both cameras see the sheet? Basler field of view, px/mm — nothing saved">Check</button>
+              <button id="btn-bt-hand" class="bt" title="20 hand_cam detection frames at the current pose → sheet pose">Capture hand</button>
+              <label><input type="checkbox" id="chk-bt-standoff" checked> standoff first</label>
+              <label>target [mm] <input type="number" id="num-bt-standoff" min="1" max="30" step="0.5" value="16.5" style="width:5em"></label>
+              <button id="btn-bt-basler" class="bt" title="Keyence standoff loop (moves the arm a few mm), then one Basler frame">Capture Basler</button>
+            </div>
+            <div class="row">
+              <button id="btn-bt-status" class="bt">Status</button>
+              <label>exclude: <input type="text" id="txt-bt-exclude" style="width:8em" placeholder="b3 h2"></label>
+              <button id="btn-bt-solve" class="bt" title="least squares over the vision tip + image roll; writes result.yaml">Solve</button>
+            </div>
+            <div class="bold" id="lbl-bt-state">hand 0 · basler 0</div>
+            <div class="detail" id="lbl-bt-last">—</div>
+            <pre id="pre-bt-report" class="report" hidden></pre>
+          </div>
+          <div class="group">
             <div class="group-title">Single tag locate (debug)</div>
             <p class="note">Base parked on the target floor tag, hand cam already viewing a cross tag (drive the arm from the Arm tab or a plan seed first).</p>
             <div class="row">
