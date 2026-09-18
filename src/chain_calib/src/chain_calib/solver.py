@@ -1,39 +1,37 @@
 """
 solver.py
 =========
-Measure the error of the front_cam <-> hand_cam transform chain with two
-floor tags laid a known distance apart, and fit a constant correction
-(2026-09-15, user request: "T_fc2hc 사이의 tf들은 블랙박스 — 이상값과
-실측값의 오차를 보정값으로").
+Measure the error of the front_cam <-> hand_cam transform chain against
+the printed A0 tag sheet (``sheet.py``) and fit a constant correction
+(2026-09-15 user request: "T_fc2hc 사이의 tf들은 블랙박스 — 이상값과
+실측값의 오차를 보정값으로"; 2026-09-18: the sheet replaced two hand-laid
+tags as the ground truth, and the two-tag mode was removed).
 
 The chain the locator uses (chain.py, T_X2Y = pose of Y in X):
 
     T_A2B = inv(T_hc2A) · T_hc2ee · T_ee2ab · T_ab2mb · T_mb2fc · T_fc2B
                           \\_____________ T_hc2fc(model) ______________/
 
-With tag A under hand_cam and tag B under front_cam laid on ONE floor
-with their edges collinear (a straightedge) and the centre distance d
-measured, the TRUE T_A2B is known: R = Rz(k·90°), t = d·(cos a, sin a, 0)
-with a a multiple of 90° (which multiples: whichever the raw chain is
-closest to — its error is degrees, not a quarter turn). Every arm pose i
-then gives a MEASURED T_hc2fc:
+Every tag of the sheet is a pure translation of the sheet frame W, so
+each camera observes W directly (multi-tag PnP) and every arm pose i
+gives a MEASURED T_hc2fc with no other truth needed:
 
-    S_i = T_hc2A_i · T_A2B_true · inv(T_fc2B_i)
+    S_i = T_hc2W_i · inv(T_fc2W_i)
 
 against the model M_i = H · A_i · B with H = T_hc2ee, A_i = T_ee2ab_i
 (arm FK), B = T_ab2mb(lift) · T_mb2fc. The base does not move, so B and
-T_fc2B are the same for every sample and the arm poses are the only
+T_fc2W are the same for every sample and the arm poses are the only
 excitation — exactly the AX = YB (robot-world / hand-eye) problem:
 
     inv(H) · S_i = D · (A_i · B) · F
 
 with D a constant correction on the HAND side (T_hc2ee' = H · D, i.e. the
 hand-eye is wrong) and F a constant correction on the BASE side
-(B' = B · F: the arm mount T_ab2mb, T_mb2fc, or the front tag's
-observation — everything after the arm, indistinguishable from one base
-pose). A single arm pose cannot tell D from F; a set of poses with
-rotation diversity (tilts about two axes + spins, as the hand-eye sweep
-produces) can, because D sits BEFORE the varying A_i and F after it.
+(B' = B · F: the arm mount T_ab2mb, T_mb2fc, or front_cam's observation —
+everything after the arm, indistinguishable from one base pose). A
+single arm pose cannot tell D from F; a set of poses with rotation
+diversity (tilts about two axes + spins) can, because D sits BEFORE the
+varying A_i and F after it.
 
 ``fit_corrections`` fits three models and reports each one's residual:
 hand only (F = I), base only (D = I), joint. Read the attribution off the
@@ -41,11 +39,15 @@ residuals: if the hand-only fit already reaches the noise floor, the
 error is the hand-eye; if only the joint fit does, both sides carry
 error; if the base-only fit is as good as the hand-only one the poses
 did not have enough rotation diversity and the split is undetermined.
+(The handoff document's `X_fixed` / `Y_fixed` / `XY` are hand / base /
+joint.) ``evaluate`` applies a fitted D, F to held-out samples;
+``pair_errors`` is the user's metric — a tag pair's T_A2B through the
+chain vs the sheet's truth — before and after a correction.
 
 Pure numpy / scipy — no ROS. ``scripts/chain_calib.py`` collects the
 samples (operator-jogged views, one ``capture`` each);
-``scripts/check_chain_calib.py`` verifies this module on a synthetic chain
-with planted errors.
+``scripts/check_chain_calib.py`` verifies this module on a synthetic
+session with planted errors.
 """
 import math
 from dataclasses import dataclass, field
@@ -83,11 +85,6 @@ def vec6_from_T(T):
     return np.concatenate([_rotvec_from_R(T[:3, :3]), T[:3, 3]])
 
 
-def Rz(deg):
-    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-
-
 def pose_error(T_est, T_true):
     """(translation error m, rotation error deg) of T_est vs T_true."""
     E = invert_T(T_true) @ T_est
@@ -101,57 +98,16 @@ def pose_error(T_est, T_true):
 @dataclass
 class ChainSample:
     label: str
-    tcp_pose_mm_deg: List[float]
-    T_hc2A: np.ndarray
-    T_fc2B: np.ndarray
+    tcp_pose_mm_deg: List[float]             # the arm's FLANGE pose (/arm/state), Fairino mm / deg
+    T_hc2W: np.ndarray                       # sheet in hand_cam, multi-tag PnP
+    T_fc2W: np.ndarray                       # sheet in front_cam, multi-tag PnP
     lift_height_m: float = 0.0
-
-
-@dataclass
-class TruthChoice:
-    k90: int            # tag B's in-plane rotation vs A, in quarter turns
-    a90: int            # direction of A -> B in A's frame, in quarter turns
-    T_A2B: np.ndarray
-    raw_pos_err_m: float
-    raw_rot_err_deg: float
-
-
-def truth_T_A2B(spacing_m, k90, a90):
-    T = np.eye(4)
-    T[:3, :3] = Rz(90.0 * k90)
-    T[0, 3] = spacing_m * math.cos(math.radians(90.0 * a90))
-    T[1, 3] = spacing_m * math.sin(math.radians(90.0 * a90))
-    return T
-
-
-def snap_truth(T_A2B_model_mean, spacing_m) -> TruthChoice:
-    """The laid geometry, up to the quarter-turn ambiguities of two tags
-    with collinear edges: pick the (k, a) the raw chain is closest to."""
-    best = None
-    for k in range(4):
-        for a in range(4):
-            T = truth_T_A2B(spacing_m, k, a)
-            dp, dr = pose_error(T_A2B_model_mean, T)
-            score = dp / max(spacing_m, 1e-3) + math.radians(dr)
-            if best is None or score < best[0]:
-                best = (score, k, a, T, dp, dr)
-    _, k, a, T, dp, dr = best
-    return TruthChoice(k90=k, a90=a, T_A2B=T, raw_pos_err_m=dp, raw_rot_err_deg=dr)
-
-
-def mean_T(Ts):
-    """Chordal mean of a few close transforms."""
-    Ts = [np.asarray(T, dtype=float) for T in Ts]
-    t = np.mean([T[:3, 3] for T in Ts], axis=0)
-    M = np.mean([T[:3, :3] for T in Ts], axis=0)
-    U, _, Vt = np.linalg.svd(M)
-    R = U @ Vt
-    if np.linalg.det(R) < 0:
-        U[:, -1] *= -1
-        R = U @ Vt
-    T = np.eye(4)
-    T[:3, :3], T[:3, 3] = R, t
-    return T
+    # the corner means the two PnPs were solved from, {tag id: (4,2) px} —
+    # kept so `solve` can re-run the PnP with the print's measured scale
+    hand_corners: Optional[dict] = None
+    front_corners: Optional[dict] = None
+    hand_rms_px: float = float("nan")
+    front_rms_px: float = float("nan")
 
 
 # ----------------------------------------------------------------------
@@ -206,7 +162,7 @@ def _solve(mode, H, As, B, Ss, w_rot):
     n = 12 if mode == 'joint' else 6
     x0 = np.zeros(n)
     if mode == 'joint':
-        # seed the joint fit from the two single-side fits
+        # seed the joint fit from the hand-only fit
         xh = least_squares(_residuals, np.zeros(6), args=('hand', H, As, B, Ss, w_rot), method='lm').x
         x0[:6] = xh
     f = least_squares(_residuals, x0, args=(mode, H, As, B, Ss, w_rot), method='lm', xtol=1e-12, ftol=1e-12)
@@ -218,15 +174,15 @@ def _solve(mode, H, As, B, Ss, w_rot):
     return T_from_vec6(x[:6]), T_from_vec6(x[6:12])
 
 
-def build_inputs(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, truth_T_A2B, lift_compensate=None):
-    """(H, [A_i], B, [S_i], labels). B is taken at the FIRST sample's lift
-    height (all samples must share the lift height; the tool keeps the
-    lift still)."""
+def build_inputs(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate=None):
+    """(H, [A_i], B, [S_i], labels) with S_i = T_hc2W · inv(T_fc2W). B is
+    taken at the FIRST sample's lift height (all samples must share it;
+    the tool keeps the lift still)."""
     H = np.asarray(T_hc2ee, dtype=float)
     As, Ss, labels = [], [], []
     for s in samples:
         As.append(invert_T(pose_fr5_to_matrix_m(s.tcp_pose_mm_deg)))
-        Ss.append(np.asarray(s.T_hc2A) @ truth_T_A2B @ invert_T(np.asarray(s.T_fc2B)))
+        Ss.append(np.asarray(s.T_hc2W) @ invert_T(np.asarray(s.T_fc2W)))
         labels.append(s.label)
     T_ab2mb_c = np.asarray(T_ab2mb, dtype=float)
     if lift_compensate is not None:
@@ -235,42 +191,116 @@ def build_inputs(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, truth_T_
     return H, As, B, Ss, labels
 
 
-def raw_chain_T_A2B(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate=None):
-    """The production chain's T_A2B per sample (before any correction)."""
-    out = []
-    for s in samples:
-        T_ab2mb_c = np.asarray(T_ab2mb, dtype=float)
-        if lift_compensate is not None:
-            T_ab2mb_c = lift_compensate(T_ab2mb_c, s.lift_height_m)
-        A = invert_T(pose_fr5_to_matrix_m(s.tcp_pose_mm_deg))
-        out.append(invert_T(np.asarray(s.T_hc2A)) @ np.asarray(T_hc2ee) @ A @ T_ab2mb_c @ np.asarray(T_mb2fc) @ np.asarray(s.T_fc2B))
-    return out
-
-
-def fit_corrections(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, spacing_m,
+def fit_corrections(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc,
                     lift_compensate=None, w_rot=0.5, jackknife=True):
-    """Everything: truth snap, raw residual, hand / base / joint fits.
-    ``w_rot`` weights a radian of rotation residual against a metre of
-    translation (0.5 m/rad ≈ the hc -> fc lever: 1 deg ~ 9 mm)."""
-    raw = raw_chain_T_A2B(samples, T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate)
-    truth = snap_truth(mean_T(raw), spacing_m)
-    H, As, B, Ss, labels = build_inputs(samples, T_hc2ee, T_ab2mb, T_mb2fc, truth.T_A2B, lift_compensate)
+    """raw residual (= the chain's T_hc2fc error per view, handoff §6.3)
+    + hand / base / joint fits (+ leave-one-out sd). ``w_rot`` weights a
+    radian of rotation residual against a metre of translation
+    (0.5 m/rad ≈ the hc -> fc lever: 1 deg ~ 9 mm)."""
+    H, As, B, Ss, labels = build_inputs(samples, T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate)
     results = {'raw': _summarise('raw', np.eye(4), np.eye(4), H, As, B, Ss, labels)}
     for mode in ('hand', 'base', 'joint'):
         D, F = _solve(mode, H, As, B, Ss, w_rot)
         results[mode] = _summarise(mode, D, F, H, As, B, Ss, labels)
-    if jackknife and len(samples) >= 4:
+    n = len(As)
+    if jackknife and n >= 4:
         for mode in ('hand', 'base', 'joint'):
             Ds, Fs = [], []
-            for k in range(len(samples)):
-                idx = [i for i in range(len(samples)) if i != k]
+            for k in range(n):
+                idx = [i for i in range(n) if i != k]
                 D, F = _solve(mode, H, [As[i] for i in idx], B, [Ss[i] for i in idx], w_rot)
                 Ds.append(vec6_from_T(D)); Fs.append(vec6_from_T(F))
-            n = len(samples)
             Ds, Fs = np.array(Ds), np.array(Fs)
             results[mode].jackknife_D_sd = np.sqrt((n - 1) / n * ((Ds - Ds.mean(0)) ** 2).sum(0))
             results[mode].jackknife_F_sd = np.sqrt((n - 1) / n * ((Fs - Fs.mean(0)) ** 2).sum(0))
-    return truth, results
+    return results
+
+
+def evaluate(D, F, samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate=None,
+             name='holdout') -> FitResult:
+    """Residual of a GIVEN correction on samples that did not take part in
+    the fit (view hold-out, handoff §9)."""
+    H, As, B, Ss, labels = build_inputs(samples, T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate)
+    return _summarise(name, np.asarray(D), np.asarray(F), H, As, B, Ss, labels)
+
+
+def pair_errors(samples: List[ChainSample], sheet, T_hc2ee, T_ab2mb, T_mb2fc, D=None, F=None,
+                lift_compensate=None, pairs=None):
+    """The user's metric: for each sample the pose of tag B (front_cam
+    side) in tag A (hand_cam side) THROUGH THE CHAIN,
+
+        T_A2B_est = inv(T_hc2A) · (H · D · A_i · B · F) · T_fc2B,
+        T_hc2A = T_hc2W · T_W2A,  T_fc2B = T_fc2W · T_W2B,
+
+    against the sheet's T_A2B. ``pairs`` = [(A, B)] per sample; default =
+    the tag nearest each camera's optical axis (``sheet.axis_tag``).
+    Returns [(label, A, B, pos_err_m, rot_err_deg, t_err_in_B_mm(3))]."""
+    from .sheet import axis_tag
+    D = np.eye(4) if D is None else np.asarray(D)
+    F = np.eye(4) if F is None else np.asarray(F)
+    H = np.asarray(T_hc2ee)
+    out = []
+    for i, s in enumerate(samples):
+        T_ab2mb_c = np.asarray(T_ab2mb, dtype=float)
+        if lift_compensate is not None:
+            T_ab2mb_c = lift_compensate(T_ab2mb_c, s.lift_height_m)
+        A_i = invert_T(pose_fr5_to_matrix_m(s.tcp_pose_mm_deg))
+        M = H @ D @ A_i @ T_ab2mb_c @ np.asarray(T_mb2fc) @ F
+        if pairs is not None:
+            a, b = pairs[i]
+        else:
+            a = axis_tag(s.T_hc2W, sheet, (s.hand_corners or {}).keys() or None)
+            b = axis_tag(s.T_fc2W, sheet, (s.front_corners or {}).keys() or None)
+        T_hc2A = np.asarray(s.T_hc2W) @ sheet.T_W2k(a)
+        T_fc2B = np.asarray(s.T_fc2W) @ sheet.T_W2k(b)
+        est = invert_T(T_hc2A) @ M @ T_fc2B
+        gt = sheet.T_A2B(a, b)
+        dp, dr = pose_error(est, gt)
+        E = invert_T(gt) @ est
+        out.append((s.label, int(a), int(b), dp, dr, E[:3, 3] * 1e3))
+    return out
+
+
+def all_pair_errors(samples: List[ChainSample], sheet, T_hc2ee, T_ab2mb, T_mb2fc, D=None, F=None,
+                    lift_compensate=None):
+    """``pair_errors`` for EVERY (A seen by hand_cam, B seen by front_cam)
+    combination of every sample — e.g. 305->300 and 305->301 from one view.
+    Only pairs split across the two cameras measure the chain; two tags
+    in the SAME camera differ by a PnP consistency only (the chain
+    cancels), so those are not listed."""
+    out = []
+    for s in samples:
+        for a in sorted(s.hand_corners or []):
+            for b in sorted(s.front_corners or []):
+                if a in sheet.t_W_m and b in sheet.t_W_m:
+                    out.extend(pair_errors([s], sheet, T_hc2ee, T_ab2mb, T_mb2fc, D, F, lift_compensate, pairs=[(a, b)]))
+    return out
+
+
+def summarise_errors(errs):
+    """(mean, sd, rms, p95) of position [mm] and rotation [deg] over a
+    list of (…, pos_m, rot_deg, …) tuples — bias vs random, handoff §1.3."""
+    p = np.array([e[3] for e in errs]) * 1e3
+    r = np.array([e[4] for e in errs])
+    f = lambda v: (float(v.mean()), float(v.std()), float(np.sqrt((v ** 2).mean())), float(np.percentile(v, 95)))
+    return f(p), f(r)
+
+
+def residual_correlations(res: FitResult, views):
+    """Pearson r of the per-sample position residual against view range,
+    tilt and spin — the diagnosis table of handoff §9.2 (a residual that
+    tracks range/tilt points at detection / intrinsics / tag size, one
+    that tracks the arm pose at FK, none at a constant extrinsic)."""
+    p = np.array([dp for _, dp, _ in res.per_sample])
+    out = {}
+    for name, vals in (('range_m', [v.range_m for v in views]), ('tilt_deg', [v.tilt_deg for v in views]),
+                       ('spin_deg', [v.spin_deg for v in views])):
+        x = np.asarray(vals, dtype=float)
+        if len(x) < 3 or x.std() < 1e-9 or p.std() < 1e-12:
+            out[name] = float("nan")
+        else:
+            out[name] = float(np.corrcoef(x, p)[0, 1])
+    return out
 
 
 # ----------------------------------------------------------------------

@@ -1696,6 +1696,117 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-18 (evening) — chain_calib: the printed A0 tag sheet is the ground truth for T_hc2fc; two-tag mode removed
+
+User dropped `mobile_manipulator T_hc2fc Calibration/` at the workspace
+root (an A0 print PDF with tags 200 + 300–309, its layout JSON, and a
+handoff document written for another stack — ROS2 / FR5 / pupil_apriltags)
+and asked for what the handoff describes: compare the robot's estimate of
+the transform between the tag front_cam sees and the tag hand_cam sees
+against the sheet's GT, and turn the error into corrections of the fixed
+chain matrices. That is the 2026-09-15 `chain_calib` problem with a
+better ruler, so it went into that package; the folder moved to
+`src/chain_calib/sheet/`. **Then, on the user's instruction, the
+2026-09-15 two-tag mode (`--spacing`, hand-laid tags + tape measure) was
+deleted** — the sheet makes laying and measuring tags unnecessary. The
+package now has one mode; `ChainSample` carries `T_hc2W / T_fc2W`, and
+`load_samples` refuses the old session format. **The 2026-09-15 session
+data (`log/chain_calib/20260915_c`) and its result record were deleted
+on the user's instruction** (git has them).
+
+**What the sheet changes.** Each camera solves `T_cam2W` (W = tag 200's
+frame; every tag is a pure translation of it) by a **multi-tag PnP over
+all the sheet tags it sees** — IPPE over every corner, LM refine, both
+mirror solutions checked (`sheet.multi_tag_pnp`) — instead of one 90 mm
+tag's pose, so the out-of-plane tilt that dominated the error budget is
+measured over a 150–600 mm baseline. The measured hc→fc is simply
+`S_i = T_hc2W · inv(T_fc2W)`: no quarter-turn snap, the cameras may look
+at ANY tags. The fit is the same AX = YB (the handoff's `X_fixed` /
+`Y_fixed` / `XY` = our hand / base / joint). hand_cam corners are RAW →
+CameraInfo `D` goes into the PnP (the D435 reports zeros today, but the
+path is there and a synthetic −0.05 k1 costs 6.8 mm if ignored);
+front_cam corners are the ground-plane-corrected level-camera pixels →
+no `D`, `T_mb2fc_level`, and their PnP depth is genuinely MEASURED (the
+correction only de-tilts the rays; `h` enters pose_x/y, which this never
+reads). Corners are stored (`corners.json`) so `solve --sx --sy
+--tag-size` re-solves every sample with the print's MEASURED scale — a
+plotter's 0.3 % reads as a 1.5 mm chain error otherwise (pinned by the
+check). New in `solve`: hold-out evaluation (`--holdout`,
+`--holdout-every`), the user's metric — tag A (hand_cam axis) → tag B
+(front_cam axis) `T_A2B` through the chain vs the sheet, mean / sd / rms
+/ p95 before and after each correction, bias vector in B's frame — and
+residual-vs-view correlations (handoff §9.2).
+
+**Corner convention settled against the real PDF, not the doc**
+(`check_chain_calib.py` §1): rasterised with `pdftoppm` and detected with
+dt_apriltags (the library `robot_camera_node` runs), all 11 tags land at
+their paper positions (< 0.2 mm) with corner 0 bottom-left — exactly
+`detections._CORNER_ORDER`, and the handoff's pupil_apriltags table. A
+virtual camera over the raster gives R = I, so W's axes (+x paper right,
++y paper down, +z into the paper) are the tag frame the whole chain
+already uses.
+
+Verified offline: `check_chain_calib.py` (rewritten for the sheet) **35**
+(PDF convention; PnP with / without D; a square-on single tag is NOT
+flagged for the IPPE flip while an oblique one reports its two
+solutions; the README §2 layout gives 24 views of 2–4 grid tags with
+front_cam on the 300/301 pair; planted hand-eye 2° / 15 mm → D within
+0.3 mm / 0.03°, mount 1° / 8 mm → F within 0.1 mm / 0.01°, both at once
+by the joint fit, attribution right each time; the T_A2B metric 24 mm →
+0.4 mm; hold-out 0.70 vs train 0.55 mm; persistence round trip; re-solve
+at a different scale; the old format refused) and the CLI's `status` /
+`solve --holdout-every 4` on synthetic sessions written to disk (both
+errors planted → verdict BOTH, joint hold-out 0.70 mm). Live, read-only:
+`check` against the running stack read K / D of both cameras and the
+arm, collected 20 frames per camera and refused correctly (`none of the
+detected tags [0] is on the sheet`) — the sheet is not laid yet.
+`catkin_make` clean.
+
+Not done, deliberately: the handoff's stage-2 reprojection bundle
+adjustment (the 20-frame-mean SE(3) LSQ is at ~0.5 mm on the plant, so
+no need shown yet); the raised 8 cm tag-A variant (planar sheet only, the
+loader refuses z ≠ 0); any automatic arm motion (operator-jogged, as
+since 09-15). To run: print at 100 %, MEASURE sx / sy / tag size (README
+§2), lay the sheet with the 300/301 pair under front_cam and the grid to
+the robot's right, `check`, capture 12–24 tilted / spun views,
+`solve --holdout-every 4`. Corrections are still applied by hand
+(`--write-hand-eye`; T_ab2mb also lives in robot.yaml, see README §3-4).
+
+### 2026-09-18 (evening) — Basler vision tip from the 20 mm tag sheet: `chain_calib/basler_tip_calib.py`
+
+User: how to get the TF between the BASLER and hand_cam precisely with
+two tags of known relative position; then "20 mm tags for both, 20 mm
+gap" and a photo of the A4 sheet they printed (tag36h11 201–230, 5 × 6).
+Answer built rather than described: both cameras ride the flange, so the
+TF is the constant `inv(D) · T_ee2tip`, D is the sweep's, and the only
+unknown is the **vision tip** — where the Basler's frame centre looks at
+its 16.5 mm standoff, in the flange frame (3) + image roll (1). Not a
+Basler hand-eye: at 16.5 mm the lens is macro, tilt is unmeasurable and
+there is no K, and the 4 numbers ARE what the scan uses
+(`vision_tip_offset_mm`, never measured on this robot, and stale since
+the tool case was shortened on 09-18).
+
+Method (`basler_tip.py`, sheet `A4_tag20_201-230_5x6_layout.json`,
+40 mm pitch DESIGN — measure the print): hand_cam over the sheet at
+0.25–0.35 m sees all 30 tags → `multi_tag_pnp` (120 corners, 200 mm
+baseline) → `T_ab2W = A · inv(D) · T_hc2W`, several spins averaged (their
+scatter = the hand_cam chain floor, and a hand-eye error shows there as
+spin-dependent scatter); Basler at the Keyence standoff over one tag →
+corners at full resolution (detect at 1/4, cornerSubPix) → a 2-D
+similarity px → W over all corners seen → the sheet point under the
+frame centre and the image x angle; least squares over (p_tip, ψ) with
+3 position + 1 angle residual per Basler sample, jackknife. Tool:
+`check` / `capture-hand` / `capture-basler [--standoff 16.5]` / `status`
+/ `solve` → `result.yaml` with `vision_tip_offset_mm`; NOT applied
+(robot.yaml, set_tool_tcp.py, the planner URDF must move together).
+`check_basler_tip.py` 11: exact at zero noise, 0.15 mm / 0.04° worst
+under 0.3 px hand_cam + 2 px Basler + 0.02° arm noise, a rendered
+5472 × 3648 frame (aruco 36h11 bitmap is upside down vs dt_apriltags'
+corner order — rot90 ×2) lands the centre to 0.05 mm, a mirrored corner
+order is refused. Live `check` against the stack: hand_cam detections
+and a lamp-on Basler frame arrive (the A0 sheet 300–303 was still on the
+floor; the A4 sheet not yet laid). README §6 is the procedure.
+
 ### 2026-09-18 (15:10) — Third sweep aimed by the new file: 17/17, tag 2–8 mm from centre; the 20 mm absolute offset reproduces; STOP ALL now cancels a sweep
 
 User: "Auto-sample 한 번 더 했음". Node not restarted (old code, 49
@@ -2250,7 +2361,7 @@ two tags 0.5 m apart, so two snapshots). Verified offline only; the
 suites that read the loader still pass (ground_plane 17, repose 10,
 error_budget, yaw-sweep 4/4). `catkin_make` not needed. Not driven.
 
-### 2026-09-15 — front_cam ↔ hand_cam chain calibration from two floor tags (`calib_fc_hc_chain.py`)
+### 2026-09-15 — front_cam ↔ hand_cam chain calibration package `chain_calib` (two floor tags; the two-tag truth was replaced by the A0 sheet 2026-09-18)
 
 User: the matrices between front_cam and hand_cam are a black box — no
 way to tell any of them from its ideal value — so measure the whole
@@ -2295,36 +2406,16 @@ which D is only good to ~4 mm). Live `check` ran against the master
 (arm state, extrinsics, both K, hand_cam topic) and failed correctly on
 the unlaid tag.
 
-**Run on the robot the same evening (three layouts).** Two lessons and
-one result. (1) The user's E / g tape readings came out 100 mm over the
-chain twice (left: chain 790.7 vs 889.5; right: 1005 vs 1100) — the
-SAME sign on both sides, which an arm-mount offset cannot produce
-(it would flip) — and a direct centre-to-centre read agreed with the
-chain; the layout is now read as outer-edge-to-outer-edge minus the
-fitted 89.75 mm tag width (spacing 1.01025 m, tag 150 under hand_cam,
-149 under front_cam, 150 to the robot's RIGHT). `check` at three arm
-poses gave the chain 10.9–13.2 mm / 1.0° off, almost all of it +8…+14 mm
-in HEIGHT and constant under a 90° wrist spin — so not a hand-eye
-lateral error. (2) **The sweep collided the arm** (`20260915_c`: 12
-planned, 6 rejected, 2 move failures, 11 captured of which v09/v10 are
-the collision, 414 mm residual): the planner's safety rules model only
-the flange and vision tip against the TAG PLANE — the mobile base body,
-lift and the arm's own elbow are not modelled at all — and with the tag
-1 m beside the base near the reach limit the tilted views swung the
-elbow into the robot. ⚠️ Do not run `collect` again in that geometry
-without a base-body / link clearance model, or take the tilted views by
-hand (jog + capture). `solve` now drops outliers (> 4× the median raw
-residual, `--exclude`). Nine clean samples: raw 11.0 mm / 0.94° rms,
-hand-only 7.4, base-only 6.3, joint 4.3 (jackknife 7–16 mm) — **verdict
-UNDETERMINED**: the nine views were 8 tilted (11–23°) but ALL toward
-the tag's −x / −y sides (the +x / +y views were the rejected / failed
-ones), and without the opposite tilts a hand-eye offset along the
-optical axis and an arm-base height offset are the same thing. What stands: no 100 mm-class
-error anywhere (mount −100, camera_offset 0.55, hand-eye all mm-true);
-the chain is ~5 mm in the floor plane and ~12 mm in height, the latter
-consistent with the 09-14 hand-eye absolute check (z 5 mm). Nothing
-applied. The arm controller refused connections from 18:06 (fault after
-the collision) — recover on the pendant first.
+**Run on the robot the same evening; superseded and deleted 2026-09-18.**
+Two things from that run still shape the tool: the automatic view sweep
+collided the arm with the robot body — the planner's safety rules model
+only the flange and vision tip against the TAG PLANE, not the base
+body, lift or elbow — so `chain_calib` has had **no automatic arm motion
+since** (operator-jogged `capture` only); and the two-tag truth (hand-laid
+tags + a tape measure) proved error-prone to lay and measure, which is
+why the printed A0 sheet replaced it on 2026-09-18 and the two-tag mode,
+its session data and its result record were removed on the user's
+instruction. Nothing was applied to the config from that session.
 
 ### 2026-09-15 — Collect tab VISION lamp switch; black frames in bursts explained and fixed
 
