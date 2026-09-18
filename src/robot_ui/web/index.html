@@ -104,7 +104,7 @@
             <div class="group-title">Distance sensor assist  (Keyence standoff)</div>
             <div class="readout" id="lbl-standoff">standoff: —  (no /arm/standoff_state yet)</div>
             <div class="row">
-              <label>target [mm] <input type="number" id="num-standoff" min="1" max="30" step="0.5" value="10" title="Perpendicular standoff the loop drives to. 10 mm is the sensor zero and where the Basler focus / Ra model were set. A value typed here applies to this button only — TASK scans keep robot.yaml's target."></label>
+              <label>target [mm] <input type="number" id="num-standoff" min="1" max="30" step="0.5" value="16.5" title="Perpendicular standoff (tool-case bottom to surface) the loop drives to. 16.5 mm is the sensor zero (2026-09-18, shortened case) and where the Basler focus / Ra model were set. A value typed here applies to this button only — TASK scans keep robot.yaml's target."></label>
               <button id="btn-standoff" title="Move the tool along its own Z axis until the Keyence reads the target standoff. Needs the surface inside the sensor range. Refused while the arm is scanning.">Auto standoff</button>
               <button id="btn-standoff-cancel">Cancel</button>
             </div>

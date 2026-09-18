@@ -589,10 +589,11 @@ class MainWindow(QMainWindow):
         self.spin_standoff_target.setRange(1.0, 30.0)
         self.spin_standoff_target.setDecimals(1)
         self.spin_standoff_target.setSingleStep(0.5)
-        self.spin_standoff_target.setValue(10.0)
+        self.spin_standoff_target.setValue(16.5)
         self.spin_standoff_target.setToolTip(
-            'Perpendicular standoff the loop drives to. 10 mm is the sensor '
-            'zero and where the Basler focus / Ra model were set; the sensor '
+            'Perpendicular standoff (tool-case bottom to surface) the loop '
+            'drives to. 16.5 mm is the sensor zero (2026-09-18, shortened case) '
+            'and where the Basler focus / Ra model were set; the sensor '
             'measures roughly ±20 mm around it. A value typed here applies '
             'to this button only — TASK scans keep robot.yaml\'s target.')
         so_row.addWidget(self.spin_standoff_target)

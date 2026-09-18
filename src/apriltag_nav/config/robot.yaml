@@ -1156,17 +1156,22 @@ keyence:
   ip: "192.168.100.105"
   port: 64000
 
-  # The DL-EN1's own zero point: it reads 0 at this perpendicular standoff
-  # (measured on the real sensor; it said 30.0 until 2026-08-05, which
-  # matched no hardware setting). Since 2026-09-08 target_distance_mm is
-  # LIVE: the loop holds the projected reading at (sensor_zero - target), so
-  # target == zero reproduces the old "drive the reading to 0". Raise the
-  # target to scan further from the mould WITHOUT reconfiguring the sensor —
-  # but the Basler focus and the Ra model were established at 10 mm, so a
-  # different standoff changes the images. Keep the target inside the
-  # sensor's measuring range (out of range = the +/-99999 sentinel).
-  sensor_zero_mm:     10.0
-  target_distance_mm: 10.0
+  # The DL-EN1's own zero point: it reads 0 at this perpendicular standoff,
+  # measured from the BOTTOM OF THE TOOL CASE to the surface. 16.5 mm since
+  # 2026-09-18: the tool case was shortened and the Keyence + Basler moved
+  # with it relative to the flange, the user measured 16.5 mm at reading 0
+  # and refocused the Basler there (it said 10.0 from 2026-08-05, operator's
+  # word, and 30.0 before that, which matched no hardware setting). Since
+  # 2026-09-08 target_distance_mm is LIVE: the loop holds the projected
+  # reading at (sensor_zero - target), so target == zero reproduces the old
+  # "drive the reading to 0". KEEP THEM EQUAL unless you mean to move the
+  # capture position: the Basler focus is set at reading 0, and the Ra model
+  # was trained on frames taken there. Raising the target scans further from
+  # the mould WITHOUT reconfiguring the sensor, but changes the images. Keep
+  # the target inside the sensor's measuring range (out of range = the
+  # +/-99999 sentinel).
+  sensor_zero_mm:     16.5
+  target_distance_mm: 16.5
 
   # SENSOR POLARITY (set in the DL-EN1, confirmed on the robot 2026-08-05):
   #   distance > 10 mm (too far)   -> reading NEGATIVE
@@ -1178,11 +1183,27 @@ keyence:
   # a NEGATIVE reading means retreat is wrong, the tool must move CLOSER.
   # Both routes agree; re-derive both if the sensor is reconfigured.
 
-  # Angle between the laser beam and the tool Z axis, degrees. The beam is
-  # mounted OBLIQUE on this platform, so the reading is a distance along the
-  # beam, not the perpendicular standoff: a perpendicular error e reads as
-  # e/cos(angle). arm_controller projects the reading by cos(angle) FIRST and
-  # then does everything else in perpendicular millimetres.
+  # Angle between the laser beam and the tool Z axis (= the surface NORMAL,
+  # not the surface), degrees. The beam is mounted OBLIQUE on this platform,
+  # so the reading is a distance along the beam, not the perpendicular
+  # standoff: a perpendicular error e reads as e/cos(angle). arm_controller
+  # projects the reading by cos(angle) FIRST and then does everything else
+  # in perpendicular millimetres.
+  #
+  # 37.1 since 2026-09-18: the sensor was remounted with the shortened tool
+  # case and MEASURED the same day with tools/measure_keyence_angle_via_node.py
+  # (the arm_node-routed twin of measure_keyence_angle.py — no second RPC
+  # connection while the stack is up), tool vertical over the real
+  # workpiece, base on tag 102:
+  #   sweep -0.5..+1.7 mm, 4 pts -> k = 1.257 -> 37.30 deg  (R^2 0.99847)
+  #   sweep  0..+3.8 mm,   7 pts -> k = 1.250 -> 36.87 deg  (R^2 0.99953)
+  # Per-step sensitivity ranged 1.10-1.35 (spot walk over topography, as on
+  # the old mount), so +/-2 deg is the honest uncertainty. The user's
+  # geometric figure was 60 deg to the surface (= 30 deg here); the
+  # measurement says 53 deg to the surface. Also seen: the far end of the
+  # sensor range is at a raw reading of about -13 mm (perp -10.4 mm, i.e.
+  # ~27 mm case standoff) — beyond it the +/-99999 sentinel. The 42.6 deg
+  # history under here is the OLD mount and is kept for the method.
   #
   # Consequence for tuning: tolerance_mm, keyence_max_step_mm and
   # keyence_activate_threshold are all PERPENDICULAR standoff mm — the quantity
@@ -1209,7 +1230,7 @@ keyence:
   # close to deadbeat, which is why the uncorrected loop appeared to work. That
   # coincidence would have broken the moment kp was retuned or the sensor
   # remounted; an uncompensated mount diverges past 66.4 deg at kp 0.8.
-  beam_angle_deg: 42.6
+  beam_angle_deg: 37.1
 
   # Direction sign. The same measurement found k POSITIVE (the reading grows as
   # the tool moves +Z, toward the surface), and dir must be -sign(k), so the

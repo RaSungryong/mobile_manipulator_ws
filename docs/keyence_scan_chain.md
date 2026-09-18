@@ -37,7 +37,7 @@ only the two robot-side conversions — `perp = reading × cos(beam)` and
 | reading | the cached value, one sample, possibly stale | median of 5 readings that ARRIVED after the last move settled; sentinel frames dropped; sensor silent → stop, no motion |
 | stale value | stepped up to 10 × 1 mm against a value that never changed | response check: a step ≥ 0.3 mm must move the reading by ≥ 25 % of it, two misses abort ("reading does not follow the motion") |
 | slope / spot walk | 1 mm clamp only | adaptive gain: next step ÷ measured d(reading)/d(motion) of the last one, clamped [1, 4] — only ever reduces |
-| target standoff | fixed at the sensor zero (10 mm) | `keyence.target_distance_mm` live (default 10 = unchanged); `sensor_zero_mm` 10 |
+| target standoff | fixed at the sensor zero (10 mm) | `keyence.target_distance_mm` live (default = the zero, 16.5 since 2026-09-18); `sensor_zero_mm` 16.5 |
 | wait per step | fixed 1.0 s | settle 0.3 s + ~0.17 s of fresh samples |
 | outcome | logged, then `execution_message: Success` | returned; CSV row says `Success (standoff ok (err −0.04 mm, 3 steps, travel 2.0 mm))` or `Success (standoff NOT corrected: <reason> …)`; `require_converged: true` fails the point and skips the capture instead |
 | out of range at start | skip | skip with the side named (sign of the sentinel); opt-in `seek_enabled` steps 2 mm toward the indicated side up to 10 mm — OFF until the sentinel sign is confirmed on this sensor |
@@ -65,10 +65,10 @@ restart required. First live run to watch: the per-step
 
 | Property | Value | How established |
 |---|---|---|
-| Zero point | reading 0 at **10 mm** standoff | operator, confirms `target_distance_mm` |
+| Zero point | reading 0 at **16.5 mm** standoff (tool-case bottom → surface; was 10 until 2026-09-18) | operator, tape at reading 0 after the case was shortened and the Keyence + Basler moved with it; Basler refocused there. `target_distance_mm` == this |
 | Polarity | too far → **negative**, too close → **positive** | operator |
-| Beam angle vs tool Z | **42.6°** (`cos` = 0.7361) | `tools/measure_keyence_angle.py` |
-| Sensitivity `k` = d(reading)/d(toolZ) | **+1.358** mm/mm | same, two runs |
+| Beam angle vs tool Z | **37.1°** (`cos` = 0.800) since 2026-09-18, remounted sensor: two sweeps 37.30° / 36.87°, R² 0.998 / 0.9995, ±2° (spot walk). Was **42.6°** (`cos` = 0.7361) on the old mount | `tools/measure_keyence_angle_via_node.py` (through arm_node; the RPC-direct `measure_keyence_angle.py` is for a stack-down bench) |
+| Sensitivity `k` = d(reading)/d(toolZ) | **+1.25** mm/mm (was +1.358 on the old mount) | same, two runs |
 | Noise | sd ≈ 3–5 µm | 20 s at rest |
 | Publish rate | 30 Hz | `/keyence/value` |
 
@@ -139,7 +139,7 @@ have broken the moment kp was retuned or the sensor remounted.
 
 | Param | Value | Unit | Set in |
 |---|---|---|---|
-| `beam_angle_deg` | 42.6 | deg | `robot.yaml` |
+| `beam_angle_deg` | 37.1 (measured 2026-09-18; was 42.6 until then) | deg | `robot.yaml` |
 | `keyence_dir` | −1.0 | sign | launch |
 | `keyence_kp` | 0.8 | — | launch |
 | `keyence_tol` | 0.2 | perp mm | launch |
@@ -149,7 +149,7 @@ have broken the moment kp was retuned or the sensor remounted.
 | `approach_fraction` / `retreat_step_mm` / `max_travel_mm` | 0.5 / 3.0 / 25 | — / perp mm / perp mm | `robot.yaml` (2026-09-08) |
 | `samples` / `settle_s` / `read_timeout_s` | 5 / 0.3 s / 1.0 s | | `robot.yaml` (2026-09-08) |
 | `adaptive_gain` / `gain_ratio_max` / `min_response_ratio` | true / 4.0 / 0.25 | | `robot.yaml` (2026-09-08) |
-| `sensor_zero_mm` / `target_distance_mm` | 10.0 / 10.0 | perp mm | `robot.yaml` (2026-09-08, target now LIVE) |
+| `sensor_zero_mm` / `target_distance_mm` | 16.5 / 16.5 | perp mm | `robot.yaml` (2026-09-08, target now LIVE; 10 → 16.5 on 2026-09-18) |
 | `seek_enabled` / `require_converged` | false / false | | `robot.yaml` (2026-09-08) |
 
 Precedence is `~param` on `arm_node` > `robot.yaml keyence:` >
