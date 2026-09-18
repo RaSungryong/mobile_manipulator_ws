@@ -1869,6 +1869,14 @@ class MainWindow(QMainWindow):
         self.bridge.send_task_command('STOP')
         self._run(self.bridge.mobile_stop, label='mobile stop')
         self._run(self.bridge.lift_stop, label='lift stop')
+        # A running hand-eye sweep / calibration session would otherwise
+        # wait out its 60 s move timeout and CONTINUE from wherever the
+        # arm was left (2026-09-18). Cooperative cancels, only when the
+        # nodes are up (the trigger would block on an absent service).
+        if self._handeye_online:
+            self._run(self.bridge.handeye_cancel, label='handeye cancel')
+        if self._calib_online:
+            self._run(self.bridge.cancel_map_calibration, label='calib cancel')
         if self.chk_lamp.isChecked():
             self.chk_lamp.setChecked(False)
         if self.chk_preview.isChecked():

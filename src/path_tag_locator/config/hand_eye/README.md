@@ -75,9 +75,24 @@
 > where the 09-14 file agreed to 1 / 0 / 5. The jackknife says the
 > 18-sample solution is stable to ~1 mm on that number, so the 20 mm is
 > systematic — hand-eye bias from fewer views (18 vs 23, two tilt-22
-> views, 0.37 m lever) or something in the base/map side. Next: one more
-> sweep from ~0.6 m (it now aims from this file, no bootstrap), Compute
-> over both sessions' sweep samples, re-check this number.
+> views, 0.37 m lever) or something in the base/map side.
+>
+> **15:10 — third sweep, aimed by the new file: no divergence, 17/17
+> views, the tag 2–8 mm from the image centre at every view** (the
+> aim's own confirmation). File updated to the solve over all **35 sweep
+> samples** (`result_sweep123_refined.npz`): t = (36, −335, −152) mm,
+> rpy (0.14, −0.45, −179.4)°, tag scatter 2.7 mm rms / 5.1 max, jackknife
+> 2.8 / 2.2 / 1.5 mm on t. The independent third sweep alone solves to
+> 12.6 mm / 1.1° from the 18-sample file and puts tag 0 at the SAME place
+> vs the map: **10 / −21 / −3 mm** (all 35: 10 / −19 / −5, jackknife
+> 0.5 / 0.7 / 1.6 mm). So the offset is not sample noise: in world axes
+> it is −19 mm ACROSS the lane (world −x, the tag 19 mm nearer the
+> robot's lane than map.yaml says) and −10 mm along it. Candidates that
+> software cannot separate: a hand-eye bias particular to this lever, the
+> arm mount's `arm_body_offset_y`, or tag 102's map position — the 09-14
+> mount agreed to 1 / 0 / 5 with the same chain, so at least one of them
+> changed with the remount. `chain_calib` (2026-09-15) or a tape measure
+> from the base to cross tag 0 is the next step, not another sweep.
 
 This directory holds the hand-eye calibration result that the locator
 node loads at startup.

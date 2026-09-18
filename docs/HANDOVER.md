@@ -218,8 +218,14 @@ pull + `catkin_make` before anything below.
   use is the sweep-only refined solve (t = (37, −340, −153) mm, tag
   scatter 2.3 mm rms); the node's all-32 compute was 25 mm off (7
   bootstrap samples at 1.2 m) and is archived. Node now drops bootstrap
-  samples and refines. ⚠️ Absolute check open: tag 0 vs map 10 / −18 /
-  −9 mm (09-14: 1 / 0 / 5) — do one more sweep from ~0.6 m and re-check.
+  samples and refines. A third sweep (15:10) aimed from the new file
+  with no divergence, 17/17 views, tag 2–8 mm from centre; file = all 35
+  sweep samples, scatter 2.7 mm rms. ⚠️ Absolute check open and now
+  REPRODUCIBLE: tag 0 vs map 10 / −19 / −5 mm (09-14: 1 / 0 / 5), −19 mm
+  across the lane — hand-eye bias vs `arm_body_offset_y` vs tag 102's
+  map position; `chain_calib` or a tape measure, not another sweep.
+  STOP ALL now cancels a running sweep / calibration session (it used
+  to resume from wherever the arm was left after the 60 s move timeout).
 - **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
   operator versions of the charging manager's dock-and-charge / undock
   tasks; the charger starts only on the `/crevis/charging true` that

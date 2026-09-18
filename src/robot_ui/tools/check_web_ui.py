@@ -503,13 +503,20 @@ def part_a():
         bridge.calls.clear()
         c.api_set_preview(True)
         bridge.calls.clear()
+        c._handeye_online = True; c._calib_online = True
         c.api_stop_all()
         time.sleep(0.3)
-        for name in ('arm_cancel', 'mobile_stop', 'lift_stop'):
+        for name in ('arm_cancel', 'mobile_stop', 'lift_stop', 'handeye_cancel', 'cancel_map_calibration'):
             check(bridge.has(name), f'STOP ALL → {name}')
         check(bridge.has('send_task_command', 'STOP'), 'STOP ALL → /task_command STOP')
         check(bridge.has('set_vision_lamp', False), 'STOP ALL releases the lamp hold')
         check(bridge.has('set_camera_active', False) and c.ui()['preview_on'] is False, 'STOP ALL turns the preview off')
+        bridge.calls.clear()
+        c._handeye_online = False; c._calib_online = False
+        c.api_stop_all()
+        time.sleep(0.3)
+        check(not bridge.has('handeye_cancel') and not bridge.has('cancel_map_calibration'),
+              'STOP ALL skips the calibration cancels while those nodes are offline')
 
         # ---- log ring ----
         for i in range(600):

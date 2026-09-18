@@ -1050,6 +1050,15 @@ class UiController:
         self.bridge.send_task_command('STOP')
         self._run(self.bridge.mobile_stop, label='mobile stop')
         self._run(self.bridge.lift_stop, label='lift stop')
+        # A running hand-eye sweep / calibration session would otherwise
+        # wait out its 60 s move timeout and CONTINUE from wherever the
+        # arm was left (2026-09-18: STOP ALL + Home mid-sweep, the sweep
+        # resumed from the home pose). Cooperative cancels, only when
+        # the nodes are up (the trigger would block on an absent service).
+        if self._handeye_online:
+            self._run(self.bridge.handeye_cancel, label='handeye cancel')
+        if self._calib_online:
+            self._run(self.bridge.cancel_map_calibration, label='calib cancel')
         if self._ui.get('lamp_on'):
             self.bridge.set_vision_lamp(False)
         if self._preview_on:

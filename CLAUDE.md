@@ -1696,6 +1696,40 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-18 (15:10) — Third sweep aimed by the new file: 17/17, tag 2–8 mm from centre; the 20 mm absolute offset reproduces; STOP ALL now cancels a sweep
+
+User: "Auto-sample 한 번 더 했음". Node not restarted (old code, 49
+samples in memory) but `auto_sample` loads the npz per call, so it aimed
+from the sweep-only refined file: **no divergence**, square-up from
+1.2 m again (285 → 115 mm in 6, unconverged — start from ~0.6 m next
+time), 17 planned / 7 xy-rejected, **17 captured, the tag 2–8 mm from
+the image centre at every view** — with the node's 25 mm-off file that
+would have read ~25. One move failure: at 15:11:09 the operator hit
+STOP ALL (two `CANCEL requested`) and Home while view 9 was moving to
+(−244, 444, −45) mm, and the sweep, whose `ArmInterface` only
+attributes `move_cart ok`, waited its 60 s timeout and then **continued
+from the home pose** (5 MoveL chunks down to view 10, 8 more views,
+all fine). That is the documented "a failed move plans the next one
+from wherever the arm is" — but an operator stop must stop the
+procedure: both robot_ui fronts' STOP ALL now also call
+`/handeye_calib/cancel` and `/map_calibrator/cancel_calibration` when
+those nodes are online (`check_web_ui` 112, `check_task_list_ui` 87).
+
+Solve over the 35 sweep samples of the three sweeps (offline, refined
+`calibrate()`, `result_sweep123_refined.npz`, now `T_hc2ee.npz`): t =
+(36, −335, −152) mm, scatter 2.7 mm rms / 5.1 max, jackknife 2.8 / 2.2 /
+1.5 mm — 5.4 mm / 0.36° from the 18-sample file. **The absolute offset
+reproduces**: sweep 3 alone (17 fresh views, a hand-eye 12.6 mm / 1.1°
+from the 18-sample one) puts tag 0 at 10 / −21 / −3 mm from map.yaml's
+prediction, all 35 at 10 / −19 / −5 with a 0.5 / 0.7 / 1.6 mm jackknife.
+In world axes (`transform_world_to_arm` sensitivity: world +x → arm +y,
+world +y → arm −x at the tag-102 pose) that is **−19 mm ACROSS the
+lane** and −10 along it. Not noise, and not resolvable by more sweeps:
+hand-eye bias particular to this 0.37 m lever, `arm_body_offset_y`, or
+tag 102's map position — the 09-14 mount agreed to 1 / 0 / 5 through
+the same chain. Next is `chain_calib` or a tape measure from the base
+to cross tag 0. Restart the calibration nodes for the new npz.
+
 ### 2026-09-18 (afternoon) — Bootstrap sweep ran on the robot twice; the compute needed two more fixes; new-mount hand-eye in use, absolute check open
 
 User: "다시 해봤어요 검증해줘". `run_20260918_144420`: **14:46, from
@@ -1823,6 +1857,49 @@ and are left alone. `check_task_list_ui.py` 85 → 86, `check_web_ui.py`
 retreating`, then `bootstrap: provisional T_hc2ee from 7 samples`, then
 the normal `N views planned`; `Compute & save` afterwards. Rename the
 09-14 file `T_hc2ee_2026-09-14_old_mount.npz` when the new one is in.
+
+### 2026-09-18 — Tool case shortened: Keyence zero 10 → 16.5 mm, beam angle re-measured 42.6 → 37.1°
+
+User shortened the end-effector tool case; the Keyence and the Basler moved
+with it relative to the flange, the case bottom now rests **16.5 mm** above
+the surface when the sensor reads 0, and the Basler was refocused there.
+Config: `keyence.sensor_zero_mm` **16.5** and `target_distance_mm` **16.5**
+(setpoint stays 0 — the loop still drives the reading to 0, which is where
+the focus is; the two keys must move together, a zero-only edit would have
+pushed the tool 6.5 mm closer on every scan), UI Auto-standoff default 16.5,
+`keyence_scan_chain.md` Sensor facts. Note the zero was never measured in
+this workspace: 10.0 was the operator's word on 2026-08-05, 30.0 before
+that matched nothing; 16.5 is a tape reading at reading 0.
+
+**Beam angle measured on the new mount, not taken from the geometry.** The
+user's figure was 60° to the surface (= 30° to tool Z); two sweeps with
+`tools/measure_keyence_angle_via_node.py` (new — the same symmetric-sweep
+method as `measure_keyence_angle.py`, but through `/arm/jog_cmd` +
+`/arm/state` so it opens no second Fairino RPC while `arm_node` runs;
+tool vertical over the workpiece, base on 102) gave **k = 1.257 / 1.250 →
+37.30° / 36.87°**, R² 0.998 / 0.9995, rms 35 µm — i.e. **53° to the
+surface**. Per-step sensitivity wandered 1.10–1.35 (spot walk over
+topography, as on the old mount), so ±2°. `beam_angle_deg` **37.1**. Also
+seen: the far end of the sensor's range is at raw ≈ −13 mm (perp −10.4 →
+~27 mm case standoff); the first sweep's −1.0 mm point went out of range.
+`keyence_dir` −1.0 confirmed (k > 0). `arm_node` restart required for all
+of it; `check_scan_progress.py` 49 ok.
+
+⚠️ **Found on the way, NOT fixed: `jog` accumulates a constant readback
+offset.** Every MoveL target arm_node logged was z −0.635 / y −0.09 from
+the previous one for a `jog z −0.5`: `GetActualTCPPose` after a MoveL
+reports (0, −0.09, −0.135) mm off the target it was sent, and `jog` reads
+that pose and adds its delta, so each jog moves delta + 0.135 mm in z and
+drifts y by 0.09 mm — 5 × 0.5 mm jogs moved 3.2 mm. Constant, so the
+sweep's fit against the reported z is right (target and readback moved the
+same 0.635 per step). For the operator jogging in robot_ui it is a 27 %
+overshoot on small z jogs; whether it is a controller settle offset or a
+frame subtlety is open. The sweeps' return jogs suffered from it too: the
+arm ended ~1.7 mm closer to the surface than the user parked it.
+
+Still open from the same change: Ra values before/after are not comparable
+(new working distance, refocused), `vision_tip_offset_mm` still describes
+the old case, and `T_hc2ee` if hand_cam moved with it.
 
 ### 2026-09-15 — Web Task combo: the dropdown showed ONE task; now a real dropdown that always lists them all
 

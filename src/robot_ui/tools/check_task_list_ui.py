@@ -390,11 +390,16 @@ def main():
     app.processEvents()
     check(win.chk_lamp.isChecked(), 'lamp_state true ticks it')
     bridge.calls.clear()
+    win._handeye_online = True; win._calib_online = True
     click(win.chk_lamp.parentWidget().parentWidget(), 'STOP ALL') or win._on_stop_all()
     t0 = _time.monotonic()
-    while _time.monotonic() - t0 < 2.0 and ('set_vision_lamp', False) not in bridge.calls:
+    while _time.monotonic() - t0 < 2.0 and not all(c in bridge.calls for c in
+                                                   [('set_vision_lamp', False), ('handeye_cancel',), ('cancel_map_calibration',)]):
         app.processEvents(); _time.sleep(0.02)
     check(('set_vision_lamp', False) in bridge.calls, 'STOP ALL releases the lamp hold')
+    check(('handeye_cancel',) in bridge.calls and ('cancel_map_calibration',) in bridge.calls,
+          'STOP ALL cancels a hand-eye sweep and a calibration session (nodes online)')
+    win._handeye_online = False; win._calib_online = False
 
     print('== CAPTURE while the live preview runs (2026-09-15)')
     import numpy as _np
