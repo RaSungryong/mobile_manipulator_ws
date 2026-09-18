@@ -257,7 +257,9 @@ def run_case(T_hc2ee_aim, start_offset=(0.06, -0.04, 0.10), cancel_after=None, f
 
     extra = {}
     if with_solve:
-        extra = dict(n_samples=lambda: len(caps), solve=make_solve(caps, rng))
+        def discard(since):
+            del caps[since:]
+        extra = dict(n_samples=lambda: len(caps), solve=make_solve(caps, rng), discard=discard)
     r = SweepRunner(cfg, get_tcp=arm.get_tcp, move=arm.move, detect=cam.detect, capture=capture,
                     cancelled=lambda: state['cancel'], log_info=lambda s: None, log_warn=lambda s: None,
                     progress=progress, **extra)
@@ -354,10 +356,11 @@ for label, T_aim, depth, kind in (('quarter-turn, 0.55 m', T_moved, 0.45, 'wrong
 
 print('== bootstrap: auto with the moved-camera file, real cv2.calibrateHandEye under noise')
 for depth, off in ((0.45, (0.06, -0.04, 0.10)), (1.10, (0.06, -0.04, 0.10))):
-    flags = []; n_caps = []; iters = []; nb = []
+    flags = []; n_caps = []; iters = []; nb = []; caps_all = []; n_caps_all = []
     for seed in range(6):
         res, arm, cam, caps, events = run_case(T_moved, cfg=SweepCfg(), seed=seed, with_solve=True,
                                                start_depth=depth, start_offset=off)
+        caps_all.append(caps); n_caps_all.append(res.n_captured)
         if seed == 0:
             print('  ', f'start depth {depth + off[2]:.2f} m:', res.summary())
         if res.error:
@@ -368,13 +371,15 @@ for depth, off in ((0.45, (0.06, -0.04, 0.10)), (1.10, (0.06, -0.04, 0.10))):
           f'depth {depth + off[2]:.2f} m: every seed diverged on the file, bootstrapped, completed')
     check(min(nb) >= 5, f'  bootstrap captured {sorted(set(nb))} of 7 views')
     check(min(n_caps) >= 8, f'  every seed ends with >= 8 samples ({sorted(n_caps)})')
+    check(all(len(c) == r for c, r in zip(caps_all, n_caps_all)),
+          '  the 7 bootstrap samples were dropped from the set (sweep samples only remain)')
     check(max(iters) <= SweepCfg().align_max_iterations,
           f'  square-up with the provisional hand-eye ran {sorted(set(iters))} iterations')
 
 # quality of the provisional estimate itself, and the sweep's safety under it
 errs = []
 for seed in range(6):
-    res, arm, cam, caps, events = run_case(T_moved, cfg=SweepCfg(), seed=seed, with_solve=True)
+    res, arm, cam, caps, events = run_case(T_moved, cfg=SweepCfg(bootstrap_keep_samples=True), seed=seed, with_solve=True)
     T_prov = make_solve(caps[:res.n_bootstrap], np.random.RandomState(seed))(0)
     errs.append(he_error(T_prov))
 mm = max(e[0] for e in errs); deg = max(e[1] for e in errs)
@@ -382,8 +387,9 @@ check(mm < 60 and deg < 4.0,
       f'provisional hand-eye from the 7 bootstrap views: worst of 6 seeds {mm:.0f} mm / {deg:.2f} deg off (aim-grade)')
 mm_f, deg_f = he_error(T_moved)
 check(mm_f > 100 and deg_f > 60, f'  (the file it replaced was {mm_f:.0f} mm / {deg_f:.1f} deg off)')
-res, arm, cam, caps, events = run_case(T_moved, cfg=SweepCfg(), seed=1, with_solve=True)
+res, arm, cam, caps, events = run_case(T_moved, cfg=SweepCfg(bootstrap_keep_samples=True), seed=1, with_solve=True)
 check(all(c[1] is not None for c in caps), 'every capture (bootstrap and sweep) had the tag detected')
+check(len(caps) == res.n_captured + res.n_bootstrap, 'bootstrap_keep_samples: true keeps the 7 in the set')
 lows = []
 for T_c, _, _ in caps:
     for p in SweepCfg().tool_points_mm:

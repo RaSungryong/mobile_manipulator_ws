@@ -213,8 +213,13 @@ pull + `catkin_make` before anything below.
   until the next `Compute & save`.** The first sweep after the remount
   diverged (the file aims the wrong way); the sweep now retreats and
   bootstraps its own aiming hand-eye from six ±10° flange rotations at
-  the start pose (`auto.bootstrap: auto`), so re-run Auto-sample from
-  ≥ 0.5 m above the tag, then Compute. Not yet run on the robot.
+  the start pose (`auto.bootstrap: auto`). **Run 2026-09-18 14:46/14:48:
+  both sweeps bootstrapped and completed (5 + 13 views).** The file in
+  use is the sweep-only refined solve (t = (37, −340, −153) mm, tag
+  scatter 2.3 mm rms); the node's all-32 compute was 25 mm off (7
+  bootstrap samples at 1.2 m) and is archived. Node now drops bootstrap
+  samples and refines. ⚠️ Absolute check open: tag 0 vs map 10 / −18 /
+  −9 mm (09-14: 1 / 0 / 5) — do one more sweep from ~0.6 m and re-check.
 - **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
   operator versions of the charging manager's dock-and-charge / undock
   tasks; the charger starts only on the `/crevis/charging true` that

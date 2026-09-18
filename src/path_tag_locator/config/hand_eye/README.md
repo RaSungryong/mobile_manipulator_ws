@@ -49,8 +49,35 @@
 > squares up with it and runs the normal sweep (`handeye_calib.yaml
 > auto.bootstrap: auto`). Nothing to configure after a remount — start
 > the sweep from ~0.6–1.2 m above the tag with the tag in view, as before.
-> `compute` then writes the real file. Keep the 09-14 file as
-> `T_hc2ee_2026-09-14_old_mount.npz` once the new one is in.
+> `compute` then writes the real file. The 09-14 file is kept as
+> `T_hc2ee_2026-09-14_old_mount.npz`.
+>
+> ✅ **2026-09-18 15:01 — `T_hc2ee.npz` is the NEW mount** (run
+> `run_20260918_144420`, two sweeps in one node session: 14:46 from 1.2 m
+> and 14:48 from 0.62 m, both bootstrapped). t = (37, −340, −153) mm, rpy
+> (0.46, −0.47, −179.3)° — the camera is now 0.37 m from the flange and
+> spun ~180° from the 09-14 mount, which is exactly why the old file
+> diverged. Computed OFFLINE from the **18 sweep samples** with the
+> refined `calibrate()` (`result_sweep_only_refined.npz` in the run dir):
+> tag 0 re-projected through the 18 poses scatters **2.3 mm rms / 4.8 max**,
+> normal 0.82° rms — the 09-14 quality (2.1 / 3.2); jackknife sd 3.5 /
+> 3.6 / 1.7 mm on t, 0.5–1.2 mm on the located tag. The node's own
+> 14:49 `compute` (ANDREFF over all 32 samples, the 14 bootstrap
+> rotations included — 7 of them at 1.2 m where the tag is ~70 px and
+> each scattered 17–22 mm) is kept as
+> `T_hc2ee_2026-09-18_node_all32_andreff.npz`: it scattered the tag
+> 11.1 mm rms and sits **25 mm / 1.4°** from the file in use. Since then
+> the node drops the bootstrap samples after the provisional solve and
+> refines every compute, so the next `Compute & save` gives this quality
+> directly. ⚠️ Absolute check NOT closed: tag 0 lands at (−389.5, 992.4,
+> −580.2) mm in the arm frame, base aligned on 102 (2.3 mm from the
+> tag), against map.yaml's (−400, 1010, −571.5): **10 / −18 / −9 mm**,
+> where the 09-14 file agreed to 1 / 0 / 5. The jackknife says the
+> 18-sample solution is stable to ~1 mm on that number, so the 20 mm is
+> systematic — hand-eye bias from fewer views (18 vs 23, two tilt-22
+> views, 0.37 m lever) or something in the base/map side. Next: one more
+> sweep from ~0.6 m (it now aims from this file, no bootstrap), Compute
+> over both sessions' sweep samples, re-check this number.
 
 This directory holds the hand-eye calibration result that the locator
 node loads at startup.

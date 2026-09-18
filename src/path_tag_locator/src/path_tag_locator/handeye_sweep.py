@@ -71,8 +71,11 @@ rotations, so the moves are small and need no hand-eye to plan — and
 provisional T_hc2ee. It is only cm / degree accurate, which is all the
 aim needs: the square-up re-measures every step, the views re-detect,
 and the clearance rule gets ``bootstrap_clearance_extra_m`` on top.
-Those samples stay in the set (they are real samples of the new mount).
-``bootstrap: always`` skips the file entirely; ``never`` fails with the
+Those samples are dropped from the set once solved
+(``bootstrap_keep_samples`` false): they are small rotations at whatever
+height the operator started from — the 2026-09-18 ones at 1.2 m
+scattered the tag 17–22 mm each and pulled the final solve 27 mm off —
+and the sweep's views are the calibration. ``bootstrap: always`` skips the file entirely; ``never`` fails with the
 manual procedure named (jog + ~capture at >= 8 poses with tilt and
 spin, ~compute, then the sweep). Precondition: the camera at least
 ``bootstrap_min_depth_m`` from the tag, so a 10 deg flange rotation
@@ -128,6 +131,11 @@ class SweepCfg:
     bootstrap_min_depth_m: float = 0.5
     bootstrap_min_samples: int = 5
     bootstrap_clearance_extra_m: float = 0.05
+    # keep the bootstrap's samples in the set? Default no: they are small
+    # rotations at whatever height the operator started (the 2026-09-18
+    # ones at 1.2 m scattered the tag 17-22 mm each and pulled the solve
+    # 27 mm off); the sweep's views are the calibration.
+    bootstrap_keep_samples: bool = False
 
 
 @dataclass
@@ -355,11 +363,13 @@ class SweepRunner:
     solve(since)         -> T_hc2ee (4x4 m) from the samples captured from
                             index ``since`` on, or None — the bootstrap's
                             provisional hand-eye (cv2.calibrateHandEye)
+    discard(since)       -> drop the samples from index ``since`` on (the
+                            bootstrap's, once it has been solved), optional
     """
 
     def __init__(self, cfg: SweepCfg, *, get_tcp, move, detect, capture,
                  cancelled=None, log_info=print, log_warn=print, progress=None,
-                 n_samples=None, solve=None):
+                 n_samples=None, solve=None, discard=None):
         self.cfg = cfg
         self.get_tcp = get_tcp
         self.move = move
@@ -371,6 +381,7 @@ class SweepRunner:
         self.progress = progress or (lambda d: None)
         self.n_samples = n_samples
         self.solve = solve
+        self.discard = discard
 
     # ------------------------------------------------------------------
     def _move_chunked(self, T_target) -> bool:
@@ -556,9 +567,13 @@ class SweepRunner:
         res.bootstrapped = True
         res.aim_source = 'bootstrap'
         t = T_prov[:3, 3] * 1000.0
+        kept = ''
+        if not cfg.bootstrap_keep_samples and self.discard is not None:
+            self.discard(since)
+            kept = f"; its {n_new} samples dropped from the set (aiming only)"
         self.log_info(f"bootstrap: provisional T_hc2ee from {n_new} samples: "
                       f"t = ({t[0]:.0f}, {t[1]:.0f}, {t[2]:.0f}) mm — aiming with it "
-                      f"(clearance margin +{cfg.bootstrap_clearance_extra_m * 1000:.0f} mm)")
+                      f"(clearance margin +{cfg.bootstrap_clearance_extra_m * 1000:.0f} mm){kept}")
         self.progress({'phase': 'bootstrap', 'index': n_views, 'total': n_views,
                        'label': 'solved', 'ok': True, 'n_bootstrap': n_new,
                        't_mm': [float(v) for v in t]})

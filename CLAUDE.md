@@ -1696,6 +1696,62 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-18 (afternoon) — Bootstrap sweep ran on the robot twice; the compute needed two more fixes; new-mount hand-eye in use, absolute check open
+
+User: "다시 해봤어요 검증해줘". `run_20260918_144420`: **14:46, from
+1.2 m** — file diverged after ONE step (287 → 405 mm, tilt 4.4 → 7.4°),
+retreat, bootstrap 7/7 views (HORAUD, t = (−86, −315, 157)), square-up
+6 iterations 286 → 155 mm ending at z 0.72 (unconverged, 10 cm clamp),
+4 views planned / 20 rejected by clearance, 5 captured. **14:48, from
+0.62 m** (where the first left the arm) — the FILE was tried again and
+diverged again (the node loads it per call), bootstrap 7/7 (t = (19,
+−279, −21)), square-up converged in 5 (105 → 2.7 mm, z 0.349), 12
+planned / 12 rejected, 13 captured. `compute` over all 32: ANDREFF
+0.0676, t = (35, −337, −128). So the divergence guard, the retreat and
+the bootstrap all did exactly what the plant said. Two things the plant
+had NOT shown:
+
+1. **The bootstrap samples poison the compute.** Re-detecting the 32
+   archived frames: with the node's file the fixed tag re-projects with
+   **11.1 mm rms / 22 max** scatter (09-14: 2.1 / 3.2). Per sample, the
+   seven 1.2 m bootstrap frames (tag ~70 px) sit 17–22 mm off each, the
+   0.62 m ones 2–9, the 18 sweep views 1–5. The two bootstrap solves
+   differed by 200 mm between themselves — fine for AIMING (both
+   square-ups then converged), useless as calibration data. Now
+   `bootstrap_keep_samples: false` (default): the node drops them from
+   the set once the provisional hand-eye is solved (`discard(since)`;
+   they stay archived on disk).
+2. **The closed-form solve is not what the chain needs.** `calibrate()`
+   now REFINES the best OpenCV result by minimising the fixed tag's
+   re-projection scatter (position + normal) over the 6 parameters
+   (`refine_hand_eye`, scipy least_squares), keeps it only if the
+   scatter drops, and reports both (`CalibResult.scatter_*`,
+   `summarize`, `result.yaml`). On today's 18 sweep samples: PARK 3.1 /
+   6.2 mm → refined **2.3 / 4.8 mm**, normal 0.82°; over all 32: 11.1 →
+   5.3. Synthetic A/B (`check_handeye_refine.py`, 14): the refinement
+   never raises the fit scatter, lowers the located-tag bias and
+   per-view rms on HELD-OUT views (4.9 → 3.1 / 7.5 → 6.3 mm at 0.7° /
+   3 mm noise) and costs ≤ 1 mm / 0.1° of hand-eye truth — the trade
+   the locator wants; and a 2026-09-18-shaped mixed set is no better
+   than the sweep views alone, which is the case for dropping them.
+
+**File in use: the sweep-only refined solve, written offline** from the
+run's 18 sweep samples — t = (37, −340, −153) mm, rpy (0.46, −0.47,
+−179.3)°: the camera is 0.37 m from the flange and ~180° spun from the
+09-14 mount (which is why that file diverged). Jackknife sd 3.5 / 3.6 /
+1.7 mm on t, 0.5–1.2 mm on the located tag. The node's 14:49 file is
+`T_hc2ee_2026-09-18_node_all32_andreff.npz` (25 mm / 1.4° away), the
+09-14 one `T_hc2ee_2026-09-14_old_mount.npz`. ⚠️ **Absolute check not
+closed:** tag 0 through the new file lands (−389.5, 992.4, −580.2) mm,
+base aligned on 102 to 2.3 mm, vs map.yaml's (−400, 1010, −571.5):
+**10 / −18 / −9 mm**, where 09-14 agreed to 1 / 0 / 5. Stable to ~1 mm
+under the jackknife, so systematic — fewer views than 09-14 (18 vs 23,
+only two tilt-22 views, a longer lever) or the base/map side. Next on
+the robot: one more sweep from ~0.6 m (aims from the new file now, no
+bootstrap expected), Compute over both sessions' sweep samples, re-check
+that number; restart the calibration nodes (they cache the npz).
+`check_handeye_sweep.py` 71 → 74, `check_repose_from_corners` 10.
+
 ### 2026-09-18 — Hand camera remounted: the sweep's square-up diverged on the old hand-eye; now it retreats and bootstraps its own aiming estimate
 
 User: "현재 handcam 위치 바꿔서 핸드아이 캘리브레이션 다시할려고하는대

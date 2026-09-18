@@ -307,6 +307,7 @@ class HandeyeCalibNode:
             progress=self._publish_progress,
             n_samples=lambda: len(self.samples),
             solve=self._solve_provisional,
+            discard=self._discard_from,
         )
 
         def _worker():
@@ -324,6 +325,16 @@ class HandeyeCalibNode:
                      f"{cfg.distances_m} m, tilts {cfg.tilts_deg} deg, spins "
                      f"{cfg.spins_deg} deg; {aim_note} (bootstrap: {cfg.bootstrap}); "
                      f"progress on {rospy.resolve_name('~progress')}"))
+
+    def _discard_from(self, since):
+        """Drop the samples captured from index ``since`` on (the
+        bootstrap's, once its provisional hand-eye is solved). They stay
+        in the run directory on disk; only the set ~compute uses shrinks."""
+        with self._sample_lock:
+            n = len(self.samples) - int(since)
+            del self.samples[int(since):]
+        rospy.loginfo("handeye_calib: %d bootstrap sample(s) dropped from the set "
+                      "(still archived under %s)", n, self.recorder.run_dir)
 
     def _solve_provisional(self, since):
         """The sweep's bootstrap: a hand-eye over the samples captured from

@@ -303,6 +303,8 @@ class HandeyeRunRecorder:
             str(self.run_dir / "result.npz"),
             T_hc2ee=np.asarray(result.T_hc2ee, dtype=np.float64),
             T_ee2hc=np.asarray(result.T_ee2hc, dtype=np.float64),
+            **({"T_hc2ee_opencv": np.asarray(result.T_hc2ee_opencv, dtype=np.float64)}
+               if getattr(result, "T_hc2ee_opencv", None) is not None else {}),
         )
         summary = {
             "timestamp": _now_str(),
@@ -314,6 +316,14 @@ class HandeyeRunRecorder:
             "tag_size_m": float(tag_size_m),
             "apriltag_family": family,
         }
+        # tag-scatter refinement (2026-09-18), when the result carries it
+        if np.isfinite(getattr(result, "scatter_rms_m", float("nan"))):
+            summary["refined"] = bool(getattr(result, "refined", False))
+            summary["tag_scatter_rms_mm"] = round(float(result.scatter_rms_m) * 1000.0, 2)
+            summary["tag_scatter_max_mm"] = round(float(result.scatter_max_m) * 1000.0, 2)
+            summary["tag_normal_rms_deg"] = round(float(result.scatter_normal_rms_deg), 3)
+            summary["opencv_scatter_rms_mm"] = round(float(result.opencv_scatter_rms_m) * 1000.0, 2)
+            summary["opencv_scatter_max_mm"] = round(float(result.opencv_scatter_max_m) * 1000.0, 2)
         with open(self.run_dir / "result.yaml", "w") as fh:
             yaml.safe_dump(summary, fh, default_flow_style=False,
                            sort_keys=False)
