@@ -11,6 +11,7 @@ catkin_package(CATKIN_DEPENDS rospy)
 install(PROGRAMS
   scripts/chain_calib.py
   scripts/check_chain_calib.py
+  scripts/verify_chain.py
   scripts/basler_tip_calib.py
   scripts/check_basler_tip.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

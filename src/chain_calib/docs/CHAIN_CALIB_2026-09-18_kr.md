@@ -1,0 +1,230 @@
+# front_cam ↔ hand_cam 체인 캘리브레이션 — 2026-09-18 세션 기록
+
+A0 인쇄 AprilTag 시트(태그 200 + 300–309)를 참값(ground truth)으로 삼아
+`T_hc2fc` 체인 — hand_cam → 플랜지(hand-eye) → arm base → mobile base →
+front_cam — 의 고정 행렬 오차를 측정하고, base 쪽 보정을
+`path_tag_locator/config/extrinsics.yaml`의 `T_ab2mb`에 반영한 기록이다.
+절차·해석·재실행 방법은 [README.md](../README.md), 도구 코드는
+`scripts/chain_calib.py` / `scripts/verify_chain.py`, 원 데이터는
+`log/chain_calib/20260918/`.
+
+| 항목 | 값 |
+|---|---|
+| 세션 | `log/chain_calib/20260918/` — 17:10–17:36 캡처 50개, 17:50 solve, 18:14 검증 플랜, 18:17 검증 실행 |
+| 참값 | `sheet/A0_landscape_tag200_300-309_5x2_FINAL2_layout.json` (W = 태그 200, 300–309는 850/1000 mm × 0/150/300/450/600 mm 격자, 90 mm 태그) |
+| front_cam | 태그 200 위, ground-plane 보정 ON(level 프레임), 20프레임 평균 |
+| hand_cam | 300–309 위를 수동 조그, 뷰당 2–6 태그, 거리 0.35–0.61 m, 기울기 최대 27° (4방향), 스핀 +30…+140°, 180° |
+| hand-eye | `T_hc2ee.npz` 2026-09-18 (35 스윕 샘플, t (36, −335, −152) mm) |
+| 결과 | **원시 체인 오차 25.1 mm / 2.01° → base 보정 후 9.1 mm / 0.93°** (hand-only 13.9, joint 9.0) → 판정 **BASE 쪽**, hand-eye는 정상 |
+| 적용 | `extrinsics.yaml T_ab2mb` ← t (−13.2, −118.0, −642.7) mm, rpy (−1.247, −0.457, 178.710)° (설계값 (0, −100, −652) / Rz(180°)) |
+| 검증 | 보정 체인으로 hand_cam을 10개 태그 위 0.50 m로 이동: 중심 편차 평균 (−0.3, −0.7) mm, 거리 0.504 ± 0.002 m; 잔여 ±12 mm는 팔 x 이동에 따른 선형 기울기(2.1°/0.6 m) |
+
+---
+
+## 1. 무엇을 측정했나
+
+체인의 각 행렬은 따로 검증할 방법이 없는 "블랙박스"였다. 시트는 두 카메라가
+**같은 강체 위의 태그들**을 보게 해 준다: front_cam이 태그 200을, hand_cam이
+300–309를 보면 두 카메라 사이의 변환은
+
+```
+S_i = T_hc2W · inv(T_fc2W)          (측정: 시트 W 프레임을 통해)
+M_i = T_hc2ee · T_ee2ab(FK_i) · T_ab2mb · T_mb2fc     (모델: 체인)
+```
+
+로 두 번 얻어지고, 뷰 i마다 그 차이가 체인 오차다. 팔 자세 A_i만 바뀌고 base는
+정지해 있으므로 이것은 AX = YB(robot-world / hand-eye) 문제가 되며,
+
+```
+inv(H) · S_i = D · (A_i · B) · F
+```
+
+에서 **D**(플랜지 프레임 — hand-eye 오차)와 **F**(front_cam 프레임 — 팔 마운트
+`T_ab2mb` + `T_mb2fc` + 태그 200 관측을 합친 base 쪽 오차)를 최소자승으로 푼다.
+base 자세가 하나뿐이라 F 안에서 마운트 오차와 front_cam 오차는 분리되지
+않지만, 이 파일을 쓰는 모든 소비자는 그 곱만 쓰므로 분리할 필요도 없다.
+
+각 카메라의 `T_cam2W`는 보이는 시트 태그 **전부의 코너**로 멀티태그 PnP(IPPE →
+LM 정련, 거울 해 검사)를 풀어 얻는다 — 90 mm 태그 하나의 자세가 아니라
+150–600 mm 기준선 위에서 면외 기울기를 측정한다. hand_cam 코너는 RAW라
+CameraInfo D를 넣고(D435는 0 보고), front_cam 코너는 ground-plane 보정된
+level 카메라 픽셀이라 D 없이 `T_mb2fc_level`로 푼다.
+
+코너 순서 규약은 문서가 아니라 실제 PDF로 확정했다: `pdftoppm`으로
+래스터화해 dt_apriltags(robot_camera_node가 쓰는 라이브러리)로 검출하면 11개
+태그 전부가 종이 위치에 < 0.2 mm로 놓이고 corner 0 = 좌하단, W 축은
++x 종이 오른쪽 / +y 종이 아래 / +z 종이 안쪽 = 체인이 이미 쓰는 태그 프레임.
+
+## 2. 절차 (실제 진행 순서)
+
+1. **인쇄·실측·배치.** A0 100 % 인쇄. 시트를 바닥에 놓고 front_cam 아래에
+   태그 200, 로봇 오른쪽으로 300–309 격자. 실측 스케일은 `sx = sy = 1.0`,
+   태그 90 mm로 입력(설계값; §5 참조).
+2. **`chain_calib.py check`** — 두 카메라의 K/D, 팔 상태, 검출 확인. 첫 뷰:
+   hand_cam이 [300–305] 0.612 m에서, front_cam이 [200]. 원시 체인 오차
+   14.9 mm / 2.23°.
+3. **`capture` × 50 (수동 조그).** 태그를 바꿔 가며(300 → 301 → …) 위치·기울기
+   (rpy)·스핀을 바꿔 캡처. 자동 팔 이동은 없다(09-15 충돌 이후 규칙). 90° 스핀은
+   현재 자세에서 링크 충돌 위험이 있어 요구하지 않는다 — `status`의 coverage
+   판정은 4방향 기울기 ≥ 12° 뷰가 6개 이상이면 스핀 없이도 READY.
+4. **`solve --sx --sy --tag-size --holdout-every 4`.** raw / hand / base /
+   joint 4가지 피팅, joint 잔차 기준 이상치 제거(2회, 중앙값의 4×), 홀드아웃
+   평가, 사용자 지표(태그 A → B 위치), 잔차-뷰 상관.
+5. **보정 전/후 계산** — 로봇이 태그 200 기준 태그 300을 어디로 보는가.
+6. **`verify_chain.py plan / run --fit base`** — 보정 체인으로 hand_cam을
+   각 격자 태그 위 0.50 m, 수평, 태그가 화면 중앙에 오는 플랜지 자세로 이동
+   (Enter마다 한 점, MoveL), 실제 태그의 중심 편차·거리·기울기 기록.
+7. **적용** — `extrinsics.yaml T_ab2mb`(이 문서 §6).
+
+## 3. 풀이 결과
+
+50뷰 중 이상치 6개(v09, v35, v42, v44, v46, v47 — 5° 수준의 튐) 제외, 매 4번째
+뷰 홀드아웃.
+
+| 피팅 | 뜻 | rms (mm / °) | max | 홀드아웃 |
+|---|---|---|---|---|
+| raw | 체인 그대로 | **25.08 / 2.008** | 38.95 / 2.71 | 24.3 / 1.95 |
+| hand | `T_hc2ee · D` (hand-eye만 보정) | 13.91 / 1.271 | 28.5 / 2.06 | 13.3 / 1.11 |
+| **base** | `T_ab2mb · T_mb2fc · F · inv(T_mb2fc)` | **9.06 / 0.926** | 21.8 / 1.86 | 9.8 / 0.85 |
+| joint | 둘 다 | 8.95 / 0.926 | 23.0 / 1.86 | 10.0 / 0.85 |
+
+**판정: BASE 쪽.** base 단독 피팅이 joint 피팅의 바닥(8.9 mm)에 도달하고
+hand 단독은 못 한다. joint 피팅이 hand-eye에 배정한 D는 1–2 mm / 0.3°로 자체
+jackknife 안 — 2026-09-18 hand-eye는 맞다.
+
+**F (front_cam 프레임, 인쇄 스케일 0.998 / 0.996 / 89.7 mm — 적용된 값):**
+t (+10.8, −12.3, −13.6) mm, rpy (−1.247, +0.457, +1.290)°,
+jackknife sd ≈ 0.5–1.4 mm / 0.02–0.15°.
+설계 스케일(1.0 / 1.0 / 90 mm)로 풀면 t (+12.6, −13.7, −14.2) mm,
+rpy (−1.110, +0.362, +1.343)° — 차이 1–3 mm / 0.15°.
+
+**`T_ab2mb`로 접으면** (`T_ab2mb_design · T_mb2fc · F · inv(T_mb2fc)`):
+
+| | t (mm) | rpy (°) |
+|---|---|---|
+| 설계 | (0, −100, −652) | (0, 0, 180) |
+| **보정** | **(−13.2, −118.0, −642.7)** | **(−1.247, −0.457, 178.710)** |
+
+즉 arm base에서 본 mobile base 원점이 설계보다 13 / 18 / 9 mm, 1.3° 어긋나
+있었다. 뷰 부분집합·스케일 변형에 ±2 mm / 0.2°로 안정, 홀드아웃 = 학습.
+같은 날 hand-eye 절대 점검이 독립 체인으로 찾은 "레인 가로 −19 mm"와 같은
+크기·방향이다.
+
+**사용자 지표 — 태그 200 기준 태그 300의 위치** (참값 (850, 0, 0) mm):
+
+| | x | y | z |
+|---|---|---|---|
+| 보정 전 | 839.5 | +9.0 | −29.6 |
+| 보정 후 | 848.3 | +3.0 | +0.5 |
+
+보정 전에는 태그가 850이 아니라 840 mm, 그리고 **30 mm 위**에 있다고 계산했다
+(front_cam 프레임의 −14 mm z + 1.3° 회전 × 0.85 m 레버).
+
+## 4. 검증 — 보정 체인으로 실제 이동
+
+`verify_chain.py plan --fit base`가 만든 10개 플랜지 목표는 시트 격자를 arm
+base 프레임으로 **강체 회전·이동한 것 그대로**다(45개 태그 쌍의 간격이 시트와
+0.001 mm 안에서 같음, 자세 10개 모두 동일). 격자의 모양은 시트 JSON에서,
+격자가 arm base 어디에 놓이는지는 체인(front_cam의 200 관측 → `T_mb2fc` →
+보정 `T_ab2mb`)에서 왔다. 그러므로 이 실행은 "체인이 시트를 올바른 곳에
+놓았는가"와 "팔이 그 격자를 따라갔는가"를 함께 본다.
+
+`run --fit base` (18:17, 10/10 검출, `verify_result_base_181737.csv`):
+
+| 태그 | 중심 편차 x, y (mm) | 거리 (m) | 카메라 기울기 (°) |
+|---|---|---|---|
+| 300 | −12.0, −3.3 | 0.505 | 1.6 |
+| 301 | −7.7, −4.0 | 0.510 | 2.6 |
+| 302 | −8.5, −3.2 | 0.503 | 0.9 |
+| 303 | −4.9, −3.5 | 0.504 | 1.5 |
+| 304 | −2.9, −2.3 | 0.502 | 0.6 |
+| 305 | −0.1, −2.3 | 0.504 | 1.4 |
+| 306 | +4.4, +0.7 | 0.501 | 0.7 |
+| 307 | +5.9, +0.2 | 0.504 | 1.2 |
+| 308 | +11.3, +6.4 | 0.505 | 2.7 |
+| 309 | +11.6, +4.4 | 0.504 | 1.7 |
+
+**상수 오차는 사라졌다.** 편차 평균 (−0.3, −0.7) mm(보정 전이라면 약
+(−10, +9) mm), 거리 0.504 ± 0.002 m(보정 전 체인은 태그가 30 mm 위에 있다고
+믿었으니 0.53 m). +4 mm는 hand-eye / 스케일 수준의 잔여.
+
+**남은 것은 위치 의존 오차다.** 편차 x가 300 → 309로 −12 → +12 mm
+**직선적으로** 변한다: 회귀 `off_x = 0.0167·Wx + 0.0363·Wy − 0.28`, 격자
+600 mm(= 팔 x 이동 −566 → +37 mm)당 +21.8 mm = **2.08°**, y도 +8.7 mm/600 mm,
+회귀 잔차 sd 1.2 mm. 10개 자세 모두 같은 방향을 명령했는데 실측 카메라
+기울기는 0.6–2.7°로 위치마다 다르다. 수집 세션에도 같은 신호가 있다: joint
+피팅 잔차의 y 회전 성분과 플랜지 x 위치의 상관 r = +0.64. **팔이 x로 움직이면
+실제 방향이 FK 보고값과 ~2°/0.6 m 만큼 달라진다** — 세션의 9 mm 바닥과 검증의
+±12 mm가 같은 원인이다. 출처는 팔(FK / 관절 오프셋) 또는 구조(리프트 기둥이
+팔의 모멘트에 따라 휨) 중 하나이며, 어느 쪽이든 상수 TF로는 잡을 수 없고
+front_cam·hand-eye·마운트 TF의 문제가 아니다.
+
+실용 정확도: 팔 x 이동 범위 ±0.3 m 안에서 이 체인으로 위치한 태그는
+**≈ ±10 mm**, 격자 중앙 근처에서 2–5 mm.
+
+## 5. 잔차 바닥 9 mm의 출처 (합성 0.5 mm와 왜 다른가)
+
+저장된 코너로 진단했다.
+- front_cam의 `T_fc2W`는 44개 정상 뷰에서 0.1 mm / 0.1°로 상수 — 원인 아님.
+- **hand 쪽만으로**(FK + hand_cam PnP, front_cam 없이) 시트를 arm base에
+  재구성하면 9.5 mm rms 산포 — hand_cam의 뷰당 ~0.5° 자세 오차 × 격자→태그 200
+  ~1 m 레버.
+- 렌즈 왜곡 아님(44뷰 `calibrateCamera`는 0.78 px에 머물고 그 K/D는 피팅을
+  악화), 시트 평면성 아님(태그별 오프셋을 풀어도 xy ≤ 1.3 mm, z ≤ 3 mm).
+- 뷰에 따라 다르다: 2태그 뷰 10–20 mm, 0.55 m 이내 4–6태그 뷰 1–4 mm.
+  `solve --min-tags 4 --max-range 0.56`이면 바닥 8.6 → **4.3 mm**, F는 그대로.
+- 이상치 판정은 raw 잔차가 아니라 joint 잔차로 한다 — raw 기준은 5° 튐(v35,
+  v44)을 놓쳤다.
+
+**부수 발견 — 인쇄 스케일.** 태그별 오프셋을 풀어 보면 인쇄가 설계보다
+0.2–0.4 % 작다(sy ≈ 0.996, sx ≈ 0.998, 태그 ≈ 89.7 mm). 사용자는 1.0 / 1.0 /
+0.09를 입력했다. 적용된 `corrections.npz`는 이 추정 스케일로 다시 푼 것이고
+(17:50), 로봇 검증도 그 값으로 했다. 설계 스케일 풀이와의 차이는 1–3 mm.
+**시트를 실측해 `--sx --sy --tag-size`로 다시 푸는 것이 남은 2 mm를 확정하는
+가장 싼 방법이다.**
+
+## 6. 적용된 것 / 적용하지 않은 것
+
+**적용 (2026-09-18):**
+- `src/path_tag_locator/config/extrinsics.yaml` `T_ab2mb_row_major` ← §3의
+  보정 행렬(`corrections.npz F_base`를 접은 값, 9자리). `T_mb2fc`는 생성 파일
+  그대로. `check_front_cam_extrinsics.py`의 "T_ab2mb 설계값 그대로" 검사는
+  "정규직교, Rz(180) 3° / 설계 30 mm 이내"로 바뀌었다(24 통과).
+  `load_extrinsics_full()`이 돌려주는 행렬 = 설계 · F 접기 (4.5e-10).
+- 소비자: `path_tag_locator_node`, `map_calibrator_node`, hand-eye 절대 점검,
+  `robot_sim`, `generate_calibration_artifacts.py`(플랜 시드 — 재생성하지
+  않았다; 1–2 cm 이동은 align 루프가 흡수하고 plate 1 시드는 세션 실측값이다).
+  **캘리브레이션 노드(`path_tag_locator.launch`) 재시작 필요** — 시작 시 읽는다.
+- `chain_calib`를 `--fit none`으로 다시 돌리면 이제 적용된 체인을 그대로 쓴다.
+
+**적용하지 않은 것 (별도 결정):**
+- `robot.yaml arm_calibration`(pose 모드 IK, `transform_world_to_arm`)은
+  설계값 유지. 플래너 URDF의 `mobile_to_base`와 `check_pose_vs_joint.py`가
+  같은 설계값에 맞춰져 있어 셋을 함께 움직여야 하고, 반영하면 모든 pose 모드
+  목표가 13–18 mm 이동한다. robot.yaml 주석에 그 사실을 적었다.
+
+## 7. 남은 일
+
+1. 시트 실측 → `solve --sx --sy --tag-size` 재실행 → F가 2 mm 이상 움직이면
+   extrinsics 갱신.
+2. `verify_chain.py run --fit none`으로 보정 전 대조 데이터(예상 30–40 mm 편차,
+   거리 0.53 m) 기록; `--fit base`를 다시 돌리면 이제 태그 위 카메라 실위치와
+   부호 있는 rpy 열이 남는다.
+3. 위치 의존 2°/0.6 m: 같은 10점을 다른 팔 구성(손목 180° 회전, 높이 0.40 m)으로
+   반복 — 편차 기울기가 TCP 위치를 따르면 구조(휨), 관절 구성을 따르면 FK.
+4. robot.yaml / URDF 반영 여부.
+
+## 8. 재실행
+
+```bash
+source devel/setup.bash
+rosrun chain_calib chain_calib.py --sx S --sy S --tag-size T check
+rosrun chain_calib chain_calib.py --sx S --sy S --tag-size T capture log/chain_calib/<date>   # 자세마다
+rosrun chain_calib chain_calib.py --sx S --sy S --tag-size T status  log/chain_calib/<date>
+rosrun chain_calib chain_calib.py --sx S --sy S --tag-size T solve   log/chain_calib/<date> --holdout-every 4
+rosrun chain_calib verify_chain.py plan log/chain_calib/<date> --fit base   # <date>/corrections.npz 사용
+rosrun chain_calib verify_chain.py run  log/chain_calib/<date> --fit base
+```
+
+적용된 체인을 다시 검증할 때는 `--fit none`(보정 없이 = 현재 extrinsics 그대로).
+오프라인 점검: `check_chain_calib.py` 37, `check_front_cam_extrinsics.py` 24.

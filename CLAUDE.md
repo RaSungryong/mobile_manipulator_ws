@@ -1483,9 +1483,25 @@ arm_tilt_x:         0.0       # no mount tilt
 arm_tilt_y:         0.0       # no mount tilt
 ```
 
-`T_ab2mb` t is therefore **(0, -0.100, -0.652)**. Both signs come out negative
-because Rz(180°) flips y and the inverse flips it back; the arm did move toward
-the wall, i.e. body **-Y**.
+`T_ab2mb` t is therefore **(0, -0.100, -0.652)** by design. Both signs come
+out negative because Rz(180°) flips y and the inverse flips it back; the arm
+did move toward the wall, i.e. body **-Y**.
+
+⚠️ **Since 2026-09-18 the two copies DIFFER on purpose.** `extrinsics.yaml`
+`T_ab2mb` holds the CALIBRATED value from `chain_calib` (printed A0 tag
+sheet as the ground truth, 50 views): **t (−13.2, −118.0, −642.7) mm, rpy
+(−1.247, −0.457, 178.710°)** — 13 / 18 / 9 mm and 1.3° off the design
+block above, verified on the robot (hand_cam driven through the chain
+lands each grid tag 0.3 / 0.7 mm mean from the image centre at 0.504 m).
+Everything on the locator / calibration chain (`path_tag_locator`,
+`robot_sim`, the plan generator, `verify_chain.py --fit none`) uses it.
+`robot.yaml arm_calibration` (pose-mode IK) **still carries the design
+figures**, because the planner URDF's `mobile_to_base` and
+`check_pose_vs_joint.py` are written to them and all three must move
+together — a separate decision that would shift every pose-mode target
+13–18 mm. `check_front_cam_extrinsics.py` pins T_ab2mb to "orthonormal,
+within 3° of Rz(180) and 30 mm of the design", not to the design numbers.
+Record: `src/chain_calib/docs/CHAIN_CALIB_2026-09-18_kr.md`.
 
 ⚠️ **`arm_body_offset_y` corrects POSE mode only.** `arm_transform.py` reads it
 into `p_A_W`, and `transform_world_to_arm` is called from exactly one place —
@@ -1761,6 +1777,87 @@ errors planted → verdict BOTH, joint hold-out 0.70 mm). Live, read-only:
 arm, collected 20 frames per camera and refused correctly (`none of the
 detected tags [0] is on the sheet`) — the sheet is not laid yet.
 `catkin_make` clean.
+
+**First session on the robot (17:10–, `log/chain_calib/20260918`, 50
+views, front_cam on tag 200, hand_cam over the 300–309 grid, tilts to
+27° in all four directions, spins +30…+140 and 180).** `solve`: raw
+25 mm / 2.0° → hand-only 13.9, base-only 9.1, joint 9.0 mm — **verdict
+BASE side**: the 2026-09-18 hand-eye is right (joint D = 1–2 mm / 0.3°,
+inside its jackknife), and a base-side correction F ≈ (+12, −13, −14) mm /
+(−1.1, +0.3, +1.3)° explains everything a constant can — i.e.
+**T_ab2mb' ≈ (−13, −119, −640) mm, rpy (−1.1, −0.3, 178.7°)** vs the
+assumed (0, −100, −652) / exact Rz(180). Stable to ±2 mm / 0.2° over view
+subsets and the print-scale range, hold-out = train, and it is the SAME
+−19 mm across the lane the 09-18 hand-eye absolute check found through an
+independent chain. **Applied the same night to `extrinsics.yaml` `T_ab2mb`
+(the `corrections.npz` F_base at the data-estimated print scale 0.998 /
+0.996 / 89.7 mm — the value the robot verified below; the design-scale
+solve differs by 1–3 mm): t (−13.2, −118.0, −642.7) mm, rpy (−1.247,
+−0.457, 178.710°).** `T_mb2fc` untouched (F folded as
+`T_ab2mb · T_mb2fc · F · inv(T_mb2fc)`); `check_front_cam_extrinsics.py`'s
+"T_ab2mb untouched" check became a rigid-and-near-design check (24 pass);
+`load_extrinsics_full()` returns the folded matrix to 4.5e-10; chain_calib
+37 / repose 10 still pass. robot.yaml `arm_calibration` keeps the design
+value (pose IK; the planner URDF and `check_pose_vs_joint.py` must move
+with it — separate decision, noted in the yaml). Calibration plan seeds
+not regenerated (1–2 cm, align absorbs; plate 1 seeds are session data).
+**Restart the calibration nodes** to load it. Full record:
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-18_kr.md`.
+
+**Why the floor is 9 mm, not the synthetic 0.5:** diagnosed from the
+stored corners, not guessed. front_cam's `T_fc2W` is constant to
+0.1 mm / 0.1° over the 44 good views (not it). The HAND side alone —
+FK + hand_cam PnP, no front_cam — reconstructs the sheet in the arm
+base with a 9.5 mm rms scatter: a ~0.5° per-view orientation error of
+hand_cam × the ~1 m lever from the grid to tag 200. Not lens distortion
+(a 44-view `calibrateCamera` on the sheet only reaches 0.78 px and its
+K/D make the fit worse), not the sheet (per-tag offsets freed: xy
+≤ 1.3 mm, z ≤ 3 mm / plane 0.9 mm, rms 0.70 → 0.65 px). It tracks the
+VIEW: 2-tag views deviate 10–20 mm, 4–6-tag views at ≤ 0.55 m 1–4 mm;
+filtering to ≥ 4 tags / ≤ 0.56 m drops the floor 8.6 → 4.3 mm with F
+unchanged (`solve --min-tags --max-range`, new). So the accuracy of a
+tag located ~1 m from hand_cam through this chain is ~5–9 mm today, set
+by hand_cam's orientation per view, and the remedy is views with 4+
+tags close up (or a longer hand_cam baseline), not more fitting. Side
+finding: the freed offsets show the print ~0.2–0.4 % SMALL (sy ≈ 0.996,
+sx ≈ 0.998; the user had entered 1.0000) — worth 2 mm on F, re-measure.
+Outlier rejection now judges the JOINT-fit residual (v09, v35, v42, v44,
+v46, v47 caught — 5° jolts that the raw criterion let through), and the
+verdict is relative (which single-side fit reaches the joint fit's
+floor) with the floor printed.
+
+**`scripts/verify_chain.py` (same evening, user request):** the metric
+EXECUTED — from front_cam's live view of tag 200 the chain (with a chosen
+fit of `corrections.npz`, or none) computes the flange pose that puts
+hand_cam 0.50 m above each grid tag, level, tag on the axis; `run` MoveLs
+there one target at a time (Enter each, first target within 0.35 m of
+the current flange) and reports the tag's offset from the image centre
+and its range. Offline: rebuilding each session view's flange from its
+own hand_cam pose through the corrected chain reproduces the fit
+residual (9.2 mm / 0.93° over 44 views; 38 mm / 2.0° uncorrected), so
+the target algebra is the fit's inverse. **Run on the robot at 18:17
+(`run --fit base`, 10/10 tags seen):** the 10 flange targets are the
+sheet grid rigidly moved into the arm base (45 pairwise spacings equal the
+sheet's to 0.001 mm, one orientation) — so the run tests both "did the
+chain place the sheet right" and "did the arm follow the grid". Centre
+offsets mean **(−0.3, −0.7) mm** (≈ (−10, +9) uncorrected), range
+**0.504 ± 0.002 m** (0.53 uncorrected) — the constant error is gone. What
+remains is a **linear gradient**: offset x −12 → +12 mm from tag 300 to
+309 (`off_x = 0.0167·Wx + 0.0363·Wy − 0.28`, +21.8 mm per 600 mm of arm
+x = **2.08°**, y +8.7 mm / 600 mm, residual sd 1.2 mm) with the measured
+camera tilt varying 0.6–2.7° at ONE commanded orientation. Same signal in
+the session (joint residual r_y vs flange x, r = +0.64): the arm's actual
+orientation changes ~2° per 0.6 m of x travel relative to its FK —
+FK / joint offsets or structure (lift column flex), NOT a constant TF, and
+the origin of the 9 mm floor. Practical accuracy of a tag located through
+the chain: ≈ ±10 mm over ±0.3 m of arm x, 2–5 mm near the grid centre.
+`run` now also records the camera's actual position over each tag and its
+signed rpy (`cam_over_tag_*`, `cam_r*_deg`) to split position from tilt
+next time; a `--fit none` contrast run and the same 10 points in a second
+arm configuration (wrist spun 180° / height 0.40 m — gradient following
+TCP position ⇒ structure, following joint configuration ⇒ FK) are the
+next steps. Side finding: the flange readback during the run sat 2 mm /
+0.2° (ry 0.536 vs 0.753 commanded) from the target, constant.
 
 Not done, deliberately: the handoff's stage-2 reprojection bundle
 adjustment (the 20-frame-mean SE(3) LSQ is at ~0.5 mm on the plant, so

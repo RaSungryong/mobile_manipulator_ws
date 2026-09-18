@@ -327,15 +327,33 @@ def cmd_solve(args):
     print("hand-eye: %s\nextrinsics: %s" % (_resolve(args.hand_eye or meta.get("hand_eye_npz")), ext.note))
     if args.exclude:
         samples = [s for s in samples if s.label not in set(args.exclude)]
+    if args.min_tags > 1 or args.max_range:
+        keep = [s for s in samples if len(s.hand_corners or []) >= args.min_tags
+                and (not args.max_range or sample_view(s, sheet).range_m <= args.max_range)]
+        print("view filter: hand_cam >= %d tags%s -> %d of %d samples" % (
+            args.min_tags, (", range <= %.2f m" % args.max_range) if args.max_range else "", len(keep), len(samples)))
+        samples = keep
     ok, lines = coverage(samples, sheet=sheet)
     print("coverage: " + lines[0]); print("          " + lines[1])
-    # outliers (a sample taken while the arm was moving / pushed) would dominate every fit
-    res0 = CC.fit_corrections(samples, H, ext.T_ab2mb, ext.T_mb2fc_chain, compensate_T_ab2mb, jackknife=False)
-    med = float(np.median([dp for _, dp, _ in res0['raw'].per_sample]))
-    bad = [lab for lab, dp, dr in res0['raw'].per_sample if dp > args.outlier_factor * med]
+    # outliers (a sample taken while the arm was still moving / pushed) would
+    # dominate every fit. Judged on the JOINT fit's residual, not the raw
+    # one: good samples collapse to the noise floor after correction and a
+    # bad one stands out by 10x, while in the raw chain a 5 deg jolt hides
+    # inside the 2 deg systematic error. Two passes (the first fit is
+    # itself pulled by the outliers).
+    bad = []
+    for _ in range(2):
+        keep = [s for s in samples if s.label not in set(bad)]
+        res0 = CC.fit_corrections(keep, H, ext.T_ab2mb, ext.T_mb2fc_chain, compensate_T_ab2mb, jackknife=False)['joint']
+        pos = np.array([dp for _, dp, _ in res0.per_sample]); rot = np.array([dr for _, _, dr in res0.per_sample])
+        mp, mr = max(float(np.median(pos)), 0.5e-3), max(float(np.median(rot)), 0.05)
+        new = [lab for (lab, dp, dr) in res0.per_sample if dp > args.outlier_factor * mp or dr > args.outlier_factor * mr]
+        if not new:
+            break
+        bad += new
     if bad:
-        print("excluding %d outlier(s) whose raw residual exceeds %.0fx the median (%.1f mm): %s"
-              % (len(bad), args.outlier_factor, med * 1e3, ", ".join(bad)))
+        print("excluding %d outlier(s) whose residual after the joint fit exceeds %.0fx the median (%.1f mm / %.2f deg): %s"
+              % (len(bad), args.outlier_factor, mp * 1e3, mr, ", ".join(bad)))
         samples = [s for s in samples if s.label not in set(bad)]
     train, test = _holdout_split(samples, args)
     if len(train) < 4:
@@ -397,18 +415,24 @@ def cmd_solve(args):
             print("  %3d -> %3d   n %2d   raw %6.2f / %.3f   %-5s %6.2f / %.3f   bias (%+.1f, %+.1f, %+.1f)"
                   % (a, b, len(r), pr0, rr0, args.pairs, pr1, rr1, bb[0], bb[1], bb[2]))
 
-    floor = 3e-3
+    # Attribution is RELATIVE: which single-side fit already does what the
+    # joint fit does. The remaining joint residual is the per-view
+    # measurement floor of this session (mostly hand_cam's orientation
+    # noise x the hc->fc lever), whatever the constant corrections are.
     h, b, j = res['hand'], res['base'], res['joint']
-    if h.rms_pos_m <= max(floor, 1.5 * j.rms_pos_m) and h.rms_pos_m < 0.5 * b.rms_pos_m:
-        verdict = "HAND side: the hand-eye explains the residual; the base side adds nothing"
-    elif b.rms_pos_m <= max(floor, 1.5 * j.rms_pos_m) and b.rms_pos_m < 0.5 * h.rms_pos_m:
-        verdict = "BASE side: an arm-mount / front_cam error explains it; the hand-eye is fine"
-    elif j.rms_pos_m < 0.5 * min(h.rms_pos_m, b.rms_pos_m):
-        verdict = "BOTH sides carry error (only the joint fit reaches the floor)"
-    elif abs(h.rms_pos_m - b.rms_pos_m) < 0.3 * max(h.rms_pos_m, b.rms_pos_m):
+    close = lambda a: a.rms_pos_m <= 1.15 * j.rms_pos_m and a.rms_rot_deg <= 1.15 * j.rms_rot_deg
+    if close(h) and not close(b):
+        verdict = "HAND side: the hand-eye explains everything the joint fit explains; the base side adds nothing"
+    elif close(b) and not close(h):
+        verdict = "BASE side: an arm-mount / front_cam error explains everything the joint fit explains; the hand-eye is fine"
+    elif close(h) and close(b):
         verdict = "UNDETERMINED: hand and base fits are equally good — capture more TILTED views (see coverage)"
     else:
-        verdict = "mixed — read the table"
+        verdict = "BOTH sides carry error (only the joint fit reaches its floor)"
+    verdict += "\n         floor: %.1f mm / %.2f deg rms remain after the joint fit — per-view noise, not correctable by a constant" % (
+        j.rms_pos_m * 1e3, j.rms_rot_deg)
+    if j.rms_pos_m > 4e-3:
+        verdict += "\n         (high — hand_cam orientation per view; prefer views with >= 3-4 tags at 0.35-0.50 m, see the per-sample table)"
     print("\nverdict: %s" % verdict)
     for k in ('hand', 'base', 'joint'):
         r = res[k]
@@ -457,6 +481,8 @@ def main():
     p.add_argument("--outlier-factor", type=float, default=4.0)
     p.add_argument("--holdout", nargs="*", default=None, help="sample labels kept OUT of the fit, evaluated after")
     p.add_argument("--holdout-every", type=int, default=0, help="hold out every k-th sample (e.g. 4)")
+    p.add_argument("--min-tags", type=int, default=1, help="use only samples where hand_cam saw at least this many tags")
+    p.add_argument("--max-range", type=float, default=None, help="use only samples with hand_cam within this range (m)")
     p.add_argument("--pairs", choices=["hand", "base", "joint"], default=None,
                    help="also list every (hand_cam tag -> front_cam tag) pair's error, raw vs this fit")
     p.add_argument("--write-hand-eye", choices=["hand", "joint"], default=None,

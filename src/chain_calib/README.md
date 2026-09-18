@@ -14,7 +14,8 @@ hand_cam 사이의 변환 체인 오차**를 재고, 그 오차를 체인 안의
 ```
 src/chain_calib/
   scripts/chain_calib.py        운영자 도구  check / capture / status / drop / solve
-  scripts/check_chain_calib.py  오프라인 검증 (PDF 코너 규약 + 합성 세션, 35개 검사)
+  scripts/check_chain_calib.py  오프라인 검증 (PDF 코너 규약 + 합성 세션, 37개 검사)
+  scripts/verify_chain.py       보정 검증: 체인으로 계산한 자세로 hand_cam을 태그 위로 보내 실제 중심 편차를 잼
   src/chain_calib/solver.py     수학 (AX = YB 피팅, 홀드아웃 평가, 태그 쌍 지표), ROS 없음
   src/chain_calib/sheet.py      시트 레이아웃, 프레임 누적, multi-tag PnP, ROS 없음
   src/chain_calib/session.py    샘플 저장, 자세 설명, 커버리지 조언, ROS 없음
@@ -272,14 +273,38 @@ rosrun chain_calib chain_calib.py solve log/chain_calib/<세션> --sx 1.0012 --s
   `path_tag_locator/config/hand_eye/T_hc2ee_chain_<날짜>.npz`를 씁니다.
   `locator.yaml`의 `hand_eye.npz_path`를 그 파일로 바꾸고 캘리브레이션 노드를
   재시작합니다. 기존 파일은 그대로 남습니다.
-- **BASE side**: `corrected T_ab2mb`를 `extrinsics.yaml`에 넣으면 locator 체인은
-  맞지만, **같은 행렬이 `robot.yaml arm_calibration`(pose 모드 IK)에도**
-  있습니다. 둘을 같이 바꿔야 하고 부호 규약 확인이 먼저라 별도 작업입니다.
-  F의 회전 성분은 "팔 마운트에 틸트가 없다"는 가정의 검증값이기도 합니다.
+- **BASE side**: `corrected T_ab2mb`를 `extrinsics.yaml`의 `T_ab2mb_row_major`에
+  넣습니다(locator 체인, `robot_sim`, 플랜 생성기가 읽음; 캘리브레이션 노드
+  재시작). **2026-09-18 세션의 값이 이렇게 반영되어 있습니다** —
+  [docs/CHAIN_CALIB_2026-09-18_kr.md](docs/CHAIN_CALIB_2026-09-18_kr.md).
+  `check_front_cam_extrinsics.py`가 정규직교·설계 근방을 검사합니다.
+  **`robot.yaml arm_calibration`(pose 모드 IK)은 설계값을 유지**합니다 —
+  플래너 URDF와 `check_pose_vs_joint.py`가 같은 설계값에 맞춰져 있어 셋을
+  함께 움직여야 하는 별도 결정입니다. F의 회전 성분은 "팔 마운트에 틸트가
+  없다"는 가정의 검증값이기도 합니다(2026-09-18: 1.3° 있었습니다).
 - 세션 디렉터리의 `corrections.npz`에 D, F, 스케일, 홀드아웃 목록이 항상
   남습니다.
 
 ---
+
+### 3-5. 보정 검증 — 체인으로 팔을 태그 위로 보내 본다
+
+`solve`의 수치가 아니라 **실제 동작**으로 확인합니다: front_cam이 보는 200을
+기준으로 체인이 계산한 "태그 k 위 0.50 m, 수직" 자세로 hand_cam을 보내고,
+거기서 hand_cam이 k를 화면 어디에 보는지 잽니다. 그 중심 편차와 거리 오차가
+곧 그 자세에서의 체인 오차입니다.
+
+```bash
+# hand_cam을 격자 위 ~0.5 m, 수직으로 놓고 시작 (첫 목표가 0.35 m 안에 있어야 움직입니다)
+rosrun chain_calib verify_chain.py plan log/chain_calib/<세션> --fit base   # 10개 목표 자세 출력·CSV, 이동 없음
+rosrun chain_calib verify_chain.py run  log/chain_calib/<세션> --fit base   # 자세마다 Enter → MoveL → 측정
+rosrun chain_calib verify_chain.py run  log/chain_calib/<세션> --fit none   # 보정 전 체인으로 같은 것 (대조)
+```
+
+열 자세는 방향·높이가 같고 150 mm씩 평행이동만 하므로 MoveL 경로가 단순합니다.
+그래도 이동마다 Enter를 받고, `s`로 건너뛰고 `q`로 그만둘 수 있습니다. 결과는
+`<세션>/verify_result_<fit>_<시각>.csv`. 기대값: `--fit base`에서 중심 편차
+5~10 mm(체인 잔차 9 mm + 자세 잡음), `--fit none`에서 30~40 mm.
 
 ## 4. 문제 해결
 
