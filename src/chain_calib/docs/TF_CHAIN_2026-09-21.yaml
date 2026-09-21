@@ -1,19 +1,19 @@
 title: mobile manipulator TF chain — hand_cam -> flange -> arm base -> mobile base -> front_cam
 date: '2026-09-21'
-git: a7fbdcc
-convention: 'T_X2Y = pose of frame Y expressed in frame X (a Y-frame point p maps to X as T_X2Y @ p). Row-major 4x4, metres. rpy_deg_xyz = scipy extrinsic xyz euler of the rotation. Chain: T_hc2fc = T_hc2ee
-  . T_ee2ab . T_ab2mb . T_mb2fc, with T_ee2ab = inv(T_ab2ee) from the arm FK (/arm/state flange pose, Fairino mm/deg ZYX).'
+git_before_this_commit: 5fe46e5
+convention: 'T_X2Y = pose of frame Y expressed in frame X (a Y-frame point p maps to X as T_X2Y @ p). Row-major 4x4, metres. rpy_deg_xyz = scipy extrinsic xyz euler. Chain: T_hc2fc = T_hc2ee . T_ee2ab .
+  T_ab2mb . T_mb2fc, with T_ee2ab = inv(T_ab2ee) from the arm FK (/arm/state flange pose, Fairino mm/deg ZYX).'
 frames:
   hc: 'hand_cam optical frame (RealSense D435 colour): x image right, y image down, z optical axis'
   ee: arm FLANGE (what /arm/state reports; the controller active tool is the flange, CLAUDE.md 2026-09-14)
   ab: arm base_link (Fairino base)
   mb: 'mobile base body frame: x forward, y left, z up, origin at the floor under the chassis centre'
-  fc: 'front_cam optical frame — two variants: physical (tilted 1.44 deg, for consumers that re-detect RAW frames) and level (the virtual level camera robot_camera_node publishes /front_cam/tag_detections
-    in while ground_plane is on; x = robot forward, y = robot right, z down)'
+  fc: front_cam optical frame — physical (tilted 1.44 deg; for consumers that re-detect RAW frames) and level (the virtual level camera /front_cam/tag_detections is published in while ground_plane is on;
+    x = robot forward, y = robot right, z down)
   W: 'the A0 sheet frame = tag 200: +x paper right (= robot RIGHT as laid), +y paper down (= robot REAR), +z into the paper (down); every sheet tag is a pure translation of it'
 T_hc2ee:
-  source: path_tag_locator/config/hand_eye/T_hc2ee.npz — hand-eye sweep 2026-09-18 (35 samples, 3 sweeps, tag-scatter refined); chain_calib joint fits put its error at 1-2 mm / 0.3 deg (D within jackknife)
-    on both 09-18 and 09-21
+  source: path_tag_locator/config/hand_eye/T_hc2ee.npz — hand-eye sweep 2026-09-18 (35 samples, tag-scatter refined); the 2026-09-21 chain_calib joint fit puts its error at ~6 mm / 0.6 deg, inside this
+    data's hand-eye resolution, and the spin test (62 vs 152 deg) moves the FK grid normal 0.55 deg, inside per-view scatter — no sign the camera moved
   matrix:
   - - -0.999922069
     - 0.009743968
@@ -40,8 +40,8 @@ T_hc2ee:
   - -0.4486
   - -179.4428
 T_ee2ab:
-  source: 'LIVE — inverse of the flange pose from /arm/state (pose_fr5_to_matrix_m). Not a constant. ⚠ its orientation error is position dependent: ~2 deg per 0.6 m of arm x travel (verify_chain 2026-09-18),
-    the dominant remaining error of this chain'
+  source: 'LIVE — inverse of the flange pose from /arm/state (pose_fr5_to_matrix_m). Not a constant. ⚠ its orientation error is position dependent: ~2 deg per 0.6 m of arm x travel (verify_chain 2026-09-21,
+    reproduced from an earlier run to 0.04 deg) — the dominant remaining error of this chain'
   example_home_pose_mm_deg:
   - -159.0
   - 700.0
@@ -67,10 +67,8 @@ T_ee2ab:
     - 0.0
     - 1.0
 T_ab2mb:
-  source: 'path_tag_locator/config/extrinsics.yaml — CALIBRATED by chain_calib: 2026-09-18 session (50 views, A0 sheet), re-solved 2026-09-21 at the measured print scale (1.0/1.0/90.00 mm) and with the
-    level-floor prior on front_cam rotation; confirmed by the independent 2026-09-21 session (64 views): translation residual (-2.2, -0.9, -1.9) mm, yaw residual 0.09 deg. Lift at ORIGIN — consumers subtract
-    the live lift (chain.compensate_T_ab2mb). vs design (0,-100,-652)/Rz(180): translation off (14.5, 20.7, 12.7) mm, yaw 1.34 deg, roll/pitch ~0 (mount has no tilt; the 09-18 1.2 deg roll was paper under
-    tag 200)'
+  source: 'path_tag_locator/config/extrinsics.yaml — CALIBRATED by chain_calib 2026-09-21 (A0 sheet, 63 views, ruler print scale 1.0/1.0/90.00 mm, level-floor prior on front_cam rotation). Lift at ORIGIN
+    — consumers subtract the live lift (chain.compensate_T_ab2mb). vs design (0,-100,-652)/Rz(180): translation off (7.5, 23.7, 23.6) mm, yaw 1.43 deg, roll/pitch 0.32/0.79 deg'
   design:
     t_mm:
     - 0.0
@@ -81,35 +79,36 @@ T_ab2mb:
     - 0.0
     - 180.0
   matrix:
-  - - -0.999721761
-    - -0.023419843
-    - 0.002812857
-    - -0.014499313
-  - - 0.023425307
-    - -0.999723737
-    - 0.001925298
-    - -0.120667549
-  - - 0.00276699
-    - 0.001990655
-    - 0.999994191
-    - -0.639311834
+  - - -0.999595683
+    - -0.02498118
+    - -0.013579865
+    - -0.007466274
+  - - 0.024902589
+    - -0.999672319
+    - 0.005926043
+    - -0.123681765
+  - - -0.013723455
+    - 0.005585474
+    - 0.999890229
+    - -0.62843951
   - - 0.0
     - 0.0
     - 0.0
     - 1.0
   t_mm:
-  - -14.499
-  - -120.668
-  - -639.312
+  - -7.466
+  - -123.682
+  - -628.44
   rpy_deg_xyz:
-  - 0.1141
-  - -0.1585
-  - 178.6577
-  uncertainty: translation ~2 mm (two sessions agree), yaw ~0.1 deg; roll/pitch NOT measurable better than +-0.5-1 deg with paper on a floor (paper flatness + chassis attitude on the floor), left at the
-    design (~0)
+  - 0.3201
+  - 0.7863
+  - 178.5729
+  uncertainty: 'robot constants: yaw ~0.1 deg, in-plane translation ~2 mm (two independent sessions agreed). NOT robot constants: roll/pitch (+-1 deg) and the tz/tx they drag along (+-10 mm at the 0.64
+    m lever) — a floor-sheet session measures grid-normal-vs-arm-z, i.e. mount tilt + chassis attitude at that parking + paper slope; expect ~8 mm of shift per re-parking. Fit jackknife: t (0.25,0.29,1.01)
+    mm, rot 0.06 deg.'
 T_mb2fc_physical:
-  source: extrinsics.yaml — GENERATED by make_front_cam_extrinsics.py from robot.yaml (camera_offset 0.550, ground_plane roll +1.406 pitch -0.323 yaw -0.380 deg, height 0.302 + tag_thickness 0.001). Use
-    with RAW front_cam frames only
+  source: extrinsics.yaml — GENERATED by make_front_cam_extrinsics.py from robot.yaml (camera_offset 0.550, ground_plane roll +1.406 pitch -0.323 yaw -0.380 deg, height 0.302 + tag_thickness 0.001). RAW
+    front_cam frames only
   matrix:
   - - 0.999962117
     - -0.006632097
@@ -136,7 +135,8 @@ T_mb2fc_physical:
   - -0.3322
   - -0.372
 T_mb2fc_level:
-  source: 'derived: T_mb2fc @ T_tilted_to_level(fit). THE frame /front_cam/tag_detections is in while ground_plane is on — what path_tag_locator, chain_calib and verify_chain use. R = diag(1,-1,-1) exactly'
+  source: 'derived: T_mb2fc @ T_tilted_to_level(fit). THE frame /front_cam/tag_detections is in while ground_plane is on — what path_tag_locator, chain_calib, verify_chain and sheet_path use. R = diag(1,-1,-1)
+    exactly'
   matrix:
   - - 1.0
     - 0.0
@@ -165,66 +165,65 @@ T_mb2fc_level:
 T_ab2fc_level:
   source: 'derived constant part of the chain: T_ab2mb @ T_mb2fc_level (lift at origin)'
   matrix:
-  - - -0.999721761
-    - 0.023419843
-    - -0.002812857
-    - -0.563493986
-  - - 0.023425307
-    - 0.999723737
-    - -0.001925298
-    - -0.107200265
-  - - 0.00276699
-    - -0.001990655
-    - -0.999994191
-    - -0.33479175
+  - - -0.999595683
+    - 0.02498118
+    - 0.013579865
+    - -0.561358599
+  - - 0.024902589
+    - 0.999672319
+    - -0.005926043
+    - -0.10818975
+  - - -0.013723455
+    - -0.005585474
+    - -0.999890229
+    - -0.333020671
   - - 0.0
     - 0.0
     - 0.0
     - 1.0
   t_mm:
-  - -563.494
-  - -107.2
-  - -334.792
+  - -561.359
+  - -108.19
+  - -333.021
   rpy_deg_xyz:
-  - -179.8859
-  - -0.1585
-  - 178.6577
+  - -179.6799
+  - 0.7863
+  - 178.5729
 T_hc2fc_at_home:
   source: 'worked example: T_hc2ee . T_ee2ab(home) . T_ab2mb . T_mb2fc_level at the arm home pose'
   matrix:
-  - - 0.999394001
-    - -0.033143758
-    - 0.010635948
-    - 0.456610647
-  - - 0.033138327
-    - 0.99945054
-    - 0.000686518
-    - -1.1348552
-  - - -0.010652858
-    - -0.000333643
-    - 0.999943202
-    - 0.956071903
+  - - 0.999382239
+    - -0.034676416
+    - -0.005717325
+    - 0.454471245
+  - - 0.034656926
+    - 0.999393233
+    - -0.003473698
+    - -1.135869976
+  - - 0.005834312
+    - 0.003273407
+    - 0.999977623
+    - 0.954320085
   - - 0.0
     - 0.0
     - 0.0
     - 1.0
   t_mm:
-  - 456.611
-  - -1134.855
-  - 956.072
+  - 454.471
+  - -1135.87
+  - 954.32
   rpy_deg_xyz:
-  - -0.0191
-  - 0.6104
-  - 1.8991
+  - 0.1876
+  - -0.3343
+  - 1.9861
 accuracy:
-  per_view_floor: 8-9 mm / 0.6-0.9 deg rms per view (hand_cam per-view orientation ~0.5 deg x the ~1 m lever to tag 200)
-  position_dependent: +-12 mm across 0.6 m of arm x (arm FK / structure, 2.1 deg per 0.6 m) — not a constant TF
-  practical: 'a floor tag located through this chain: ~+-10 mm over +-0.3 m of arm travel, 2-5 mm near the calibrated area'
+  per_view_floor: ~8.5 mm / 0.65 deg rms per view (hand_cam per-view orientation ~0.5 deg x the ~1 m lever to tag 200)
+  position_dependent: +-12 mm across 0.6 m of arm x travel (arm FK / structure, 2 deg per 0.6 m) — not a constant TF
+  re_parking: ~8 mm constant shift per re-parking / re-laying (chassis attitude + paper)
+  practical: 'a floor tag located through this chain: ~+-10 mm over +-0.3 m of arm travel'
 not_in_this_chain:
   robot_yaml_arm_calibration: pose-mode IK still uses the DESIGN T_ab2mb (planner URDF + check_pose_vs_joint.py are written to it) — separate decision
   vision_tip: Basler vision tip (0,-253,225.2) mm from the flange, never measured on this robot — see basler_tip_calib
 records:
-- src/chain_calib/docs/CHAIN_CALIB_2026-09-18_kr.md
 - src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md
-- log/chain_calib/20260918
 - log/chain_calib/20260921

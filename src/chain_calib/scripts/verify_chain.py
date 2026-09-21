@@ -103,8 +103,8 @@ def plan_targets(S, sheet, T_ab2mb, Hc, height, spin_deg, tags, front_rotation="
     # use (the level-floor prior by default, 2026-09-21). A single tag's out-of-plane tilt is
     # the local slope of the paper under it, and taken as the SHEET's orientation it would put
     # the far grid tags at the wrong height: 0.7 deg of it is 10 mm at tag 300 (0.85 m away)
-    # and 17 mm at 309. The old T_ab2mb happened to carry the equal-and-opposite tilt of the
-    # 09-18 paper, which is why the 09-18 run read flat heights — self-consistency, not truth.
+    # and 17 mm at 309. The first (discarded) T_ab2mb happened to carry the equal-and-opposite
+    # tilt of that day's paper, which is why its verify run read flat heights — self-consistency.
     T_fc2W = f.T_cam2W if front_rotation == "measured" else CC.level_front_observation(f.T_cam2W)
     slope = math.degrees(math.acos(max(-1.0, min(1.0, abs(f.T_cam2W[2, 2])))))
     out, T_ab2W, spin, spin_cur = targets_from(T_ab2mb, S.ext.T_mb2fc_chain, T_fc2W, lift,

@@ -23,59 +23,35 @@
 #            shifted 100 mm toward the wall, i.e. mb-frame y = -0.100. Both
 #            signs come out negative because Rz(180) flips y and the inverse
 #            flips it back. Must equal robot.yaml `arm_body_offset_y`.
-#            ⚠️ CALIBRATED 2026-09-18 (chain_calib, printed A0 tag sheet as
-#            the ground truth, 50 hand_cam views over tags 300-309 with
-#            front_cam on tag 200; src/chain_calib/docs/
-#            CHAIN_CALIB_2026-09-18_kr.md, re-solved 2026-09-21 — see
-#            CHAIN_CALIB_2026-09-21_kr.md): the design matrix above is now
-#            t = (-14.50, -120.67, -639.31) mm, rpy (+0.114, -0.159,
-#            178.658) deg — i.e. the mobile base seen from the arm base is
-#            14.5 / 20.7 / 12.7 mm off the design translation and yawed
-#            1.34 deg, with NO roll / pitch to speak of (0.11 / -0.16 deg,
-#            consistent with the design's "no mount tilt" and the old
-#            655-point fit). The correction was fitted as F in the fc frame
+#            ⚠️ CALIBRATED 2026-09-21 by chain_calib (printed A0 tag sheet as
+#            the ground truth: front_cam on tag 200, 63 hand_cam views over
+#            tags 300-309, 20 distinct view geometries, spin span 90 deg;
+#            record src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md, chain
+#            in docs/TF_CHAIN_2026-09-21.yaml): the design matrix above is
+#            now t = (-7.47, -123.68, -628.44) mm, rpy (+0.320, +0.786,
+#            178.573) deg. The correction was fitted as F in the fc frame
 #            and folded in as T_ab2mb' = T_ab2mb_design . T_mb2fc . F .
-#            inv(T_mb2fc), so the GENERATED T_mb2fc below is untouched. It
-#            cannot separate an arm-mount error from a front_cam error (one
-#            base pose), and does not need to: every consumer of this file
-#            uses the product.
-#            ⚠️ HISTORY, because it is a trap: the value applied on 09-18
-#            carried rpy (-1.247, -0.457, 178.71) — a 1.2 deg ROLL that was
-#            NOT the mount. front_cam sees one 90 mm tag (200), 100 mm from
-#            the A0 corner, and a single tag's out-of-plane tilt is the
-#            local slope of the paper under it (1.27 deg that day); the
-#            coplanar-sheet model has nowhere to put that but F. Re-laying
-#            the sheet on 09-21 moved that slope 1.7 deg and the residual
-#            fit asked for exactly that rotation — the tell. Solving with
-#            front_cam's rotation under the level-floor prior (the level
-#            frame IS level by the ground-plane calibration, and the sheet
-#            lies on that floor) leaves the fit rms unchanged (9.25 ->
-#            9.20 mm) and drops F's tilt 1.16 -> 0.17 deg; the 6.5 mm of y
-#            translation the wrong tilt had dragged along went with it.
-#            `chain_calib.py --front-rotation level` is now the default.
-#            The 09-18 verify run (hand_cam driven to 0.50 m above each grid
-#            tag: 0.3 / 0.7 mm mean, 0.504 m) could not catch this — it goes
-#            through the same front_cam view of the same paper.
-#            Print scale used: sx = sy = 1.0000, tag 90.00 mm — the user's
-#            STEEL-RULE measurement of the print (2026-09-21). The first
-#            application (2026-09-18) used sx 0.998 / sy 0.996 / 89.7 mm,
-#            estimated from the data, and t moved (-1.3, -2.6, +1.5) mm /
-#            0.14 deg when it was re-solved at the measured scale. Why the
-#            ruler wins: the GLOBAL sheet scale is not observable from this
-#            data at all (per-view estimate 0.9989 +- 0.0083 over 49 views)
-#            because it is exactly degenerate with hand_cam's depth scale
-#            (fx, fy, tag size) and with its unmodelled distortion (the D435
-#            publishes D = 0; k1 = +0.1 alone moves the apparent scale from
-#            0.996 to 0.999). What the corner data DOES show is an axis
-#            RATIO -- sx/sy = 1.0063, robust across camera spins -- which no
-#            isotropic camera effect explains but which also disagrees with
-#            the ruler by ~2 mm over 600 mm; unresolved, and worth 2-3 mm on
-#            T_ab2mb, i.e. under the 9 mm per-view floor. Calibrate hand_cam
-#            (intrinsics + distortion) before trusting any sheet-scale
-#            number inferred from these fits.
-#            robot.yaml arm_calibration (pose-mode IK) and the planner URDF
-#            still carry the DESIGN value — a separate decision; changing
-#            them would move every pose-mode target 13-18 mm.
+#            inv(T_mb2fc), so the GENERATED T_mb2fc below is untouched. One
+#            base pose cannot separate an arm-mount error from a front_cam
+#            error and does not need to: every consumer uses the product.
+#            What is robust in it (two independent sessions agree): the
+#            YAW, 1.43 deg about the vertical, and the in-plane translation
+#            (~2 mm). What is NOT a robot constant: the roll/pitch (0.32 /
+#            0.79 deg) — a floor-sheet session measures "grid normal vs arm
+#            z", which is the mount tilt PLUS the chassis' attitude on the
+#            floor at that parking PLUS the paper's slope; an earlier session
+#            (2026-09-18, since deleted) read 0.17 deg for the same quantity
+#            at another parking, so treat the tilt as +-1 deg and the
+#            tz / tx it drags along (0.64 m lever) as +-10 mm. Method notes
+#            that survive from that first session: a single tag's tilt is
+#            the paper's local slope (front_cam's rotation is therefore
+#            replaced by the level-floor prior in solve / verify_chain /
+#            sheet_path), and the global sheet scale is unobservable from
+#            the fit (use the ruler). Verified on the robot: hand_cam driven
+#            through this chain to 0.50 m above each grid tag lands the tag
+#            centre within ~10 mm, with a position-dependent gradient (2 deg
+#            over 0.6 m of arm x) that is the ARM's, not this matrix's.
+#            Lift at ORIGIN — never bake a lift height in.
 #   T_mb2fc: pose of fc(front_cam) in mb(mobile_base) frame — the PHYSICAL
 #            optical frame, tilt included (2026-09-15). GENERATED by
 #            scripts/make_front_cam_extrinsics.py from three robot.yaml
@@ -140,10 +116,10 @@
 # from tranformation_ws/transform_chain/constants.py used different numbers
 # and is no longer authoritative).
 
-T_ab2mb_row_major:   # CALIBRATED 2026-09-18 by chain_calib (A0 tag sheet, session log/chain_calib/20260918, base fit F_base); re-solved 2026-09-21 at the RULER sheet scale (sx = sy = 1.0000, tag 90.00 mm) and with front_cam's rotation under the LEVEL-FLOOR PRIOR (--front-rotation level, see the comment block above); design value was diag(-1,-1,1) / (0, -0.100, -0.652)
-  [-0.999721761, -0.023419843,  0.002812857, -0.014499313,
-    0.023425307, -0.999723737,  0.001925298, -0.120667549,
-    0.002766990,  0.001990655,  0.999994191, -0.639311834,
+T_ab2mb_row_major:   # CALIBRATED 2026-09-21 by chain_calib (A0 tag sheet, session log/chain_calib/20260921, 63 views, base fit F_base, ruler print scale 1.0/1.0/90.00 mm, level-floor prior on front_cam's rotation); design value was diag(-1,-1,1) / (0, -0.100, -0.652)
+  [-0.999595683, -0.024981180, -0.013579865, -0.007466274,
+    0.024902589, -0.999672319,  0.005926043, -0.123681765,
+   -0.013723455,  0.005585474,  0.999890229, -0.628439510,
     0.000000000,  0.000000000,  0.000000000,  1.000000000]
 
 T_mb2fc_row_major:   # GENERATED by scripts/make_front_cam_extrinsics.py from robot.yaml: camera_offset 0.550, camera_lateral 0.000, ground_plane.front_cam roll +1.406 pitch -0.323 yaw -0.380 deg, height_m 0.302 + tag_thickness 0.001 — do not hand-edit

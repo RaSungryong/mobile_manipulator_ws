@@ -183,9 +183,9 @@ def level_front_observation(T_fc2W):
     the LOCAL slope of the paper under that tag — tag 200 sits 100 mm from
     the A0 corner, where paper lifts. The chain model assumes every tag is
     coplanar, so that local slope has nowhere to go but the base-side F:
-    on 2026-09-18 F carried 1.16 deg of tilt that was 1.27 deg of paper
-    under tag 200 (equal and opposite), and re-laying the sheet moved it by
-    1.7 deg. Forcing the prior changed the fit rms by 0.05 mm and dropped
+    the first (discarded) session's F carried 1.16 deg of tilt that was
+    1.27 deg of paper under tag 200 (equal and opposite), and re-laying the
+    sheet moved it by 1.7 deg. Forcing the prior changed the fit rms by 0.05 mm and dropped
     F's tilt to 0.17 deg. The frame is level by construction (the
     ground-plane correction was fitted so the floor is z = const in it) and
     the sheet lies on that floor, so the prior costs only the floor-slope
