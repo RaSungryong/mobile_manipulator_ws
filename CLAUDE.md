@@ -1928,6 +1928,25 @@ T_hc2fc at the home pose), its source, its uncertainty, and what is NOT in
 it (robot.yaml's pose-IK copy, the vision tip). Read that file, not this
 paragraph, for numbers.
 
+**verify_chain run on the new chain (15:11, `--fit none`, 8 of 10 tags —
+the run died at tag 308 when front_cam lost tag 200 for 20 frames and the
+drift check raised; the CSV was only written after the loop, so the 8
+rows were reconstructed from the terminal; both fixed: rows are appended
+per target, the front_cam re-read is non-fatal).** Tag by tag against
+09-18: the difference is a CONSTANT (−1.4, −3.6) mm on every one of the
+8 tags (rms 7.3 → 9.8 mm, range +4.0 → +1.9 mm) — the two chains and the
+two parkings differ by a pure 3.9 mm shift, inside the ~8 mm re-parking
+expectation. The position-dependent gradient is IDENTICAL: off_x
++20.1 mm / 600 mm (1.92°) on 09-18, +20.5 mm (1.96°) today, same
+intercept, residual sd 1.0 / 1.3 mm — reproduced to 0.04° across days,
+parkings and chain values, so it is the ARM, systematic. The new columns
+show it directly: one commanded orientation, yet over 450 mm of arm x
+travel the camera's rx drifts +2.17° and its position over the tag
+−11.1 mm, together — arm base / lift column tilting under the arm's
+moment, or FK joint offsets; separating those is the next task. The
+paper tilt shows as predicted: range falls 0.60 / 0.79° along the two
+grid columns.
+
 Two things worth keeping from the re-solve. **The fold is path-independent
 — verified, not assumed:** re-solving on the ALREADY-corrected chain and
 folding the residual lands on (−14.51, −120.66, −641.21) /
