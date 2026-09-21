@@ -188,9 +188,20 @@ rms·jackknife·홀드아웃이 말한다. PnP rms 0.6–0.7 px는 이 셋업의
   `map_calibrator_node`, hand-eye 절대 점검, `robot_sim`, 플랜 생성기(시드는
   재생성 안 함 — align 루프가 흡수). **캘리브레이션 노드는 다음 시작 때 읽는다.**
   `check_front_cam_extrinsics.py`는 정규직교·설계 근방(3° / 50 mm)을 검사.
-- **미적용 (별도 결정):** `robot.yaml arm_calibration`(pose 모드 IK)은 설계값.
-  플래너 URDF `mobile_to_base`·`check_pose_vs_joint.py`와 함께 움직여야 하고
-  반영하면 pose 모드 목표가 ~25 mm, yaw 1.4° 이동한다.
+- **같은 날 추가 적용 (사용자: "end-effector pose 제어에도 이 체인을 쓴다"):**
+  `robot.yaml arm_calibration` ← inv(T_ab2mb)를 4-DOF 파라미터로: offset
+  (−0.013008, −0.120318, 0.629002) m, mount_yaw 3.166578737 rad (181.43°),
+  tilt_x/y 0.005927 / 0.013580 rad (`transform_world_to_arm`, **arm_node
+  재시작**); 플래너 URDF `fr10v6_mobile_vision_0317_test.urdf`의
+  `mobile_to_base` xyz (0.013008, 0.120318, 0.629002) rpy (0.005927, 0.013580,
+  0.024986) — 180° 돈 `mobile_base` 프레임에서 본 같은 변환.
+  `check_pose_vs_joint.py`가 세 파일의 일치를 검사한다(26). **결과:** pose 모드
+  목표가 1 m 거리에서 ~35 mm 이동; 기존 `rrt_final_path_*`(설계 마운트로 계획됨)는
+  `assigned_workpoints_*`와 45 mm 어긋난 상태이니 **플래너에서 새 URDF로 재생성**
+  해야 한다. 틸트가 0이 아니므로 리프트 보상이 팔 z만이 아니라 x/y에도 5 mm(전
+  행정) 들어간다 — 물리적으로 맞다(`check_lift_compensation` 11).
+  이유: locator가 태그를 위치시키는 체인과 팔이 그 점으로 가는 체인이 다르면 그
+  차이(~25 mm / 1.4°)가 매 왕복마다 그대로 남는다. 같으면 상쇄된다.
 
 ## 7. 다음
 

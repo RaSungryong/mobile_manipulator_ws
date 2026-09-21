@@ -25,16 +25,22 @@ Joint-mode targets are unaffected: those CSVs are absolute joint angles
 fed straight to MoveJ and no transform reads them.
 
 Calibration source of truth: path_tag_locator/config/extrinsics.yaml
-T_ab2mb — R = Rz(180°) exactly (mount_yaw = π, NO tilt), t = (0, -0.100, -0.652)
-(arm base 652 mm above the mobile-base origin, lift at its origin; measured
-on the replacement base 2026-08-13 — figures from before that swap describe
-different hardware). The no-tilt claim was independently confirmed by a
-655-point real-robot fit which found tilt ≈ 0.0001/0.0007 rad; that fit's
-data (`task/csv/calib_data*`) was old-base and has been deleted, so the
-number survives only as this note. Earlier USD-derived defaults (tilts
-±1.5°) are superseded — those tilts do not exist on the real platform.
+T_ab2mb, CALIBRATED 2026-09-21 by chain_calib against the printed A0 tag
+sheet; robot.yaml `arm_calibration` is its inverse in this module's
+parametrisation (T_mb2ab = Rz(mount_yaw)·Ry(tilt_y)·Rx(tilt_x) |
+(offset_x, offset_y, base_z), body frame x forward / y left / z up) so the
+arm goes where the locator chain says a tag is. Design was R = Rz(180°),
+t = (0, -0.100, 0.652); calibrated (-0.013, -0.120, 0.629), yaw 181.43°,
+tilts 0.34 / 0.78° — the tilts are as much the chassis' attitude at that
+parking as the mount (±1°), kept for consistency with the locator chain.
+Note the docstring above about the lift: with a non-zero tilt a lift move
+is no longer purely along arm z (0.78° × 0.34 m = ~5 mm of x/y at full
+stroke) — physically right, since the lift is vertical in the WORLD.
 Lookup chain per value:
     private ROS param  >  robot.yaml `arm_calibration`  >  hardcoded default
+(the hardcoded defaults are the 2026-09-21 calibration too — three sites,
+change them together; check_pose_vs_joint.py asserts robot.yaml ==
+inv(extrinsics)).
 """
 
 import numpy as np
@@ -72,12 +78,12 @@ def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
     Returns (pos_mm, rpy_deg) in Fairino SDK units (mm, degrees).
     """
     _calib = load_yaml_block('arm_calibration')
-    body_off_x = rospy.get_param('~arm_body_offset_x', _calib.get('arm_body_offset_x', 0.0))
-    body_off_y = rospy.get_param('~arm_body_offset_y', _calib.get('arm_body_offset_y', -0.100))
-    body_off_z = rospy.get_param('~arm_base_z',        _calib.get('arm_base_z',        0.652))
-    mount_yaw  = rospy.get_param('~arm_mount_yaw',     _calib.get('arm_mount_yaw',     np.pi))
-    tilt_x     = rospy.get_param('~arm_tilt_x',        _calib.get('arm_tilt_x',        0.0))
-    tilt_y     = rospy.get_param('~arm_tilt_y',        _calib.get('arm_tilt_y',        0.0))
+    body_off_x = rospy.get_param('~arm_body_offset_x', _calib.get('arm_body_offset_x', -0.013008))
+    body_off_y = rospy.get_param('~arm_body_offset_y', _calib.get('arm_body_offset_y', -0.120318))
+    body_off_z = rospy.get_param('~arm_base_z',        _calib.get('arm_base_z',        0.629002))
+    mount_yaw  = rospy.get_param('~arm_mount_yaw',     _calib.get('arm_mount_yaw',     3.166578737))
+    tilt_x     = rospy.get_param('~arm_tilt_x',        _calib.get('arm_tilt_x',        0.005926625))
+    tilt_y     = rospy.get_param('~arm_tilt_y',        _calib.get('arm_tilt_y',        0.013580283))
 
     x_base = -msg.y
     y_base = -msg.x

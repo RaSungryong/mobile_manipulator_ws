@@ -25,11 +25,16 @@
     </inertial>
   </link>
 
-  <!-- Joint connecting mobile base to manipulator base -->
+  <!-- Joint connecting mobile base to manipulator base.
+       CALIBRATED 2026-09-21 (chain_calib, A0 tag sheet): = inv(extrinsics.yaml T_ab2mb)
+       seen from this mobile_base frame, which is yawed 180 deg from the code's body frame
+       (x forward, y left). Design was xyz="0 0.1 0.652" rpy="0 0 0". Must stay equal to
+       robot.yaml arm_calibration (check_pose_vs_joint.py asserts it). Paths planned with the
+       design value land ~35 mm off at 1 m reach - regenerate rrt_final_path_* with this. -->
   <joint name="mobile_to_base" type="fixed">
     <parent link="mobile_base" />
     <child link="base_link" />
-    <origin xyz="0 0.1 0.652" rpy="0 0 0" />
+    <origin xyz="0.013008 0.120318 0.629002" rpy="0.005926625 0.013580283 0.024986084" />
   </joint>
 
   <!-- Original Manipulator Links and Joints -->

@@ -1085,40 +1085,37 @@ vision_stop:
 # These are the source of truth; controllers may still override via ROS
 # private params if needed.
 arm_calibration:
-  # DESIGN mount geometry: R = Rz(180°) exactly, t = (0, -0.100, -0.652).
-  # ⚠️ Since 2026-09-21 path_tag_locator/config/extrinsics.yaml T_ab2mb holds
-  # the CALIBRATED value instead (chain_calib, A0 tag sheet: t (-7.5, -123.7,
-  # -628.4) mm, rpy (+0.32, +0.79, 178.57) deg — 7 / 24 / 24 mm and 1.4 deg
-  # of yaw off this block; the roll/pitch is that parking's chassis attitude
-  # + paper, not a robot constant). The locator / calibration chain uses
-  # that; this block — pose-mode IK via transform_world_to_arm — deliberately
-  # still carries the design figures, because the planner URDF
-  # (mobile_to_base) and check_pose_vs_joint.py are written to them and all
-  # three must move together. Folding the calibration in here is a separate
-  # decision; it would shift every pose-mode target by ~25 mm / 1.4 deg. See
-  # src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md.
-  # Two independent confirmations that the mount has NO tilt: the extrinsics
-  # measurement, and a 655-point real-robot fit which found tilt_x/y ≈
-  # 0.0001/0.0007 rad. That fit's data (task/csv/calib_data*) was old-base
-  # and was deleted 2026-09-11, so the number survives only as this note.
+  # ⚠️ CALIBRATED 2026-09-21 — this block is now the INVERSE of
+  # path_tag_locator/config/extrinsics.yaml T_ab2mb (chain_calib, A0 tag
+  # sheet, 63 views): the same chain the locator uses, so a tag located
+  # through front_cam/hand_cam and a pose-mode target sent to the arm agree
+  # (user, 2026-09-21: the corrected chain is for end-effector pose control
+  # too). Mapping: T_mb2ab = inv(T_ab2mb) = [Rz(mount_yaw) Ry(tilt_y)
+  # Rx(tilt_x) | (offset_x, offset_y, base_z)] in the body frame (x forward,
+  # y left, z up). check_pose_vs_joint.py asserts the two files agree, and
+  # that the planner URDF's mobile_to_base is the same transform seen from
+  # its 180-deg-yawed mobile_base frame. Change all three together.
+  #
+  # DESIGN values, for reference: offset (0, -0.100, 0.652), mount_yaw pi
+  # exactly, tilts 0 (the 100 mm is the 2026-08-13 arm relocation toward the
+  # wall). The calibration moved the arm base (-13.0, -20.3, -23.0) mm and
+  # yawed it +1.43 deg; roll/pitch 0.34 / 0.78 deg are the chassis attitude
+  # at that parking + the paper's slope as much as the mount (+-1 deg,
+  # record src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md §5-3) and were
+  # kept for CONSISTENCY with the locator chain, not as a mount measurement.
+  # ⚠️ Every pose-mode target moved ~35 mm at 1 m reach with this; the
+  # planner's joint paths (rrt_final_path_*) were planned with the DESIGN
+  # mount and now land that far from their pose twins until regenerated with
+  # the updated URDF. arm_node restart required.
   #
   # ⚠️ arm_base_z is the height WITH THE LIFT AT ITS ORIGIN. The lift adds up
-  # to 343 mm on top of it (0.652 -> 0.995 m at 6900 counts) and this value
-  # does NOT track it — see the TODO at navifra.scan_height_counts.
-  #
-  # ⚠️ 0.651 -> 0.652 on 2026-08-23, and that 1 mm is a DESIGN FIGURE overriding
-  # a measurement, not a re-measurement. 651 was taped on the replacement base
-  # 2026-08-13; 652 is what the cell design record (the parent directory's
-  # CLAUDE.md, §3 mounts table) specifies. Unreconciled, same shape as the
-  # camera_offset 547/550 conflict above. It must stay equal to -tz of
-  # extrinsics.yaml T_ab2mb and to the fallback in arm_transform.py — three
-  # sites, change them together.
+  # to 343 mm on top of it and pose-mode IK adds the live /lifter/height
+  # (transform_world_to_arm lift_m, 2026-09-11).
   #
   # ⚠️ Ignore any arm_base_z from before 2026-08-13: the mobile base was
   # REPLACED that day, so older figures describe different hardware and are
-  # not discrepancies to reconcile. (The USD-derived mount tilts from the
-  # same era do not exist on the real platform either — see arm_tilt_* below.)
-  arm_body_offset_x: 0.0       # arm mount in body frame X (m)
+  # not discrepancies to reconcile.
+  arm_body_offset_x: -0.013008  # arm mount in body frame X (m)  [design 0.0]
   # Moved 100 mm toward the wall (body -Y, the side_cam side) on 2026-08-13 to
   # cancel the 100 mm the wider 0.70 m body pushes the robot centre away from
   # the wall. Net absolute arm position is unchanged — that is the whole point.
@@ -1126,11 +1123,11 @@ arm_calibration:
   # ⚠️ JOINT mode does not: those CSVs are absolute arm configurations and no
   # transform touches them, so they are only still valid if the robot's stop
   # position really does move the matching 100 mm.
-  arm_body_offset_y: -0.100    # arm mount in body frame Y (m)
-  arm_base_z:        0.652     # arm base height above the ground (m), lift at origin
-  arm_mount_yaw:     3.14159265358979  # rad (pi, exact per extrinsics)
-  arm_tilt_x:        0.0       # no mount tilt on the real platform
-  arm_tilt_y:        0.0       # no mount tilt on the real platform
+  arm_body_offset_y: -0.120318  # arm mount in body frame Y (m)  [design -0.100]
+  arm_base_z:        0.629002  # arm base height above the mb origin (m), lift at origin  [design 0.652]
+  arm_mount_yaw:     3.166578737  # rad = 181.432 deg  [design pi]
+  arm_tilt_x:        0.005926625  # rad = 0.340 deg  [design 0; see the header — parking-dependent]
+  arm_tilt_y:        0.013580283  # rad = 0.778 deg  [design 0; see the header — parking-dependent]
 
   # ---- how a POSE-mode CSV row is read (2026-09-14) ----
   # csv_euler: scipy from_euler spec applied to the columns [rx, ry, rz].

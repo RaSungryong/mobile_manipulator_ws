@@ -222,8 +222,13 @@ accuracy:
   re_parking: ~8 mm constant shift per re-parking / re-laying (chassis attitude + paper)
   practical: 'a floor tag located through this chain: ~+-10 mm over +-0.3 m of arm travel'
 not_in_this_chain:
-  robot_yaml_arm_calibration: pose-mode IK still uses the DESIGN T_ab2mb (planner URDF + check_pose_vs_joint.py are written to it) — separate decision
   vision_tip: Basler vision tip (0,-253,225.2) mm from the flange, never measured on this robot — see basler_tip_calib
 records:
 - src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md
 - log/chain_calib/20260921
+also_holding_this_transform:
+  robot_yaml_arm_calibration: apriltag_nav/config/robot.yaml arm_calibration = inv(T_ab2mb) as offsets (-0.013008, -0.120318, 0.629002) m, mount_yaw 3.166578737 rad, tilt_x 0.005926625, tilt_y 0.013580283
+    rad — pose-mode IK (transform_world_to_arm). Applied 2026-09-21 so the arm goes where the locator chain says a tag is; arm_node restart.
+  planner_urdf: frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf mobile_to_base xyz (0.013008, 0.120318, 0.629002) rpy (0.005926625, 0.013580283, 0.024986084) — the same transform seen from
+    its 180-deg-yawed mobile_base. Existing rrt_final_path_* were planned with the design mount and land ~45 mm from their pose twins until regenerated.
+  check: apriltag_nav/tools/check_pose_vs_joint.py asserts the three agree

@@ -20,7 +20,8 @@ silently wrong measurement, and one the Keyence standoff loop cannot undo
 The checks below pin the three things that could go wrong:
   * the SIGN (compensating the wrong way doubles the error instead of
     removing it),
-  * that ONLY z moves — the mount has no tilt, so the lift must not leak
+  * that the lift moves the target along the WORLD vertical — with the
+    2026-09-21 calibrated tilt that is not purely arm z, and must not leak
     into x/y or into the orientation,
   * that `lift_m=0` still reproduces the old result BIT-FOR-BIT, so this
     is a no-op for every task that runs at the origin.
@@ -102,28 +103,43 @@ for m in MSGS:
         worst = max(worst, float(np.abs(np.asarray(a) - np.asarray(b)).max()))
 check("default argument == explicit 0.0", worst == 0.0, f"max diff {worst:g}")
 
-print("\n== the lift moves ONLY arm-frame z, and by exactly its height ==")
-bad_xy = 0.0
-bad_z = 0.0
+print("\n== the lift moves the target by exactly -h along the WORLD vertical (arm frame) ==")
+# Since 2026-09-21 the mount carries a small calibrated tilt (robot.yaml
+# arm_tilt_x/y), so the lift — vertical in the WORLD — is no longer purely
+# along arm z: it leaks h*sin(tilt) into arm x/y (0.78 deg x 343 mm ~ 5 mm),
+# which is physically right. The test is therefore against the full model:
+#   p_arm(h) - p_arm(0) == -R_AW . (0, 0, h)         (exact)
+#   p_A_W(h) + R_WA . p_arm(h) == the requested world point   (exact)
+from scipy.spatial.transform import Rotation as _R
+_TX, _TY, _YAW = float(CAL.get('arm_tilt_x', 0.0)), float(CAL.get('arm_tilt_y', 0.0)), float(CAL.get('arm_mount_yaw', np.pi))
+_OX, _OY = float(CAL.get('arm_body_offset_x', 0.0)), float(CAL.get('arm_body_offset_y', -0.1))
+
+def _R_WA(theta_deg):
+    return (_R.from_euler('z', np.radians(theta_deg) + _YAW) * _R.from_euler('y', _TY) * _R.from_euler('x', _TX)).as_matrix()
+
+def _p_A_W(m, h):
+    th = np.radians(m.theta); c, sn = np.cos(th), np.sin(th)
+    return np.array([-m.y + c * _OX - sn * _OY, -m.x + sn * _OX + c * _OY, BASE_Z + h])
+
+bad_dir = 0.0
 bad_rpy = 0.0
 for m in MSGS:
     for p in PTS:
         for h_mm in (0.0, 1.0, 150.0, 300.0, STROKE_MM):
             p0, r0 = transform_world_to_arm(p, m, 0.0)
             p1, r1 = transform_world_to_arm(p, m, h_mm / 1000.0)
-            bad_xy = max(bad_xy, abs(p1[0] - p0[0]), abs(p1[1] - p0[1]))
-            bad_z = max(bad_z, abs((p0[2] - p1[2]) - h_mm))
+            expect = -_R_WA(m.theta).T @ np.array([0.0, 0.0, h_mm])
+            bad_dir = max(bad_dir, float(np.abs((np.asarray(p1) - np.asarray(p0)) - expect).max()))
             bad_rpy = max(bad_rpy, float(np.abs(np.asarray(r1) - np.asarray(r0)).max()))
-check("x and y are untouched", bad_xy < 1e-9, f"max {bad_xy:.3e} mm")
-check("z decreases by exactly the lift height", bad_z < 1e-9,
-      f"max error {bad_z:.3e} mm")
+check("the lift shifts the arm-frame target by exactly -R_AW.(0,0,h)", bad_dir < 1e-6, f"max {bad_dir:.3e} mm")
 check("orientation is untouched", bad_rpy < 1e-9, f"max {bad_rpy:.3e} deg")
+_leak = STROKE_MM * np.sin(np.hypot(_TX, _TY))
+print(f"   (tilt {np.degrees(np.hypot(_TX, _TY)):.3f} deg -> the full stroke leaks {_leak:.1f} mm into arm x/y — expected, the lift is vertical in the world)")
 
 print("\n== SIGN: compensation must CANCEL the error, not double it ==")
-# Physical model: the arm base really sits at BASE_Z + h. Commanding the
-# arm to put its TCP at p_arm above that base lands the TCP at
-#   world_z = (BASE_Z + h) + p_arm_z
-# Correct behaviour: that equals the requested world z for every h.
+# Physical model: the arm base really sits at p_A_W(h). Commanding the arm
+# to put its TCP at p_arm lands the TCP at p_A_W(h) + R_WA . p_arm; correct
+# behaviour: that equals the requested world point for every h.
 err_comp, err_uncomp = 0.0, 0.0
 for h_mm in (0.0, 150.0, 300.0, STROKE_MM):
     h = h_mm / 1000.0
@@ -131,25 +147,25 @@ for h_mm in (0.0, 150.0, 300.0, STROKE_MM):
         for p in PTS:
             pc, _ = transform_world_to_arm(p, m, h)       # compensated
             pu, _ = transform_world_to_arm(p, m, 0.0)     # as before
-            landed_c = (BASE_Z + h) + pc[2] / 1000.0
-            landed_u = (BASE_Z + h) + pu[2] / 1000.0
-            err_comp = max(err_comp, abs(landed_c - p["z"]))
-            err_uncomp = max(err_uncomp, abs(landed_u - p["z"]))
-check("compensated TCP lands on the requested world z", err_comp < 1e-12,
+            RWA = _R_WA(m.theta)
+            landed_c = _p_A_W(m, h) + RWA @ (np.asarray(pc) / 1000.0)
+            landed_u = _p_A_W(m, h) + RWA @ (np.asarray(pu) / 1000.0)
+            err_comp = max(err_comp, float(np.linalg.norm(landed_c - [p["x"], p["y"], p["z"]])))
+            err_uncomp = max(err_uncomp, abs(landed_u[2] - p["z"]))
+check("compensated TCP lands on the requested world point", err_comp < 1e-9,
       f"worst {err_comp*1e3:.3e} mm")
 check("uncompensated lands HIGH by the full stroke (the bug being fixed)",
       abs(err_uncomp * 1e3 - STROKE_MM) < 1e-6,
       f"worst {err_uncomp*1e3:.2f} mm = the stroke")
 
-# direction, stated explicitly: a wrong sign would put it 2h off
+# direction, stated explicitly: a wrong sign would put it 2h off (vertically)
 h = 0.300
 p, m = PTS[1], MSGS[1]
-pc, _ = transform_world_to_arm(p, m, h)
 pw, _ = transform_world_to_arm(p, m, -h)      # deliberately wrong sign
-landed_wrong = (BASE_Z + h) + pw[2] / 1000.0
+landed_wrong = _p_A_W(m, h) + _R_WA(m.theta) @ (np.asarray(pw) / 1000.0)
 check("a flipped sign would be 2x the lift off (so the sign is testable)",
-      abs((landed_wrong - p["z"]) - 2 * h) < 1e-12,
-      f"{(landed_wrong - p['z'])*1e3:.1f} mm vs 2h = {2*h*1e3:.1f} mm")
+      abs((landed_wrong[2] - p["z"]) - 2 * h) < 1e-9,
+      f"{(landed_wrong[2] - p['z'])*1e3:.1f} mm vs 2h = {2*h*1e3:.1f} mm")
 
 print("\n== magnitude at the heights the tasks actually use ==")
 for h_mm, what in ((150.0, "optimized_joints_line2"),

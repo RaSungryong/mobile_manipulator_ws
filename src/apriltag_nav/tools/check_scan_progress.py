@@ -215,8 +215,19 @@ check(len(failed) == 1 and failed[0]['point_id'] == 1, 'the far point fails, onc
 msg = failed[0]['message']
 check(msg.startswith('IK failed (code 112): tip target'), f'reason is the IK code, not a TypeError: {msg[:40]}')
 check('unpack' not in msg, 'no "cannot unpack" any more')
-check('2.56 m from the arm base' in msg and '(-1714, 1896, -267) mm' in msg,
-      'message names the arm-frame target and its distance from the base')
+# The arm-frame numbers depend on robot.yaml arm_calibration (CALIBRATED since
+# 2026-09-21, so no longer the design-mount (-1714, 1896, -267) / 2.56 m): derive
+# them the way _exec_pose does and check the message quotes THOSE.
+import re as _re
+_m = _re.search(r'\((-?\d+), (-?\d+), (-?\d+)\) mm', msg); _d = _re.search(r'(\d+\.\d+) m from the arm base', msg)
+_ok = False
+if _m and _d:
+    _t = np.array([float(v) for v in _m.groups()])
+    _ok = 2.3 < float(_d.group(1)) < 2.8 and abs(np.linalg.norm(_t) / 1000.0 - float(_d.group(1))) < 0.02 \
+        and np.linalg.norm(_t - np.array([-1714.0, 1896.0, -267.0])) < 80.0
+check(_ok, f'message names the arm-frame target and its distance from the base ({_m.group(0) if _m else "?"}, '
+           f'{_d.group(0) if _d else "?"}; design-mount value was (-1714, 1896, -267) / 2.56 m, '
+           f'the calibrated mount moves it a few cm)')
 check('world (0.285, 1.714, 0.385)' in msg and 'robot pose (-0.000, 1.711, 90.0 deg)' in msg,
       'message names the CSV world point and the robot pose it was transformed at')
 check(not any(c[0] == 'MoveJ' and c[1] == TOOL_ID and c[2][0] == 1.0 for c in robot.calls[:3]),

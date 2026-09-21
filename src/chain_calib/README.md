@@ -298,9 +298,13 @@ rosrun chain_calib chain_calib.py solve log/chain_calib/<세션> --sx 1.0012 --s
   [docs/CHAIN_CALIB_2026-09-21_kr.md](docs/CHAIN_CALIB_2026-09-21_kr.md), 체인 전체는
   [docs/TF_CHAIN_2026-09-21.yaml](docs/TF_CHAIN_2026-09-21.yaml).
   `check_front_cam_extrinsics.py`가 정규직교·설계 근방(3° / 50 mm)을 검사합니다.
-  **`robot.yaml arm_calibration`(pose 모드 IK)은 설계값을 유지**합니다 —
-  플래너 URDF와 `check_pose_vs_joint.py`가 같은 설계값에 맞춰져 있어 셋을
-  함께 움직여야 하는 별도 결정입니다. ⚠️ F의 roll/pitch는 마운트 틸트가 아니라
+  **같은 변환이 `robot.yaml arm_calibration`(pose 모드 IK)과 플래너 URDF의
+  `mobile_to_base`에도 들어갑니다**(2026-09-21부터; `check_pose_vs_joint.py`가 셋의
+  일치를 검사) — locator가 태그를 위치시키는 체인과 팔이 거기로 가는 체인이 같아야
+  왕복 오차가 상쇄됩니다. robot.yaml 값은 inv(T_ab2mb)를 offset + Rz(yaw)Ry(ty)Rx(tx)
+  로 분해한 것이고(`arm_node` 재시작), URDF는 180° 돈 mobile_base에서 본 같은
+  변환입니다. 기존 `rrt_final_path_*`는 설계 마운트로 계획된 것이라 재생성이 필요합니다.
+  ⚠️ F의 roll/pitch는 마운트 틸트가 아니라
   **이번 주차의 차체 자세 + 종이 경사를 포함한 값**(±1°)입니다 — 로봇 상수로
   믿을 것은 yaw와 면내 이동입니다(그 문서 §5-3).
 - 세션 디렉터리의 `corrections.npz`에 D, F, 스케일, 홀드아웃 목록이 항상

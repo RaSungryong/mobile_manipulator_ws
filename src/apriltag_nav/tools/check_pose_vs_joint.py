@@ -132,10 +132,29 @@ check(URDF_TIP_MM is not None, f'URDF found: {URDF}')
 if URDF_TIP_MM is not None:
     check(np.linalg.norm(URDF_TIP_MM - TIP) < 0.05,
           f'URDF vision_tip offset {np.round(URDF_TIP_MM, 2).tolist()} mm == tool 1 / robot.yaml vision_tip_offset_mm {TIP.tolist()}')
-    mx, mr = URDF_MOUNT
-    check(abs(mx[2] - 0.652) < 1e-6 and abs(mx[1] - 0.1) < 1e-6 and abs(mx[0]) < 1e-6 and max(map(abs, mr)) < 1e-6,
-          f'URDF mobile_to_base {mx} rpy {mr}: arm base 0.652 up and 0.1 to +y of mobile_base with no yaw '
-          '(== T_ab2mb (0, -0.100, -0.652) with the code\'s Rz(180 deg) body frame)')
+    # Since 2026-09-21 the mount is CALIBRATED (chain_calib) and lives in THREE
+    # places that must agree: extrinsics.yaml T_ab2mb (the locator chain),
+    # robot.yaml arm_calibration (= inv(T_ab2mb) as offset + Rz(yaw)Ry(ty)Rx(tx)
+    # in the body frame), and this URDF's mobile_to_base (the same transform
+    # seen from a mobile_base frame yawed 180 deg from the code's body frame).
+    import yaml as _yaml
+    _EXT = os.path.join(HERE, '..', '..', 'path_tag_locator', 'config', 'extrinsics.yaml')
+    _T_ab2mb = np.array(_yaml.safe_load(open(_EXT))['T_ab2mb_row_major'], float).reshape(4, 4)
+    _T_mb2ab = np.linalg.inv(_T_ab2mb)
+    _Rz180 = R.from_euler('z', np.pi).as_matrix()
+    _urdf_T = _T(*URDF_MOUNT)
+    _exp_t = _Rz180 @ _T_mb2ab[:3, 3]; _exp_R = _Rz180 @ _T_mb2ab[:3, :3]
+    check(np.abs(_urdf_T[:3, 3] - _exp_t).max() < 1e-6 and np.abs(_urdf_T[:3, :3] - _exp_R).max() < 1e-6,
+          f'URDF mobile_to_base == inv(extrinsics T_ab2mb) seen from the 180-deg-yawed mobile_base '
+          f'(t {np.round(_urdf_T[:3, 3]*1e3, 2).tolist()} mm; extrinsics t {np.round(_T_ab2mb[:3, 3]*1e3, 2).tolist()})')
+    _blk = arm_transform.load_yaml_block('arm_calibration')
+    _yaml_R = (R.from_euler('z', float(_blk['arm_mount_yaw'])) * R.from_euler('y', float(_blk['arm_tilt_y']))
+               * R.from_euler('x', float(_blk['arm_tilt_x']))).as_matrix()
+    _yaml_t = np.array([_blk['arm_body_offset_x'], _blk['arm_body_offset_y'], _blk['arm_base_z']], float)
+    check(np.abs(_yaml_t - _T_mb2ab[:3, 3]).max() < 1e-6 and np.abs(_yaml_R - _T_mb2ab[:3, :3]).max() < 1e-6,
+          'robot.yaml arm_calibration == inv(extrinsics T_ab2mb)  (offsets %s mm, yaw %.3f deg, tilts %.3f / %.3f deg)'
+          % (np.round(_yaml_t*1e3, 2).tolist(), np.degrees(float(_blk['arm_mount_yaw'])),
+             np.degrees(float(_blk['arm_tilt_x'])), np.degrees(float(_blk['arm_tilt_y']))))
 
 print('== FK model vs the robot (2026-09-14, /arm/state at home)')
 home = np.radians([-90.00087, -90.00022, 90.00348, -89.99956, -90.00044, 0.00044])
@@ -162,7 +181,24 @@ def ang_deg(Ra, Rb):
     return math.degrees(math.acos(np.clip((np.trace(Ra.T @ Rb) - 1) / 2, -1, 1)))
 
 
-print('== transform_world_to_arm orientation convention vs FK of the paired joint row')
+# ⚠️ The paired rows below were PLANNED by the RRT planner with the DESIGN mount
+# (URDF mobile_to_base 0 / 0.1 / 0.652, rpy 0). The tests on them are about the
+# CSV euler convention and the tip/flange handling, so they run with the design
+# block patched in; under the 2026-09-21 calibrated mount the same rows land
+# ~35-45 mm / 1.7 deg from their joint twins — which is the true state of those
+# files until the planner regenerates them with the updated URDF (asserted at
+# the end as a known discrepancy, not hidden).
+DESIGN_CALIB = dict(arm_body_offset_x=0.0, arm_body_offset_y=-0.100, arm_base_z=0.652,
+                    arm_mount_yaw=math.pi, arm_tilt_x=0.0, arm_tilt_y=0.0)
+_real_load = arm_transform.load_yaml_block
+def _design_block(name):
+    b = dict(_real_load(name))
+    if name == 'arm_calibration':
+        b.update(DESIGN_CALIB)
+    return b
+arm_transform.load_yaml_block = _design_block
+
+print('== transform_world_to_arm orientation convention vs FK of the paired joint row (design mount, as planned)')
 for gid, d in ROWS.items():
     Mq = fk_flange(d['joints'])
     for euler in ('ZYX', 'zyx'):
@@ -258,6 +294,19 @@ try:
     check(False, 'unknown tool frame refuses pose mode')
 except RuntimeError as e:
     check('refused' in str(e) and not robot3.targets, f'unknown tool frame refuses pose mode: {e}')
+
+# ---------------------------------------------------------------- the calibrated mount vs the planner's files
+arm_transform.load_yaml_block = _real_load
+print('== the same planner rows under the CALIBRATED mount (robot.yaml as it is)')
+_worst = 0.0
+for gid, d in ROWS.items():
+    Mq = fk_flange(d['joints'])
+    pos, rpy = transform_world_to_arm(d['pose'], d['msg'], 0.0)
+    tip_fk = (Mq[:3, 3] + Mq[:3, :3] @ (TIP / 1000)) * 1000
+    _worst = max(_worst, float(np.linalg.norm(np.asarray(pos) - tip_fk)))
+check(20.0 < _worst < 80.0,
+      f'pose rows now land {_worst:.1f} mm from their joint-row twins: EXPECTED — rrt_final_path_* were planned with the '
+      'design mount; regenerate them with the updated URDF before trusting scan_joint_* against scan_pose_*')
 
 print(f'\n{N_OK} ok, {N_FAIL} failed')
 sys.exit(1 if N_FAIL else 0)

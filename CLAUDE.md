@@ -1515,14 +1515,31 @@ attitude at that parking PLUS the paper's slope (±1°, and ±10 mm of tz/tx
 at the 0.64 m lever), so expect ~8 mm of shift per re-parking. Everything
 on the locator / calibration chain (`path_tag_locator`, `robot_sim`, the
 plan generator, `verify_chain.py --fit none`, `sheet_path.py`) uses it.
-`robot.yaml arm_calibration` (pose-mode IK) **still carries the design
-figures**, because the planner URDF's `mobile_to_base` and
-`check_pose_vs_joint.py` are written to them and all three must move
-together — a separate decision that would shift every pose-mode target
-~25 mm / 1.4°. `check_front_cam_extrinsics.py` pins T_ab2mb to
-"orthonormal, within 3° of Rz(180) and 50 mm of the design", not to the
-design numbers. Record: `src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`;
-the whole chain with provenance: `src/chain_calib/docs/TF_CHAIN_2026-09-21.yaml`.
+**Since 2026-09-21 (later the same day, user: the corrected chain is for
+end-effector pose control too) the SAME transform is in all three places
+that hold the mount:** `extrinsics.yaml T_ab2mb`; `robot.yaml
+arm_calibration` = its inverse in the 4-DOF parametrisation — offsets
+(−0.013008, −0.120318, 0.629002), mount_yaw 3.166578737 rad (181.43°),
+tilt_x/y 0.005927 / 0.013580 rad — read by `transform_world_to_arm`
+(pose-mode IK; `arm_node` restart), whose hardcoded fallbacks match; and
+the planner URDF `frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`
+`mobile_to_base` xyz (0.013008, 0.120318, 0.629002) rpy (0.005927,
+0.013580, 0.024986) — the same transform seen from its 180°-yawed
+`mobile_base`. `check_pose_vs_joint.py` asserts the three agree (26).
+Consequences: every pose-mode target moved ~35 mm at 1 m reach; the
+existing `rrt_final_path_*` joint paths were planned with the DESIGN mount
+and now land that far from their `assigned_workpoints_*` twins until the
+planner regenerates them with the updated URDF (the check asserts that
+45 mm discrepancy as EXPECTED, not hidden); with a non-zero tilt the lift
+is no longer purely along arm z (0.85° × 343 mm ≈ 5 mm of x/y at full
+stroke — `check_lift_compensation` is tilt-aware now, 11). The "no mount
+tilt" statements above and in `arm_transform.py`'s older text are
+superseded by this — the applied tilt is as much this parking's chassis
+attitude as the mount (±1°), kept so the locator and the arm agree.
+`check_front_cam_extrinsics.py` pins T_ab2mb to "orthonormal, within 3°
+of Rz(180) and 50 mm of the design", not to the design numbers. Record:
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`; the whole chain with
+provenance: `src/chain_calib/docs/TF_CHAIN_2026-09-21.yaml`.
 
 ⚠️ **`arm_body_offset_y` corrects POSE mode only.** `arm_transform.py` reads it
 into `p_A_W`, and `transform_world_to_arm` is called from exactly one place —
@@ -1885,8 +1902,16 @@ frame (+11.4, −8.2, −16.0) mm / (+0.32, −0.79, +1.43)°, jackknife
 grid normal 0.55°, inside per-view scatter). User's metric (tag 200's
 position from the hand_cam tags through the chain vs the sheet): bias
 (+10.2, +6.6, +16.0) → 0 mm, rms 21.8 → 8.5 mm. Checks 24 / 37 / 10.
-**Restart the calibration nodes.** robot.yaml's pose-IK copy stays on the
-design (separate decision, ~25 mm / 1.4°).
+**Restart the calibration nodes.** Later the same day, on the user's
+statement that the corrected chain is for end-effector pose control too,
+the same transform went into `robot.yaml arm_calibration` (pose-mode IK,
+`arm_node` restart) and the planner URDF's `mobile_to_base`;
+`check_pose_vs_joint.py` asserts the three files agree and names the
+resulting ~45 mm pose-vs-joint discrepancy of the existing planner files
+as expected (regenerate `rrt_final_path_*` with the updated URDF);
+`check_lift_compensation.py` made tilt-aware; `check_scan_progress.py`'s
+hard-coded design-mount IK message numbers derived instead (49). See the
+Transform Parameters section.
 
 **The first session's 1.2° roll was the paper, not the mount** — found
 because the re-measurement asked for a 1.8° rotation where a few mm were
