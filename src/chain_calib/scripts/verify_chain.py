@@ -165,9 +165,26 @@ def cmd_run(args):
         sys.exit("a target is beyond the 1.25 m flange reach — lower --height or drop that tag with --tags")
     Kh = S.K_hand; cx, cy = Kh[0, 2], Kh[1, 2]
     rows = []
+    # The result file is opened NOW and appended after every target, so a Ctrl-C,
+    # an EOF on stdin (pre-fed Enters running out) or a crash keeps what was
+    # measured — the 2026-09-21 run lost nine measured targets to an EOF at the
+    # tenth prompt because the file was only written after the loop.
+    out = os.path.join(args.dir, "verify_result_%s_%s.csv" % (args.fit, time.strftime("%H%M%S")))
+    HEADER = ["tag", "x_mm", "y_mm", "z_mm", "rx_deg", "ry_deg", "rz_deg", "off_x_mm", "off_y_mm", "range_m", "dpx_x", "dpx_y",
+              "tilt_deg", "cam_over_tag_x_mm", "cam_over_tag_y_mm", "cam_rx_deg", "cam_ry_deg", "cam_rz_deg", "note"]
+    fh = open(out, "w", newline="")
+    w = csv.writer(fh); w.writerow(HEADER); fh.flush()
+    print("results -> %s (appended after every target)" % out)
+
+    def keep(row):
+        rows.append(row); w.writerow(row); fh.flush()
+
     print("\nEnter = move to the next target, s = skip it, q = quit. Hand on the e-stop.")
     for k, pose, reach in targets:
-        ans = input("-> tag %d at %s ? " % (k, ["%.1f" % v for v in pose])).strip().lower()
+        try:
+            ans = input("-> tag %d at %s ? " % (k, ["%.1f" % v for v in pose])).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n   (stdin closed / interrupted — stopping here, %d target(s) kept)" % len(rows)); break
         if ans == "q":
             break
         if ans == "s":
@@ -181,7 +198,7 @@ def cmd_run(args):
             h, htags, nh = S.camera_T(S.cfg.topics.hand_cam_detections, Kh, S.D_hand, "hand_cam")
         except Exception as e:
             print("   hand_cam: %s" % e)
-            rows.append([k] + ["%.3f" % v for v in pose] + [""] * 11 + ["not detected"]); continue
+            keep([k] + ["%.3f" % v for v in pose] + [""] * 11 + ["not detected"]); continue
         T_hc2k = h.T_cam2W @ sheet.T_W2k(k)
         seen = k in htags
         if seen:
@@ -203,17 +220,12 @@ def cmd_run(args):
               % (k, "seen" if seen else "NOT in view (offset from its PnP position)", dpx[0], dpx[1], off[0], off[1],
                  T_hc2k[2, 3], args.height, (T_hc2k[2, 3] - args.height) * 1e3, tilt, rpy_k[0], rpy_k[1], rpy_k[2],
                  cam_in_k[0], cam_in_k[1], h.tag_ids, h.rms_px, dfront))
-        rows.append([k] + ["%.3f" % v for v in pose] + ["%.2f" % off[0], "%.2f" % off[1], "%.4f" % T_hc2k[2, 3],
-                                                        "%.1f" % dpx[0], "%.1f" % dpx[1], "%.3f" % tilt,
-                                                        "%.2f" % cam_in_k[0], "%.2f" % cam_in_k[1],
-                                                        "%.3f" % rpy_k[0], "%.3f" % rpy_k[1], "%.3f" % rpy_k[2],
-                                                        "seen" if seen else "not seen"])
-    out = os.path.join(args.dir, "verify_result_%s_%s.csv" % (args.fit, time.strftime("%H%M%S")))
-    with open(out, "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["tag", "x_mm", "y_mm", "z_mm", "rx_deg", "ry_deg", "rz_deg", "off_x_mm", "off_y_mm", "range_m", "dpx_x", "dpx_y",
-                    "tilt_deg", "cam_over_tag_x_mm", "cam_over_tag_y_mm", "cam_rx_deg", "cam_ry_deg", "cam_rz_deg", "note"])
-        w.writerows(rows)
+        keep([k] + ["%.3f" % v for v in pose] + ["%.2f" % off[0], "%.2f" % off[1], "%.4f" % T_hc2k[2, 3],
+                                                 "%.1f" % dpx[0], "%.1f" % dpx[1], "%.3f" % tilt,
+                                                 "%.2f" % cam_in_k[0], "%.2f" % cam_in_k[1],
+                                                 "%.3f" % rpy_k[0], "%.3f" % rpy_k[1], "%.3f" % rpy_k[2],
+                                                 "seen" if seen else "not seen"])
+    fh.close()
     ok = [r for r in rows if r[-1] == "seen"]
     if ok:
         ox = np.array([float(r[7]) for r in ok]); oy = np.array([float(r[8]) for r in ok]); rz_ = np.array([float(r[9]) for r in ok])
