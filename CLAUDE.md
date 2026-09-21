@@ -1489,8 +1489,9 @@ did move toward the wall, i.e. body **-Y**.
 
 ⚠️ **Since 2026-09-18 the two copies DIFFER on purpose.** `extrinsics.yaml`
 `T_ab2mb` holds the CALIBRATED value from `chain_calib` (printed A0 tag
-sheet as the ground truth, 50 views): **t (−13.2, −118.0, −642.7) mm, rpy
-(−1.247, −0.457, 178.710°)** — 13 / 18 / 9 mm and 1.3° off the design
+sheet as the ground truth, 50 views; re-solved 2026-09-21 at the measured
+print scale): **t (−14.5, −120.7, −641.2) mm, rpy
+(−1.110, −0.362, 178.657°)** — 15 / 21 / 11 mm and 1.2° off the design
 block above, verified on the robot (hand_cam driven through the chain
 lands each grid tag 0.3 / 0.7 mm mean from the image centre at 0.504 m).
 Everything on the locator / calibration chain (`path_tag_locator`,
@@ -1712,6 +1713,68 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-21 — The sheet is NOT 0.3 % small: the global scale is unobservable; T_ab2mb re-solved at the measured print scale
+
+User, asking for the calibration procedure again, then: "I measured it
+with a steel rule and it really is 1.0 / 1.0 / 90 mm, but if OpenCV says
+0.2–0.4 % small then change it — go ahead, your call. And note 200 and
+the 300s are **printed on A0 paper, so z = 0, no thickness.**" Checked
+against the stored corners of `log/chain_calib/20260918` rather than
+picking a side. Three findings, full record in
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-18_kr.md` §5-1:
+
+1. **The 1 mm hypothesis is dead.** `T_mb2fc` tz = `height_m` 0.302 +
+   `tag_thickness` 0.001, and 0.001/0.303 = 0.33 % is suspiciously the
+   size of the discrepancy — but the ground-plane corrected corners are
+   near-independent of the assumed height: h 0.302 → 0.350 (16 %) moves a
+   corner 0.07 px, so 1 mm moves it **0.0015 px**. And `chain_calib`
+   contains no `tag_thickness` reference at all; the sheet's pose is
+   MEASURED by PnP, never assumed. z = 0 enters nothing.
+2. **The 0.2–0.4 % claim was never a measurement.** Freeing ONE isotropic
+   scale on the whole sheet per view gives **0.9989 ± 0.0083** over 49
+   views — indistinguishable from 1. It cannot be otherwise: a global
+   sheet scale is exactly degenerate with hand_cam's depth scale (fx, fy,
+   tag size) and with its unmodelled distortion (the D435 publishes
+   D = 0; `k1 = +0.1` alone moves the apparent scale 0.996 → 0.999). The
+   09-18 number was a by-product of a ~20-parameter per-tag-offset fit
+   that improved rms only 0.70 → 0.65 px. **A direct ruler beats that.**
+3. **What IS in the data is an axis RATIO, and it is unresolved.** With
+   the tag edge pinned at 90.00 mm and the grid pitch free per axis, the
+   43-view joint fit + jackknife gives sy **0.9965 ± 0.0000** (−2.1 mm per
+   600) while sx is **1.0010 ± 0.0013**, i.e. NOT significant (its only
+   lever is the single 150 mm column pair, and per-view vs joint estimates
+   wander 1.0010–1.0025). So what is firm is a **y-only 0.35 % shrink**,
+   still ≠ sx, and flat across camera spin
+   (0.9961 / 0.9963 / 0.9971 by spin bin, corr with cos 2·spin +0.16) —
+   so it sits in the SHEET frame, where no isotropic camera effect can
+   put it. It also disagrees with the ruler by ~2 mm over 600 mm. Most
+   likely hand_cam's uncalibrated distortion interacting with the view
+   geometry; the fix is to calibrate hand_cam, not to distort the sheet
+   model. Left unapplied.
+
+**Decision: the ruler.** It costs little either way — re-solving the
+session at each candidate scale leaves a RESIDUAL correction of only
+1–3 mm in every case (ruler 1.7/1.4/0.6 mm, the applied 0.3/0.5/1.1, the
+anisotropic fit 0.5/3.3/1.9), far under the 9 mm per-view floor and the
+arm's ±12 mm position-dependent error. So `corrections.npz` was re-solved
+at 1.0 / 1.0 / 0.090 and `extrinsics.yaml T_ab2mb` re-applied:
+**t (−14.51, −120.66, −641.21) mm, rpy (−1.110, −0.362, 178.657°)**,
+moving (−1.3, −2.6, +1.5) mm / 0.14° from the 09-18 value. Checks:
+`check_front_cam_extrinsics` 24, `check_chain_calib` 37, repose 10.
+**Restart the calibration nodes.**
+
+Two things worth keeping from the re-solve. **The fold is path-independent
+— verified, not assumed:** re-solving on the ALREADY-corrected chain and
+folding the residual lands on (−14.51, −120.66, −641.21) /
+(−1.110, −0.362, 178.657), identical to the decimal to solving once from
+the DESIGN matrix at the same scale. So a later session's F can simply be
+folded again. And the verdict is now **UNDETERMINED with D and F both
+1–2 mm**, the user's metric bias (+8.4, +14.3, +14.1) → **(+2.2, +1.3,
++0.6) mm** — i.e. exactly the "nothing left for a constant to explain"
+state a correct correction should produce, which is the real confirmation
+of the 09-18 work. Next on hand_cam: a proper intrinsics + distortion
+calibration, which is what both open scale questions reduce to.
+
 ### 2026-09-18 (evening) — chain_calib: the printed A0 tag sheet is the ground truth for T_hc2fc; two-tag mode removed
 
 User dropped `mobile_manipulator T_hc2fc Calibration/` at the workspace
@@ -1790,10 +1853,12 @@ assumed (0, −100, −652) / exact Rz(180). Stable to ±2 mm / 0.2° over view
 subsets and the print-scale range, hold-out = train, and it is the SAME
 −19 mm across the lane the 09-18 hand-eye absolute check found through an
 independent chain. **Applied the same night to `extrinsics.yaml` `T_ab2mb`
-(the `corrections.npz` F_base at the data-estimated print scale 0.998 /
-0.996 / 89.7 mm — the value the robot verified below; the design-scale
-solve differs by 1–3 mm): t (−13.2, −118.0, −642.7) mm, rpy (−1.247,
-−0.457, 178.710°).** `T_mb2fc` untouched (F folded as
+(the `corrections.npz` F_base): t (−13.2, −118.0, −642.7) mm, rpy (−1.247,
+−0.457, 178.710°) at the data-estimated print scale 0.998 / 0.996 /
+89.7 mm — the value the robot verified below. ⚠️ Re-solved 2026-09-21 at
+the user's MEASURED print scale (1.0 / 1.0 / 90.00 mm) and re-applied:
+t (−14.5, −120.7, −641.2) mm, rpy (−1.110, −0.362, 178.657°), a move of
+(−1.3, −2.6, +1.5) mm / 0.14° — see the 2026-09-21 entry.** `T_mb2fc` untouched (F folded as
 `T_ab2mb · T_mb2fc · F · inv(T_mb2fc)`); `check_front_cam_extrinsics.py`'s
 "T_ab2mb untouched" check became a rigid-and-near-design check (24 pass);
 `load_extrinsics_full()` returns the folded matrix to 4.5e-10; chain_calib
@@ -1819,8 +1884,11 @@ unchanged (`solve --min-tags --max-range`, new). So the accuracy of a
 tag located ~1 m from hand_cam through this chain is ~5–9 mm today, set
 by hand_cam's orientation per view, and the remedy is views with 4+
 tags close up (or a longer hand_cam baseline), not more fitting. Side
-finding: the freed offsets show the print ~0.2–0.4 % SMALL (sy ≈ 0.996,
-sx ≈ 0.998; the user had entered 1.0000) — worth 2 mm on F, re-measure.
+finding: the freed offsets showed the print ~0.2–0.4 % SMALL (sy ≈ 0.996,
+sx ≈ 0.998; the user had entered 1.0000) — **retracted 2026-09-21, see
+that entry: the GLOBAL sheet scale is not observable from this data at
+all (0.9989 ± 0.0083), being degenerate with hand_cam's depth scale and
+its unmodelled distortion.**
 Outlier rejection now judges the JOINT-fit residual (v09, v35, v42, v44,
 v46, v47 caught — 5° jolts that the raw criterion let through), and the
 verdict is relative (which single-side fit reaches the joint fit's
