@@ -1791,8 +1791,14 @@ takes one Basler frame and reports image-centre − tag-centre in mm with
 a verdict (≤ 3 OK / 3–6 the arm's spin error / > 6 wrong), appended to
 `verify.csv`; refused beyond 0.35 m from the current flange. Verified
 offline only (`check_web_ui` 121, `check_task_list_ui` 94; the browser
-suite times out in this environment before and after the change). Not
-run on the robot.
+suite times out in this environment before and after the change).
+**Run on the robot 16:29 / 16:31 (tag 215, wrist rz 0, from the web
+UI):** measured tip → error (−0.1, +2.6) mm, |d| 2.6 — inside the fit's
+±3; design tip → (−7.5, +0.6) mm, |d| 7.5 — the 7.4 mm y delta seen
+directly, and BOTH runs ended at the same flange z (−432.6 mm after
+the standoff loop) although the design tip's target was 15.6 mm
+higher: the seek walked the difference, so the z delta is confirmed
+too. `verify.csv` in the session dir.
 
 Not applied. Applying means moving THREE things together — robot.yaml
 `vision_tip_offset_mm` (the tip → flange conversion of pose mode),
