@@ -306,6 +306,20 @@ rosrun chain_calib chain_calib.py solve log/chain_calib/<세션> --sx 1.0012 --s
 
 ---
 
+### 3-5a. 경로 스크립트 — hand_cam 렌즈를 시트 좌표의 점들로 (2026-09-21)
+
+`scripts/sheet_path.py`: **hand_cam 렌즈를 TCP로** 하여 태그 200 프레임의 점 목록
+(x, y, h — h는 시트 위 높이)으로 순차 이동, 각 점에서 `--dwell`초 정지 후 hand_cam이
+시트를 다시 풀어 **렌즈가 실제로 W 어디에 갔는지**를 명령값과 비교합니다(xy 오차가
+주 지표). 기본 점은 격자 10개 태그 위 0.50 m. 플랜 확인 후 한 번 y를 누르면 자동으로
+돕니다. 결과는 점마다 `sheet_path_<HHMMSS>.csv`에 즉시 추가.
+
+```bash
+rosrun chain_calib sheet_path.py log/chain_calib/<세션> --dry-run          # 플랜만
+rosrun chain_calib sheet_path.py log/chain_calib/<세션>                    # 10점, 3 s 대기
+rosrun chain_calib sheet_path.py log/chain_calib/<세션> --points "0.925,0.075,0.40;1.000,0.300,0.45" --dwell 5
+```
+
 ### 3-5. 보정 검증 — 체인으로 팔을 태그 위로 보내 본다
 
 `solve`의 수치가 아니라 **실제 동작**으로 확인합니다: front_cam이 보는 200을
