@@ -213,8 +213,13 @@ def cmd_run(args):
         # and only these two separate them
         cam_in_k = invert_T(T_hc2k)[:3, 3] * 1e3
         rpy_k = rot2rpy_deg(T_hc2k[:3, :3])
-        f, _, _ = S.camera_T(S.cfg.topics.front_cam_detections, S.K_front, None if S.front_frame == "level" else S.D_front, "front_cam")
-        dfront = np.linalg.norm(f.T_cam2W[:3, 3] - info["T_fc2W"][:3, 3]) * 1e3
+        # front_cam drift check is a DIAGNOSTIC: the arm can occlude tag 200 at the far
+        # targets (2026-09-21, tag 308) — that must not end the run.
+        try:
+            f, _, _ = S.camera_T(S.cfg.topics.front_cam_detections, S.K_front, None if S.front_frame == "level" else S.D_front, "front_cam")
+            dfront = np.linalg.norm(f.T_cam2W[:3, 3] - info["T_fc2W"][:3, 3]) * 1e3
+        except Exception as e:
+            dfront = float("nan"); print("   (front_cam: %s — probably occluded by the arm at this pose; drift not checked)" % e)
         print("   tag %d %s: centre offset %+.1f, %+.1f px = (%+.1f, %+.1f) mm; range %.4f m (target %.3f, %+.1f mm); tilt %.2f deg "
               "(cam rpy in tag %+.2f %+.2f %+.1f); camera over the tag at (%+.1f, %+.1f) mm; hand tags %s rms %.2f px; front_cam 200 moved %.1f mm"
               % (k, "seen" if seen else "NOT in view (offset from its PnP position)", dpx[0], dpx[1], off[0], off[1],
