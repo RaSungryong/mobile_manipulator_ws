@@ -70,6 +70,28 @@ def corrected_chain(ext, H, corrections, fit):
     return T_ab2mb, Hc, "%s fit of %s: %s ; %s" % (fit, corrections, CC.describe_T(D, "D"), CC.describe_T(F, "F"))
 
 
+# Body-clearance guard, EMPIRICAL (2026-09-21, sheet_path at h = 0.40 m): with the
+# flange BELOW the arm-base plane (arm z < 0) the arm folds its elbow / tool down
+# toward the chassis when the horizontal reach is short — reach 0.50 m stalled
+# (MoveL never completed, 60 s), 0.40 m COLLIDED; 0.63 m and up were fine, and
+# above the plane (h = 0.50 m, z ~ +15 mm) reach 0.40 m was fine. There is no link
+# model here, so this is the line the evidence draws, with margin. The 2026-09-15
+# sweep collided for the same reason; keep this conservative.
+LOW_Z_MM = 0.0            # flange z (arm frame) below which the rule applies
+MIN_REACH_LOW_M = 0.65    # minimum horizontal reach when below the plane
+
+
+def body_clearance_ok(pose_mm_deg, min_reach_low_m=MIN_REACH_LOW_M):
+    """(ok, reason) for a flange target [x y z rx ry rz] (mm / deg, arm frame)."""
+    x, y, z = pose_mm_deg[0], pose_mm_deg[1], pose_mm_deg[2]
+    reach = math.hypot(x, y) / 1e3
+    if z < LOW_Z_MM and reach < min_reach_low_m:
+        return False, ("flange %.0f mm below the arm-base plane at only %.2f m reach — elbow/tool fold down toward "
+                       "the body (collided at 0.40 m, stalled at 0.50 m on 2026-09-21); need >= %.2f m or a higher target"
+                       % (-z, reach, min_reach_low_m))
+    return True, ""
+
+
 def Rz(deg):
     c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
@@ -181,6 +203,10 @@ def cmd_run(args):
 
     print("\nEnter = move to the next target, s = skip it, q = quit. Hand on the e-stop.")
     for k, pose, reach in targets:
+        ok_b, why_b = body_clearance_ok(pose)
+        if not ok_b:
+            print("-> tag %d REFUSED: %s" % (k, why_b))
+            keep([k] + ["%.3f" % v for v in pose] + [""] * 11 + ["refused: " + why_b]); continue
         try:
             ans = input("-> tag %d at %s ? " % (k, ["%.1f" % v for v in pose])).strip().lower()
         except (EOFError, KeyboardInterrupt):

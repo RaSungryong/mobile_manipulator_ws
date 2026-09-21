@@ -324,7 +324,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15 |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -1750,6 +1750,54 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-21 — robot_ui: live joint angles + joint control (Arm tab, web and Qt)
+
+User: "ui 에 현재joint각도 와 joint 제어 추가". The joints were already in
+`/arm/state` (`ArmState.joints`, same poll cycle and `pose_valid` flag as
+the TCP pose — `arm_node` even keeps them live through a scan via the
+worker snapshot) but neither front rendered them, and the arm had no
+joint-space command at all: `move_cart` / `jog_cmd` are Cartesian, and
+the only MoveJ entry points were the home pose and a `scan_joint_*` row.
+
+- **`ArmController.move_joint(j1..j6, vel, acc)`** = one
+  `MoveJ(target, TOOL_ID, 0, vel=, acc=)`; **`jog_joint(joint, delta)`**
+  reads the LIVE joints, adds `delta` deg to ONE of them ('j1'..'j6' or
+  1..6) and calls `move_joint` — the same rules as the Cartesian jog: no
+  accumulated target, `max_step` bound, refused while busy, RPC timeout
+  → `_wait_motion_done`. Result strings `move_joint ok` / `jog j3 -2.5
+  deg ok`. **arm_node:** `/arm/move_joint`, `/arm/jog_joint` (String
+  JSON), through the same single worker and `motion_seq` bump as
+  `move_cart` — refused, not queued, while a scan holds the arm.
+  Deliberately NO reach / collision / joint-limit check below the SDK:
+  none exists for MoveJ anywhere in the stack (a joint task's rows go
+  the same way), and the controller refuses a limit with its own code.
+- **UI (both fronts, one *Joints* group on the Arm tab):** J1..J6
+  readout from `/arm/state` (`—` while `pose_valid` is false, the last
+  valid set kept for the fields), a ± button per joint with its own
+  `jog step [deg]` (speed shared with the Cartesian jog), a six-field
+  absolute target with *Fill from current* and **MOVE J** (blank = keep
+  the live angle, one MoveJ). Bridge: `ARM_JOINTS`, `arm_move_joint`,
+  `arm_jog_joint`; web: `api_arm_jog_joint` / `api_arm_move_joint` /
+  `api_arm_joints`, `joint-grid` / `jog-joint-grid` /
+  `joint-target-grid` in `app.js`.
+
+Verified offline: `check_scan_progress.py` 49 → **62** (real
+`ArmController` against the fake Fairino: six angles in one MoveJ with
+vel/acc, error code reported with busy released, jog moves only the
+named joint from the live angles, integer joint names, unknown joint /
+over-`max_step` / non-numeric refused before any RPC, busy refusals),
+`check_web_ui.py` 121 → **128**, `check_task_list_ui.py` 94 → **102**
+(labels render to 2 decimals and blank on `pose_valid` false, the jog
+call carries the joint step and the shared speed, MOVE J fills a blank
+field from the live joints, a non-numeric field refuses). The
+DevTools-driven `check_web_ui_browser.py` got the same three cases but
+still dies at `Page.navigate` in this environment (pre-existing, see the
+Basler-tip entry); `google-chrome --headless --dump-dom` on the page
+shows the new grids built, so the JS runs through its init. Not run on
+the robot: `arm_node` restart for the two topics, `robot_ui_web_node`
+restart (or reload for the page alone — `app.js` is served `no-store`
+from the source `web/`, but the `api_*` methods live in the node).
+
 ### 2026-09-21 — Basler vision tip measured on the A4 sheet: (−1.8, −245.6, 209.6) mm, roll −179.1°; the ±3 mm floor is the arm's spin-dependent orientation error
 
 User: "vision tip 수집한 데이터 분석하면 결과 확인". Session
@@ -1976,6 +2024,31 @@ sheet — the ten grid points at 0.50 m by default, 3 s dwell; targets equal
 verify_chain's to 0.00. Session capture lesson: 64 captures but 20
 distinct geometries — repeats over-weight one pose; −x tilts 3, tags
 308 / 309 seen once.
+
+**Later: two discriminating runs, and a COLLISION.** `sheet_path` after
+re-parking (16:35): 10-point mean lens error (+1.3, −0.9) mm — the chain
+constant holds at a new base pose — with the arm gradient a third time
+(−17 mm / 600 mm of arm x, plus an extra −10…−17 mm at the folded far row,
+tags 308 / 309, reach 0.48 m). Wrist spun 92° → 60° (17:00): the mean stays
+(−2.1, −0.9) but the per-point pattern changes completely (rms difference
+17.7 mm vs 13 mm within a run; the Wy gradient becomes a ±10 mm alternation
+by column) — the error is a function of the ARM CONFIGURATION, not of the
+lens position, so a rigid base / lift-column tilt is ruled out; what is
+left is FK-level (joint zero offsets / link geometry) or configuration-
+dependent flex, ±15–20 mm ≈ 1° of joint error at 1 m. h = 0.40 m (17:05):
+3 points, then the target at reach 0.50 m with the flange 84 mm BELOW the
+arm-base plane stalled (MoveL never completed) and the one at 0.40 m
+**collided** — the arm folds its elbow / tool toward the chassis there;
+0.63 m and up were fine, and above the plane 0.40 m was fine. The script
+had no body model (documented, and not enough — the 09-15 sweep failed
+the same way, and `sheet_path` moving the arm automatically is itself the
+exception to the "no automatic arm motion in chain_calib" rule). Now
+`verify_chain.body_clearance_ok`: flange z < 0 ⇒ horizontal reach ≥ 0.65 m
+or the target is REFUSED and recorded (`--min-reach-low` to override
+knowingly). Empirical line, no link model. **Next for the remaining
+±15 mm: joint-offset calibration of the arm** — the sheet already gives
+the lens pose per view, but the tools record only the TCP, not the joint
+angles; record `/arm/state` joints per sample first.
 
 ### 2026-09-18 (evening) — chain_calib: the printed A0 tag sheet is the ground truth for T_hc2fc; two-tag mode removed
 

@@ -30,10 +30,13 @@ are appended to <session>/sheet_path_<HHMMSS>.csv as they are measured.
 
 Safety: the arm is never moved automatically until you confirm the printed
 plan once; the first target must be within --max-first-move of the current
-flange; every target must be inside the 1.25 m flange reach; a failed move
-skips that point; Ctrl-C stops after the current point. Hand on the e-stop.
-No automatic motion inside chain_calib's calibration itself — this script
-is the verification path, like verify_chain.
+flange; every target must be inside the 1.25 m flange reach; a target with
+the flange BELOW the arm-base plane at under --min-reach-low (0.65 m) of
+horizontal reach is REFUSED (the arm folds its elbow / tool toward the
+chassis there — a 0.40 m one collided on 2026-09-21; there is no link model,
+this is the empirical line); a failed move skips that point; Ctrl-C stops
+after the current point. Hand on the e-stop. No automatic motion inside
+chain_calib's calibration itself — this script is the verification path.
 """
 import argparse
 import csv
@@ -100,6 +103,9 @@ def main():
     ap.add_argument("--front-rotation", choices=["level", "measured"], default="level")
     ap.add_argument("--frames", type=int, default=20)
     ap.add_argument("--max-first-move", type=float, default=0.35)
+    ap.add_argument("--min-reach-low", type=float, default=vc.MIN_REACH_LOW_M,
+                    help="body-clearance rule: minimum horizontal reach (m) when the flange is below the arm-base plane "
+                         "(default %.2f — 0.50 stalled and 0.40 collided on 2026-09-21)" % vc.MIN_REACH_LOW_M)
     ap.add_argument("--dry-run", action="store_true", help="print the plan, move nothing")
     ap.add_argument("--yes", action="store_true", help="skip the one confirmation prompt")
     ap.add_argument("--hand-eye", default=None)
@@ -134,8 +140,14 @@ def main():
     targets = lens_targets(T_ab2W, Hc, points, spin)
     print("current flange: %s" % ["%.1f" % v for v in cur])
     print("  #  lens @ W (x, y, h) m       flange x      y      z      rx      ry      rz   reach")
+    n_refused = 0
     for i, (p, pose, reach) in enumerate(targets):
-        print("%3d  (%.3f, %.3f, %.3f)   %8.1f %6.1f %6.1f %7.2f %7.2f %7.2f   %.3f" % (i + 1, *p, *pose, reach))
+        ok_b, why_b = vc.body_clearance_ok(pose, args.min_reach_low)
+        n_refused += (not ok_b)
+        print("%3d  (%.3f, %.3f, %.3f)   %8.1f %6.1f %6.1f %7.2f %7.2f %7.2f   %.3f%s"
+              % (i + 1, *p, *pose, reach, "" if ok_b else "   REFUSED — " + why_b))
+    if n_refused:
+        print("%d point(s) will be skipped (body clearance). Raise the height h, or --min-reach-low to override knowingly." % n_refused)
     d0 = float(np.linalg.norm(np.array(targets[0][1][:3]) - np.array(cur[:3])) / 1e3)
     print("first target is %.2f m from the current flange" % d0)
     if args.dry_run:
@@ -160,6 +172,10 @@ def main():
     try:
         for i, (p, pose, reach) in enumerate(targets):
             print("-> %d/%d  lens to W (%.3f, %.3f, h %.3f)" % (i + 1, len(targets), *p))
+            ok_b, why_b = vc.body_clearance_ok(pose, args.min_reach_low)
+            if not ok_b:
+                print("   REFUSED (body clearance): %s" % why_b)
+                w.writerow([i + 1, *p, *pose] + [""] * 13 + ["refused: " + why_b]); fh.flush(); continue
             try:
                 S.arm.move_j_to_pose(pose, linear=True)
             except Exception as e:
