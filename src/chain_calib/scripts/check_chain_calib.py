@@ -374,6 +374,65 @@ try:
         check("planted J2..J6 offsets recovered within 0.3 deg each", err[1:].max() < 0.3,
               "fitted %s vs planted %s" % (np.round(_dq, 2), _dq_true))
         check("J1 stays exactly 0 (degenerate with the chain's base yaw)", _dq[0] == 0.0)
+    # 5b. the REPROJECTION residual (default since the first real session) with corners rendered
+    # by a pinhole hand_cam, mostly 2-tag views as on the robot, plus a planted 20 mm / 1 deg
+    # hand-eye error: offsets alone cannot explain it, --hand-eye-free must recover it
+    import cv2 as _cv2
+    _K = np.array([[609.3, 0, 321.5], [0, 608.6, 238.7], [0, 0, 1.0]])
+    _dH = np.eye(4); _dH[:3, :3] = CC._R_from_rotvec(np.radians([0.6, -0.5, 0.7])); _dH[:3, 3] = [0.008, 0.004, -0.018]
+    _H_true = H_file @ _dH
+    _smp2 = []
+    _real = os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921_arm")
+    _qs = [x.joints_deg for x in _load(_real)[0] if x.joints_deg is not None] if os.path.isdir(_real) else []
+    # configurations: the real session's joint vectors (they look at the sheet by construction) jittered
+    # 3 deg, else the four seeds — the true sheet pose is the one the real session's chain places it at
+    if _qs:
+        _T_ab2W_true = T_ab2mb @ T_mb2fc @ np.asarray(_load(_real)[0][0].T_fc2W, float)
+    _fr, _ = _cv2.Rodrigues(invert_T(_T_fc2W)[:3, :3])
+    _f200, _ = _cv2.projectPoints(sheet.corners_W(200).reshape(-1, 1, 3), _fr, invert_T(_T_fc2W)[:3, 3].reshape(3, 1), _K, None)
+    for i in range(48 if not _qs else len(_qs)):
+        q = (np.array(_qs[i], float) + _rng.uniform(-3, 3, 6)) if _qs else (np.array(_seeds[i % 4], float) + _rng.uniform(-15, 15, 6))
+        T_W2hc = invert_T(_T_ab2W_true) @ _ch.fk_flange(q, _dq_true) @ invert_T(_H_true)
+        T_hc2W = invert_T(T_W2hc)
+        rv, _ = _cv2.Rodrigues(T_hc2W[:3, :3])
+        corners = {}
+        for k in sorted(sheet.t_W_m):
+            if k == 200:
+                continue
+            uv, _ = _cv2.projectPoints(sheet.corners_W(k).reshape(-1, 1, 3), rv, T_hc2W[:3, 3].reshape(3, 1), _K, None)
+            uv = uv.reshape(4, 2) + _rng.normal(0, 0.3, (4, 2))
+            pc = (T_hc2W[:3, :3] @ sheet.corners_W(k).T + T_hc2W[:3, [3]]).T
+            if (pc[:, 2] > 0.1).all() and (uv > 5).all() and (uv[:, 0] < 635).all() and (uv[:, 1] < 475).all():
+                corners[k] = uv
+        if len(corners) < 2:
+            continue
+        _smp2.append(_CS("s%02d" % i, list(matrix_m_to_pose_fr5(_ch.fk_flange(q))), T_hc2W, _T_fc2W, 0.0,
+                         hand_corners=corners, front_corners={200: _f200.reshape(4, 2)}, joints_deg=list(q)))
+    _d2 = tempfile.mkdtemp(prefix="chk_armoff2_")
+    _save(_d2, _smp2, dict(mode="sheet", date="synthetic", sheet_sx=1.0, sheet_sy=1.0, sheet_tag_size_m=0.09,
+                           front_cam_frame="level", K_hand=_K.ravel().tolist(), D_hand=[0.0] * 5,
+                           K_front=_K.ravel().tolist(), D_front=[0.0] * 5))
+    _n2 = sum(len(x.hand_corners) == 2 for x in _smp2)
+    check("synthetic reprojection session: %d views, %d of them 2-tag" % (len(_smp2), _n2), len(_smp2) >= 30 and _n2 >= 5)
+    _r = subprocess.run([sys.executable, os.path.join(_HERE, "arm_offsets.py"), _d2, "--quick", "--hand-eye-free",
+                         "--write-hand-eye", os.path.join(_d2, "H_fit.npz")], capture_output=True, text=True)
+    _ok = _r.returncode == 0 and os.path.exists(os.path.join(_d2, "H_fit.npz"))
+    check("arm_offsets.py --hand-eye-free runs with the reprojection residual", _ok, (_r.stderr or "")[-300:])
+    if _ok:
+        _Hf = np.load(os.path.join(_d2, "H_fit.npz"))["arr_0"]
+        _E = invert_T(_H_true) @ _Hf
+        _dp = np.linalg.norm(_E[:3, 3]) * 1e3; _rv = np.degrees(CC._rotvec_from_R(_E[:3, :3]))
+        # the planted J6 offset (0.5 deg) is a flange-z spin and lands in the hand-eye BY DESIGN (J6 fixed) —
+        # so the fitted hand-eye must be the truth up to exactly that spin
+        check("planted 20 mm / 1 deg hand-eye error recovered within 2 mm / 0.15 deg (up to the J6 spin, %.2f deg)" % _rv[2],
+              _dp < 2.0 and np.linalg.norm(_rv[:2]) < 0.15 and abs(abs(_rv[2]) - 0.5) < 0.15,
+              "%.2f mm / rotvec %s deg off the truth" % (_dp, np.round(_rv, 3)))
+        _dq2 = np.load(os.path.join(_d2, "arm_offsets.npz"))["dq_deg"]
+        check("planted J2..J5 offsets recovered within 0.3 deg alongside the hand-eye (J6 folded into it)",
+              np.abs(_dq2[1:5] - _dq_true[1:5]).max() < 0.3, "fitted %s vs planted %s" % (np.round(_dq2, 2), _dq_true))
+        check("'reproj rms' with the fit under 0.5 px (0.3 px corner noise)",
+              any("reproj rms" in l and float(l.split("reproj rms")[1].split("px")[0]) < 0.5 for l in _r.stdout.splitlines()
+                  if l.startswith("base pose + joint offsets")), " | ".join(l for l in _r.stdout.splitlines() if l.startswith("base pose")))
     check("a session recorded before joint angles existed loads with joints_deg None",
           all(x.joints_deg is None for x in _load(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921"))[0])
           if os.path.isdir(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921")) else True)

@@ -1859,6 +1859,52 @@ run on the robot: `arm_node` and the calibration nodes read the new file
 at their next start; the numbers they will read are the ones they run
 on now.
 
+### 2026-09-21 (night) — First arm-calibration session on the sheet: the fit reads PIXELS now; the dominant term looks like the hand-eye, but it is not stable enough to apply
+
+User collected `log/chain_calib/20260921_arm` (65 views: all of 300–309,
+spins 30 / 90 / 150°, hand_cam 0.25–0.56 m, tilts to 41°) for the
+joint-offset tooling of the previous entry, then moved to another
+session. **Handover for the next session: `docs/HANDOVER.md` §2-0c** —
+this entry is the reasoning.
+
+**The PnP-pose residual was worthless on real data.** Most views hold
+two sheet tags, and a two-tag PnP has a near-planar ambiguity: a false
+3–7° tilt with a matching 30–110 mm depth error (the `raw chain error …
+z ±30…110 mm` lines in `capture`). Fitting joint offsets to those poses
+gave rigid 21 mm rms and hold-out WORSE with offsets. `arm_offsets.py`
+now minimises the **corner reprojection in px** (`--residual reproj`,
+default; `pose` kept): a two-tag view then constrains exactly what its
+corners constrain. Also added `--hand-eye-free` (6-DOF `T_hc2ee`
+correction; J6 fixed because a J6 offset IS a flange-z spin of the
+hand-eye), `--min-tags`, `--quick`, `--write-hand-eye`, and the link
+scales moved to the j3 / j4 ORIGINS (0.700 / 0.586 m) — the first
+version scaled j2's 0.18 m along J1's axis, a pure base shift, and
+diverged. `chain_calib.py platform()` falls back to the configured
+`T_hc2ee.npz` when a session's meta names the pre-`56ef9fb` path.
+
+**Result (exclude v13 / v11 / v20 — moving, v45 — one tag):** rigid
+7.64 px rms (hold-out 7.85) → offsets 3.81 (3.85) → **hand-eye free 1.26
+(2.11)**: a `T_hc2ee` correction of 20.4 mm / 1.29°, Δt in the hand_cam
+frame (+8.3, +3.7, −18.3) mm, joint offsets then all ≤ 1.2° (J2
+−1.22 ± 0.31, J5 −0.10 ± 0.05), links nothing. `check_chain_calib.py`
+§5b (48 checks) renders corners at the REAL configurations, plants a
+20 mm / 1° hand-eye error + offsets and recovers both to 0.15 mm at
+0.30 px — the method is right. **Not applied, for two measured
+reasons:** the parameters move between range subsets (far Δt (+5.4,
+−5.0, −11.9) / 0.88° vs near (+9.1, −0.1, −19.3) / 1.43°, J4 −0.13 ↔
++0.76°) and the 1.2–2.1 px residual is 4–7× the corner floor, so the
+model is missing a term — hand_cam intrinsics (D435 reports D = 0; an
+fx error is near-degenerate with hand-eye z at one range) or the paper
+(0.75–1.03° slope this session) are the candidates. Re-solving the
+63-view chain session with the fitted hand-eye flips its verdict to
+HAND with D ≈ the inverse — the chain data (PnP poses) prefers the old
+hand-eye + the applied `T_ab2mb`. Unresolved; next steps and the exact
+commands are in HANDOVER §2-0c (intrinsics check first, then tape the
+sheet and add range / tilt diversity, accept only when subsets agree).
+`log/chain_calib/20260921/corrections.npz` was restored after the
+`--hand-eye` re-solve overwrote it; the re-solve outputs live under
+`20260921_arm/`.
+
 ### 2026-09-21 — robot_ui: live joint angles + joint control (Arm tab, web and Qt)
 
 User: "ui 에 현재joint각도 와 joint 제어 추가". The joints were already in

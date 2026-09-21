@@ -29,6 +29,122 @@ or superseded; it is in git history if you need it.
 
 ## 2. Open items
 
+### 2-0c. ▶ NEXT SESSION — arm kinematic / hand-eye calibration from the A0 sheet (written 2026-09-21 evening, on the robot; READ THIS FIRST)
+
+State when the session that wrote this ended. Everything below is committed
+on `real` and pushed; nothing in it is APPLIED to the robot's config.
+
+**Where we are.** The front_cam ↔ hand_cam chain was calibrated on
+2026-09-21 (`log/chain_calib/20260921`, 63 views, level-floor prior, ruler
+scale 1.0 / 1.0 / 90 mm) and APPLIED: `T_ab2mb` in
+`src/apriltag_nav/config/tf/tf_chain.yaml` (+ `T_ab2mb.npz`; robot.yaml /
+the planner URDF derive from it since commit `56ef9fb`). Record:
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`. Verified with
+`sheet_path.py` (hand_cam LENS driven to the 10 grid tags): constant error
+~1 mm, but a per-point error of ±15–20 mm that CHANGES with the wrist spin
+(60° vs 92°) — configuration-dependent ⇒ the ARM (FK) side, not a rigid
+transform. So the next step became the arm's own calibration.
+
+**What was built for it** (`src/chain_calib`, commits `cf0288f` and the one
+after it):
+
+| piece | what |
+|---|---|
+| `capture` stores joints | `ChainSample.joints_deg` (J1..J6 per view) in `samples.npz`; old sessions load with `None` |
+| `chain_calib/arm_fk.py` | URDF FK (`ArmChain.fk_flange(q, dq, link_scale)`), reproduces the controller's TCP to 0.01 mm over all 65 real views |
+| `scripts/arm_offsets.py` | fits J2..J6 zero offsets (+ `--links` upper-arm/forearm scales, + `--hand-eye-free` a 6-DOF `T_hc2ee` correction) with the sheet pose in the arm base free. **Residual = corner REPROJECTION in px** (default); `--residual pose` is the first version and is useless on 2-tag views (see below). `--min-tags`, `--exclude`, `--holdout-every`, `--quick` (no jackknife), `--write-hand-eye <npz>`. Applies nothing. |
+| `check_chain_calib.py` | 48 checks; §5b renders corners at the REAL session's configurations, plants offsets + a 20 mm / 1° hand-eye error and recovers both (0.15 mm; J6 folds into the hand-eye spin by design) |
+| `chain_calib.py platform()` | falls back to the configured `T_hc2ee.npz` when a session's meta still names the pre-`56ef9fb` path |
+
+**Data:** `log/chain_calib/20260921_arm/` — 65 views, all ten tags 300–309,
+spins 30 / 90 / 150°, hand_cam range 0.25–0.56 m (mostly 0.45), tilts to
+41° (mostly ≤ 5°). Exclude `v13` (24 px corner scatter — arm moving),
+`v11`, `v20` (moving), `v45` (one tag). Outputs there:
+`arm_offsets_handeye_free.txt` (the full fit with jackknife),
+`T_hc2ee_fit_20260921_arm.npz` (the fitted hand-eye — a CANDIDATE),
+`chain_solve_*_with_fitted_handeye.txt` (the chain re-solved with it).
+
+**Results, and why nothing is applied yet:**
+
+1. A fit on the hand_cam PnP POSES is worthless here: two-tag views have a
+   near-planar ambiguity (false 3–7° tilt with 30–110 mm of depth error),
+   and most views hold two tags. `sample` lines print `raw chain error …
+   z ±30…110 mm` for exactly those — that is the PnP, not the arm. Hence
+   the reprojection residual. (The chain `solve` still uses PnP poses; on
+   this session it reports a 36 mm floor and UNDETERMINED — ignore that
+   run, it is the same artefact.)
+2. Reprojection, rigid model (sheet pose free, offsets 0): **7.64 px rms**
+   (≈ 5.7 mm at 0.45 m; hold-out 7.85). Joint offsets J2..J6 alone:
+   **3.81 px** (hold-out 3.85), offsets all < 0.6° and mostly inside their
+   jackknife sd — real but small. `--links` alone: 3.30 px with link
+   scales −17.7 / −7.1 mm (implausible; absorbing item 3).
+3. **`--hand-eye-free`: 1.26 px (hold-out 2.11)** — the dominant term is a
+   `T_hc2ee` correction of **20.4 mm / 1.29°**, Δt in the hand_cam frame
+   (+8.3, +3.7, **−18.3**) mm, fitted `T_hc2ee` t (+43.95, −330.83,
+   −169.80) mm rpy (−0.678, −0.019, −178.546)°; joint offsets then J2
+   −1.22 ± 0.31, J3 −0.32 ± 0.24, J4 +0.23 ± 0.14, J5 −0.10 ± 0.05° (J6
+   fixed, degenerate with the hand-eye spin); links add nothing
+   (+0.4 / −1.3 mm). The synthetic check recovers a planted hand-eye of
+   this size exactly, so the METHOD is right.
+4. ⚠️ **But the parameters are not stable across view subsets**, so do not
+   apply them: far views only (> 0.42 m, 45) give Δt (+5.4, −5.0, −11.9)
+   mm / 0.88°, near views only (≤ 0.42 m, 15) give (+9.1, −0.1, −19.3) mm
+   / 1.43°, and J4 flips −0.13 ↔ +0.76°. A residual of 1.2–2.1 px against
+   a 0.3 px corner floor says the model is still missing something — most
+   likely **hand_cam intrinsics** (the D435 reports D = 0; an fx error is
+   near-degenerate with hand-eye z at one range, and with the printed tag
+   size), or the paper not being flat (front_cam read a 0.75–1.03° slope
+   across this session, worse than the 0.3–0.5° of the chain session —
+   tape it down).
+5. Re-solving the CHAIN (63-view session) with the fitted hand-eye plugged
+   in makes its verdict flip to HAND side with D ≈ the inverse of that
+   correction — i.e. the chain data, judged by PnP poses, prefers the OLD
+   hand-eye + the applied `T_ab2mb`. The two fits disagree about where
+   the ~20 mm sits (hand-eye vs mount vs intrinsics). Unresolved.
+
+**Do next, in this order:**
+
+1. **Hand_cam intrinsics.** Decisive test before any more fitting: with
+   the arm STILL, `cv2.calibrateCamera` over the stored `corners.json` of
+   both sessions (sheet = planar target, 65 + 63 views, all tags — the
+   09-18 attempt over 44 single-position views reached 0.78 px and was
+   inconclusive); or a range sweep straight down over one tag pair at
+   0.25 / 0.35 / 0.45 / 0.55 m: PnP range − FK range constant ⇒ hand-eye
+   z, proportional to range ⇒ fx. If K changes, re-run `arm_offsets.py`
+   with the new K (it reads `K_hand` from `meta.yaml` — edit it or add a
+   `--K` flag) and `chain_calib.py solve` on both sessions.
+2. Tape the sheet flat (check `paper slope` < 0.5° in `capture`), then
+   ADD views to `20260921_arm`: every tag at 0.30 AND 0.55 m, tilts ≥ 15°
+   at every position (this session tilted only at a few spots), spins
+   spread 30–150° — range and tilt diversity is what separates hand-eye z
+   from intrinsics and from J2/J4.
+3. Refit: `rosrun chain_calib arm_offsets.py log/chain_calib/20260921_arm
+   --sx 1.0 --sy 1.0 --tag-size 0.090 --holdout-every 4 --hand-eye-free
+   --exclude v13 v11 v20 v45` and the near / far split; accept only when
+   the subsets agree within ~2 mm / 0.2° and hold-out ≤ ~0.6 px.
+4. Then apply in this order, each a separate commit: hand-eye
+   (`tf_chain_tool.py set T_hc2ee --npz …`) → chain `solve` with it →
+   `T_ab2mb` → `sheet_path.py` verification at two spins (the accuracy
+   target is xy of the lens over each grid tag) → joint offsets, which
+   need a command-side change (`MoveJ(IK(target) − δq)` or pre-distorted
+   Cartesian targets in `arm_controller`), not a config edit. Restart
+   `arm_node` and the calibration nodes after any tf_chain change.
+
+**Safety, learned the hard way (collision 2026-09-21 17:05):** with the
+flange BELOW the arm-base plane (z < 0) and horizontal reach < 0.65 m the
+elbow / tool fold into the chassis. `verify_chain.py` and `sheet_path.py`
+refuse such targets (`body_clearance_ok`); manual jogs are not guarded.
+Low views only over the front row (300–305).
+
+**Repo rules that held in that session:** hunks-only staging — other
+sessions leave uncommitted files (robot_ui, arm_node, CLAUDE.md,
+`log/apriltag_nav/nav_log/…`, `stop_stack.sh`, `STOP_LAUNCH_kr.md`);
+`git add` only what you changed. Push with the token file
+(`git -c credential.helper= -c 'credential.helper=!f() { echo
+username=RaSungryong; printf "password=%s\n" "$(tr -d "[:space:]" <
+token)"; }; f' push origin real`; never print the token). Every applied
+change gets a CLAUDE.md Work Log entry.
+
 ### 2-0. ▶ NEXT ON-ROBOT SESSION — navigation (written 2026-09-08 evening, on the robot)
 
 Four commits landed on `real` today (`4388538`, `b310326`, `5401ace`,

@@ -387,9 +387,18 @@ python3 src/chain_calib/scripts/check_chain_calib.py     # 35 checks
 체인의 base yaw와 축퇴라 0 고정; 시트의 팔 베이스 내 자세 6개는 자유).
 
 ```
-T_W2hc_meas = inv(T_hc2W)                                  hand_cam 멀티태그 PnP
 T_W2hc_pred = inv(T_ab2W) · FK(q + δq) · inv(T_hc2ee)        URDF FK + hand-eye
+residual    = project(K_hand, inv(T_W2hc_pred) · 시트 코너) − 관측 코너 px   (기본, --residual reproj)
+            | pose_error(T_W2hc_pred, inv(T_hc2W))                        (--residual pose, 첫 버전)
 ```
+
+⚠️ **잔차는 코너 재투영(px)이다.** 첫 실제 세션(`20260921_arm`, 65뷰)에서 hand_cam
+이 두 태그만 보는 뷰가 대부분이었고, 두 태그 PnP는 평면 모호성 때문에 **가짜 기울기
+3~7° + 그에 맞는 깊이 오차 30~110 mm**를 낸다 — `capture`의 `raw chain error … z
+±30~110 mm`가 그것이다(팔이 아니라 PnP). PnP 자세를 맞추던 첫 버전은 그 잡음을
+피팅했다(강체 21 mm rms, 오프셋이 홀드아웃에서 더 나빠짐). 코너 픽셀을 맞추면 두
+태그 뷰는 코너가 구속하는 만큼만(위치·스핀은 잘, 기울기는 약하게) 기여한다. 0.45 m
+에서 1 px ≈ 0.75 mm.
 
 ### 수집 — 무엇이 다른가
 
@@ -416,8 +425,11 @@ reach가 0.65 m 미만인 자세(베이스 옆으로 접힌 자세)는 팔꿈치
 ### 풀이
 
 ```bash
-rosrun chain_calib arm_offsets.py log/chain_calib/<세션> --holdout-every 4
-rosrun chain_calib arm_offsets.py log/chain_calib/<세션> --links            # + j2/j3 링크 길이
+A="--sx 1.0 --sy 1.0 --tag-size 0.090 --holdout-every 4"
+rosrun chain_calib arm_offsets.py log/chain_calib/<세션> $A                 # J2~J6 오프셋
+rosrun chain_calib arm_offsets.py log/chain_calib/<세션> $A --links         # + 상완(0.700)/전완(0.586) 길이
+rosrun chain_calib arm_offsets.py log/chain_calib/<세션> $A --hand-eye-free # + T_hc2ee 6-DOF 보정 (J6은 고정: hand-eye 스핀과 축퇴)
+   --exclude v13 …   --min-tags 3   --quick(jackknife 생략)   --write-hand-eye <npz>(후보 저장, 설치 아님)
 ```
 
 읽는 법: (1) `URDF FK vs the controller's TCP` — 1 mm 안이어야 URDF가 컨트롤러의
@@ -430,7 +442,26 @@ rosrun chain_calib arm_offsets.py log/chain_calib/<세션> --links            # 
 별도 작업이고 숫자를 본 뒤 결정한다.
 
 합성 검증: `check_chain_calib.py` §5 — 1.5 mm / 0.4° 잡음에서 심은 J2~J6 오프셋을
-0.3° 안으로 복원.
+0.3° 안으로 복원; §5b — 실제 세션의 관절 구성에서 코너를 렌더링(0.3 px 잡음, 두 태그
+뷰 다수)하고 심은 20 mm / 1° hand-eye 오차 + 오프셋을 0.15 mm로 복원(J6은 hand-eye
+스핀으로 접힘), 재투영 rms 0.30 px.
+
+### 첫 실제 세션 결과 (2026-09-21, `log/chain_calib/20260921_arm`) — 적용 보류
+
+65뷰(300~309 전부, 스핀 30/90/150°, 거리 0.25~0.56 m, 대부분 0.45), `--exclude v13
+v11 v20 v45`(움직이는 중 캡처 / 태그 1개). 재투영 rms: 강체 **7.64 px** → 오프셋만
+**3.81**(홀드아웃 3.85; 오프셋 모두 0.6° 미만) → **`--hand-eye-free` 1.26**(홀드아웃
+2.11): 지배항은 **T_hc2ee 보정 20.4 mm / 1.29°**, hand_cam 프레임 Δt (+8.3, +3.7,
+−18.3) mm, 그 뒤 J2 −1.22±0.31, J3 −0.32±0.24, J4 +0.23±0.14, J5 −0.10±0.05°, 링크는
+0. 그러나 **거리 부분집합에서 답이 흔들린다**(>0.42 m 45뷰: Δt (+5.4, −5.0, −11.9)
+/ 0.88°; ≤0.42 m 15뷰: (+9.1, −0.1, −19.3) / 1.43°, J4 −0.13 ↔ +0.76°), 잔차 1.2~2.1 px
+가 코너 바닥 0.3 px보다 크므로 모델에 빠진 것이 있다 — hand_cam 내부 파라미터(D435
+는 D=0을 보고; fx 오차는 한 거리에서 hand-eye z와 축퇴)와 종이 평탄도(이 세션
+0.75~1.03°)가 후보. 체인 `solve`에 이 hand-eye를 넣으면 63뷰 세션은 D≈그 역을 요구
+한다(PnP 자세 기반이라 같은 잡음의 영향). **아무것도 적용하지 않았다.** 다음 순서는
+`docs/HANDOVER.md` §2-0c: hand_cam 내부 파라미터 확인 → 시트 테이핑 → 거리(0.30/
+0.55)·기울임(≥15°, 모든 자리) 추가 수집 → 부분집합이 2 mm / 0.2° 안에서 일치할 때
+적용.
 
 ## 6. Basler 비전 팁 측정 — `basler_tip_calib.py` (2026-09-18)
 

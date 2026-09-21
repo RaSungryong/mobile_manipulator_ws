@@ -88,7 +88,14 @@ def platform(hand_eye=None):
     cfg = load_locator_cfg(os.path.join(_ptl_cfg_dir(), "locator.yaml"))
     ext = load_extrinsics_full(_resolve(cfg.extrinsics_yaml),
                                front_cam_frame=getattr(cfg.detector, "front_cam_frame", "auto"))
-    H = load_T_hc2ee(_resolve(hand_eye or cfg.hand_eye_npz))
+    he = _resolve(hand_eye or cfg.hand_eye_npz)
+    if hand_eye and not os.path.exists(he):
+        # A session's meta.yaml remembers the file it was captured with; the
+        # 2026-09-21 move of every transform into apriltag_nav/config/tf made
+        # the pre-move sessions' paths stale. Same transform, new home.
+        print("! hand-eye %s no longer exists — using the configured %s" % (he, _resolve(cfg.hand_eye_npz)))
+        he = _resolve(cfg.hand_eye_npz)
+    H = load_T_hc2ee(he)
     return cfg, ext, H
 
 

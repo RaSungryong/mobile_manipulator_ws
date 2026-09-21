@@ -1,0 +1,98 @@
+! hand-eye /home/abc/mobile_manipulator_ws_20260902/src/path_tag_locator/config/hand_eye/T_hc2ee.npz no longer exists — using the configured /home/abc/mobile_manipulator_ws_20260902/src/apriltag_nav/config/tf/T_hc2ee.npz
+! sheet scale is the DESIGN value (sx = sy = 1, tag 90.0 mm) — measure the print and pass --sx --sy --tag-size (README §2); 0.2 % of scale is 1-2 mm of chain error
+61 samples, 61 with joint angles
+URDF: /home/abc/mobile_manipulator_ws_20260902/src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf
+hand-eye: /home/abc/mobile_manipulator_ws_20260902/src/path_tag_locator/config/hand_eye/T_hc2ee.npz
+
+URDF FK(q) vs the controller's TCP over the samples: 0.00 mm / 0.001 deg rms, max 0.01 mm / 0.001 deg
+residual: corner reprojection [px]
+
+== residual: FK through the chain vs hand_cam (lens pose = against the per-view PnP, which is itself noisy on 2-tag views; the px column is what the fit minimises) ==
+base pose free, offsets 0 (rigid)  lens pose rms 20.84 mm / 2.613 deg   max 48.28 mm / 6.256 deg   reproj rms  7.64 px (max 14.31)
+base pose + joint offsets + hand-eye lens pose rms 20.26 mm / 2.371 deg   max 41.36 mm / 4.992 deg   reproj rms  1.26 px (max  3.24)
+  hold-out, rigid                  lens pose rms 18.65 mm / 2.406 deg   max 38.03 mm / 4.190 deg   reproj rms  7.85 px (max 15.29)
+  hold-out, offsets                lens pose rms 19.31 mm / 2.389 deg   max 39.64 mm / 5.062 deg   reproj rms  2.11 px (max  6.99)
+
+== joint zero offsets (deg, ADDED to the reading = physical angle) ==
+  J1   +0.000  (fixed: degenerate with the base yaw the chain already holds)
+  J2   -1.221  jackknife sd 0.314
+  J3   -0.319  jackknife sd 0.244
+  J4   +0.233  jackknife sd 0.142
+  J5   -0.101  jackknife sd 0.054
+  J6   +0.000  (fixed: degenerate with the free hand-eye's spin)
+  hand-eye correction: 20.4 mm / 1.29 deg from the calibrated file  -> fitted T_hc2ee: t (+43.95, -330.83, -169.80) mm  rpy (-0.678, -0.019, -178.546) deg
+    delta t (hc frame) [  8.3   3.7 -18.3] mm
+    fitted hand-eye saved -> log/chain_calib/20260921_arm/T_hc2ee_fit_20260921_arm.npz (a candidate; the chain's T_ab2mb was fitted with the OLD hand-eye and must be re-solved before either is applied)
+  wrist offsets act through the 369 mm hand-eye lever: 1 deg there = 6.4 mm at the lens
+  rigid    lens W-x error vs flange x: -1.0 mm per 600 mm (r = -0.02)
+  offsets  lens W-x error vs flange x: -1.8 mm per 600 mm (r = -0.04)
+
+== the sheet in the arm base ==
+  from the chain (front_cam view): t (-559.39, -103.43, -636.18) mm  rpy (+179.214, +0.321, +88.628) deg
+  fitted with the offsets       : t (-557.04, -81.71, -650.35) mm  rpy (-179.620, -1.135, +89.489) deg
+  difference 26.0 mm / 2.06 deg — how much the chain's placement of the sheet disagrees with the arm once its offsets are removed
+
+per-sample residual, rigid -> offsets  (lens pose mm / deg; reproj px; hand tags):
+  v00     9.3 / 2.55  ->   14.3 / 1.73  12.34 ->  1.42 px  2 tags
+  v01     7.5 / 2.02  ->   14.6 / 1.71   9.60 ->  0.90 px  2 tags
+  v02    25.0 / 2.51  ->   27.2 / 3.30   6.43 ->  0.99 px  3 tags
+  v03    27.9 / 3.43  ->   33.2 / 4.04   8.96 ->  1.27 px  3 tags (hold-out)
+  v04     7.5 / 1.23  ->    2.7 / 0.32   4.18 ->  0.76 px  3 tags
+  v05    17.0 / 2.40  ->   12.6 / 1.54   3.66 ->  0.94 px  3 tags
+  v06     6.7 / 1.09  ->    1.7 / 0.15   4.73 ->  0.75 px  3 tags
+  v07    12.2 / 1.87  ->    7.1 / 0.79   4.29 ->  0.94 px  3 tags (hold-out)
+  v08     2.6 / 0.90  ->    7.9 / 0.95   4.85 ->  0.93 px  3 tags
+  v09    13.6 / 2.77  ->   18.6 / 2.16   8.98 ->  1.05 px  2 tags
+  v10    16.4 / 3.21  ->   20.0 / 2.31  10.62 ->  1.42 px  2 tags
+  v12    26.6 / 3.27  ->   24.3 / 3.01  14.10 ->  1.01 px  3 tags (hold-out)
+  v14     9.4 / 2.31  ->   16.3 / 1.92  10.79 ->  0.81 px  2 tags
+  v15    43.3 / 4.87  ->   34.2 / 4.12   4.01 ->  1.09 px  2 tags
+  v16    13.8 / 2.22  ->   22.6 / 2.76   8.02 ->  1.49 px  2 tags
+  v17    13.8 / 1.99  ->   21.9 / 2.64   6.18 ->  1.13 px  2 tags (hold-out)
+  v18    47.5 / 5.65  ->   41.4 / 4.99   2.57 ->  0.94 px  2 tags
+  v19    25.1 / 3.09  ->   21.8 / 2.69   1.54 ->  1.06 px  3 tags
+  v21    10.6 / 1.34  ->   19.3 / 2.37   1.21 ->  1.02 px  3 tags
+  v22    21.9 / 2.61  ->   18.5 / 2.28   3.53 ->  0.93 px  3 tags (hold-out)
+  v23    48.3 / 6.26  ->   40.7 / 4.94   6.95 ->  0.78 px  2 tags
+  v24    14.9 / 1.81  ->   22.2 / 2.66   4.25 ->  0.99 px  2 tags
+  v25    21.2 / 2.60  ->   20.7 / 2.50   4.28 ->  0.80 px  2 tags
+  v26    18.0 / 1.98  ->   18.2 / 2.11   7.05 ->  0.91 px  2 tags (hold-out)
+  v27    15.7 / 2.03  ->   17.9 / 2.11   2.07 ->  0.83 px  2 tags
+  v28    38.7 / 4.74  ->   38.0 / 4.57   1.94 ->  0.89 px  2 tags
+  v29    27.8 / 3.41  ->   26.7 / 3.26   5.72 ->  1.04 px  2 tags
+  v30    11.3 / 2.07  ->   16.1 / 1.90   5.67 ->  0.80 px  2 tags (hold-out)
+  v31     8.2 / 2.29  ->   15.6 / 1.85  11.40 ->  0.79 px  2 tags
+  v32    27.0 / 2.97  ->   23.7 / 2.88  10.14 ->  0.95 px  2 tags
+  v33    43.4 / 4.58  ->   38.2 / 4.60  14.31 ->  1.07 px  2 tags
+  v34     7.0 / 2.58  ->   16.1 / 1.94  15.29 ->  0.82 px  2 tags (hold-out)
+  v35    41.5 / 4.34  ->   35.4 / 3.42   8.76 ->  1.07 px  3 tags
+  v36    32.3 / 3.57  ->   39.4 / 4.03   8.23 ->  1.29 px  3 tags
+  v37    10.6 / 1.01  ->   15.8 / 1.64   3.71 ->  1.00 px  5 tags
+  v38    16.4 / 2.15  ->   11.8 / 1.13   5.31 ->  0.97 px  5 tags (hold-out)
+  v39    17.1 / 2.25  ->   13.0 / 1.28   4.24 ->  0.75 px  5 tags
+  v40    12.8 / 0.94  ->   15.9 / 1.60   5.14 ->  0.77 px  6 tags
+  v41    14.5 / 0.98  ->   16.3 / 1.59   8.97 ->  0.84 px  6 tags
+  v42    16.7 / 2.17  ->   12.4 / 1.25   6.10 ->  0.72 px  5 tags (hold-out)
+  v43    15.3 / 2.25  ->   13.2 / 1.29   8.36 ->  0.59 px  4 tags
+  v44    14.9 / 1.70  ->   19.8 / 1.93  11.56 ->  0.83 px  4 tags
+  v46     6.0 / 1.77  ->    5.4 / 0.88  13.54 ->  2.23 px  2 tags
+  v47    16.1 / 2.16  ->    9.9 / 1.59   8.26 ->  1.43 px  2 tags (hold-out)
+  v48    10.5 / 1.34  ->   10.6 / 1.49   3.81 ->  1.38 px  2 tags
+  v49    11.5 / 1.67  ->    6.2 / 0.96   5.49 ->  1.40 px  2 tags
+  v50     3.3 / 0.71  ->    7.4 / 0.97   2.46 ->  0.82 px  2 tags
+  v51    11.2 / 1.55  ->   11.1 / 1.55   2.67 ->  1.38 px  2 tags (hold-out)
+  v52     6.7 / 0.91  ->    4.9 / 0.82   3.26 ->  1.61 px  4 tags
+  v53     8.4 / 1.92  ->   12.1 / 1.64   6.06 ->  1.32 px  2 tags
+  v54     6.2 / 1.36  ->    8.3 / 1.10   5.11 ->  1.28 px  4 tags
+  v55     5.6 / 0.52  ->    7.2 / 0.82   2.10 ->  1.62 px  4 tags (hold-out)
+  v56     7.0 / 0.51  ->    8.2 / 0.96   2.77 ->  1.55 px  4 tags
+  v57     9.7 / 0.55  ->    2.9 / 0.81  13.57 ->  3.24 px  2 tags
+  v58     9.6 / 0.94  ->    2.0 / 0.42   9.51 ->  2.32 px  2 tags
+  v59     1.3 / 0.97  ->    6.2 / 1.23   5.16 ->  6.99 px  2 tags (hold-out)
+  v60     3.1 / 1.06  ->    6.4 / 1.11   5.27 ->  0.89 px  2 tags
+  v61    11.2 / 1.39  ->    2.2 / 0.33   9.98 ->  0.94 px  4 tags
+  v62     6.3 / 1.32  ->    1.2 / 0.19   8.82 ->  2.24 px  4 tags
+  v63    38.0 / 4.19  ->   39.6 / 5.06   9.49 ->  1.47 px  2 tags (hold-out)
+  v64    12.3 / 1.50  ->    3.1 / 0.54   8.81 ->  1.20 px  2 tags
+
+saved -> log/chain_calib/20260921_arm/arm_offsets.npz   (NOT applied anywhere — see the record for how offsets enter a command)
