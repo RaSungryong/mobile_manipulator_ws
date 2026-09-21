@@ -333,5 +333,52 @@ try:
 finally:
     shutil.rmtree(d)
 
+# ----------------------------------------------------------------------
+print("\n== 5. arm joint-offset fit (arm_offsets.py): planted zero offsets recovered from lens poses ==")
+# The arm error left after the chain calibration is configuration-dependent
+# (2026-09-21 spin test), i.e. kinematic. Plant J2..J6 offsets, generate lens
+# poses hand_cam would measure against the sheet at 36 configurations with
+# 1.5 mm / 0.4 deg of noise, and fit them back. J1 stays 0 (degenerate with
+# the base yaw the chain holds). Also: joint angles round-trip through
+# samples.npz and an old session without them loads with joints_deg None.
+import subprocess, tempfile
+from chain_calib.arm_fk import ArmChain
+from chain_calib.session import save_samples as _save
+from chain_calib.solver import ChainSample as _CS
+_ch = ArmChain()
+_home = [-90.00087, -90.00022, 90.00348, -89.99956, -90.00044, 0.00044]
+check("URDF FK reproduces the controller's home TCP (-158.99, 699.99, 773.96) mm",
+      np.linalg.norm(_ch.fk_flange(_home)[:3, 3] * 1e3 - [-158.9886, 699.9907, 773.9619]) < 0.1)
+_rng = np.random.default_rng(3)
+_dq_true = np.array([0.0, 0.8, -0.6, 1.2, -0.9, 0.5])
+_T_fc2W = np.array([[0, -1, 0, 0.002], [1, 0, 0, 0.006], [0, 0, 1, 0.303], [0, 0, 0, 1.0]])
+_T_ab2W_true = T_ab2mb @ T_mb2fc @ _T_fc2W
+_seeds = [[-100, -70, 110, -130, -90, 10], [-60, -80, 120, -125, -90, 40], [-120, -60, 100, -130, -95, -20], [-80, -90, 130, -125, -85, 60]]
+_smp = []
+for i in range(36):
+    q = np.array(_seeds[i % 4], float) + _rng.uniform(-15, 15, 6)
+    T_W2hc = invert_T(_T_ab2W_true) @ _ch.fk_flange(q, _dq_true) @ invert_T(H_file)
+    nz = np.eye(4); nz[:3, 3] = _rng.normal(0, 0.0015, 3); nz[:3, :3] = CC._R_from_rotvec(_rng.normal(0, math.radians(0.4), 3))
+    _smp.append(_CS("s%02d" % i, list(matrix_m_to_pose_fr5(_ch.fk_flange(q))), invert_T(T_W2hc @ nz), _T_fc2W, 0.0, joints_deg=list(q)))
+_d = tempfile.mkdtemp(prefix="chk_armoff_")
+try:
+    _save(_d, _smp, dict(mode="sheet", date="synthetic", sheet_sx=1.0, sheet_sy=1.0, sheet_tag_size_m=0.09, front_cam_frame="level"))
+    from chain_calib.session import load_samples as _load
+    _s2, _ = _load(_d)
+    check("joint angles round-trip through samples.npz", all(np.allclose(a.joints_deg, b.joints_deg) for a, b in zip(_smp, _s2)))
+    _r = subprocess.run([sys.executable, os.path.join(_HERE, "arm_offsets.py"), _d, "--holdout-every", "4"], capture_output=True, text=True)
+    _dq = np.load(os.path.join(_d, "arm_offsets.npz"))["dq_deg"] if os.path.exists(os.path.join(_d, "arm_offsets.npz")) else None
+    check("arm_offsets.py runs on the synthetic session", _r.returncode == 0 and _dq is not None, (_r.stderr or "")[-200:])
+    if _dq is not None:
+        err = np.abs(_dq - _dq_true)
+        check("planted J2..J6 offsets recovered within 0.3 deg each", err[1:].max() < 0.3,
+              "fitted %s vs planted %s" % (np.round(_dq, 2), _dq_true))
+        check("J1 stays exactly 0 (degenerate with the chain's base yaw)", _dq[0] == 0.0)
+    check("a session recorded before joint angles existed loads with joints_deg None",
+          all(x.joints_deg is None for x in _load(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921"))[0])
+          if os.path.isdir(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921")) else True)
+finally:
+    shutil.rmtree(_d)
+
 print("\n%d checks, %d failed" % (_n[0], _bad[0]))
 sys.exit(1 if _bad[0] else 0)

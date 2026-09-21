@@ -108,6 +108,11 @@ class ChainSample:
     front_corners: Optional[dict] = None
     hand_rms_px: float = float("nan")
     front_rms_px: float = float("nan")
+    # J1..J6 (deg) from /arm/state at capture — the input of the ARM joint-offset
+    # calibration (arm_offsets.py, 2026-09-21): the chain fit needs only the TCP,
+    # the arm's own error needs the configuration it was in. NaN for sessions
+    # recorded before this field existed.
+    joints_deg: Optional[List[float]] = None
 
 
 # ----------------------------------------------------------------------

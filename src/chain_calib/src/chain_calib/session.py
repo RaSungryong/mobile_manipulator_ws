@@ -53,7 +53,9 @@ def save_samples(dir_, samples: List[ChainSample], meta: dict):
              tcp=np.array([s.tcp_pose_mm_deg for s in samples], dtype=float).reshape(-1, 6),
              lift=np.array([s.lift_height_m for s in samples], dtype=float),
              T_hc2W=np.array([s.T_hc2W for s in samples], dtype=float).reshape(-1, 4, 4),
-             T_fc2W=np.array([s.T_fc2W for s in samples], dtype=float).reshape(-1, 4, 4))
+             T_fc2W=np.array([s.T_fc2W for s in samples], dtype=float).reshape(-1, 4, 4),
+             joints=np.array([(s.joints_deg if s.joints_deg is not None else [float("nan")] * 6) for s in samples],
+                             dtype=float).reshape(-1, 6))
     with open(os.path.join(dir_, "meta.yaml"), "w") as fh:
         yaml.safe_dump(meta, fh, sort_keys=False)
     with open(os.path.join(dir_, "corners.json"), "w") as fh:
@@ -74,6 +76,9 @@ def load_samples(dir_):
                          "only truth now — start a new session directory" % dir_)
     samples = [ChainSample(str(lab), list(map(float, tcp)), T1, T2, float(lift))
                for lab, tcp, lift, T1, T2 in zip(d["labels"], d["tcp"], d["lift"], d["T_hc2W"], d["T_fc2W"])]
+    if "joints" in d:                                   # sessions before 2026-09-21 have none
+        for s, q in zip(samples, d["joints"]):
+            s.joints_deg = None if np.any(np.isnan(q)) else [float(v) for v in q]
     extra = json.load(open(os.path.join(dir_, "corners.json")))
     for s in samples:
         e = extra.get(s.label)

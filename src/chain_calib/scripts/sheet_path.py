@@ -164,7 +164,7 @@ def main():
     fh = open(out, "w", newline=""); w = csv.writer(fh)
     w.writerow(["idx", "cmd_x_m", "cmd_y_m", "cmd_h_m", "flange_x_mm", "flange_y_mm", "flange_z_mm", "flange_rx", "flange_ry", "flange_rz",
                 "lens_x_m", "lens_y_m", "lens_h_m", "err_x_mm", "err_y_mm", "err_xy_mm", "err_h_mm", "tilt_deg",
-                "nearest_tag", "tag_centre_dpx_x", "tag_centre_dpx_y", "hand_tags", "hand_rms_px", "note"])
+                "nearest_tag", "tag_centre_dpx_x", "tag_centre_dpx_y", "hand_tags", "hand_rms_px", "joints_deg", "note"])
     fh.flush()
     print("results -> %s (appended per point). Ctrl-C stops after the current point. Hand on the e-stop.\n" % out)
     Kh = S.K_hand; cx, cy = Kh[0, 2], Kh[1, 2]
@@ -175,18 +175,22 @@ def main():
             ok_b, why_b = vc.body_clearance_ok(pose, args.min_reach_low)
             if not ok_b:
                 print("   REFUSED (body clearance): %s" % why_b)
-                w.writerow([i + 1, *p, *pose] + [""] * 13 + ["refused: " + why_b]); fh.flush(); continue
+                w.writerow([i + 1, *p, *pose] + [""] * 14 + ["refused: " + why_b]); fh.flush(); continue
             try:
                 S.arm.move_j_to_pose(pose, linear=True)
             except Exception as e:
                 print("   move failed: %s — skipping" % e)
-                w.writerow([i + 1, *p, *pose] + [""] * 13 + ["move failed: %s" % e]); fh.flush(); continue
+                w.writerow([i + 1, *p, *pose] + [""] * 14 + ["move failed: %s" % e]); fh.flush(); continue
             rospy.sleep(args.dwell)
+            try:
+                q = S.arm.get_joints()                 # the configuration the measurement was made in
+            except Exception:
+                q = [float("nan")] * 6
             try:
                 h, htags, nh = S.camera_T(S.cfg.topics.hand_cam_detections, Kh, S.D_hand, "hand_cam")
             except Exception as e:
                 print("   hand_cam: %s" % e)
-                w.writerow([i + 1, *p, *pose] + [""] * 13 + ["hand_cam: %s" % e]); fh.flush(); continue
+                w.writerow([i + 1, *p, *pose] + [""] * 13 + [" ".join("%.3f" % v for v in q), "hand_cam: %s" % e]); fh.flush(); continue
             T_W2hc = invert_T(h.T_cam2W)                       # lens pose in W, measured against the sheet itself
             lens = T_W2hc[:3, 3]
             err_x, err_y = (lens[0] - p[0]) * 1e3, (lens[1] - p[1]) * 1e3
@@ -203,7 +207,8 @@ def main():
                   % (lens[0], lens[1], -lens[2], err_x, err_y, math.hypot(err_x, err_y), err_h, tilt, k, dpx[0], dpx[1], h.tag_ids, h.rms_px))
             w.writerow([i + 1, *p, *["%.3f" % v for v in pose], "%.5f" % lens[0], "%.5f" % lens[1], "%.5f" % -lens[2],
                         "%.2f" % err_x, "%.2f" % err_y, "%.2f" % math.hypot(err_x, err_y), "%.2f" % err_h, "%.3f" % tilt,
-                        k, "%.1f" % dpx[0], "%.1f" % dpx[1], " ".join(map(str, h.tag_ids)), "%.2f" % h.rms_px, "ok"])
+                        k, "%.1f" % dpx[0], "%.1f" % dpx[1], " ".join(map(str, h.tag_ids)), "%.2f" % h.rms_px,
+                        " ".join("%.3f" % v for v in q), "ok"])
             fh.flush()
     except KeyboardInterrupt:
         print("\n(interrupted — stopping after the current point)")

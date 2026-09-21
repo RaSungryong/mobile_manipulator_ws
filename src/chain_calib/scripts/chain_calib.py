@@ -180,6 +180,7 @@ class Session:
         if not ok:
             raise RuntimeError(why)
         tcp = self.arm.get_tcp_pose()
+        joints = self.arm.get_joints()                 # same /arm/state poll as the pose
         lift = self.lift.height_m() or 0.0
         h, htags, nh = self.camera_T(self.cfg.topics.hand_cam_detections, self.K_hand, self.D_hand, "hand_cam")
         # front_cam: ground-plane-corrected corners are a distortion-free
@@ -189,7 +190,7 @@ class Session:
         s = CC.ChainSample(label, list(map(float, tcp)), h.T_cam2W, f.T_cam2W, float(lift),
                            hand_corners={k: t.corners_px for k, t in htags.items()},
                            front_corners={k: t.corners_px for k, t in ftags.items()},
-                           hand_rms_px=h.rms_px, front_rms_px=f.rms_px)
+                           hand_rms_px=h.rms_px, front_rms_px=f.rms_px, joints_deg=[float(v) for v in joints])
         return s, dict(hand=h, front=f, hand_tags=htags, front_tags=ftags, n_hand=nh, n_front=nf)
 
 
@@ -219,7 +220,8 @@ def print_sample(sample, info, H, ext, sheet, front_rotation="level"):
             print("  ! %s: %s" % (name, fl))
     if hstd > 0.3 or fstd > 0.3:
         print("  ! corner scatter over the frames > 0.3 px — was the arm still moving? (capture again)")
-    print("  lift %.3f m, TCP %s" % (sample.lift_height_m, ["%.1f" % x for x in sample.tcp_pose_mm_deg]))
+    print("  lift %.3f m, TCP %s, joints %s" % (sample.lift_height_m, ["%.1f" % x for x in sample.tcp_pose_mm_deg],
+                                                ["%.2f" % x for x in (sample.joints_deg or [])]))
     # the user's metric at this view: the chain's T_A2B vs the sheet's — with front_cam's
     # rotation treated the way `solve` will (the level prior by default), so this number
     # and the fit agree; the slope line above is the MEASURED single-tag tilt on purpose.
