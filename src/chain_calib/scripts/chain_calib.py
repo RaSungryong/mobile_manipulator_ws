@@ -21,6 +21,7 @@ move for the whole session.
 frames per camera per capture by default; session directories under
 log/chain_calib/. README.md in this package is the operator guide.
 """
+import math
 import argparse
 import os
 import re
@@ -97,7 +98,7 @@ def sheet_from_args(args, meta=None):
     return sh
 
 
-def resolve_samples(samples, meta, sheet):
+def resolve_samples(samples, meta, sheet, front_rotation="level"):
     """Re-solve every sample's T_hc2W / T_fc2W from its stored corners
     with THIS sheet (scale may differ from capture time). K / D from meta."""
     K_hand = np.asarray(meta["K_hand"], float).reshape(3, 3)
@@ -108,6 +109,8 @@ def resolve_samples(samples, meta, sheet):
         h = SH.multi_tag_pnp(s.hand_corners, sheet, K_hand, D_hand)
         f = SH.multi_tag_pnp(s.front_corners, sheet, K_front, D_front)
         s.T_hc2W, s.T_fc2W, s.hand_rms_px, s.front_rms_px = h.T_cam2W, f.T_cam2W, h.rms_px, f.rms_px
+    if front_rotation == "level":
+        CC.level_front_samples(samples)
     return len(samples)
 
 
@@ -190,7 +193,7 @@ class Session:
         return s, dict(hand=h, front=f, hand_tags=htags, front_tags=ftags, n_hand=nh, n_front=nf)
 
 
-def print_sample(sample, info, H, ext, sheet):
+def print_sample(sample, info, H, ext, sheet, front_rotation="level"):
     h, f = info["hand"], info["front"]
     v = sample_view(sample, sheet)
     hstd = max(t.std_px for t in info["hand_tags"].values())
@@ -198,20 +201,37 @@ def print_sample(sample, info, H, ext, sheet):
     print("  hand_cam : tags %s (%d/%d frames), PnP rms %.2f px, corner scatter %.2f px; range %.3f m, %s, spin %+.0f deg"
           % (h.tag_ids, min(t.n_frames for t in info["hand_tags"].values()), info["n_hand"], h.rms_px, hstd,
              v.range_m, azimuth_word(v), v.spin_deg))
+    # front_cam's frame is LEVEL (ground-plane corrected), so its z is vertical and the
+    # angle between the sheet normal and that z IS the slope of the paper it is looking
+    # at. The sheet model says every tag is coplanar, so this number must match what
+    # hand_cam sees over the grid — and front_cam usually sees ONE tag (200, which sits
+    # 100 mm from the A0 corner, where paper lifts). A change here between sessions goes
+    # straight into the base correction F: 2026-09-21 found 1.7 deg of it. Print it.
+    f_slope = math.degrees(math.acos(max(-1.0, min(1.0, abs(f.T_cam2W[2, 2])))))
+    f_dir = math.degrees(math.atan2(f.T_cam2W[2, 1], f.T_cam2W[2, 0]))
     print("  front_cam: tags %s (%d/%d frames), PnP rms %.2f px, corner scatter %.2f px; sheet origin at (%+.3f, %+.3f, %.3f) m"
           % (f.tag_ids, min(t.n_frames for t in info["front_tags"].values()), info["n_front"], f.rms_px, fstd,
              f.T_cam2W[0, 3], f.T_cam2W[1, 3], f.T_cam2W[2, 3]))
+    print("             paper slope under those tags: %.2f deg from horizontal (down toward %+.0f deg in the sheet plane)%s"
+          % (f_slope, f_dir, "   ! over 1 deg — tape it flat, this lands in F" if f_slope > 1.0 else ""))
     for r, name in ((h, "hand_cam"), (f, "front_cam")):
         for fl in r.flags:
             print("  ! %s: %s" % (name, fl))
     if hstd > 0.3 or fstd > 0.3:
         print("  ! corner scatter over the frames > 0.3 px — was the arm still moving? (capture again)")
     print("  lift %.3f m, TCP %s" % (sample.lift_height_m, ["%.1f" % x for x in sample.tcp_pose_mm_deg]))
-    # the user's metric at this view: the chain's T_A2B vs the sheet's
-    (lab, a, b, dp, dr, e) = CC.pair_errors([sample], sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain,
+    # the user's metric at this view: the chain's T_A2B vs the sheet's — with front_cam's
+    # rotation treated the way `solve` will (the level prior by default), so this number
+    # and the fit agree; the slope line above is the MEASURED single-tag tilt on purpose.
+    import copy as _copy
+    sm = _copy.copy(sample)
+    if front_rotation == "level":
+        sm.T_fc2W = CC.level_front_observation(sm.T_fc2W)
+    (lab, a, b, dp, dr, e) = CC.pair_errors([sm], sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain,
                                             lift_compensate=compensate_T_ab2mb)[0]
     print("  raw chain error at this view: tag %d (hand_cam) -> tag %d (front_cam): %.1f mm / %.2f deg  "
-          "(in B's frame: x %+.1f, y %+.1f, z %+.1f mm)" % (a, b, dp * 1e3, dr, e[0], e[1], e[2]))
+          "(in B's frame: x %+.1f, y %+.1f, z %+.1f mm)%s"
+          % (a, b, dp * 1e3, dr, e[0], e[1], e[2], "" if front_rotation == "level" else "  [front rotation as measured]"))
 
 
 def _holdout_split(samples, args):
@@ -239,7 +259,7 @@ def cmd_check(args):
     except Exception as e:
         print("FAIL: %s" % e)
         sys.exit(2)
-    print_sample(s, info, H, ext, sheet)
+    print_sample(s, info, H, ext, sheet, args.front_rotation)
     v = sample_view(s, sheet)
     if not 0.30 <= v.range_m <= 0.65:
         print("  ! the camera should be 0.35-0.55 m from the sheet")
@@ -275,7 +295,7 @@ def cmd_capture(args):
     except Exception as e:
         sys.exit("capture failed: %s" % e)
     print("sample %s:" % label)
-    print_sample(s, info, H, ext, sheet)
+    print_sample(s, info, H, ext, sheet, args.front_rotation)
     hard = [fl for fl in info["hand"].flags + info["front"].flags if "ambiguity" in fl or "behind" in fl]
     if hard and not args.force:
         sys.exit("NOT saved (%s) — move so the camera sees two tags, or --force" % "; ".join(hard))
@@ -293,7 +313,7 @@ def cmd_status(args):
         sys.exit("no samples in %s" % args.dir)
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
-    resolve_samples(samples, meta, sheet)
+    resolve_samples(samples, meta, sheet, args.front_rotation)
     print("%d samples; %s" % (len(samples), sheet.describe()))
     errs = CC.pair_errors(samples, sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain, lift_compensate=compensate_T_ab2mb)
     for s, (lab, a, b, dp, dr, e) in zip(samples, errs):
@@ -320,7 +340,7 @@ def cmd_solve(args):
         sys.exit("no samples in %s" % args.dir)
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
-    n = resolve_samples(samples, meta, sheet)
+    n = resolve_samples(samples, meta, sheet, args.front_rotation)
     print("%d samples from %s (%d frames/sample); %d re-solved from stored corners"
           % (len(samples), meta.get("date"), meta.get("frames_per_sample", 0), n))
     print(sheet.describe())
@@ -468,6 +488,10 @@ def main():
     ap.add_argument("--tag-size", type=float, default=None, help="tag black edge as measured on the print (m)")
     ap.add_argument("--frames", type=int, default=20, help="frames averaged per camera per capture")
     ap.add_argument("--hand-eye", default=None, help="hand-eye npz to evaluate (default: locator.yaml's)")
+    ap.add_argument("--front-rotation", choices=["level", "measured"], default="level",
+                    help="what the fit uses for front_cam's sheet ROTATION: 'level' (default) = the level-floor "
+                         "prior, only the measured yaw kept — a single tag's tilt is the paper's local slope, not "
+                         "the chain's (2026-09-21); 'measured' = the single-tag PnP rotation as is")
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("check", help="read both cameras and the arm once; nothing saved").set_defaults(fn=cmd_check)
     p = sp.add_parser("capture", help="save one sample at the current arm pose"); p.add_argument("dir")

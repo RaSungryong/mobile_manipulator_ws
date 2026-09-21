@@ -174,6 +174,39 @@ def _solve(mode, H, As, B, Ss, w_rot):
     return T_from_vec6(x[:6]), T_from_vec6(x[6:12])
 
 
+def level_front_observation(T_fc2W):
+    """front_cam's T_fc2W with its ROTATION replaced by the level-floor prior:
+    z = the level frame's z (vertical), only the yaw about it kept.
+
+    Why (2026-09-21): front_cam usually sees ONE 90 mm tag (200) at 0.30 m,
+    and a single tag's out-of-plane tilt is not the sheet's orientation but
+    the LOCAL slope of the paper under that tag — tag 200 sits 100 mm from
+    the A0 corner, where paper lifts. The chain model assumes every tag is
+    coplanar, so that local slope has nowhere to go but the base-side F:
+    on 2026-09-18 F carried 1.16 deg of tilt that was 1.27 deg of paper
+    under tag 200 (equal and opposite), and re-laying the sheet moved it by
+    1.7 deg. Forcing the prior changed the fit rms by 0.05 mm and dropped
+    F's tilt to 0.17 deg. The frame is level by construction (the
+    ground-plane correction was fitted so the floor is z = const in it) and
+    the sheet lies on that floor, so the prior costs only the floor-slope
+    difference between the two spots (~0.2-0.4 deg here). Translation and
+    yaw of a single-tag PnP are fine and are kept."""
+    T = np.asarray(T_fc2W, dtype=float)
+    yaw = math.atan2(T[1, 0], T[0, 0])
+    c, s_ = math.cos(yaw), math.sin(yaw)
+    out = np.eye(4)
+    out[:3, :3] = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+    out[:3, 3] = T[:3, 3]
+    return out
+
+
+def level_front_samples(samples: List[ChainSample]):
+    """Apply :func:`level_front_observation` in place; returns the samples."""
+    for s in samples:
+        s.T_fc2W = level_front_observation(s.T_fc2W)
+    return samples
+
+
 def build_inputs(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate=None):
     """(H, [A_i], B, [S_i], labels) with S_i = T_hc2W · inv(T_fc2W). B is
     taken at the FIRST sample's lift height (all samples must share it;

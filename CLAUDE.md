@@ -1490,8 +1490,11 @@ did move toward the wall, i.e. body **-Y**.
 ⚠️ **Since 2026-09-18 the two copies DIFFER on purpose.** `extrinsics.yaml`
 `T_ab2mb` holds the CALIBRATED value from `chain_calib` (printed A0 tag
 sheet as the ground truth, 50 views; re-solved 2026-09-21 at the measured
-print scale): **t (−14.5, −120.7, −641.2) mm, rpy
-(−1.110, −0.362, 178.657°)** — 15 / 21 / 11 mm and 1.2° off the design
+print scale and with front_cam's rotation under the level-floor prior —
+the 09-18 1.2° roll was PAPER, see the 2026-09-21 entry): **t (−14.50,
+−120.67, −639.31) mm, rpy (+0.114, −0.159, 178.658°)** — 15 / 21 / 13 mm
+and 1.34° of YAW off the design, no roll / pitch to speak of (0.11 /
+−0.16°, i.e. the design's "no mount tilt" stands),
 block above, verified on the robot (hand_cam driven through the chain
 lands each grid tag 0.3 / 0.7 mm mean from the image centre at 0.504 m).
 Everything on the locator / calibration chain (`path_tag_locator`,
@@ -1757,11 +1760,68 @@ session at each candidate scale leaves a RESIDUAL correction of only
 1–3 mm in every case (ruler 1.7/1.4/0.6 mm, the applied 0.3/0.5/1.1, the
 anisotropic fit 0.5/3.3/1.9), far under the 9 mm per-view floor and the
 arm's ±12 mm position-dependent error. So `corrections.npz` was re-solved
-at 1.0 / 1.0 / 0.090 and `extrinsics.yaml T_ab2mb` re-applied:
-**t (−14.51, −120.66, −641.21) mm, rpy (−1.110, −0.362, 178.657°)**,
-moving (−1.3, −2.6, +1.5) mm / 0.14° from the 09-18 value. Checks:
-`check_front_cam_extrinsics` 24, `check_chain_calib` 37, repose 10.
+at 1.0 / 1.0 / 0.090 and `extrinsics.yaml T_ab2mb` re-applied that
+morning as t (−14.51, −120.66, −641.21) mm, rpy (−1.110, −0.362,
+178.657°) — **superseded the same afternoon, below.**
+
+**Afternoon — the re-measurement session (`log/chain_calib/20260921`,
+57 views, record `src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`)
+found that the 09-18 correction's ROLL was paper, not the mount.** The
+first `solve` of the new data asked for a 1.8° rotation where a few mm of
+residual was expected. Traced, not guessed: front_cam's reading of tag
+200's orientation had changed **1.694°** between the sessions (sheet
+normal 1.27° → 0.68° off vertical, leaning −100° → +143°) while the sheet
+itself moved 11 / 8 mm — i.e. re-laying the sheet changed the LOCAL slope
+of the paper under tag 200, which sits 100 mm from the A0 corner. front_cam
+sees that ONE 90 mm tag at 0.30 m, so its out-of-plane tilt is the paper's
+local slope, and the coplanar-sheet model can only put it into the base
+correction F. Retro-check on 09-18: F's z-tilt 1.17° (→ +73°) against
+that day's paper slope 1.27° (→ −100°) — equal and 173° opposite, i.e.
+cancelling. Forcing front_cam's rotation to the level-floor prior (the
+level frame is level by the ground-plane calibration and the sheet lies on
+that floor; only the measured yaw kept) and re-solving 09-18 from the
+design mount: **fit rms 9.25 → 9.20 mm (unchanged), F tilt 1.16° →
+0.17°**, the coupled y translation −13.7 → −7.2 mm; yaw +1.34° and
+t_x / t_z unchanged. So the mount has no tilt (design + the 655-point fit
+were right), and what is real is **yaw 1.34° + translation (14.5, 20.7,
+12.7) mm**. `chain_calib.py --front-rotation level` (default; `measured`
+keeps the old behaviour), `level_front_observation()` in the solver, the
+stored samples stay raw; `check` / `capture` now print the paper slope
+under front_cam's tags (⚠ over 1°). **Re-applied: t (−14.50, −120.67,
+−639.31) mm, rpy (+0.114, −0.159, 178.658°)** — solved from the design and
+folded on the applied chain agree to 0.00 mm / 0.000°. The 09-18 verify
+run could not have caught this: it drives through the same front_cam view
+of the same paper, so it only tests self-consistency. Checks 24 / 37 / 10.
 **Restart the calibration nodes.**
+
+**What the new session says, and what it cannot yet say.** With the
+prior, its 57 views against the re-applied chain: raw 8.36 mm / 1.21°,
+residual F translation (−2.2, −0.7, −1.3) mm — the translation and yaw
+are confirmed — but a **pitch residual of −1.02°** remains, and it is
+real in the data: the grid plane's normal seen through hand_cam + FK +
+hand-eye (no front_cam involved) sits 0.17° from the arm's z on 09-18 and
+**0.86°** on 09-21, leaning −16°. That is 9 mm of bow over the 600 mm
+grid. **User: the robot was moved off the sheet after 09-18 and parked
+back on it today** — so both the paper under the grid AND the chassis'
+attitude on the floor (four wheels on new spots, 0.3–0.5° on this floor)
+changed, and the chain cannot tell either from a mount tilt: "mount tilt"
+IS "grid normal vs arm z". **So this method does not measure the mount
+tilt to better than ±0.5–1°; 0.17° and 0.86° are both inside that, the
+1° pitch residual is this parking's number, not the robot's, and it is
+NOT applied.** The design's "no mount tilt" plus the 09-18 prior result
+(0.11 / −0.16°) stand. What the two sessions DO agree on, independent of
+paper and parking, is the robot constant: yaw +1.34° (residual 0.09°) and
+translation (residual ≤ 2 mm) — the session's purpose is met. To measure
+tilt for real: sheet on a rigid flat board and the chassis attitude
+measured per session (inclinometer); not needed for ±10 mm floor-tag
+work. The session's geometry is also
+weak: 57 captures but only **14 distinct view geometries** (11 / 11 / 9 /
+7 / 6 repeats of one pose, over-weighting them), −x tilts 2, spin span 40°
+(09-18: 150°), tags 308 / 309 seen once. Next: straightedge across the
+grid; ±30° spin views to test the hand-eye (grid normal varying with spin
+⇒ hand_cam moved); then distinct poses only, −x ≥ 4, far rows, spin ≥ 60°;
+re-solve. README: corner scatter, not PnP rms, is the motion indicator
+(rms 0.6–0.7 px is this setup's floor — hand_cam's D = 0).
 
 Two things worth keeping from the re-solve. **The fold is path-independent
 — verified, not assumed:** re-solving on the ALREADY-corrected chain and
