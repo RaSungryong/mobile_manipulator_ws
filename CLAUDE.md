@@ -1310,9 +1310,17 @@ reading that does not follow the motion aborts, the gain adapts DOWN to the
 measured sensitivity on sloped material, `keyence.target_distance_mm` is
 live (default 10 = the sensor zero), and the outcome is written into the
 CSV row's `execution_message` (`require_converged` makes a failed standoff
-fail the point). `seek_enabled` (step toward an out-of-range side) is OFF
-until the sentinel's sign is confirmed on the real sensor. Not yet run on
-the robot. Three things about it are not guessable from the code — full
+fail the point). **`seek_enabled` is ON since 2026-09-21**: an out-of-range
+first reading steps `seek_step_mm` (5) toward the side the sentinel names
+until a reading appears, on its OWN budget (`seek_max_mm` 40 — the
+user's "start from 4 cm": Auto standoff works from ≤ ~67 mm of case
+standoff; not counted
+against `max_steps` / `max_travel_mm`) — the far-side sign (negative,
+raw −100000) was confirmed with the tool at the home pose; a "near"
+sentinel retreats. The step must stay under the sensor window (~6.5–27 mm
+case standoff) and the budget is how far a beam that sees nothing walks
+the tool down. Run on the robot through robot_ui's Auto standoff.
+Three things about it are not guessable from the code — full
 record in `docs/keyence_scan_chain.md`:
 
 - **The laser is mounted oblique, 42.6° off tool Z** (measured, not documented
@@ -1723,6 +1731,51 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-21 — Keyence seek turned on: the standoff loop now walks into the sensor window
+
+During the Basler vision-tip session the operator jogged the tool up after
+a wrist spin and pressed Auto standoff: `standoff NOT corrected: out of
+range on the far side (seek disabled) (0 steps, travel 0.0 mm)` —
+"这个太短了". The sensor's window on this mount is ~6.5–27 mm of case
+standoff (far end raw ≈ −13), so anything parked a few cm up is the
+sentinel and the loop refused to move. The 2026-09-08 rewrite had the
+seek built but OFF pending the sentinel's sign; that was confirmed now
+without any motion: with the arm at the home pose and nothing in range
+`/keyence/value` reads −100000 and `standoff_state` says `side: far` —
+negative = far, the same polarity as the readings.
+
+Two changes. (1) `keyence_standoff.py`: the seek has its own budget —
+`seek_max_mm` of travel and the steps that takes — instead of consuming
+`max_steps` and `max_travel_mm`; before, 15 decisions minus ~11 seek
+steps left the closed loop 4, and a 25 mm total budget could not hold a
+33 mm seek plus the approach. A non-positive `seek_step_mm` is treated as
+seek off (a 0 mm step spun 10 M iterations in the check). The record's
+`travel_mm` still counts both. (2) `robot.yaml`: `seek_enabled: true`,
+`seek_step_mm` **5** / `seek_max_mm` **40** — the user's rule
+"Auto standoff 시작 가능은 4 cm": the seek walks at most 4 cm on no
+measurement, so the loop works from ≤ ~67 mm of case standoff (8 steps
+of ~1 s: SetSpeed(5) MoveL + settle + 5 readings). A 30 cm version
+(10 / 300) was written and backed out within the hour: the step stays
+under the ~20 mm window either way, but the budget is also how far a
+beam that sees NOTHING walks the tool down, and at 30 cm the oblique
+spot is 23 cm to the side — over a raised workpiece edge the beam reads
+the floor as "far" while the case descends onto the part. The user's
+other wish, "거리감지는 30 cm", is not this sensor's: the IL-030-class
+head reads ~4.5–27 mm of case standoff and nothing beyond; sensing the
+surface from 30 cm would be the hand_cam's DEPTH stream (D435, 0.2–3 m,
+~1–2 %), proposed, not built.
+
+Verified offline: new `tools/check_standoff_seek.py` (20 — surface plant
+with the signed sentinel: 60 mm start seeks 11 × 3 mm then converges with
+> 15 total steps and the closed loop inside its 25 mm; seek off refuses
+without moving; a blind beam walks ≤ 50 mm and stops with a reason;
+budget 40 from 90 mm stops at 51 mm; a near sentinel retreats then
+converges; in-range start has no seek entries; cancel mid-seek; step 0 =
+off), `check_scan_progress.py` 49. `arm_node` restart required (reads
+the keys at start); then Auto standoff from a few cm up should log
+`[Seek n] out of range on the far side; approach 3.00 mm` lines and hand
+over to `[Standoff k/15]`.
 
 ### 2026-09-21 — Stopping the stack: SIGINT stalled on a frozen VS Code terminal; `tools/stop_stack.sh`
 

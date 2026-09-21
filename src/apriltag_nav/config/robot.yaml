@@ -1309,15 +1309,33 @@ keyence:
                               #   >= 0.3 mm must move the reading by at least
                               #   this fraction of it; two misses in a row
                               #   abort (frozen sensor / arm not moving)
-  # Seek: OFF. When the FIRST reading is out of range the sentinel's sign says
-  # which side (negative = too far, positive = too close). With seek on, the
-  # loop steps seek_step_mm that way, up to seek_max_mm, until a reading
-  # appears. Approaching on no measurement is exactly what the loop exists to
-  # avoid, so enable this only after confirming on the real sensor that the
-  # sentinel is signed the way the readings are.
-  seek_enabled:        false  # ~keyence_seek_enabled
-  seek_step_mm:        2.0
-  seek_max_mm:         10.0
+  # Seek: ON since 2026-09-21 (user: the sensor's window is too short — the
+  # far end is ~27 mm case standoff, so a tool parked a few cm up got
+  # "out of range on the far side (seek disabled)" and nothing moved).
+  # When a reading is out of range the sentinel's sign says which side
+  # (negative = too far, positive = too close): the loop steps seek_step_mm
+  # that way until a reading appears, then the closed loop takes over. The
+  # seek has its OWN budget (seek_max_mm + the steps that takes) and does
+  # not consume max_steps / max_travel_mm. The far-side sign was CONFIRMED
+  # 2026-09-21: tool at the home pose, nothing in range, /keyence/value
+  # -100000 = negative = "far" (arm_controller.standoff_state: side far).
+  # A "near" sentinel makes the seek retreat, which is always safe.
+  #   seek_step_mm 5: must stay UNDER the sensor window (~20 mm wide;
+  #     ~4.5..27 mm case standoff on this mount — the near end is estimated
+  #     from the IL-030-like range, not measured) so the seek cannot step
+  #     across it — the first in-range reading ends the seek. Each step is
+  #     one MoveL at SetSpeed(5) + settle + 5 readings, ~1 s.
+  #   seek_max_mm 40 (user, 2026-09-21: "start possible from 4 cm"): the
+  #     seek walks at most 4 cm on no measurement, so Auto standoff works
+  #     from up to ~27 + 40 = 67 mm of case standoff (8 steps, ~8 s). It is
+  #     ALSO the most a beam that sees NOTHING can push the tool down —
+  #     the oblique spot sits 0.76 x standoff to the side (5 cm at 67 mm),
+  #     so keep the surface flat under and beside the tool. The sensor
+  #     itself cannot see farther (a 30 cm "distance sense" needs another
+  #     sensor — the hand_cam's depth — not this key).
+  seek_enabled:        true   # ~keyence_seek_enabled
+  seek_step_mm:        5.0
+  seek_max_mm:         40.0
   # When the loop did not converge: false (default) scans anyway and writes
   # "Success (standoff NOT corrected: <reason>)" into execution_message; true
   # marks the point failed and skips the capture.

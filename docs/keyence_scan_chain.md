@@ -40,7 +40,7 @@ only the two robot-side conversions — `perp = reading × cos(beam)` and
 | target standoff | fixed at the sensor zero (10 mm) | `keyence.target_distance_mm` live (default = the zero, 16.5 since 2026-09-18); `sensor_zero_mm` 16.5 |
 | wait per step | fixed 1.0 s | settle 0.3 s + ~0.17 s of fresh samples |
 | outcome | logged, then `execution_message: Success` | returned; CSV row says `Success (standoff ok (err −0.04 mm, 3 steps, travel 2.0 mm))` or `Success (standoff NOT corrected: <reason> …)`; `require_converged: true` fails the point and skips the capture instead |
-| out of range at start | skip | skip with the side named (sign of the sentinel); opt-in `seek_enabled` steps 2 mm toward the indicated side up to 10 mm — OFF until the sentinel sign is confirmed on this sensor |
+| out of range at start | skip | `seek_enabled` (ON since 2026-09-21, far-side sign confirmed at the home pose) steps `seek_step_mm` 5 toward the indicated side until a reading appears, own budget `seek_max_mm` 40 (not counted against `max_steps` / `max_travel_mm`); off → skip with the side named |
 
 Offline verification (`t_standoff.py`, 44 checks, surface plant with the
 42.6° spot walk, signed sentinel, dropouts, frozen/silent sensor;
@@ -150,7 +150,7 @@ have broken the moment kp was retuned or the sensor remounted.
 | `samples` / `settle_s` / `read_timeout_s` | 5 / 0.3 s / 1.0 s | | `robot.yaml` (2026-09-08) |
 | `adaptive_gain` / `gain_ratio_max` / `min_response_ratio` | true / 4.0 / 0.25 | | `robot.yaml` (2026-09-08) |
 | `sensor_zero_mm` / `target_distance_mm` | 16.5 / 16.5 | perp mm | `robot.yaml` (2026-09-08, target now LIVE; 10 → 16.5 on 2026-09-18) |
-| `seek_enabled` / `require_converged` | false / false | | `robot.yaml` (2026-09-08) |
+| `seek_enabled` / `require_converged` | **true** (2026-09-21; step 5 mm, budget 40 mm) / false | | `robot.yaml` |
 
 Precedence is `~param` on `arm_node` > `robot.yaml keyence:` >
 hardcoded default. `robot.yaml` now mirrors the launch values so both paths

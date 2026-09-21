@@ -58,14 +58,22 @@ What changed against the inline loop, and why
    standoff can be moved away from the mould without reconfiguring the
    sensor. NOTE the Basler focus / Ra model were established at the 10 mm
    standoff; changing the target changes the images.
-8. SEEK (opt-in, default OFF). When the very first reading is out of range
-   the sentinel's SIGN says which side (negative = too far, positive = too
-   close, matching the sensor polarity). With `seek_enabled` the loop steps
-   `seek_step_mm` in the indicated direction — never on a mixed/ambiguous
-   sentinel — up to `seek_max_mm`, then hands over to the closed loop.
-   Off by default because approaching on no measurement is exactly what
-   this loop exists to avoid; enable it only once the sentinel sign has
-   been confirmed on the real sensor.
+8. SEEK (opt-in; ON in robot.yaml since 2026-09-21). When a reading is out
+   of range the sentinel's SIGN says which side (negative = too far,
+   positive = too close, matching the sensor polarity). With `seek_enabled`
+   the loop steps `seek_step_mm` in the indicated direction — never on a
+   mixed/ambiguous sentinel — until a reading appears, then hands over to
+   the closed loop. The seek has ITS OWN budget: `seek_max_mm` of travel
+   and the steps that takes; it consumes neither `max_steps` nor
+   `max_travel_mm`, which bound the closed loop that follows (the record's
+   `travel_mm` still counts both). Approaching on no measurement is what
+   this loop exists to avoid, so two things bound the risk: the step is
+   smaller than the sensor's window (the window cannot be jumped over —
+   the first in-range reading stops the seek), and `seek_max_mm` caps how
+   far a beam that sees NOTHING (spot off the plate edge, reported as "far")
+   can walk the tool down. The far-side sign was confirmed on the robot
+   2026-09-21: tool at the home pose, nothing in range, raw -100000 =
+   negative = "far". A "near" sentinel makes the seek RETREAT, always safe.
 9. THE OUTCOME IS RETURNED, not logged and forgotten: converged / reason /
    final error / steps / travel, so the scan CSV can carry it.
 """
@@ -98,8 +106,8 @@ class StandoffConfig:
     invalid_retries: int = 2           # consecutive invalid reads before abort
     setpoint_mm: float = 0.0           # perpendicular reading to hold (0 = sensor zero)
     seek_enabled: bool = False
-    seek_step_mm: float = 2.0
-    seek_max_mm: float = 10.0
+    seek_step_mm: float = 2.0          # < the sensor window, so it cannot be jumped
+    seek_max_mm: float = 10.0          # seek travel budget, separate from max_travel_mm
 
 
 @dataclass
@@ -195,11 +203,20 @@ class StandoffController:
         ratio = 1.0                 # adaptive gain divisor
         nonresp = 0
         invalid_run = 0
-        seek_travel = 0.0
+        seek_travel = 0.0           # seek budget (own), see docstring 8
+        loop_travel = 0.0           # closed-loop travel against max_travel_mm
         prev_err = None             # error before the last motion
         prev_cmd = None             # last commanded approach (mm)
 
-        for step in range(int(cfg.max_steps)):
+        step = 0                    # closed-loop decisions; seek steps do not count
+        # A non-positive seek step is "seek off" (a 0 mm step would spin
+        # without moving); otherwise bound the seek in steps too, so a huge
+        # budget cannot loop past what it can travel.
+        seek_on = bool(cfg.seek_enabled) and float(cfg.seek_step_mm) > 0.0
+        seek_steps_max = (int(cfg.seek_max_mm / float(cfg.seek_step_mm)) + 2
+                          if seek_on else 0)
+        seek_steps = 0
+        while step < int(cfg.max_steps):
             if self._cancelled():
                 res.reason = 'cancelled'
                 return res
@@ -215,32 +232,37 @@ class StandoffController:
                 invalid_run += 1
                 # Seek: only on an unambiguous sentinel side, only when
                 # enabled, only within its own budget.
-                if (cfg.seek_enabled and m.sentinel_sign != 0
-                        and seek_travel + cfg.seek_step_mm <= cfg.seek_max_mm):
+                if seek_on and m.sentinel_sign != 0:
+                    side = 'near' if m.sentinel_sign > 0 else 'far'
+                    if (seek_travel + cfg.seek_step_mm > cfg.seek_max_mm
+                            or seek_steps >= seek_steps_max):
+                        res.reason = (f"still out of range on the {side} side "
+                                      f"after seeking {seek_travel:.1f} mm "
+                                      f"(seek_max_mm {cfg.seek_max_mm})")
+                        self._warn(f"[Standoff] {res.reason}")
+                        return res
                     # negative sentinel = too far -> approach (+); positive
                     # = too close -> retreat (-). Same polarity as readings.
                     cmd = -m.sentinel_sign * float(cfg.seek_step_mm)
-                    if res.travel_mm + abs(cmd) > cfg.max_travel_mm:
-                        res.reason = (f"travel budget {cfg.max_travel_mm} mm "
-                                      "exhausted while seeking")
-                        self._warn(f"[Standoff] {res.reason}")
-                        return res
-                    self._info(f"  -> [Seek {step+1}] out of range on the "
-                               f"{'near' if m.sentinel_sign > 0 else 'far'} side; "
+                    self._info(f"  -> [Seek {seek_steps+1}] out of range on the "
+                               f"{side} side; "
                                f"{'retreat' if cmd < 0 else 'approach'} "
-                               f"{abs(cmd):.2f} mm")
+                               f"{abs(cmd):.2f} mm ({seek_travel:.1f}/"
+                               f"{cfg.seek_max_mm} mm used)")
                     if not self._move(cmd):
                         res.reason = 'move failed while seeking'
                         return res
                     res.steps += 1
                     res.travel_mm += abs(cmd)
                     seek_travel += abs(cmd)
+                    seek_steps += 1
+                    invalid_run = 0     # a seek step is progress, not a retry
                     prev_err, prev_cmd = None, None
-                    res.history.append(dict(step=step + 1, kind='seek',
+                    res.history.append(dict(step=res.steps, kind='seek',
                                             cmd_mm=cmd, sentinel=m.sentinel_sign))
                     continue
                 if invalid_run > int(cfg.invalid_retries):
-                    if m.sentinel_sign != 0 and not cfg.seek_enabled:
+                    if m.sentinel_sign != 0 and not seek_on:
                         res.reason = (f"out of range on the "
                                       f"{'near' if m.sentinel_sign > 0 else 'far'}"
                                       f" side (seek disabled)")
@@ -303,7 +325,7 @@ class StandoffController:
                 cmd = min(cmd, cap)
             else:
                 cmd = max(cmd, -float(cfg.retreat_step_mm))
-            if res.travel_mm + abs(cmd) > cfg.max_travel_mm:
+            if loop_travel + abs(cmd) > cfg.max_travel_mm:
                 res.reason = f"travel budget {cfg.max_travel_mm} mm exhausted"
                 self._warn(f"[Standoff] {res.reason} (err {err:+.2f} mm)")
                 return res
@@ -318,8 +340,10 @@ class StandoffController:
                 return res
             res.steps += 1
             res.travel_mm += abs(cmd)
+            loop_travel += abs(cmd)
             res.history[-1]['cmd_mm'] = cmd
             prev_err, prev_cmd = err, cmd
+            step += 1
 
         # Budget of steps used up: take one last measurement so the record
         # says where it ended, then report.
