@@ -4,6 +4,11 @@ A0 인쇄 AprilTag 시트(태그 200 + 300–309)를 참값(ground truth)으로 
 `T_hc2fc` 체인 — hand_cam → 플랜지(hand-eye) → arm base → mobile base →
 front_cam — 의 고정 행렬 오차를 측정하고, base 쪽 보정을
 `path_tag_locator/config/extrinsics.yaml`의 `T_ab2mb`에 반영한 기록이다.
+**후속 세션:** 2026-09-21의 재측정은
+[CHAIN_CALIB_2026-09-21_kr.md](CHAIN_CALIB_2026-09-21_kr.md)에 따로 기록합니다.
+이 문서의 §5-1은 새 측정이 아니라 **09-18 데이터의 재분석**입니다(인쇄 스케일
+철회 + 실측 스케일 재적용).
+
 절차·해석·재실행 방법은 [README.md](../README.md), 도구 코드는
 `scripts/chain_calib.py` / `scripts/verify_chain.py`, 원 데이터는
 `log/chain_calib/20260918/`.
