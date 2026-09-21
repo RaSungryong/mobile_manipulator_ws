@@ -225,6 +225,13 @@ class HandeyeCalibNode:
         try:
             img, K = grab_image_and_K(self.topic_image, self.topic_info,
                                       timeout=self.image_wait_timeout)
+            # RAW frame from the driver: with a robot.yaml intrinsics override
+            # the image is rectified here and archived with the override's K,
+            # so calibrate()'s re-detection over the archive is consistent.
+            from apriltag_nav.camera_intrinsics import rectify_raw_frame
+            img, K, src = rectify_raw_frame("hand_cam", img, K)
+            if src != "driver":
+                rospy.loginfo_throttle(60.0, "handeye_calib: hand_cam intrinsics %s", src)
             tcp = self.tcp_client.get_tcp_pose()
             with self._sample_lock:
                 self.samples.append(CalibSample(image_bgr=img, K=K,

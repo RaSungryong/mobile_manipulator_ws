@@ -942,6 +942,32 @@ robot_camera:
     side_cam:  0.03
     hand_cam:  0.09
 
+  # Intrinsics OVERRIDE, per camera (2026-09-21). The D435 hand_cam driver
+  # reports D = 0 and fx 609.3 / fy 608.6; cv2.calibrateCamera over the
+  # stored A0-sheet corners of both 2026-09-21 chain_calib sessions (60 + 52
+  # views, k1 k2 model; each session's two halves agree to 1 px of fx and
+  # 0.01 of k1) says the lens IS distorted (k1 +0.16 -> 4.5 px at r = 250
+  # px) and fx / fy are 1.2 % / 0.8 % low. Corner-fit rms 0.8 -> 0.27 px,
+  # arm-session sheet scatter through the chain 31.8 -> 16.1 mm, and the
+  # fy/fx change (+0.46 %) is the "y-only 0.35 % shrink" seen in the print
+  # scale. With an entry here robot_camera_node REMAPS the frame with
+  # (K, D) and detects on the rectified image, so /<cam>/tag_detections
+  # are in a distortion-free frame with intrinsics K; detection consumers
+  # use (K, D = 0) via apriltag_nav.camera_intrinsics.effective_intrinsics,
+  # raw-frame consumers (handeye_calib_node) rectify themselves. Sessions
+  # captured before this are re-solved on their raw corners with
+  # --hand-intrinsics config. Remove the entry (or enabled: false) to go
+  # back to the driver's CameraInfo. K row-major 3x3, D plumb_bob.
+  intrinsics_override:
+    hand_cam:
+      enabled: true
+      image_size: [640, 480]
+      K: [601.72, 0.0, 322.02,
+          0.0, 603.87, 238.46,
+          0.0, 0.0, 1.0]
+      D: [0.1598, -0.3222, 0.0, 0.0, 0.0]
+      note: "calibrateCamera over log/chain_calib/20260921 corners (60 views, rms 0.27 px); fx/fy sd 1.1, cx/cy sd 0.35, k1 +-0.01 across subsets"
+
   # dt_apriltags quad_decimate, PER CAMERA. The library default is 2.0
   # (detect on a half-resolution image, then refine). Fine for front_cam —
   # 1280x720, the 90 mm floor tag is ~180 px at 0.3 m, and the 30 Hz /

@@ -129,6 +129,7 @@ def _rot_from_matrix(m):
 
 
 from apriltag_nav.ground_plane import GroundPlane
+from apriltag_nav.camera_intrinsics import IntrinsicsOverride, Rectifier
 
 
 def _orientation(pose_R):
@@ -160,8 +161,16 @@ class _CameraTagWorker:
     def __init__(self, name, image_topic, info_topic, detections_topic,
                  tag_family, tag_size, bridge, driver_service, enabled,
                  quad_decimate=1.0, stop_columns=None, ground_plane=None,
-                 detect_max_hz=None, detector_threads=1, overlay_hz=10.0):
+                 detect_max_hz=None, detector_threads=1, overlay_hz=10.0,
+                 intrinsics_override=None):
         self.name = name
+        # Intrinsics override (2026-09-21, robot.yaml robot_camera.
+        # intrinsics_override.<cam>): the frame is REMAPPED with its (K, D)
+        # before detection and the detections are published in that
+        # rectified frame with camera_params = its K. Consumers use
+        # (K_override, D = 0) — see apriltag_nav/camera_intrinsics.py.
+        self.intrinsics_override = intrinsics_override
+        self.rectifier = None
         # Latency budget (2026-09-15): a frame's processing must stay under
         # the frame period or every following frame queues behind it.
         self.detect_min_period = (1.0 / float(detect_max_hz)) if detect_max_hz else 0.0
@@ -304,6 +313,23 @@ class _CameraTagWorker:
             K = msg.K
             self.camera_params = [K[0], K[4], K[2], K[5]]  # fx, fy, cx, cy
             self.camera_dist = list(msg.D) if msg.D else []
+            o = self.intrinsics_override
+            if o is not None:
+                size = (int(msg.width), int(msg.height))
+                if o.image_size and tuple(o.image_size) != size:
+                    rospy.logerr("[RobotCamera] %s: intrinsics override was fitted at %dx%d but the "
+                                 "stream is %dx%d — override IGNORED, driver K in use",
+                                 self.name, o.image_size[0], o.image_size[1], size[0], size[1])
+                else:
+                    self.rectifier = Rectifier(o.K, o.D, size) if o.has_distortion else None
+                    self.camera_params = o.camera_params
+                    self.camera_dist = []      # detections are in the rectified frame
+                    K = list(o.K.ravel())
+                    rospy.loginfo("[RobotCamera] %s: intrinsics OVERRIDE — fx %.1f fy %.1f cx %.1f cy %.1f "
+                                  "(driver %.1f %.1f %.1f %.1f), D %s -> frames %s; detections are in the "
+                                  "rectified frame", self.name, *o.camera_params, msg.K[0], msg.K[4],
+                                  msg.K[2], msg.K[5], np.round(o.D, 4).tolist(),
+                                  'remapped' if self.rectifier else 'unchanged (D = 0)')
             if self.ground_cfg and self.ground_cfg.get('enabled', False):
                 try:
                     self.ground = GroundPlane(
@@ -339,6 +365,8 @@ class _CameraTagWorker:
             self._last_detect_stamp = st
         try:
             cv_img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            if self.rectifier is not None:
+                cv_img = self.rectifier.rectify(cv_img)
             gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
             detections = self.detector.detect(
                 gray, estimate_tag_pose=True,
@@ -544,6 +572,7 @@ class RobotCameraNode:
         ground_cfg = cam_cfg.get('ground_plane') or {}
         hz_cfg = cam_cfg.get('detect_max_hz') or {}
         threads_cfg = cam_cfg.get('detector_threads') or {}
+        intr_cfg = cam_cfg.get('intrinsics_override') or {}
         overlay_hz = float(cam_cfg.get('overlay_hz', 10.0) or 0.0)
         # The columns mobile_controller stops the tag on, read from the SAME
         # keys it reads (robot.yaml `robot:`), drawn on front_cam's overlay
@@ -590,7 +619,8 @@ class RobotCameraNode:
                 ground_plane=ground_cfg.get(name),
                 detect_max_hz=hz_cfg.get(name),
                 detector_threads=threads_cfg.get(name, 1),
-                overlay_hz=overlay_hz)
+                overlay_hz=overlay_hz,
+                intrinsics_override=IntrinsicsOverride.from_dict(name, intr_cfg.get(name)))
 
         active = [n for n, w in self.workers.items() if w.enabled]
         if not active:

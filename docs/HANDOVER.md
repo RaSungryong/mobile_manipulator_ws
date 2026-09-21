@@ -102,6 +102,33 @@ spins 30 / 90 / 150°, hand_cam range 0.25–0.56 m (mostly 0.45), tilts to
    hand-eye + the applied `T_ab2mb`. The two fits disagree about where
    the ~20 mm sits (hand-eye vs mount vs intrinsics). Unresolved.
 
+**UPDATE 2026-09-21 late (offline, CLAUDE.md Work Log "hand_cam
+intrinsics were wrong"):** step 1 is DONE and its answer changed the
+plan. (a) hand_cam's driver K/D were wrong — k1 +0.160 / k2 −0.322
+(D435 reports 0), fx 1.2 % high; now `robot.yaml robot_camera.
+intrinsics_override.hand_cam` (robot_camera_node remaps the frame;
+`apriltag_nav/camera_intrinsics.py` has the contract) — **restart
+`robot_camera_node` and the calibration launch**; old sessions are
+re-solved with `--hand-intrinsics config`. (b) With the right K the
+arm-session hand-eye term is unchanged (19 mm, all z), and the z is
+UNOBSERVABLE in that session (a far-view subset fits z = −266 mm at
+0.43 px) — the 16 mm is an artefact. (c) The hand-eye solved from every
+stored photo (09-18 sweep with the new K: 4.8 mm from the file; sheet
+sessions: 3–12 mm) leaves the sheet's chain scatter at 9.5 / 16 mm
+whatever value is used — that is the ARM's configuration error, not
+the hand-eye. (d) ⚠️ The operator applied a NEW 18-sample sweep at
+20:09 (`T_hc2ee` moved 10.1 mm; `tf_chain.yaml` + `.npz` uncommitted):
+`T_ab2mb` was fitted with the old one, so the chain is inconsistent
+(raw 17.8 mm vs 6.6) until the chain is re-solved with it or the two
+files are reverted — decide first. Single sweeps reproduce to ~10 mm
+between themselves. **Revised order:** settle (d) → the xy error is the
+joints': `arm_offsets.py --hand-intrinsics config` with the hand-eye
+FIXED (offsets-only: 5.7 → 2.7 mm) and the command-side `MoveJ(IK −
+δq)` change → `sheet_path.py` at two spins. A hand-eye re-shoot on tag
+300 only makes sense if the sweep's own 10 mm reproducibility is fixed
+first (more range / tilt diversity per sweep). The original list below
+is kept for reference.
+
 **Do next, in this order:**
 
 1. **Hand_cam intrinsics.** Decisive test before any more fitting: with

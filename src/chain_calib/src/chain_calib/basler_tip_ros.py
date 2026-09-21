@@ -75,9 +75,12 @@ class _Ros:
         self.arm = ArmInterface(state_topic=cfg.arm.state_topic, move_cart_topic=cfg.arm.move_cart_topic,
                                 home_service=cfg.arm.home_service, motion_timeout_s=cfg.arm.motion_timeout_s)
         from sensor_msgs.msg import CameraInfo
+        from apriltag_nav.camera_intrinsics import effective_intrinsics
         msg = rospy.wait_for_message(cfg.topics.hand_cam_info, CameraInfo, timeout=5.0)
-        self.K_hand = np.asarray(msg.K, float).reshape(3, 3)
-        self.D_hand = np.asarray(msg.D, float).ravel() if msg.D else np.zeros(5)
+        # hand_cam corners come from robot_camera_node's detections: with an
+        # intrinsics override they are in the rectified frame -> (K_override, 0).
+        self.K_hand, self.D_hand, self.hand_intrinsics_source = effective_intrinsics(
+            "hand_cam", msg.K, msg.D if msg.D else None)
 
     def tcp(self):
         ok, why = self.arm.wait_for_node(10.0)

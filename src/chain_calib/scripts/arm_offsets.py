@@ -203,6 +203,9 @@ def main():
     ap.add_argument("--sheet-json", default=None); ap.add_argument("--sx", type=float, default=None)
     ap.add_argument("--sy", type=float, default=None); ap.add_argument("--tag-size", type=float, default=None)
     ap.add_argument("--front-rotation", choices=["level", "measured"], default="level")
+    ap.add_argument("--hand-intrinsics", choices=["meta", "config"], default="meta",
+                    help="hand_cam K/D: as recorded (meta) or robot.yaml's intrinsics override on the raw "
+                         "corners (config; for sessions captured before 2026-09-21)")
     args = ap.parse_args()
 
     samples, meta = load_samples(args.dir)
@@ -211,7 +214,7 @@ def main():
     cfg, ext, H = tool.platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = tool.sheet_from_args(args, meta)
     if all(s.hand_corners for s in samples) and meta.get("K_hand"):
-        tool.resolve_samples(samples, meta, sheet, args.front_rotation)      # PnP at the sheet scale given
+        tool.resolve_samples(samples, meta, sheet, args.front_rotation, args.hand_intrinsics)      # PnP at the sheet scale given
     else:
         print("(no stored corners — using the T_hc2W / T_fc2W as saved)")
     if args.exclude:
@@ -240,8 +243,8 @@ def main():
     s0 = samples[0]
     T_ab2W0 = compensate_T_ab2mb(ext.T_ab2mb, s0.lift_height_m) @ ext.T_mb2fc_chain @ np.asarray(s0.T_fc2W, float)
 
-    K_hand = np.asarray(meta["K_hand"], float).reshape(3, 3) if meta.get("K_hand") else None
-    D_hand = np.asarray(meta.get("D_hand", [0.0] * 5), float)
+    K_hand, D_hand = tool.hand_intrinsics(meta, args.hand_intrinsics) if meta.get("K_hand") else (None, np.zeros(5))
+    D_hand = np.asarray(D_hand if D_hand is not None and len(D_hand) else [0.0] * 5, float)
     if args.residual == "reproj" and (K_hand is None or not all(s.hand_corners for s in samples)):
         print("! no stored corners / K_hand in this session — falling back to --residual pose")
         args.residual = "pose"

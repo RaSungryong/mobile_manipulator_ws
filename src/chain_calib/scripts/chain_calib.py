@@ -120,12 +120,35 @@ def sheet_from_args(args, meta=None):
     return sh
 
 
-def resolve_samples(samples, meta, sheet, front_rotation="level"):
+def hand_intrinsics(meta, source="meta"):
+    """(K_hand, D_hand) for a session. ``meta``: as recorded at capture.
+    ``config``: robot.yaml robot_camera.intrinsics_override.hand_cam applied
+    to the session's RAW corners — for sessions captured BEFORE the
+    override existed (2026-09-21; their meta holds the driver K and D = 0).
+    A session captured WITH the override already records (K_override, 0)
+    and rectified corners, so ``config`` would apply D twice: refused."""
+    K_meta = np.asarray(meta["K_hand"], float).reshape(3, 3)
+    D_meta = np.asarray(meta.get("D_hand") or [], float)
+    if source == "meta":
+        return K_meta, D_meta
+    from apriltag_nav.camera_intrinsics import intrinsics_override
+    o = intrinsics_override("hand_cam")
+    if o is None:
+        sys.exit("--hand-intrinsics config: robot.yaml has no robot_camera.intrinsics_override.hand_cam")
+    if "override" in str(meta.get("hand_cam_intrinsics", "")):
+        sys.exit("--hand-intrinsics config: this session was captured WITH the override (rectified corners, "
+                 "K already the override's) — use the default --hand-intrinsics meta")
+    print("hand_cam intrinsics: robot.yaml override on the RAW corners — fx %.1f fy %.1f cx %.1f cy %.1f, D %s "
+          "(session meta had fx %.1f fy %.1f)" % (*o.camera_params, np.round(o.D, 4).tolist(), K_meta[0, 0], K_meta[1, 1]))
+    return o.K.copy(), o.D.copy()
+
+
+def resolve_samples(samples, meta, sheet, front_rotation="level", hand_intrinsics_source="meta"):
     """Re-solve every sample's T_hc2W / T_fc2W from its stored corners
-    with THIS sheet (scale may differ from capture time). K / D from meta."""
-    K_hand = np.asarray(meta["K_hand"], float).reshape(3, 3)
+    with THIS sheet (scale may differ from capture time). K / D from meta,
+    or the robot.yaml override for hand_cam (``hand_intrinsics``)."""
+    K_hand, D_hand = hand_intrinsics(meta, hand_intrinsics_source)
     K_front = np.asarray(meta["K_front"], float).reshape(3, 3)
-    D_hand = np.asarray(meta.get("D_hand") or [], float)
     D_front = None if meta.get("front_cam_frame", "level") == "level" else np.asarray(meta.get("D_front") or [], float)
     for s in samples:
         h = SH.multi_tag_pnp(s.hand_corners, sheet, K_hand, D_hand)
@@ -149,15 +172,20 @@ class Session:
         self.arm = ArmInterface(state_topic=cfg.arm.state_topic, move_cart_topic=cfg.arm.move_cart_topic,
                                 home_service=cfg.arm.home_service, motion_timeout_s=cfg.arm.motion_timeout_s)
         self.lift = LiftHeightListener()
-        self.K_front, self.D_front = self._grab_KD(cfg.topics.front_cam_info)
-        self.K_hand, self.D_hand = self._grab_KD(cfg.topics.hand_cam_info)
+        self.K_front, self.D_front, _ = self._grab_KD(cfg.topics.front_cam_info, "front_cam")
+        self.K_hand, self.D_hand, self.hand_intrinsics_source = self._grab_KD(cfg.topics.hand_cam_info, "hand_cam")
+        print("hand_cam intrinsics: %s (fx %.1f fy %.1f cx %.1f cy %.1f)" % (self.hand_intrinsics_source,
+              self.K_hand[0, 0], self.K_hand[1, 1], self.K_hand[0, 2], self.K_hand[1, 2]))
 
-    def _grab_KD(self, info_topic):
+    def _grab_KD(self, info_topic, camera):
+        """(K, D, source). Detections come from robot_camera_node, which
+        publishes them in the RECTIFIED frame when robot.yaml carries an
+        intrinsics override for the camera — then K is the override's and
+        D = 0 (apriltag_nav.camera_intrinsics.effective_intrinsics)."""
         from sensor_msgs.msg import CameraInfo
+        from apriltag_nav.camera_intrinsics import effective_intrinsics
         msg = self.rospy.wait_for_message(info_topic, CameraInfo, timeout=5.0)
-        K = np.asarray(msg.K, dtype=float).reshape(3, 3)
-        D = np.asarray(msg.D, dtype=float).ravel() if msg.D else np.zeros(5)
-        return K, D
+        return effective_intrinsics(camera, msg.K, msg.D if msg.D else None)
 
     def collect_frames(self, topic, n, timeout=4.0):
         """``n`` detection frames from ``topic`` as [{tag id: (4,2) corners}]
@@ -312,6 +340,7 @@ def cmd_capture(args):
     if not meta:
         meta = new_meta(sheet, args.frames, _resolve(cfg.hand_eye_npz), ext.note, ext.front_cam_frame,
                         S.K_front, S.D_front, S.K_hand, S.D_hand)
+        meta["hand_cam_intrinsics"] = S.hand_intrinsics_source
     label = args.label or next_label(samples)
     rospy.sleep(0.3)                                     # let the jog settle
     try:
@@ -364,7 +393,7 @@ def cmd_solve(args):
         sys.exit("no samples in %s" % args.dir)
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
-    n = resolve_samples(samples, meta, sheet, args.front_rotation)
+    n = resolve_samples(samples, meta, sheet, args.front_rotation, getattr(args, "hand_intrinsics", "meta"))
     print("%d samples from %s (%d frames/sample); %d re-solved from stored corners"
           % (len(samples), meta.get("date"), meta.get("frames_per_sample", 0), n))
     print(sheet.describe())
@@ -526,6 +555,9 @@ def main():
     p = sp.add_parser("status", help="list the session's samples and coverage"); p.add_argument("dir"); p.set_defaults(fn=cmd_status)
     p = sp.add_parser("drop", help="remove samples by label"); p.add_argument("dir"); p.add_argument("labels", nargs="+"); p.set_defaults(fn=cmd_drop)
     p = sp.add_parser("solve", help="fit the corrections"); p.add_argument("dir")
+    p.add_argument("--hand-intrinsics", choices=["meta", "config"], default="meta",
+                   help="hand_cam K/D: as recorded (meta) or robot.yaml's override on the raw corners (config; "
+                        "for sessions captured before 2026-09-21)")
     p.add_argument("--exclude", nargs="*", default=None, help="sample labels to drop")
     p.add_argument("--outlier-factor", type=float, default=4.0)
     p.add_argument("--holdout", nargs="*", default=None, help="sample labels kept OUT of the fit, evaluated after")

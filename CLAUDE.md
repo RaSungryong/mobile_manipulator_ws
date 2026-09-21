@@ -1775,6 +1775,98 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-21 (late) — hand_cam intrinsics were wrong (D ≠ 0, fx 1.2 % high): a per-camera override in robot.yaml, applied by remapping in robot_camera_node; the hand-eye re-checked from every stored photo — it is NOT the 20 mm
+
+Step 1 of HANDOVER §2-0c, done offline. `cv2.calibrateCamera` over the
+stored A0-sheet corners (planar target) of both 2026-09-21 chain_calib
+sessions: with the driver's K and D = 0 the corner fit is 0.7–0.8 px rms;
+with K free + k1 k2 it is **0.26–0.28 px**, the corner floor, and every
+subset agrees — chain session halves fx 600.9 / 602.4 ± 1.7, arm session
+halves 607 ± 7 / 600 ± 3.5, ≥ 3-tag views 601.3, all views 604.2; k1
++0.152…+0.166, k2 −0.31…−0.35. Adopted (60 chain views): **fx 601.72,
+fy 603.87, cx 322.02, cy 238.46, k1 +0.1598, k2 −0.3222** vs the D435's
+609.30 / 608.62 / 321.47 / 238.67 / 0. The distortion moves a corner
+4.5 px at r = 250 px; fx is 1.2 % high in the driver; and the fy/fx
+change (+0.46 %) is the "y-only 0.35 % shrink" the 09-21 chain record
+could not explain. A full 5-coefficient model (k3 p1 p2) does not
+converge on this data (LM runs for minutes) — k1 k2 only.
+
+**Applied as `robot_camera.intrinsics_override.hand_cam` in robot.yaml**
+(`apriltag_nav/camera_intrinsics.py`; the yaml comment and the module
+docstring carry the contract). Nothing in the drivers can be told a
+different K, so: `robot_camera_node` REMAPS hand_cam's frame with
+(K, D) (`Rectifier`, maps built once, ~1 ms) and detects on it —
+`/hand_cam/tag_detections` are in the rectified frame with
+`camera_params` = K_override (refused with a logerr if the stream size
+differs from `image_size`); detection consumers use
+`effective_intrinsics(cam)` = (K_override, D = 0) — `chain_calib.py`
+capture (`_grab_KD`, meta gets `hand_cam_intrinsics: override …`),
+`basler_tip_ros`; the raw-frame consumer `handeye_calib_node` rectifies
+each archived sample itself (`rectify_raw_frame`, K stored = override);
+sessions captured BEFORE (raw corners, driver K in meta) are re-solved
+with `arm_offsets.py / chain_calib.py solve --hand-intrinsics config`
+(refused on a session captured with the override — D would apply
+twice). No entry = the driver's CameraInfo, bit-for-bit as before;
+front_cam / side_cam have none. **Restart `robot_camera_node`** (and
+the calibration launch) for it to take effect; the calibration nodes'
+locator chain then sees rectified hand_cam poses.
+
+**What the correct K changes, and what it does not.** Re-fitting the
+arm session (`--hand-intrinsics config`): rigid 7.4 px, offsets-only
+3.55 (was 3.81), hand-eye-free 1.06 (was 1.26; hold-out 1.99) — and the
+fitted hand-eye correction stays **19.1 mm / 1.30°**, Δt (+8.6, +3.7,
+−16.6) mm. So intrinsics are not the missing term. The near / far split
+still disagrees ((+9.6, +5.1, −16.0) vs (+5.7, −3.2, −4.7)), and the
+reason is now measured: the far views' early half alone fits its
+hand-eye z to **−266 mm** at 0.43 px rms — the hand_cam z (optical-axis)
+offset is UNOBSERVABLE in this session (fronto-parallel views at one
+range), so the 16 mm z is a fit artefact, not a measurement. The sheet
+did not move (front_cam's tag 200 constant to 0.1 mm; one 1.2 mm step at
+v52 in the arm session).
+
+**The hand-eye from every photo already on disk** (`calibrateHandEye` +
+scatter refine; sheet sessions use multi-tag PnP → `T_hc2W`, the sweep
+re-detects its archived images): the 09-18 sweep (35 samples) with the
+driver K reproduces the file EXACTLY; with the new K + undistorted
+images it moves **4.8 mm / 0.22°** (Δt +1.2, +2.4, −4.0), scatter 2.7 →
+2.2 mm. The sheet sessions solved as hand-eye data land 3–12 mm from
+the file — and whichever hand-eye is plugged in, the sheet's position
+through the chain scatters **9.5 mm rms (chain session) / 16 mm (arm
+session)**, changing by < 1 mm between candidates: that scatter is the
+ARM's configuration-dependent error (the ±15–20 mm of `sheet_path`),
+not the hand-eye. The correct K halves the arm session's figure (31.8 →
+16.1 mm, mostly the 2-tag PnP depth). Verdict: the 09-18 hand-eye is
+good to ~5 mm; a re-shoot cannot improve on that; the xy error is the
+joints' (fixing the hand-eye at the file and fitting J2..J5 offsets
+alone: 5.7 → 2.7 mm).
+
+⚠️ **Meanwhile the operator ran a NEW sweep on cross tag 0 at 20:07
+(18 samples, `run_20260921_195136`, scatter 3.05 mm) and pressed
+Compute & save at 20:09 — `T_hc2ee` in `tf_chain.yaml` + `.npz` is now
+t (43.70, −328.51, −152.65), rpy (−0.068, −0.071, −178.766)°: 10.1 mm
+from the 09-18 value (Δt +8.1, +6.0, −1.1 in the camera frame).** On the
+sheet sessions it is a tie (chain 9.5 → 8.9 mm, arm 16.1 → 17.1). But
+`T_ab2mb` was fitted WITH the 09-18 hand-eye, so the chain's raw
+consistency on the 63-view session is now **17.8 mm** (6.6 with the
+09-18 file, new K); the joint re-fit still reaches 4.4 mm. Either revert
+the two files (`git checkout src/apriltag_nav/config/tf/`) or re-solve
+the chain and apply its `T_ab2mb` — the pair must be consistent. Left
+UNCOMMITTED here, the user's call. Also learned: single sweeps
+reproduce to ~10 mm between themselves (09-18 sweep 3 vs the 18-sample
+file was 12.6 mm; today's vs the 35-sample file 10.1) while their
+within-sweep scatter is 3 mm — the sweep's honest xy uncertainty is
+5–10 mm, which is also why the sheet cannot rank the candidates.
+
+Verified offline: new `tools/check_camera_intrinsics_override.py` (20 —
+yaml entry, effective/raw-frame rules, `undistort_points` exact to
+1e-5 px, a remapped dot image within 0.3 px, size-mismatch refusal, the
+node worker taking K_override + remap / driver K without / ignoring a
+mismatched stream / no remap for D = 0, the detector fed the remapped
+frame); `check_robot_camera_latency.py` 13, `check_chain_calib.py` 48,
+`check_basler_tip.py` 11; `arm_offsets.py --hand-intrinsics config` and
+`chain_calib.py solve --hand-intrinsics config` on the real sessions
+reproduce the scratch numbers. Not run on the robot.
+
 ### 2026-09-21 — Every fixed transform in ONE place: `apriltag_nav/config/tf` (tf_chain.yaml + an npz per transform); the old copies and superseded records deleted
 
 User: "현재 사용중인 모든 tf 값을 main apriltag_nav 저장하고 여기에서 적용,
