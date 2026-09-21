@@ -292,10 +292,15 @@
     </collision>
   </link>
 
+  <!-- vision_tip = the Basler's frame centre on the surface at the 16.5 mm
+       Keyence standoff, MEASURED 2026-09-21 (chain_calib basler_tip_calib,
+       A4 tag sheet) — the same numbers as robot.yaml vision_tip_offset_mm
+       and tools/set_tool_tcp.py; design was 0 -0.25299 0.2252. Re-export the
+       RRT CSVs from this file: the ones in task/csv carry the design tip. -->
   <joint name="vision_tip_joint" type="fixed">
     <parent link="vision" />
     <child link="vision_tip" />
-    <origin xyz="0 -0.25299 0.2252" rpy="0 0 0" />
+    <origin xyz="-0.0018 -0.2456 0.2096" rpy="0 0 0" />
   </joint>
 
   <link name="vision_tip">

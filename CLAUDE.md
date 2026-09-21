@@ -1798,6 +1798,38 @@ the robot: `arm_node` restart for the two topics, `robot_ui_web_node`
 restart (or reload for the page alone — `app.js` is served `no-store`
 from the source `web/`, but the `api_*` methods live in the node).
 
+### 2026-09-21 — Vision tip APPLIED: (−1.8, −245.6, 209.6) mm in robot.yaml, set_tool_tcp.py and the planner URDF; the RRT CSVs are now stale
+
+User: "반영해주", after the executed verification (measured tip 2.6 mm
+from tag 215, design 7.5 mm, same final flange z). Changed together:
+`robot.yaml arm_calibration.vision_tip_offset_mm`, `tools/set_tool_tcp.py`
+(tool 1 constants + docstring), the planner URDF
+`fr10v6_mobile_vision_0317_test.urdf` `vision_tip_joint` (−0.0018,
+−0.2456, 0.2096), plus the reach / clearance copies that only model the
+tool's extent (`generate_calibration_artifacts.py TOOL_OFFSET_MM`,
+`handeye_calib.yaml` / `handeye_sweep.py` `tool_points_mm`) and the
+TF_CHAIN doc line. The image roll (−179.1° about flange z) is not part
+of the TCP — the tip frame keeps the flange orientation, as before.
+Left alone: `arm_controller.py`'s fallback literal (another session has
+that file open; it is only read when the yaml key is missing) and
+`chain_calib`'s `DESIGN_TIP`, which is the contrast value by definition.
+
+⚠️ **The RRT CSVs in `task/csv` were exported with the DESIGN tip and
+are now stale for pose mode.** `_exec_pose` converts their tip
+coordinates to a flange target with the NEW offset, so the flange lands
+|Δ| = 17.4 mm from where the paired joint row puts it — the 2026-09-14
+"joint 값은 정확한데 pose는 다른 곳" symptom, by exactly that vector, until
+the planner re-exports from the updated URDF. **Run `scan_joint_*` until
+then, not `scan_pose_*`.** `tools/check_pose_vs_joint.py` now carries
+`TIP` (measured, what the config must agree on) and `CSV_TIP` (the
+design, what the files on disk carry) separately and ASSERTS the 17.4 mm
+offset between the pose-mode target and the joint row's flange, so the
+hazard is pinned rather than hidden; when the CSVs are regenerated set
+`CSV_TIP = TIP` and that check returns to "< 1 mm". Suites: 26 / 62 / 74 /
+11 pass; yaml + URDF parse. `arm_node` restart required (reads the key
+at start); `set_tool_tcp.py` only matters if tool 1 is ever activated
+on the controller (it is not — the flange is the active frame).
+
 ### 2026-09-21 — Basler vision tip measured on the A4 sheet: (−1.8, −245.6, 209.6) mm, roll −179.1°; the ±3 mm floor is the arm's spin-dependent orientation error
 
 User: "vision tip 수집한 데이터 분석하면 결과 확인". Session

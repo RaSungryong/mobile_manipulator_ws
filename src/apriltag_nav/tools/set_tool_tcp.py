@@ -5,15 +5,18 @@ set_tool_tcp.py
 ===============
 Set Fairino robot TCP (Tool Center Point) to vision_tip position.
 
-Offset derived from fr10v6_visionDF_addtip.urdf:
+Offset MEASURED 2026-09-21 (chain_calib basler_tip_calib on the A4 20 mm
+tag sheet; robot.yaml arm_calibration.vision_tip_offset_mm and the planner
+URDF's vision_tip_joint carry the same numbers — the three move together):
     flange (tool_Link) → vision      : xyz = 0, 0, 0         (no offset)
-    vision             → vision_tip  : xyz = 0, -0.25299, 0.2252  (m)
+    vision             → vision_tip  : xyz = -0.0018, -0.2456, 0.2096  (m)
 
     Total from flange to vision_tip:
-        x =   0.0   mm
-        y = -253.0   mm
-        z =  225.2   mm
+        x =  -1.8   mm
+        y = -245.6   mm
+        z =  209.6   mm
         rx = ry = rz = 0°
+    (design, until 2026-09-21: 0, -253.0, 225.2 — from fr10v6_visionDF_addtip.urdf)
 
 Usage:
     python3 set_tool_tcp.py [--tool_id 1] [--robot_ip 192.168.58.2] [--dry_run]
@@ -34,9 +37,9 @@ from fairino import Robot
 # ---------------------------------------------------------------
 # TCP offset: flange → vision_tip  (unit: mm, degrees)
 # ---------------------------------------------------------------
-VISION_TIP_X  =    0.0    # mm
-VISION_TIP_Y  = -253.0    # mm   (0 -0.25299 m)
-VISION_TIP_Z  =  225.2    # mm   (0.2252 m)
+VISION_TIP_X  =   -1.8    # mm   (measured 2026-09-21)
+VISION_TIP_Y  = -245.6    # mm   (-0.2456 m)
+VISION_TIP_Z  =  209.6    # mm   (0.2096 m)
 VISION_TIP_RX =    0.0    # deg
 VISION_TIP_RY =    0.0    # deg
 VISION_TIP_RZ =    0.0    # deg

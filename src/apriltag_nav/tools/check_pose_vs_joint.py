@@ -125,7 +125,14 @@ def fk_flange(q_rad):
     return M @ FLANGE
 
 
-TIP = np.array([0.0, -253.0, 225.2])     # mm, flange frame (set_tool_tcp.py)
+TIP = np.array([-1.8, -245.6, 209.6])    # mm, flange frame — MEASURED 2026-09-21 (set_tool_tcp.py / robot.yaml / URDF)
+# The tip the RRT CSVs on disk were exported with (the design, before the
+# 2026-09-21 measurement). Their x y z are FK flange + THIS, not TIP, until
+# the planner re-exports them from the updated URDF — so pose mode, which
+# converts tip -> flange with TIP, puts the flange |R (TIP - CSV_TIP)| from
+# the joint row's flange. Asserted below as the KNOWN stale-CSV offset.
+CSV_TIP = np.array([0.0, -253.0, 225.2])
+CSV_STALE_MM = float(np.linalg.norm(TIP - CSV_TIP))
 
 print('== the planner URDF')
 check(URDF_TIP_MM is not None, f'URDF found: {URDF}')
@@ -207,9 +214,10 @@ for gid, d in ROWS.items():
         a = ang_deg(Rc, Mq[:3, :3])
         if euler == 'ZYX':
             check(a < 0.05, f'group {gid}: csv_euler ZYX reproduces the joint row orientation ({a:.3f} deg)')
-            tip_fk = (Mq[:3, 3] + Mq[:3, :3] @ (TIP / 1000)) * 1000
+            tip_fk = (Mq[:3, 3] + Mq[:3, :3] @ (CSV_TIP / 1000)) * 1000
             check(np.linalg.norm(np.asarray(pos) - tip_fk) < 1.0,
-                  f'group {gid}: transform position == FK vision tip ({np.linalg.norm(np.asarray(pos) - tip_fk):.2f} mm)')
+                  f'group {gid}: transform position == FK + the CSV tip ({np.linalg.norm(np.asarray(pos) - tip_fk):.2f} mm; '
+                  f'the CSVs still carry the design tip)')
         else:
             check(a > 170, f'group {gid}: the old zyx reading is {a:.1f} deg off (tool pointing up)')
 _blk = arm_transform.load_yaml_block('arm_calibration')
@@ -261,7 +269,7 @@ print('== _probe_tool_frame verdicts')
 check(make(FakeRobot((0, [0, 0, 0, 0, 0, 0])), ROWS[106]['msg'])._pose_tip_to_flange is True,
       'offset 0 -> convert tip to flange (warned)')
 check(any('FLANGE' in m for m in LOG['warn']), 'the flange verdict is logged as a warning')
-check(make(FakeRobot((0, [0, -253.0, 225.2, 0, 0, 0])), ROWS[106]['msg'])._pose_tip_to_flange is False,
+check(make(FakeRobot((0, list(TIP) + [0, 0, 0])), ROWS[106]['msg'])._pose_tip_to_flange is False,
       'offset == vision tip -> send as is')
 check(make(FakeRobot((0, [0, -100.0, 0, 0, 0, 0])), ROWS[106]['msg'])._pose_tip_to_flange is None,
       'some other offset -> None (pose mode refused)')
@@ -279,14 +287,19 @@ for gid, d in ROWS.items():
     Mq = fk_flange(d['joints'])
     dpos = np.linalg.norm(tgt[:3] - Mq[:3, 3] * 1000)
     dang = ang_deg(R.from_euler('xyz', tgt[3:], degrees=True).as_matrix(), Mq[:3, :3])
-    check(dpos < 1.0 and dang < 0.05,
-          f'group {gid}: IK target == URDF flange of the joint row ({dpos:.2f} mm, {dang:.3f} deg)')
-    robot2 = FakeRobot((0, [0, -253.0, 225.2, 0, 0, 0]))
+    # With the measured tip in robot.yaml and the DESIGN tip in the CSVs the
+    # flange target is exactly R (TIP - CSV_TIP) from the joint row's flange:
+    # the stale-CSV hazard, pinned here so it cannot be forgotten. Once the
+    # CSVs are re-exported this becomes dpos < 1.0 again (set CSV_TIP = TIP).
+    check(abs(dpos - CSV_STALE_MM) < 1.0 and dang < 0.05,
+          f'group {gid}: IK target is {dpos:.2f} mm from the joint row flange = |TIP - CSV_TIP| {CSV_STALE_MM:.2f} '
+          f'(STALE CSV: re-export from the updated URDF), orientation {dang:.3f} deg')
+    robot2 = FakeRobot((0, list(TIP) + [0, 0, 0]))
     ac2 = make(robot2, d['msg'])
     ac2._exec_pose(dict(p))
     tgt2 = np.array(robot2.targets[-1])
     check(np.linalg.norm(tgt2[:3] - tgt[:3] - Mq[:3, :3] @ TIP) < 1.0,
-          f'group {gid}: with the tip active the target is the tip, exactly R @ (0,-253,225.2) further')
+          f'group {gid}: with the tip active the target is the tip, exactly R @ TIP further')
 robot3 = FakeRobot((0, [0, -100.0, 0, 0, 0, 0]))
 ac3 = make(robot3, ROWS[106]['msg'])
 try:

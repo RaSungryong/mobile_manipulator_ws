@@ -59,7 +59,7 @@ FLOOR_Z_M = -0.080          # floor (= mb origin height) in the world frame
 # fr10v6_visionDF_addtip.urdf). Reach is a FLANGE constraint: the added
 # link extends the TCP ~339 mm beyond it, and the camera yaw about the
 # tag normal is free, so the overhang can be swung toward the arm base.
-TOOL_OFFSET_MM = np.array([0.0, -253.0, 225.2])
+TOOL_OFFSET_MM = np.array([-1.8, -245.6, 209.6])   # vision tip, measured 2026-09-21 (robot.yaml)
 FLANGE_REACH_M = 1.40       # FR10 nominal reach (to wrist/flange)
 REACH_MARGIN_M = 0.05       # keep diagnostic poses this far inside it
 

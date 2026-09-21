@@ -222,7 +222,7 @@ accuracy:
   re_parking: ~8 mm constant shift per re-parking / re-laying (chassis attitude + paper)
   practical: 'a floor tag located through this chain: ~+-10 mm over +-0.3 m of arm travel'
 not_in_this_chain:
-  vision_tip: Basler vision tip (0,-253,225.2) mm from the flange, never measured on this robot — see basler_tip_calib
+  vision_tip: Basler vision tip (-1.8,-245.6,209.6) mm from the flange, MEASURED 2026-09-21 (basler_tip_calib; design was 0,-253,225.2), applied to robot.yaml / set_tool_tcp.py / the planner URDF
 records:
 - src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md
 - log/chain_calib/20260921

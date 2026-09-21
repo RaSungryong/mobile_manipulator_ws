@@ -1150,7 +1150,24 @@ arm_calibration:
   # ArmController reads GetTCPOffset at start and converts tip -> flange for
   # IK when the active offset is zero; leaves the target alone when the
   # active tool IS the tip; refuses pose mode for anything else.
-  vision_tip_offset_mm: [0.0, -253.0, 225.2]
+  #
+  # MEASURED 2026-09-21 (chain_calib basler_tip_calib, A4 20 mm tag sheet,
+  # 5 hand / 10 Basler samples, session log/chain_calib/basler_tip_20260921):
+  # the sheet point the Basler's frame centre looks at with the case at the
+  # 16.5 mm Keyence standoff, in the flange frame — (-1.8, -245.6, 209.6) mm,
+  # image roll -179.1 deg about flange z (not part of the TCP: the tip frame
+  # keeps the flange orientation). Design was (0, -253.0, 225.2); the z is the
+  # 09-18 case shortening, the y a real 7 mm. Uncertainty +/-1.5 / 3 / 2 mm
+  # (the arm's ~1 deg spin-dependent orientation at this 246 mm lever, NOT the
+  # jackknife). Verified executed the same day: the measured tip lands 2.6 mm
+  # from tag 215's centre, the design tip 7.5 mm, both ending at the same
+  # flange z. Applied on the user's instruction together with
+  # tools/set_tool_tcp.py and the planner URDF's vision_tip_joint.
+  # ⚠️ The RRT CSVs in task/csv were exported with the DESIGN tip: until the
+  # planner re-exports them from the updated URDF, pose mode converts their
+  # tip coordinates with THIS offset and its flange target sits ~17 mm from
+  # where the paired joint row puts the flange. Run scan_joint_* until then.
+  vision_tip_offset_mm: [-1.8, -245.6, 209.6]
 
 # Arm home joint angles in radians. This matches the hardcoded value used
 # across every controller (arm_controller.py, tools/arm_controller_sdk.py)
