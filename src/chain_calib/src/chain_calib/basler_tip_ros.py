@@ -22,6 +22,7 @@ import numpy as np
 
 from . import basler_tip as BT
 from . import sheet as SH
+from path_tag_locator.geometry import pose_fr5_to_matrix_m
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
 DESIGN_TIP = (0.0, -253.0, 225.2)
@@ -334,6 +335,108 @@ class BaslerTipSession:
         spins = sorted(set(round(b.theta_W_deg / 15.0) * 15 for b in bas))
         lines.append("wrist spins seen (15 deg bins): %s — need >= 3 distinct for the lateral tip components" % spins)
         return True, "\n".join(lines), self.counts()
+
+    # ------------------------------------------------------------------
+    def verify(self, tag_id, standoff_mm=16.5, use_design=False, approach_mm=20.0, max_move_m=0.35,
+               exclude=()):
+        """EXECUTED check of the vision tip (user, 2026-09-21: "실행 검증").
+
+        From the session's sheet pose (hand samples) the flange pose that
+        puts the TIP on tag ``tag_id``'s centre is computed with the current
+        wrist orientation kept (so the spin is whatever the operator set),
+        raised ``approach_mm`` along the sheet normal; one MoveL there; the
+        Keyence loop brings the case to ``standoff_mm`` (the seek covers the
+        approach); one lamp-on Basler frame; the sheet point under the image
+        centre vs the tag centre is the error, in mm. ``use_design`` runs
+        the same test with robot.yaml's design tip for contrast. The move is
+        refused when the target is farther than ``max_move_m`` from the
+        current flange (jog closer first) — same rule as verify_chain. One
+        row per run is appended to <dir>/verify.csv."""
+        try:
+            hand, _bas = self._resolved(exclude)
+        except Exception as e:
+            return False, str(e), self.counts()
+        tag_id = int(tag_id)
+        if tag_id not in self.sheet.t_W_m:
+            return False, "tag %d is not on the sheet %s" % (tag_id, sorted(self.sheet.t_W_m)), self.counts()
+        if use_design:
+            tip, src = np.asarray(DESIGN_TIP, float), "DESIGN"
+        else:
+            rp = os.path.join(self.dir, "result.npz")
+            if not os.path.exists(rp):
+                return False, "no result.npz in %s — Solve first (or tick 'design tip')" % self.dir, self.counts()
+            tip, src = np.asarray(np.load(rp)["p_tip_mm"], float), "measured"
+        T_ab2W, sc, _mx, _deg = BT.sheet_pose(hand)
+        R_W, t_W = T_ab2W[:3, :3], T_ab2W[:3, 3]
+        P_W = np.array([self.sheet.t_W_m[tag_id][0], self.sheet.t_W_m[tag_id][1], 0.0])
+        P = R_W @ P_W + t_W                       # tag centre, arm frame (m)
+        up = -R_W[:, 2]                            # W +z is INTO the paper
+        R = self.ros()
+        cur = R.tcp()
+        A = pose_fr5_to_matrix_m(cur)
+        t = P + up * (float(approach_mm) / 1e3) - A[:3, :3] @ (tip / 1e3)
+        target = [t[0] * 1e3, t[1] * 1e3, t[2] * 1e3, cur[3], cur[4], cur[5]]
+        dist = float(np.linalg.norm(t - A[:3, 3]))
+        lines = ["verify tag %d with the %s tip (%.1f, %.1f, %.1f) mm; sheet from %d hand samples (scatter %.1f mm)"
+                 % (tag_id, src, tip[0], tip[1], tip[2], len(hand), sc),
+                 "tag centre in the arm frame (%.1f, %.1f, %.1f) mm; flange target %s (%.0f mm from here, +%.0f mm above)"
+                 % (P[0] * 1e3, P[1] * 1e3, P[2] * 1e3, ["%.1f" % v for v in target], dist * 1e3, approach_mm)]
+        if dist > float(max_move_m):
+            lines.append("REFUSED: target %.2f m from the current flange (> %.2f m) — jog the tool near tag %d first"
+                         % (dist, max_move_m, tag_id))
+            return False, "\n".join(lines), self.counts()
+        try:
+            R.arm.move_j_to_pose(target, linear=True)
+        except Exception as e:
+            lines.append("move failed: %s" % e)
+            return False, "\n".join(lines), self.counts()
+        lines.append("Keyence standoff loop to %.1f mm …" % float(standoff_mm))
+        R.run_standoff(float(standoff_mm))
+        time.sleep(0.3)
+        so, sd = R.standoff_now()
+        tcp = R.tcp()
+        gray, msg = R.basler_frame()
+        det = BT.detect_basler_corners(gray, self.sheet.family)
+        if not det:
+            lines.append("no tag in the Basler frame (%s): the tip is off by more than the ~30 mm field, or not at focus" % msg)
+            return False, "\n".join(lines), self.counts()
+        b = BT.BaslerSample("v", tcp, det, (gray.shape[1], gray.shape[0]), so)
+        BT.resolve_basler([b], self.sheet)
+        d_mm = (np.asarray(b.o_W_m[:2]) - P_W[:2]) * 1e3      # sheet frame: image centre - tag centre
+        # where the tip is according to FK + this offset, for the record
+        Af = pose_fr5_to_matrix_m(tcp)
+        tip_ab = Af[:3, :3] @ (tip / 1e3) + Af[:3, 3]
+        tip_W = R_W.T @ (tip_ab - t_W) * 1e3
+        lines.append("Basler sees tags %s; image centre over (%.1f, %.1f) mm, tag %d centre at (%.1f, %.1f) mm"
+                     % (sorted(det), b.o_W_m[0] * 1e3, b.o_W_m[1] * 1e3, tag_id, P_W[0] * 1e3, P_W[1] * 1e3))
+        lines.append("ERROR (image centre - tag centre, sheet frame): dx %+.1f  dy %+.1f  |d| %.1f mm;  "
+                     "tip via FK sits %.1f mm %s the sheet;  standoff %s;  wrist rz %.1f;  %.1f px/mm"
+                     % (d_mm[0], d_mm[1], float(np.hypot(*d_mm)), abs(tip_W[2]), "above" if tip_W[2] < 0 else "below",
+                        "%.2f" % so if not np.isnan(so) else "?", tcp[5], b.px_per_mm))
+        if sd is not None and not sd.get("valid"):
+            lines.append("! Keyence out of range — the Basler is not at its standoff / focus, the numbers above are not a verdict")
+        verdict = "OK (inside the +/-3 mm the fit is good to)" if np.hypot(*d_mm) <= 3.0 else \
+            ("marginal (3-6 mm: the arm's spin-dependent orientation error at this lever)" if np.hypot(*d_mm) <= 6.0
+             else "OFF — the tip (or the sheet pose) is wrong by more than the arm can explain")
+        lines.append("verdict: " + verdict)
+        try:
+            csvp = os.path.join(self.dir, "verify.csv")
+            new = not os.path.exists(csvp)
+            with open(csvp, "a") as fh:
+                if new:
+                    fh.write("time,tag,tip_source,tip_x,tip_y,tip_z,dx_mm,dy_mm,d_mm,standoff_mm,rz_deg,px_per_mm,"
+                             "tcp_x,tcp_y,tcp_z,tcp_rx,tcp_ry,tcp_rz\n")
+                fh.write("%s,%d,%s,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%s,%.1f,%.1f,%s\n"
+                         % (time.strftime("%Y-%m-%d %H:%M:%S"), tag_id, src, tip[0], tip[1], tip[2], d_mm[0], d_mm[1],
+                            float(np.hypot(*d_mm)), "%.2f" % so if not np.isnan(so) else "", tcp[5], b.px_per_mm,
+                            ",".join("%.2f" % v for v in tcp)))
+            lines.append("-> %s" % csvp)
+        except Exception as e:
+            lines.append("(verify.csv not written: %s)" % e)
+        extra = self.counts()
+        extra.update(verify_tag=tag_id, verify_dx_mm=float(d_mm[0]), verify_dy_mm=float(d_mm[1]),
+                     verify_d_mm=float(np.hypot(*d_mm)), verify_tip_source=src)
+        return True, "\n".join(lines), extra
 
     def solve(self, exclude=()):
         try:

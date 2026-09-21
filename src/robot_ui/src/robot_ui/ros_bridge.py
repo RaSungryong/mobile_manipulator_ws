@@ -842,17 +842,20 @@ class RosBridge:
     # ------------------------------------------------------------------
     # BASLER VISION TIP (chain_calib.basler_tip_ros, 2026-09-18)
     # ------------------------------------------------------------------
-    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=()):
+    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=(), tag_id=None, use_design=False):
         """One step of the vision-tip measurement against the A4 20 mm tag
         sheet: 'check' | 'capture_hand' | 'capture_basler' | 'status' |
-        'solve'. Runs the SAME BaslerTipSession the command-line tool
-        does, on this node. Returns (ok, message, extra) — message is the
-        multi-line report, extra the counts (+ the solve numbers).
+        'solve' | 'verify'. Runs the SAME BaslerTipSession the command-line
+        tool does, on this node. Returns (ok, message, extra) — message is
+        the multi-line report, extra the counts (+ the solve numbers).
 
         BLOCKS — worker thread. capture_basler with standoff_mm publishes
-        /arm/standoff (moves the arm a few mm, the Keyence loop); nothing
-        else moves anything. chain_calib is imported lazily so the UI
-        starts without it built."""
+        /arm/standoff (moves the arm a few mm, the Keyence loop); 'verify'
+        MOVES THE ARM: one MoveL that puts the (measured, or design when
+        use_design) tip 20 mm above sheet tag ``tag_id``, then the standoff
+        loop and one Basler frame — refused when farther than 0.35 m from
+        the current flange. Nothing else moves anything. chain_calib is
+        imported lazily so the UI starts without it built."""
         try:
             from chain_calib.basler_tip_ros import BaslerTipSession, default_session_dir
         except Exception as e:      # noqa: BLE001
@@ -869,6 +872,11 @@ class RosBridge:
                 return S.status(exclude)
             if cmd == 'solve':
                 return S.solve(exclude)
+            if cmd == 'verify':
+                if tag_id is None:
+                    return False, 'verify: tag id required', {}
+                return S.verify(int(tag_id), 16.5 if standoff_mm is None else float(standoff_mm),
+                                bool(use_design), exclude=exclude)
             return False, f'unknown basler_tip command {cmd!r}', {}
         except Exception as e:      # noqa: BLE001
             return False, f'basler_tip {cmd} failed: {type(e).__name__}: {e}', {}

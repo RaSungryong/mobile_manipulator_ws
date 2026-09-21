@@ -1763,6 +1763,20 @@ with rms 3.1 (h4, h5) … 8.3 (h1). **Honest uncertainty ±1.5 / ±3 / ±2 mm
 samples and never sees the sheet-pose spread. The y and z deltas from
 the design clear that; x does not.
 
+**`verify` (same evening, user: "실행 검증 어떻게"):** the executed
+test — `BaslerTipSession.verify(tag, standoff, use_design)`, CLI
+`basler_tip_calib.py verify <dir> <tag> [--design]`, robot_ui "Verify
+(moves arm)" in the Basler-tip group (web + Qt). From the session's
+sheet pose it MoveLs the flange so the tip (result.npz, or the design
+tip for contrast) sits 20 mm above the chosen tag with the wrist
+orientation kept, runs the standoff loop (the seek covers the 20 mm),
+takes one Basler frame and reports image-centre − tag-centre in mm with
+a verdict (≤ 3 OK / 3–6 the arm's spin error / > 6 wrong), appended to
+`verify.csv`; refused beyond 0.35 m from the current flange. Verified
+offline only (`check_web_ui` 121, `check_task_list_ui` 94; the browser
+suite times out in this environment before and after the change). Not
+run on the robot.
+
 Not applied. Applying means moving THREE things together — robot.yaml
 `vision_tip_offset_mm` (the tip → flange conversion of pose mode),
 `set_tool_tcp.py` (tool 1) and the planner URDF's `vision_tip_joint` —

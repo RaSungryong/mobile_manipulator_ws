@@ -1003,7 +1003,7 @@ class UiController:
         return self._result(res)
 
     # ---------- Basler vision tip (chain_calib.basler_tip_ros) ----------
-    def _basler_tip_step(self, cmd, session_dir='', standoff_mm=None, exclude=()):
+    def _basler_tip_step(self, cmd, session_dir='', standoff_mm=None, exclude=(), **kw):
         """One step on the pool; the report goes to the shared ui state
         (every tab sees it) and, line by line, to the log."""
         session_dir = (session_dir or '').strip() or self._ui['basler_tip'].get('dir') \
@@ -1012,7 +1012,7 @@ class UiController:
                                        'last': f'{cmd.replace("_", " ")}…'}})
         try:
             res = self._run(self.bridge.basler_tip, cmd, session_dir, standoff_mm, exclude,
-                            label=None).result()
+                            label=None, **kw).result()
         except Exception as e:      # noqa: BLE001
             self._patch_ui({'basler_tip': {'busy': False, 'last': f'{cmd} ERROR: {e}'}})
             return {'ok': False, 'message': str(e)}
@@ -1031,6 +1031,10 @@ class UiController:
                 p = extra['p_tip_mm']
                 patch['last'] = (f'solve: tip ({p[0]:+.1f}, {p[1]:+.1f}, {p[2]:+.1f}) mm, '
                                  f'roll {extra.get("psi_deg", 0):+.2f}°, fit {extra.get("rms_mm", 0):.1f} mm rms')
+            if 'verify_d_mm' in extra:
+                patch['last'] = (f'verify tag {extra.get("verify_tag")} ({extra.get("verify_tip_source")} tip): '
+                                 f'error dx {extra["verify_dx_mm"]:+.1f} dy {extra["verify_dy_mm"]:+.1f} '
+                                 f'|d| {extra["verify_d_mm"]:.1f} mm')
         self._patch_ui({'basler_tip': patch})
         return {'ok': bool(ok), 'message': str(message)}
 
@@ -1050,6 +1054,14 @@ class UiController:
     def api_basler_tip_solve(self, session_dir='', exclude=''):
         ex = tuple(x.strip() for x in str(exclude or '').replace(',', ' ').split() if x.strip())
         return self._basler_tip_step('solve', session_dir, None, ex)
+
+    def api_basler_tip_verify(self, session_dir='', tag_id=None, standoff_mm=None, use_design=False):
+        """MOVES THE ARM (one MoveL near the sheet + the standoff loop)."""
+        if tag_id in (None, ''):
+            return {'ok': False, 'message': 'verify: tag id required'}
+        so = None if standoff_mm in (None, '', False) else float(standoff_mm)
+        return self._basler_tip_step('verify', session_dir, so, (), tag_id=int(tag_id),
+                                     use_design=bool(use_design))
 
     def api_handeye_load_latest(self):
         res = self._run(self.bridge.handeye_load_latest,

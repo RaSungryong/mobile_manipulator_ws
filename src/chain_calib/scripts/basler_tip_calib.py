@@ -47,6 +47,11 @@ def main():
     p.add_argument("--standoff", type=float, default=None, help="run /arm/standoff to this mm first (e.g. 16.5)")
     p = sub.add_parser("status"); p.add_argument("dir"); p.add_argument("--exclude", nargs="*", default=[])
     p = sub.add_parser("solve"); p.add_argument("dir"); p.add_argument("--exclude", nargs="*", default=[])
+    p = sub.add_parser("verify", help="MOVE the arm so the tip sits on one sheet tag, standoff, Basler frame -> error in mm")
+    p.add_argument("dir"); p.add_argument("tag", type=int)
+    p.add_argument("--standoff", type=float, default=16.5)
+    p.add_argument("--design", action="store_true", help="test robot.yaml's design tip instead of result.npz")
+    p.add_argument("--approach", type=float, default=20.0, help="mm above the nominal tip pose to MoveL to")
     args = ap.parse_args()
 
     import rospy
@@ -63,6 +68,8 @@ def main():
         ok, msg, _ = S.capture_basler(args.standoff, args.label)
     elif args.cmd == "status":
         ok, msg, _ = S.status(args.exclude)
+    elif args.cmd == "verify":
+        ok, msg, _ = S.verify(args.tag, args.standoff, args.design, args.approach)
     else:
         ok, msg, _ = S.solve(args.exclude)
     print(msg)

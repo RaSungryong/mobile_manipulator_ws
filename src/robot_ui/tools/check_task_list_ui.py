@@ -284,7 +284,7 @@ def main():
     check(click(ctab, 'Capture here') and (QTest.qWait(150) or True) and ('handeye_capture',) in bridge.calls,
           'Capture here calls handeye_capture')
     # Basler vision tip group (2026-09-18)
-    bridge.basler_tip = lambda cmd, d, so, ex: (bridge.calls.append(('basler_tip', cmd, d, so, tuple(ex))) or
+    bridge.basler_tip = lambda cmd, d, so, ex, **kw: (bridge.calls.append(('basler_tip', cmd, d, so, tuple(ex)) + tuple(sorted(kw.items()))) or
                                                 (True, 'vision tip (flange frame): x +3.1  y -257.4  z +230.9 mm\nfit 1.2 mm',
                                                  {'dir': d, 'n_hand': 4, 'n_basler': 6, 'p_tip_mm': [3.1, -257.4, 230.9],
                                                   'psi_deg': 1.75, 'rms_mm': 1.2} if cmd == 'solve' else
@@ -308,6 +308,12 @@ def main():
     check(win.lbl_bt_last.text().startswith('solve: tip (+3.1, -257.4, +230.9) mm, roll +1.75°')
           and '[basler_tip] fit 1.2 mm' in win.log_view.toPlainText() and win.btn_bt_solve.isEnabled(),
           f'solve line, report lines in the log, buttons re-enabled: {win.lbl_bt_last.text()!r}')
+    win.chk_bt_standoff.setChecked(True)
+    win.spin_bt_tag.setValue(222)
+    win.chk_bt_design.setChecked(True)
+    check(click(bt, 'Verify (moves arm)') and (QTest.qWait(300) or True)
+          and ('basler_tip', 'verify', '/tmp/bt', 17.0, ('b3', 'h2'), ('tag_id', 222), ('use_design', True)) in bridge.calls,
+          'Verify passes tag, standoff, the excludes and the design-tip box')
     check(click(ctab, 'Compute && save T_hc2ee') and (QTest.qWait(150) or True) and ('handeye_compute',) in bridge.calls,
           'Compute calls handeye_compute')
     for e in [{'phase': 'align', 'iteration': 2, 'xy_mm': 4.2, 'tilt_deg': 0.8, 'n_samples': 0},

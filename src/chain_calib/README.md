@@ -413,3 +413,26 @@ Basler 샘플들의 일관성, `jackknife`가 결과의 불확실도. 결과는 
 않는다 — `vision_tip_offset_mm`은 `robot.yaml`, `tools/set_tool_tcp.py`
 (tool 1), 플래너 URDF `vision_tip_joint` **세 곳을 함께** 바꿔야 한다.
 오프라인 검증 `scripts/check_basler_tip.py`(11).
+
+### 6-1. 실행 검증 — `verify` (2026-09-21, 팔이 움직인다)
+
+풀린 tip이 맞는지는 "계산한 tip을 태그 위에 갖다 놓고 Basler가 무엇을
+보는가"로 확인한다. 세션의 시트 자세(hand 샘플)로 태그 중심을 팔 좌표로
+옮기고, **현재 손목 방향을 유지한 채** tip이 그 중심 위 20 mm에 오는
+플랜지 포즈로 MoveL 한 번 → Keyence 루프로 16.5 mm(seek이 20 mm를
+내려온다) → Basler 한 장 → 이미지 중심 아래 시트 점과 태그 중심의 차이를
+mm로 보고한다(89 px/mm). 현재 플랜지에서 0.35 m 넘게 떨어진 목표는
+**거부** — 먼저 그 태그 근처로 jog. 결과는 `<dir>/verify.csv`에 한 줄씩.
+
+```bash
+rosrun chain_calib basler_tip_calib.py verify log/chain_calib/basler_tip_<date> 215            # 측정 tip
+rosrun chain_calib basler_tip_calib.py verify log/chain_calib/basler_tip_<date> 215 --design   # 설계 tip으로 대조
+```
+
+robot_ui: 같은 그룹의 `verify tag` 번호 + `design tip` 체크 + **Verify
+(moves arm)**. 읽는 법: `|d|` ≤ 3 mm = fit의 정확도 안(OK); 3–6 mm = 이
+레버(246 mm)에서 팔 자세 오차(~1°)가 손목 스핀에 따라 만드는 크기 —
+같은 태그에서 스핀 0 / ±45 / ±90°로 반복해 보면 스핀 0°에서 작고 ±90°에서
+커지는 것이 보인다; > 6 mm = tip이나 시트 자세가 틀린 것. 설계 tip으로
+돌리면 y 7 mm / z 16 mm 차이가 그대로 나와야 한다(≈ 620 px 옆, Keyence가
+~16 mm 더 내려감).

@@ -1084,6 +1084,22 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_bt_solve)
         row.addStretch(1)
         bt_layout.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel('verify tag'))
+        self.spin_bt_tag = QSpinBox()
+        self.spin_bt_tag.setRange(201, 230)
+        self.spin_bt_tag.setValue(215)
+        row.addWidget(self.spin_bt_tag)
+        self.chk_bt_design = QCheckBox('design tip')
+        row.addWidget(self.chk_bt_design)
+        self.btn_bt_verify = QPushButton('Verify (moves arm)')
+        self.btn_bt_verify.setToolTip('MOVES THE ARM: one MoveL putting the tip 20 mm above this tag (wrist kept), '
+                                      'Keyence standoff, one Basler frame → image centre vs tag centre in mm. '
+                                      'Refused if farther than 0.35 m — jog near the tag first')
+        self.btn_bt_verify.clicked.connect(lambda: self._basler_tip_step('verify'))
+        row.addWidget(self.btn_bt_verify)
+        row.addStretch(1)
+        bt_layout.addLayout(row)
         self.lbl_bt_state = QLabel('hand 0 · basler 0')
         self.lbl_bt_state.setStyleSheet('font-weight:bold;')
         bt_layout.addWidget(self.lbl_bt_state)
@@ -1099,7 +1115,7 @@ class MainWindow(QMainWindow):
         bt_layout.addWidget(self.txt_bt_report)
         layout.addWidget(bt_box)
         self._bt_buttons = [self.btn_bt_check, self.btn_bt_hand, self.btn_bt_basler,
-                            self.btn_bt_status, self.btn_bt_solve]
+                            self.btn_bt_status, self.btn_bt_solve, self.btn_bt_verify]
 
         loc_box = QGroupBox('Single tag locate (debug)')
         loc_layout = QVBoxLayout(loc_box)
@@ -1142,8 +1158,10 @@ class MainWindow(QMainWindow):
         report goes to the text box and, line by line, to the log."""
         session_dir = self.txt_bt_dir.text().strip()
         standoff = (self.spin_bt_standoff.value()
-                    if cmd == 'capture_basler' and self.chk_bt_standoff.isChecked() else None)
+                    if cmd in ('capture_basler', 'verify') and self.chk_bt_standoff.isChecked() else None)
         exclude = tuple(x for x in self.txt_bt_exclude.text().replace(',', ' ').split() if x)
+        kw = ({'tag_id': int(self.spin_bt_tag.value()), 'use_design': bool(self.chk_bt_design.isChecked())}
+              if cmd == 'verify' else {})
         for b in self._bt_buttons:
             b.setEnabled(False)
         self.lbl_bt_last.setText(f'{cmd.replace("_", " ")}…')
@@ -1169,6 +1187,10 @@ class MainWindow(QMainWindow):
                     self.lbl_bt_last.setText(
                         f'solve: tip ({p[0]:+.1f}, {p[1]:+.1f}, {p[2]:+.1f}) mm, roll '
                         f'{extra.get("psi_deg", 0):+.2f}°, fit {extra.get("rms_mm", 0):.1f} mm rms')
+                if 'verify_d_mm' in extra:
+                    self.lbl_bt_last.setText(
+                        f'verify tag {extra.get("verify_tag")} ({extra.get("verify_tip_source")} tip): error '
+                        f'dx {extra["verify_dx_mm"]:+.1f} dy {extra["verify_dy_mm"]:+.1f} |d| {extra["verify_d_mm"]:.1f} mm')
 
         def _err(message):
             for b in self._bt_buttons:
@@ -1176,7 +1198,7 @@ class MainWindow(QMainWindow):
             self.lbl_bt_last.setText(f'{cmd} ERROR: {message}')
 
         self._run(self.bridge.basler_tip, cmd, session_dir, standoff, exclude,
-                  label=None, on_done=_done, on_error=_err)
+                  label=None, on_done=_done, on_error=_err, **kw)
 
     def _on_handeye_auto(self):
         if not self.bridge.handeye_online():

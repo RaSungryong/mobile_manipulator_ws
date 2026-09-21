@@ -223,7 +223,12 @@ class FakeBridge:
     def basler_tip_default_dir(self):
         return '/ws/log/chain_calib/basler_tip_20260918'
 
-    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=()):
+    def basler_tip(self, cmd, session_dir=None, standoff_mm=None, exclude=(), tag_id=None, use_design=False):
+        if cmd == 'verify':
+            self.record('basler_tip', cmd, session_dir, standoff_mm, tag_id, use_design)
+            return True, 'verify tag %d line\nverdict: OK' % tag_id, {
+                'dir': session_dir, 'n_hand': 4, 'n_basler': 6, 'verify_tag': tag_id, 'verify_dx_mm': 1.2,
+                'verify_dy_mm': -0.4, 'verify_d_mm': 1.26, 'verify_tip_source': 'DESIGN' if use_design else 'measured'}
         self.record('basler_tip', cmd, session_dir, standoff_mm, tuple(exclude))
         n = {'check': (0, 0), 'capture_hand': (1, 0), 'capture_basler': (1, 1), 'status': (4, 6), 'solve': (4, 6)}[cmd]
         extra = {'dir': session_dir, 'n_hand': n[0], 'n_basler': n[1]}
@@ -516,6 +521,15 @@ def part_a():
         check(bridge.has('basler_tip', 'solve', '/tmp/other', None, ('b3', 'h2'))
               and c.ui()['basler_tip']['last'].startswith('solve: tip (+3.1, -257.4, +230.9) mm, roll +1.75°')
               and c.ui()['basler_tip']['busy'] is False, 'Solve with excludes; the tip line')
+        r = c.api_basler_tip_verify('/tmp/other', 215, 16.5, False)
+        check(r['ok'] and bridge.has('basler_tip', 'verify', '/tmp/other', 16.5, 215, False)
+              and c.ui()['basler_tip']['last'] == 'verify tag 215 (measured tip): error dx +1.2 dy -0.4 |d| 1.3 mm',
+              'Verify → bridge with tag + standoff; the error line')
+        r = c.api_basler_tip_verify('/tmp/other', '220', None, True)
+        check(bridge.has('basler_tip', 'verify', '/tmp/other', None, 220, True)
+              and '(DESIGN tip)' in c.ui()['basler_tip']['last'], 'Verify with the design tip, no standoff')
+        r = c.api_basler_tip_verify('/tmp/other', '', 16.5, False)
+        check(r['ok'] is False and 'tag id' in r['message'], 'Verify without a tag is refused before the bridge')
 
         bridge.handeye = False
         r = c.api_handeye_auto()

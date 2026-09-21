@@ -243,6 +243,11 @@
               <label>exclude: <input type="text" id="txt-bt-exclude" style="width:8em" placeholder="b3 h2"></label>
               <button id="btn-bt-solve" class="bt" title="least squares over the vision tip + image roll; writes result.yaml">Solve</button>
             </div>
+            <div class="row">
+              <label>verify tag <input type="number" id="num-bt-tag" min="201" max="230" step="1" value="215" style="width:5em"></label>
+              <label><input type="checkbox" id="chk-bt-design"> design tip</label>
+              <button id="btn-bt-verify" class="bt" title="MOVES THE ARM: one MoveL putting the tip 20 mm above this tag (wrist kept), Keyence standoff, one Basler frame → image centre vs tag centre in mm. Refused if farther than 0.35 m — jog near the tag first">Verify (moves arm)</button>
+            </div>
             <div class="bold" id="lbl-bt-state">hand 0 · basler 0</div>
             <div class="detail" id="lbl-bt-last">—</div>
             <pre id="pre-bt-report" class="report" hidden></pre>

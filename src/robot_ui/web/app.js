@@ -913,6 +913,11 @@ function init() {
   });
   $('btn-bt-status').addEventListener('click', () => call('basler_tip_status', [baslerTipArgs()]).catch(() => {}));
   $('btn-bt-solve').addEventListener('click', () => call('basler_tip_solve', [baslerTipArgs(), $('txt-bt-exclude').value]).catch(() => {}));
+  $('btn-bt-verify').addEventListener('click', () => {
+    const tag = parseInt($('num-bt-tag').value, 10);
+    const so = $('chk-bt-standoff').checked ? parseFloat($('num-bt-standoff').value) : null;
+    call('basler_tip_verify', [baslerTipArgs(), tag, so, $('chk-bt-design').checked]).catch(() => {});
+  });
 
   // ---- Scripts ----
   $('btn-plugin-refresh').addEventListener('click', () => call('plugin_refresh', []).catch(() => {}));
