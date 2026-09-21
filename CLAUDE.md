@@ -78,6 +78,14 @@ The Navifra systemd service already runs `roscore` — do not start one.
 `rosrun apriltag_nav task_executor.py` starts *only* the orchestrator and is a
 debug path, not the way to bring the stack up.
 
+**Stopping it: `tools/stop_stack.sh`** (SIGINT = Ctrl-C, wait, and — only
+if the graceful exit stalls — SIGKILL of the leftovers + `rosnode cleanup`;
+refuses the navifra driver's `robot.launch`, which runs roscore). Procedure
+and the 2026-09-21 failure it handles in `docs/STOP_LAUNCH_kr.md`: a frozen
+VS Code launch terminal blocks every node's final stdout write, so SIGINT
+leaves 16 unregistered-but-alive processes and roslaunch's own escalation
+hangs with them. Run it from a DIFFERENT terminal than the launch.
+
 ## Where run output lives — inside the workspace (2026-09-14)
 
 **User rule: every result and every record a run produces is stored in
@@ -1716,6 +1724,33 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-21 — Stopping the stack: SIGINT stalled on a frozen VS Code terminal; `tools/stop_stack.sh`
+
+User asked how to see the running launches and how to kill a specific one,
+then confirmed PID 30334 (`mobile_manipulator.launch`, up since 10:40).
+`kill -INT 30334` did the right thing — every node unregistered and ran
+its hooks (VISION lamp off, relay off, arm `Shutting down...`) — but all
+16 node processes and roslaunch itself stayed alive: roslaunch logged
+`ProcessMonitor shutdown failed!` 20 s in, the keyence node's main thread
+sat in `tty_write_lock`, and a probe `echo > /dev/pts/1` timed out. The
+launch had been started in a VS Code integrated terminal whose pty was no
+longer being drained, so each node hung on its LAST stdout write at
+interpreter exit, and roslaunch's SIGTERM→SIGKILL escalation hung writing
+its own log lines to the same tty. Forced: SIGKILL children then
+roslaunch, `rosnode cleanup` for one stale `/side_cam/realsense2_camera`
+entry; only the STATUS-lamp-off hook was lost (green stays lit until the
+next launch). The user relaunched at 13:39.
+
+⚠️ **My test run of the new script then killed that relaunched stack.**
+The first `stop_stack.sh` matched `pgrep -f "roslaunch .*<launch>"`, which
+also hit its own `bash -c` command line (it SIGINT'd itself) and — worse —
+the user's fresh roslaunch, which went down cleanly. Fixed: the matcher
+is anchored on `bin/roslaunch` as the script argument and excludes `$$`,
+verified against a decoy shell mentioning the launch name; the script was
+only run again with no launch present. Lesson kept: never smoke-test a
+stop script against a live stack. `docs/STOP_LAUNCH_kr.md` is the
+procedure (what never to kill, the tty check, the restart checklist).
+
 ### 2026-09-21 — The sheet is NOT 0.3 % small: the global scale is unobservable; T_ab2mb re-solved at the measured print scale
 
 User, asking for the calibration procedure again, then: "I measured it
@@ -1822,6 +1857,18 @@ grid; ±30° spin views to test the hand-eye (grid normal varying with spin
 ⇒ hand_cam moved); then distinct poses only, −x ≥ 4, far rows, spin ≥ 60°;
 re-solve. README: corner scatter, not PnP rms, is the motion indicator
 (rms 0.6–0.7 px is this setup's floor — hand_cam's D = 0).
+
+**Session closed at 64 views (20 distinct geometries, spin span 90°):**
+raw 8.61 mm / 1.15°, base residual translation (−2.2, −0.9, −1.9) mm /
+yaw 0.09° — 09-18's translation and yaw confirmed — pitch −0.92°
+(parking / paper, not applied); spin test 62° vs 152° moves the FK grid
+normal 0.55°, inside the 0.85° per-view scatter, so no sign hand_cam moved
+(hand-eye rotation ≲ 0.4°). **The chain as it stands is written out in
+`src/chain_calib/docs/TF_CHAIN_2026-09-21.yaml`** — every matrix (T_hc2ee,
+T_ab2mb, T_mb2fc physical + level, the constant T_ab2fc, a worked
+T_hc2fc at the home pose), its source, its uncertainty, and what is NOT in
+it (robot.yaml's pose-IK copy, the vision tip). Read that file, not this
+paragraph, for numbers.
 
 Two things worth keeping from the re-solve. **The fold is path-independent
 — verified, not assumed:** re-solving on the ALREADY-corrected chain and
