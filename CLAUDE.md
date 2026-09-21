@@ -1732,6 +1732,47 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-21 — Basler vision tip measured on the A4 sheet: (−1.8, −245.6, 209.6) mm, roll −179.1°; the ±3 mm floor is the arm's spin-dependent orientation error
+
+User: "vision tip 수집한 데이터 분석하면 결과 확인". Session
+`log/chain_calib/basler_tip_20260921` (14:07–14:41, robot_ui Basler-tip
+group): 5 hand samples (spins 0 / ±40 / ±80, 30 tags each, PnP rms
+0.8–1.1 px) and 10 Basler samples over tags 212 / 222 / 217 / 207 / 220 /
+229 at spins 0 / ±45 / ±90, standoff 16.3–16.7 (b10 unknown). The
+operator's Solve: **tip (−1.81, −245.59, 209.60) mm, image roll
+−179.11°**, fit 5.48 mm rms / 11.4 max, jackknife (1.65, 0.71, 0.35).
+Design (0, −253, 225.2) → **(−1.8, +7.4, −15.6) mm** — the z is the
+09-18 case shortening (+6.5 mm of standoff, ~22 mm of case), the y a
+real 7 mm.
+
+Re-solved offline with per-sample residuals to see what the 5.5 mm is.
+Not the sheet (single-tag similarity rms 1.4–6 px = 0.02–0.07 mm) and
+not random: the residual sits along the sheet's x axis and **grows with
+the wrist spin** — 0.05 / 1.5 / 4–6.7 / 11 mm at spin 0 / ±45 / +90 /
+−90 — i.e. (1 − cos θ)-shaped, which is what a ~1° error between the
+FK's flange z axis and the real one does to a point 246 mm off that axis
+(2·246·sin 45°·0.0175 = 6 mm at 90°). The same arm orientation error
+verify_chain measured on 09-18 (0.6–2.7° at one commanded orientation),
+now on the Basler's lever. The hand side shows it too: the sheet origin
+moves 8 mm in y between the spin-0 and spin-±80 hand samples (a
+spin-dependent chain error of ~6 mm at that lever), so the fit against
+each hand sample alone wanders tip y −243.4 … −248.8 and z 208.0 … 210.9
+with rms 3.1 (h4, h5) … 8.3 (h1). **Honest uncertainty ±1.5 / ±3 / ±2 mm
+(x / y / z), not the jackknife** — the jackknife only drops Basler
+samples and never sees the sheet-pose spread. The y and z deltas from
+the design clear that; x does not.
+
+Not applied. Applying means moving THREE things together — robot.yaml
+`vision_tip_offset_mm` (the tip → flange conversion of pose mode),
+`set_tool_tcp.py` (tool 1) and the planner URDF's `vision_tip_joint` —
+and regenerating the RRT CSVs from that URDF: the CSV tip coordinates
+were computed from joint rows with the OLD tip, so converting them with
+the new offset alone would send the flange 17 mm away from where the
+joint row puts it (the 2026-09-14 divergence, reintroduced). Also worth
+knowing before using it: at a 246 mm lever the tip's real position moves
+±4–6 mm with wrist spin whichever number is written; a tip calibrated at
+the spin the scans actually use would be the tighter one.
+
 ### 2026-09-21 — Keyence seek turned on: the standoff loop now walks into the sensor window
 
 During the Basler vision-tip session the operator jogged the tool up after
