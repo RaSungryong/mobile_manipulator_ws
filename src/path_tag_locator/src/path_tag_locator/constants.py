@@ -58,7 +58,7 @@ class DetectorCfg:
     # (the re-solve matches dt_apriltags' own estimate to ~0.2 deg).
     front_cam_repose_from_corners: bool = True
     # Which front_cam frame the published detections are expressed in,
-    # i.e. which T_mb2fc the chain must use (2026-09-15, extrinsics.yaml
+    # i.e. which T_mb2fc the chain must use (2026-09-15, tf_chain.yaml
     # now carries the PHYSICAL, tilted camera):
     #   "auto"     — read robot.yaml robot_camera.ground_plane.front_cam
     #                .enabled (the same file robot_camera_node reads):
@@ -204,18 +204,35 @@ def load_locator_cfg(yaml_path) -> LocatorCfg:
     return load_locator_cfg_from_dict(d)
 
 
-def load_extrinsics(yaml_path):
-    """Load T_AB2MB and T_MB2FC (both 4x4) from yaml row-major lists.
+def _tf_block_matrix(d, name, yaml_path):
+    """A 4x4 from a tf_chain.yaml block ``name: {matrix: [16 numbers]}``."""
+    entry = d.get(name)
+    if not isinstance(entry, dict) or "matrix" not in entry:
+        raise ValueError("%s: no `%s: {matrix: ...}` block (this must be "
+                         "apriltag_nav/config/tf/tf_chain.yaml since 2026-09-21)"
+                         % (yaml_path, name))
+    m = np.asarray(entry["matrix"], dtype=np.float64)
+    if m.size != 16:
+        raise ValueError("%s: %s.matrix must hold 16 numbers" % (yaml_path, name))
+    return m.reshape(4, 4)
+
+
+def load_extrinsics(yaml_path=None):
+    """Load T_AB2MB and T_MB2FC (both 4x4) from tf_chain.yaml
+    (apriltag_nav/config/tf; default = that file).
 
     T_MB2FC is the PHYSICAL front_cam optical frame as stored — since
     2026-09-15 that includes the measured 1.3 deg tilt. A consumer of
     robot_camera_node's ground-plane-corrected detections must NOT use it
     directly: see :func:`load_extrinsics_full` and ``Extrinsics.T_mb2fc_chain``.
     """
+    if yaml_path is None:
+        from apriltag_nav.tf_chain import TF_CHAIN_PATH  # exec_depend
+        yaml_path = TF_CHAIN_PATH
     with open(yaml_path, "r") as fh:
-        d = yaml.safe_load(fh)
-    T_ab2mb = np.asarray(d["T_ab2mb_row_major"], dtype=np.float64).reshape(4, 4)
-    T_mb2fc = np.asarray(d["T_mb2fc_row_major"], dtype=np.float64).reshape(4, 4)
+        d = yaml.safe_load(fh) or {}
+    T_ab2mb = _tf_block_matrix(d, "T_ab2mb", yaml_path)
+    T_mb2fc = _tf_block_matrix(d, "T_mb2fc", yaml_path)
     assert_rigid(T_ab2mb, name="T_ab2mb")
     assert_rigid(T_mb2fc, name="T_mb2fc")
     return T_ab2mb, T_mb2fc
@@ -258,7 +275,7 @@ class Extrinsics:
     """Platform extrinsics plus the two front_cam frames (2026-09-15).
 
     T_mb2fc        the PHYSICAL front_cam optical frame (tilted), as stored
-                   in extrinsics.yaml — right for anything that re-detects
+                   in tf_chain.yaml — right for anything that re-detects
                    RAW frames (verify_arm_pointing, hand-eye tools).
     T_mb2fc_level  the LEVEL virtual camera robot_camera_node re-images
                    detections into (= T_mb2fc @ T_tilted_to_level(fit)) —
@@ -281,9 +298,9 @@ class Extrinsics:
         return self.T_ab2mb, self.T_mb2fc_chain
 
 
-def load_extrinsics_full(yaml_path, front_cam_frame="auto",
+def load_extrinsics_full(yaml_path=None, front_cam_frame="auto",
                          ground_plane="auto", robot_yaml_path=None):
-    """Load extrinsics.yaml and derive the level front_cam frame.
+    """Load tf_chain.yaml (T_ab2mb, T_mb2fc) and derive the level front_cam frame.
 
     ``ground_plane``: "auto" reads robot.yaml (see
     :func:`load_front_cam_ground_plane`), a dict is used as given, None
@@ -295,7 +312,7 @@ def load_extrinsics_full(yaml_path, front_cam_frame="auto",
     R_MB2FC_LEVEL @ inv(tilt) to 0.01 deg and its tz must equal the fit's
     ``height_m`` + ``tag_thickness_m`` — otherwise the yaml was hand-edited out of step with
     robot.yaml and the caller gets a ValueError naming
-    scripts/make_front_cam_extrinsics.py.
+    apriltag_nav/tools/tf_chain_tool.py front-cam.
     """
     from apriltag_nav.ground_plane import T_tilted_to_level  # exec_depend
 
@@ -322,16 +339,16 @@ def load_extrinsics_full(yaml_path, front_cam_frame="auto",
     ang = math.acos(max(-1.0, min(1.0, (np.trace(R_err) - 1.0) / 2.0)))
     if ang > _LEVEL_TOL_RAD:
         raise ValueError(
-            "extrinsics.yaml T_mb2fc does not embed robot.yaml's front_cam "
+            "tf_chain.yaml T_mb2fc does not embed robot.yaml's front_cam "
             "ground-plane fit: T_mb2fc @ tilt is %.3f deg from the level "
             "camera. Regenerate it with "
-            "path_tag_locator/scripts/make_front_cam_extrinsics.py --apply "
+            "apriltag_nav/tools/tf_chain_tool.py front-cam --apply "
             "(never hand-edit the rotation)." % math.degrees(ang))
     if h is not None and abs(float(T_mb2fc[2, 3]) - float(h)) > 1e-6:
         raise ValueError(
-            "extrinsics.yaml T_mb2fc tz %.4f != robot.yaml ground_plane."
+            "tf_chain.yaml T_mb2fc tz %.4f != robot.yaml ground_plane."
             "front_cam.height_m + robot.tag_thickness %.4f — the lens height "
-            "above the floor; regenerate with make_front_cam_extrinsics.py --apply."
+            "above the floor; regenerate with tf_chain_tool.py front-cam --apply."
             % (float(T_mb2fc[2, 3]), float(h)))
     T_level[:3, :3] = R_MB2FC_LEVEL  # exact, the check above bounds the residual
 

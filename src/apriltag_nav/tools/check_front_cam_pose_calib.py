@@ -286,13 +286,14 @@ from apriltag_nav.paths import CONFIG_PATH
 tmpd = tempfile.mkdtemp(prefix='fcpose_apply_')
 ry = os.path.join(tmpd, 'robot.yaml')
 shutil.copy(CONFIG_PATH, ry)
-ex = os.path.join(tmpd, 'extrinsics.yaml')
-shutil.copy(os.path.join(_TOOLS, '..', '..', 'path_tag_locator', 'config', 'extrinsics.yaml'), ex)
+ex = os.path.join(tmpd, 'tf_chain.yaml')
+shutil.copy(os.path.join(_TOOLS, '..', 'config', 'tf', 'tf_chain.yaml'), ex)
 r = run_case(1.0, -0.3, 0.301, -0.25, 0.5535, -0.006, seed=4)
 import subprocess
 # apply to the COPY, then regenerate the COPY of extrinsics from it
 old_check_call = subprocess.check_call
-subprocess.check_call = lambda cmd, *a, **k: old_check_call(cmd + ['--robot-yaml', ry, '--extrinsics', ex], *a, **k)
+# tf_chain_tool.py takes its file options BEFORE the subcommand
+subprocess.check_call = lambda cmd, *a, **k: old_check_call(cmd[:2] + ['--robot-yaml', ry, '--tf-yaml', ex] + cmd[2:], *a, **k)
 try:
     C.apply_to_robot_yaml(r, math.degrees(r['yaw']), path=ry)
 finally:
@@ -309,7 +310,7 @@ check("nothing else in robot.yaml changed",
 sys.path.insert(0, os.path.join(_TOOLS, '..', '..', 'path_tag_locator', 'src'))
 from path_tag_locator.constants import load_extrinsics_full
 e = load_extrinsics_full(ex, robot_yaml_path=ry)
-check("regenerated extrinsics load: level t == (camera_offset, camera_lateral, height_m + tag_thickness)",
+check("regenerated tf_chain T_mb2fc loads: level t == (camera_offset, camera_lateral, height_m + tag_thickness)",
       np.allclose(e.T_mb2fc_level[:3, 3], [cfg['robot']['camera_offset'], cfg['robot']['camera_lateral'],
                                            gp['height_m'] + cfg['robot']['tag_thickness']]),
       str(np.round(e.T_mb2fc_level[:3, 3], 4)))

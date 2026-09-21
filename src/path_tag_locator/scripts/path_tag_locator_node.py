@@ -93,7 +93,7 @@ class PathTagLocatorNode:
         self.T_hc2ee = load_T_hc2ee(hand_eye_path)
         assert_rigid(self.T_hc2ee, name="T_hc2ee")
 
-        # extrinsics.yaml stores the PHYSICAL (tilted) front_cam; the chain
+        # tf_chain.yaml stores the PHYSICAL (tilted) front_cam; the chain
         # consumes robot_camera_node's detections, which are in the LEVEL
         # virtual frame while the ground-plane correction is on — the
         # loader picks the matching T_mb2fc (locator.yaml front_cam_frame).

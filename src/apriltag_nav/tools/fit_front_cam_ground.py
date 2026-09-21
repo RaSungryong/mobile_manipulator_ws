@@ -21,7 +21,7 @@ consecutive pivot snapshots — the lens-to-pivot lever (`camera_offset`).
 
 The fitted height is the lens above the TAG-TOP plane (the corners' plane);
 every tag is a 1 mm plate (robot.yaml robot.tag_thickness), which is why
-extrinsics.yaml's tz is height_m + tag_thickness.
+tf_chain.yaml T_mb2fc's tz is height_m + tag_thickness.
 
 Snapshots: `rostopic echo -n1 /front_cam/tag_detections > dir/scan_<t>.txt`
 (the node must be publishing RAW detections, i.e. ground_plane disabled, or

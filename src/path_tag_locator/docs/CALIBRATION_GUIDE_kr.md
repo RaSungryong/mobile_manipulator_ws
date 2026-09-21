@@ -42,7 +42,7 @@ cd ~/mobile_manipulator_ws && catkin_make && source devel/setup.bash
 rosrun path_tag_locator generate_calibration_artifacts.py --lift-mm 150
 ```
 
-- 핸드아이(`T_hc2ee.npz`)는 카메라/마운트를 물리적으로 건드리지 않는
+- 핸드아이(`apriltag_nav/config/tf/tf_chain.yaml`의 `T_hc2ee` + npz)는 카메라/마운트를 물리적으로 건드리지 않는
   한 재보정 불필요. 재보정 절차(2026-09-14): 베이스를 102/103번에 세우고
   Arm 탭으로 hand_cam이 크로스 태그 0을 보게 한 뒤, robot_ui →
   Calibration 탭 → **Hand-eye** 그룹 → "Auto-sample (sweep)". 노드가

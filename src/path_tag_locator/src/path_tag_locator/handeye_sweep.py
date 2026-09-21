@@ -100,7 +100,7 @@ class SweepCfg:
     spins_deg: List[float] = field(default_factory=lambda: [-30.0, 0.0, 30.0])
     max_samples: int = 24
     # Flange-frame points (mm) that must clear the plate: the flange
-    # itself and the vision tip (robot.yaml arm_calibration.vision_tip_offset_mm).
+    # itself and the vision tip (apriltag_nav/config/tf/tf_chain.yaml T_ee2tip).
     tool_points_mm: List[List[float]] = field(
         default_factory=lambda: [[0.0, 0.0, 0.0], [-1.8, -245.6, 209.6]])
     min_clearance_m: float = 0.12

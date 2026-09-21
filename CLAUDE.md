@@ -1481,14 +1481,38 @@ the world target — see the lift section below.
 
 ## Transform Parameters (4-DOF physical model)
 
-Source of truth: **`path_tag_locator/config/extrinsics.yaml` `T_ab2mb`**
-(platform-measured; that file explicitly deprecates earlier tunings). The
-mount has **no tilt** — R is exactly Rz(180°) — which a 655-point real-robot
-fit (tilt ≈ 0.0001/0.0007 rad) confirmed independently. ⚠️ That fit's data
-(`task/csv/calib_data*`) was old-base and was **deleted 2026-09-11**, so the
-number survives only as this note; git has the files. The USD-derived values
-used before (base_z 1.0076, tilts −1.3°/+1.5°) are superseded; those tilts do
-not exist on the real platform.
+**Source of truth since 2026-09-21 (evening): `apriltag_nav/config/tf/tf_chain.yaml`**
+— every fixed transform (`T_ab2mb`, `T_mb2fc`, `T_hc2ee`, `T_ee2tip`), each
+block with its DESIGN value, how the APPLIED value was measured and its
+uncertainty, plus a `<name>.npz` twin per transform for tools that take an
+npz path (`tf_chain_tool.py check` asserts they agree). Loader
+`apriltag_nav.tf_chain`; CLI `tools/tf_chain_tool.py` (`show` / `check` /
+`set` / `front-cam` / `urdf` / `export-npz`). Readers: `arm_transform`
+(pose-mode IK derives its six numbers from `T_ab2mb`), `arm_controller`
+(`T_ee2tip`, the tip → flange conversion), `tools/set_tool_tcp.py`,
+`path_tag_locator` (`locator.yaml` / `handeye_calib.yaml` point at it),
+`chain_calib`, `robot_sim`, the check scripts. Writers: `tf_chain_tool.py
+set` / `front-cam --apply` and `handeye_calib_node`'s compute (npz + yaml
+block together); nothing edits the numbers by hand. The planner URDF's
+`mobile_to_base` / `vision_tip_joint` is the ONE copy outside it (the
+planner's input) — `check_pose_vs_joint.py` and `tf_chain_tool.py check`
+assert it agrees, `tf_chain_tool.py urdf` prints the lines. `robot.yaml
+arm_calibration` keeps only `csv_euler`. Restart `arm_node` (T_ab2mb,
+T_ee2tip) and the calibration nodes (all four) after a change. Before this
+the same values sat in six files that had to be changed together —
+`path_tag_locator/config/extrinsics.yaml`, its `hand_eye/T_hc2ee.npz`
+(+ five historical npz), the six `arm_calibration` numbers and
+`vision_tip_offset_mm` in `robot.yaml`, and the record
+`chain_calib/docs/TF_CHAIN_2026-09-21.yaml` — all deleted (git has them).
+
+The mount has **no tilt** by design — R is exactly Rz(180°) — which a
+655-point real-robot fit (tilt ≈ 0.0001/0.0007 rad) confirmed
+independently. ⚠️ That fit's data (`task/csv/calib_data*`) was old-base and
+was **deleted 2026-09-11**, so the number survives only as this note; git
+has the files. The USD-derived values used before (base_z 1.0076, tilts
+−1.3°/+1.5°) are superseded; those tilts do not exist on the real platform.
+The design block, as `arm_transform` parametrises it (the file stores the
+matrix; `tf_chain_tool.py show` prints these):
 
 ```yaml
 arm_body_offset_x:  0.0       # arm mount in body frame X (m)
@@ -1503,7 +1527,7 @@ arm_tilt_y:         0.0       # no mount tilt
 out negative because Rz(180°) flips y and the inverse flips it back; the arm
 did move toward the wall, i.e. body **-Y**.
 
-⚠️ **Since 2026-09-21 the two copies DIFFER on purpose.** `extrinsics.yaml`
+⚠️ **Since 2026-09-21 the applied value is NOT the design.** `tf_chain.yaml`
 `T_ab2mb` holds the CALIBRATED value from `chain_calib` (printed A0 tag
 sheet as the ground truth, 63 views, ruler print scale, level-floor prior
 on front_cam's rotation): **t (−7.47, −123.68, −628.44) mm, rpy (+0.320,
@@ -1516,16 +1540,16 @@ at the 0.64 m lever), so expect ~8 mm of shift per re-parking. Everything
 on the locator / calibration chain (`path_tag_locator`, `robot_sim`, the
 plan generator, `verify_chain.py --fit none`, `sheet_path.py`) uses it.
 **Since 2026-09-21 (later the same day, user: the corrected chain is for
-end-effector pose control too) the SAME transform is in all three places
-that hold the mount:** `extrinsics.yaml T_ab2mb`; `robot.yaml
-arm_calibration` = its inverse in the 4-DOF parametrisation — offsets
-(−0.013008, −0.120318, 0.629002), mount_yaw 3.166578737 rad (181.43°),
-tilt_x/y 0.005927 / 0.013580 rad — read by `transform_world_to_arm`
-(pose-mode IK; `arm_node` restart), whose hardcoded fallbacks match; and
-the planner URDF `frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`
+end-effector pose control too) pose-mode IK uses the SAME transform:**
+`transform_world_to_arm` derives its 4-DOF parametrisation from
+`tf_chain.yaml T_ab2mb` at call time — offsets (−0.013008, −0.120318,
+0.629002), mount_yaw 3.166578737 rad (181.43°), tilt_x/y 0.005927 /
+0.013580 rad (`arm_node` restart) — and the planner URDF
+`frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`
 `mobile_to_base` xyz (0.013008, 0.120318, 0.629002) rpy (0.005927,
-0.013580, 0.024986) — the same transform seen from its 180°-yawed
-`mobile_base`. `check_pose_vs_joint.py` asserts the three agree (26).
+0.013580, 0.024986) is the same transform seen from its 180°-yawed
+`mobile_base`. `check_pose_vs_joint.py` asserts the URDF and the
+derivation agree (27).
 Consequences: every pose-mode target moved ~35 mm at 1 m reach; the
 existing `rrt_final_path_*` joint paths were planned with the DESIGN mount
 and now land that far from their `assigned_workpoints_*` twins until the
@@ -1536,10 +1560,10 @@ stroke — `check_lift_compensation` is tilt-aware now, 11). The "no mount
 tilt" statements above and in `arm_transform.py`'s older text are
 superseded by this — the applied tilt is as much this parking's chassis
 attitude as the mount (±1°), kept so the locator and the arm agree.
-`check_front_cam_extrinsics.py` pins T_ab2mb to "orthonormal, within 3°
-of Rz(180) and 50 mm of the design", not to the design numbers. Record:
-`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`; the whole chain with
-provenance: `src/chain_calib/docs/TF_CHAIN_2026-09-21.yaml`.
+`check_front_cam_extrinsics.py` and `tf_chain_tool.py check` pin T_ab2mb
+to "orthonormal, within 3° of Rz(180) and 50 mm of the design", not to the
+design numbers. Record: `src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`;
+the whole chain with provenance: the comments in `tf_chain.yaml` itself.
 
 ⚠️ **`arm_body_offset_y` corrects POSE mode only.** `arm_transform.py` reads it
 into `p_A_W`, and `transform_world_to_arm` is called from exactly one place —
@@ -1573,8 +1597,8 @@ now obsolete).
 fit — re-measured 2026-09-15: roll +1.406°, pitch −0.323°, yaw −0.38°
 kept from 09-09; optical axis 1.443° off vertical — and it is
 GENERATED, never hand-edited:**
-`path_tag_locator/scripts/make_front_cam_extrinsics.py --apply` derives it
-from `robot.yaml` (`camera_offset`, `camera_lateral`,
+`tools/tf_chain_tool.py front-cam --apply` derives it (block `T_mb2fc` of
+`tf_chain.yaml`) from `robot.yaml` (`camera_offset`, `camera_lateral`,
 `ground_plane.front_cam` roll/pitch/yaw, `height_m`, and
 **`robot.tag_thickness`**). **tz = height_m + tag_thickness = 0.302 + 0.001
 (user, 2026-09-15: every laid tag is a 1 mm plate, so the plane the
@@ -1741,6 +1765,7 @@ of editing the guide.
 | Wherever `tag_size` appears | there are now **two physical tag sizes**: 90 mm floor tags (front_cam, straight down) and 30 mm tags on the 정반 step (side_cam, horizontal). Neither is the old 60 mm. |
 | Appendix A, `robot_camera:` block | `tag_size` is no longer a scalar — it is a **per-camera dict** (`front_cam: 0.09`, `side_cam: 0.03`, `hand_cam: null`), with `null` falling back to `robot.tag_size`. |
 | Navigation / troubleshooting | front_cam was **rotated −90° about its optical axis** 2026-08-13: image right = robot forward, image down = robot right. `mobile_controller.py` **was adapted the same day** — no longer a blocker, but the axis meanings need updating wherever the guide explains what the camera sees. |
+| Wherever `extrinsics.yaml`, `hand_eye/T_hc2ee.npz`, `arm_calibration` numbers or `vision_tip_offset_mm` appear | **every fixed transform lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ a `<name>.npz` per transform) since 2026-09-21**, with design values and provenance in its comments; `tools/tf_chain_tool.py` shows / checks / sets them. The old files are deleted. |
 | Wherever the stop offset appears | the key is now **`center_x_stop_offset: +50.0`** (was `center_y_stop_offset: -50.0`) and **more positive** stops earlier. Same physical stop point; the fore/aft image axis moved from rows to columns. |
 
 ## Work Log
@@ -1749,6 +1774,90 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-21 — Every fixed transform in ONE place: `apriltag_nav/config/tf` (tf_chain.yaml + an npz per transform); the old copies and superseded records deleted
+
+User: "현재 사용중인 모든 tf 값을 main apriltag_nav 저장하고 여기에서 적용,
+각각의 npz파일과 모든 tf 가 있는 yaml 로 구성 그리고 설계값하고 어떻게
+나왔는지 주석으로 설명, 이제 필요없는 기록은 지운다". Until now the applied
+values sat in six files that had to be changed together and were checked
+against each other by hand: `path_tag_locator/config/extrinsics.yaml`
+(T_ab2mb, T_mb2fc), `path_tag_locator/config/hand_eye/T_hc2ee.npz` (+ five
+historical npz, a yaml input file and a README of their history),
+`robot.yaml arm_calibration` (inv(T_ab2mb) as six numbers + the vision
+tip), the planner URDF, and the record `chain_calib/docs/TF_CHAIN_2026-09-
+21.yaml`. Now **`src/apriltag_nav/config/tf/tf_chain.yaml`** holds the four
+fixed transforms — `T_ab2mb`, `T_mb2fc`, `T_hc2ee`, `T_ee2tip` — each as a
+row-major matrix with `t_mm` / `rpy_deg_xyz` readouts, a `design` block,
+and a comment header saying what the design value was, how the applied
+value was measured (session, method, numbers, what is and is not a robot
+constant) and its uncertainty; `<name>.npz` next to it is the twin for
+tools that take an npz path. Values were carried over byte-for-byte
+(T_ab2mb / T_mb2fc diff 0.0 vs HEAD's extrinsics.yaml, T_hc2ee.npz diff
+0.0). Promoted to *Transform Parameters*.
+
+- **`apriltag_nav/tf_chain.py`** (pure numpy): `load_tf_chain` /
+  `load_transform` / `load_npz`, `arm_calibration_from_T_ab2mb` (the
+  inverse as offsets + Rz Ry Rx, yaw wrapped to [0, 2π)) and its inverse,
+  `tip_offset_mm`, `urdf_mobile_to_base`, `physical_T_mb2fc` (moved from
+  the deleted `make_front_cam_extrinsics.py`), `write_transform` (rewrites
+  ONE block's source / t_mm / rpy / matrix lines in place — comments and
+  the design block survive — plus the npz, then reads it back),
+  `check_npz_agree`, `check_front_cam`. **`tools/tf_chain_tool.py`**:
+  `show` (values, vs design, the six arm_transform numbers, the URDF
+  lines), `check` (rigidity, npz == yaml, T_mb2fc == generator(robot.yaml),
+  T_ab2mb near the design, the planner URDF's two joints — 12), `set NAME
+  --npz|--matrix|--t-mm --rpy-deg --source`, `front-cam [--apply]`,
+  `export-npz`, `urdf`.
+- **Readers moved:** `arm_transform` derives its six numbers from
+  `T_ab2mb` at call time (the private `~arm_*` params still override; the
+  hardcoded fallbacks are gone — a missing file raises); `arm_controller`
+  takes the tip from `T_ee2tip`; `set_tool_tcp.py` reads it (dry run
+  prints the same −1.8 / −245.6 / 209.6); `path_tag_locator.constants.
+  load_extrinsics[_full]` read the `T_xxx: {matrix: …}` blocks (default
+  path = the tf yaml) and their refusal messages name the tool;
+  `locator.yaml` / `handeye_calib.yaml` point at `$(find apriltag_nav)/
+  config/tf/…`; `handeye_calib_node`'s compute updates the yaml block
+  after writing the canonical npz (a custom `output_path` gets a warning
+  instead); `chain_calib.py platform()` / `basler_tip_ros` resolve any
+  `$(find pkg)`, `--write-hand-eye` writes into the tf dir; `robot_sim`,
+  `error_budget`, `analyse_yaw_sweep`, `generate_calibration_artifacts`,
+  `check_chain_calib`, `check_front_cam_extrinsics` (imports the generator
+  from tf_chain), `check_pose_vs_joint` (patches `tf_chain.load_transform`
+  for its design-mount rows), `check_lift_compensation`,
+  `calib_front_cam_pose --apply` (calls `tf_chain_tool.py front-cam
+  --apply`; its check patches `--tf-yaml`). `robot.yaml arm_calibration`
+  keeps only `csv_euler`; the vision tip and the six mount numbers are
+  gone from it.
+- **Deleted (git has them):** `path_tag_locator/config/extrinsics.yaml`,
+  the whole `config/hand_eye/` (README, `T_hc2ee.yaml`, `T_hc2ee.npz` —
+  moved — and the 2026-05-27 / 09-02 spun / 09-14 old-mount / 09-18
+  node-all32 / hardware npz), `scripts/save_npz.py`,
+  `scripts/make_front_cam_extrinsics.py`, `chain_calib/docs/TF_CHAIN_2026-
+  09-21.yaml` (its content is the yaml's comments now); records that fed
+  no applied value: hand-eye runs `run_20260914_183840` (the old mount),
+  `run_20260915_182657` and `run_20260918_141740` (0 samples), and
+  `log/apriltag_nav/calib_pair` (the 09-08 tilt fit, superseded by
+  `calib_pair_20260915_a`). **Kept:** `run_20260918_144420` +
+  `run_20260918_152111` (the samples behind the applied T_hc2ee),
+  `log/chain_calib/20260921` and `basler_tip_20260921` (behind T_ab2mb and
+  T_ee2tip), and — not transform records — the `map_world_*.yaml`,
+  `locate/`, `calibrate/` session logs (`predictive_centering.map_world_
+  path: latest` still reads the newest map_world).
+
+Verified offline: `tf_chain_tool.py check` 12/12; `check_front_cam_
+extrinsics.py` 24, `check_pose_vs_joint.py` 27 (was 26: + the
+parametrisation round trip), `check_lift_compensation.py` 13,
+`check_scan_progress.py` 62, `check_front_cam_pose_calib.py` 28,
+`check_chain_calib.py` 43, `check_basler_tip.py` 11, `check_handeye_sweep.
+py` 74, `check_repose_from_corners` 10, `analyse_yaw_sweep --self-test`
+4/4, `error_budget -n 50` (its exact-closure assert relaxed 1e-8 → 1e-6:
+the calibrated rotation is stored to 9 decimals and is orthonormal only to
+~1e-9 — the values are unchanged, the assert was tighter than the file);
+`catkin_make` clean (the two deleted scripts left the install list). Not
+run on the robot: `arm_node` and the calibration nodes read the new file
+at their next start; the numbers they will read are the ones they run
+on now.
 
 ### 2026-09-21 — robot_ui: live joint angles + joint control (Arm tab, web and Qt)
 

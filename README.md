@@ -248,14 +248,13 @@ rosservice call /handeye_calib/reset "{}"
 rosservice call /handeye_calib/load_latest "{}"
 ```
 
-npz 저장:
+모든 고정 변환(T_ab2mb, T_mb2fc, T_hc2ee, T_ee2tip)은 `src/apriltag_nav/config/tf/tf_chain.yaml`
+(+ 변환별 npz)에 있다 (2026-09-21):
 
 ```bash
-rosrun path_tag_locator save_npz.py
-rosrun path_tag_locator save_npz.py --force
-rosrun path_tag_locator save_npz.py --from-yaml /path/to/T_hc2ee.yaml
-rosrun path_tag_locator save_npz.py --out /tmp/T_hc2ee.npz
-rosrun path_tag_locator save_npz.py --hardcoded
+python3 src/apriltag_nav/tools/tf_chain_tool.py show      # 값, 설계값 대비, URDF 줄
+python3 src/apriltag_nav/tools/tf_chain_tool.py check     # yaml == npz, T_mb2fc == robot.yaml, URDF
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_hc2ee --npz F --source "..."
 ```
 
 ## Calibration 검증

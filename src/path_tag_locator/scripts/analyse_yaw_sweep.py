@@ -185,9 +185,10 @@ def self_test():
         pose_fr5_to_matrix_m
 
     cfg = os.path.join(PKG, "config")
-    _ext = load_extrinsics_full(os.path.join(cfg, "extrinsics.yaml"))
+    from apriltag_nav.tf_chain import TF_CHAIN_PATH, npz_path as _tf_npz   # config/tf (2026-09-21)
+    _ext = load_extrinsics_full(TF_CHAIN_PATH)
     T_ab2mb, T_mb2fc_T = _ext.T_ab2mb, _ext.T_mb2fc_chain   # detections' frame
-    T_hc2ee_T = np.load(os.path.join(cfg, "hand_eye", "T_hc2ee.npz"))["arr_0"]
+    T_hc2ee_T = np.load(_tf_npz("T_hc2ee"))["arr_0"]
     REFS = {k: v.T_world for k, v in load_reference_tags(
         os.path.join(cfg, "reference_tags.yaml")).items()}
 

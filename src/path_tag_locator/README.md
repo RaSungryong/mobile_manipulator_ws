@@ -35,9 +35,12 @@ T_B_world = T_A_world · T_A2B
 - **B**: path tag, observed by **front/floor camera** (mobile base).
 - `T_hc2ee`: hand-eye calibration (npz).
 - `T_ee2ab`: from live Fairino TCP pose.
-- `T_ab2mb`, `T_mb2fc`: platform-fixed geometry (yaml). ⚠️ Since 2026-09-15
+- `T_ab2mb`, `T_mb2fc`: platform-fixed geometry. **Every fixed transform
+  (these two, `T_hc2ee`, `T_ee2tip`) lives in `apriltag_nav/config/tf/
+  tf_chain.yaml` since 2026-09-21** (+ `<name>.npz` twins; `apriltag_nav/
+  tools/tf_chain_tool.py show / check / set / front-cam`). ⚠️ Since 2026-09-15
   `T_mb2fc` is the PHYSICAL front_cam, 1.3° tilt included (generated from
-  robot.yaml by `scripts/make_front_cam_extrinsics.py`); the chain above runs
+  robot.yaml by `tf_chain_tool.py front-cam --apply`); the chain above runs
   on `robot_camera_node`'s detections, which are re-imaged through a LEVEL
   virtual camera while `robot.yaml robot_camera.ground_plane.front_cam` is
   enabled — so the nodes use `T_mb2fc_level` from
@@ -52,9 +55,9 @@ T_B_world = T_A_world · T_A2B
 | `srv/LocatePathTag.srv` | Service: request tag_b_id (or default), optional T_A_world override, optional save |
 | `config/locator.yaml` | Detections/arm topics, tag IDs/sizes, detector sizes, file paths |
 | `config/reference_tag.yaml` | Default T_A_world (pose or 4x4) |
-| `config/extrinsics.yaml` | T_AB2MB / T_MB2FC (row-major 4x4; T_MB2FC = physical tilted camera, GENERATED — see above) |
+| `apriltag_nav/config/tf/tf_chain.yaml` | T_AB2MB / T_MB2FC / T_HC2EE / T_EE2TIP with design + provenance (`locator.yaml` `extrinsics_yaml` points at it; T_MB2FC = physical tilted camera, GENERATED — see above) |
 | `config/handeye_calib.yaml` | Hand-eye calibration node config |
-| `config/hand_eye/T_hc2ee.npz` | 4x4 hand-eye calibration (produced by handeye_calib_node) |
+| `apriltag_nav/config/tf/T_hc2ee.npz` | 4x4 hand-eye calibration, npz twin of the yaml block (written by handeye_calib_node's compute together with the block) |
 | `config/reference_tags.yaml` | Multi-ref-tag ground truth for batch map calibration |
 | `config/calibration_plan.yaml` | Ordered path_tag → ref_tag plan |
 | `config/map_calibrator.yaml` | Orchestrator default file paths |
@@ -82,26 +85,18 @@ source devel/setup.bash
 
 ### Step 0 — Hand-eye calibration (one-off)
 
-There are two ways to produce `config/hand_eye/T_hc2ee.npz`:
+`T_hc2ee` lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ `T_hc2ee.npz`).
+Two ways to produce it:
 
-- **A. Run a calibration session** with `handeye_calib_node` (recommended
-  when you have the equipment to capture diverse hand-cam views of the
-  calibration tag — see below).
-- **B. Direct input** via `config/hand_eye/T_hc2ee.yaml` — edit
-  `position_m` + `rpy_deg` (or `matrix_4x4`) in that file with values
-  measured externally (CAD, datasheet, prior calibration), then convert
-  to npz with `scripts/save_npz.py`. Useful for bootstrapping or when
-  the nominal mounting offset is good enough.
+- **A. Run a calibration session** with `handeye_calib_node` (below) —
+  `~compute` writes the npz and the yaml block together.
+- **B. Direct input** of an externally known value (CAD, a prior
+  calibration): `python3 src/apriltag_nav/tools/tf_chain_tool.py set T_hc2ee
+  --t-mm x y z --rpy-deg r p y --source "where it came from"` (or `--npz`
+  / `--matrix`). The `--source` line is written into the yaml.
 
-```bash
-# Edit the values in config/hand_eye/T_hc2ee.yaml first, then:
-rosrun path_tag_locator save_npz.py            # uses the yaml + writes npz
-# (refuses to overwrite an existing npz; add --force to replace)
-rosrun path_tag_locator save_npz.py --force
-```
-
-Restart `path_tag_locator_node` after rewriting the npz — the locator
-caches the matrix at startup.
+Restart `path_tag_locator_node` after a change — the locator caches the
+matrix at startup.
 
 #### Path A — Real calibration via `handeye_calib_node`
 
@@ -138,7 +133,7 @@ rostopic echo /handeye_calib/progress             # align / diverged / bootstrap
 # times with diverse orientations:
 rosservice call /handeye_calib/capture     "{}"
 rosservice call /handeye_calib/status      "{}"   # check progress
-rosservice call /handeye_calib/compute     "{}"   # writes T_hc2ee.npz
+rosservice call /handeye_calib/compute     "{}"   # writes tf/T_hc2ee.npz + the yaml block
 # rosservice call /handeye_calib/reset     "{}"   # discard and start over
 # rosservice call /handeye_calib/load_latest "{}" # reuse most recent run
 ```
@@ -323,15 +318,13 @@ Once it succeeds, scaling to all path tags is just adding entries to the plan.
 3. Place at least one path tag on the floor (e.g. id 101) where the
    base can drive to it and the front camera can see it.
 
-**Phase 1 — Hand-eye `T_hc2ee.npz` (one-time)**
+**Phase 1 — Hand-eye `T_hc2ee` (one-time)**
 
 Two paths — pick one:
 
 ```bash
-# A. Quick bootstrap: type measured / design values into the yaml.
-nano src/path_tag_locator/config/hand_eye/T_hc2ee.yaml
-rosrun path_tag_locator save_npz.py             # refuses to overwrite
-rosrun path_tag_locator save_npz.py --force     # force overwrite
+# A. Quick bootstrap: a known value straight into tf_chain.yaml (+ npz).
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_hc2ee --t-mm 35.6 -334.5 -151.5 --rpy-deg 0.14 -0.45 -179.44 --source "CAD / prior"
 
 # B. Real calibration: 15-30 captures + cv2.calibrateHandEye.
 roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
@@ -673,16 +666,12 @@ copy-paste verification commands, see
   This matches the FR5 TCP-pose convention used by the Fairino SDK.
 - Transform notation: `T_X2Y` = pose of frame Y expressed in frame X
   (i.e. it transforms Y-frame coordinates to X-frame coordinates). All
-  matrices in `config/extrinsics.yaml` and `T_hc2ee.npz` follow this
-  convention.
+  matrices in `apriltag_nav/config/tf/tf_chain.yaml` (and its npz twins)
+  follow this convention.
 - `T_hc2ee` is the pose of EE in the hand-cam frame. OpenCV's
   `calibrateHandEye` returns `R_cam2gripper, t_cam2gripper` (the inverse
   direction); `handeye_calib.py` already inverts it before saving.
-- Restart the node after editing `T_hc2ee.npz` or any yaml file —
+- Restart the node after changing `tf_chain.yaml` or any yaml file —
   the locator caches them at startup.
 - The detector uses `dt_apriltags` (Duckietown). Install with
   `pip install dt_apriltags` if missing.
-- `scripts/save_npz.py` writes a hand-coded identity-ish T_hc2ee for
-  smoke-testing only; for real use it refuses to overwrite an existing
-  file unless given `--force`. Always run `handeye_calib_node` for a
-  real calibration.

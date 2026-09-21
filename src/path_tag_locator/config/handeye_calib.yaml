@@ -18,7 +18,9 @@ handeye_calib:
   io:
     image_wait_timeout: 3.0
     # Locator reads from here; produce the file with this node.
-    output_path:        "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    # = apriltag_nav/config/tf/T_hc2ee.npz: compute writes the npz AND the
+    # matching T_hc2ee block of tf_chain.yaml (the source of truth).
+    output_path:        "$(find apriltag_nav)/config/tf/T_hc2ee.npz"
     min_samples:        8
     # Archive every capture (image + TCP + K) and the final result here.
     # Each invocation of the node (and each /reset) starts a fresh
@@ -48,7 +50,7 @@ handeye_calib:
     detector_tag_size_m:  0.090       # = robot.yaml robot_camera.tag_size.hand_cam
     # Current estimate, used ONLY to aim the views and evaluate the
     # clearance rule; the captured samples do not depend on it.
-    hand_eye_npz:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    hand_eye_npz:         "$(find apriltag_nav)/config/tf/T_hc2ee.npz"
     distances_m:          [0.35, 0.45, 0.55]
     tilts_deg:            [0.0, 12.0, 22.0]
     azimuths_deg:         [0.0, 90.0, 180.0, 270.0]
@@ -57,7 +59,7 @@ handeye_calib:
     # Safety, in the tag plane's frame (the plate IS the tag plane):
     # flange-frame points (mm) that must stay min_clearance_m above it —
     # the flange and the vision tip / Keyence bracket, the lowest part of
-    # the tool (= robot.yaml arm_calibration.vision_tip_offset_mm).
+    # the tool (= apriltag_nav/config/tf/tf_chain.yaml T_ee2tip).
     tool_points_mm:       [[0.0, 0.0, 0.0], [-1.8, -245.6, 209.6]]   # flange, vision tip (measured 2026-09-21)
     min_clearance_m:      0.12
     max_xy_from_start_m:  0.30        # flange stays over the plate area the operator chose

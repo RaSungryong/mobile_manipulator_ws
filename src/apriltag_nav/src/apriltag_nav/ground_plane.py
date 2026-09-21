@@ -72,7 +72,7 @@ def T_tilted_to_level(roll, pitch, yaw=0.0):
     Consumers: `robot_camera_node` publishes detections in the LEVEL
     frame whenever the correction is enabled, so a chain that consumes
     those detections needs T_mb2fc_level, while a consumer re-detecting
-    RAW frames needs the physical matrix. `extrinsics.yaml` carries the
+    RAW frames needs the physical matrix. `tf_chain.yaml` carries the
     physical one (2026-09-15); `path_tag_locator.constants.
     load_extrinsics_full` derives the level one with this function.
     """

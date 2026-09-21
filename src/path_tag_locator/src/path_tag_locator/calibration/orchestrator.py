@@ -128,7 +128,7 @@ class CalibrationOrchestrator:
                  target_pub: Optional[rospy.Publisher] = None):
         self.cfg = cfg
         self.T_hc2ee = T_hc2ee
-        self.T_ab2mb = T_ab2mb        # lift-at-origin (extrinsics.yaml)
+        self.T_ab2mb = T_ab2mb        # lift-at-origin (tf_chain.yaml)
         self.T_mb2fc = T_mb2fc
         self.tcp_client = tcp_client   # arm_interface.ArmInterface
         self.base = base               # base_interface.BaseInterface

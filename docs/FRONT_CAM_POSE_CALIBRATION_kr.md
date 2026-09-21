@@ -25,7 +25,7 @@
 **태그 두께 (2026-09-15, 사용자):** 모든 태그는 두께 1 mm 판이다
 (`robot.yaml robot.tag_thickness: 0.001`). 피팅이 주는 렌즈 높이
 `height_m`은 **태그 윗면**까지의 높이다(코너가 놓인 평면). 바닥(= mb 원점)
-까지는 그보다 1 mm 더 높고, `extrinsics.yaml`의 `T_mb2fc` tz는 생성기가
+까지는 그보다 1 mm 더 높고, `tf_chain.yaml`의 `T_mb2fc` tz는 생성기가
 `height_m + tag_thickness`로 쓴다(로더가 검사). 내비게이션은 렌즈→태그면
 거리만 쓰므로 바뀌는 것이 없다. 이 절차에서 신경 쓸 것은 없다 — 값은
 그대로 `height_m`에 들어간다. 정반의 십자 태그도 같은 1 mm 판이라
@@ -141,7 +141,7 @@ rosrun apriltag_nav calib_front_cam_pose.py --spacing 0.120 solve log/apriltag_n
 
 `--apply`는 `robot.yaml`의 `camera_offset`, `camera_lateral`,
 `ground_plane.front_cam.{roll_deg,pitch_deg,height_m,yaw_deg}`만 바꾸고
-`make_front_cam_extrinsics.py --apply`로 `extrinsics.yaml`의 `T_mb2fc`를
+`tf_chain_tool.py front-cam --apply`로 `apriltag_nav/config/tf/tf_chain.yaml`의 `T_mb2fc`를
 재생성한다 (tz = height_m + tag_thickness). 그 다음:
 
 1. `robot.yaml` `ground_plane.front_cam.enabled: true`로 되돌리기

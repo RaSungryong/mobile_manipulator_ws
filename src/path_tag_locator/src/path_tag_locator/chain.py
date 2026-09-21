@@ -36,7 +36,7 @@ def compensate_T_ab2mb(T_ab2mb: np.ndarray,
                        lift_height_m: float) -> np.ndarray:
     """Shift T_ab2mb for the live lift extension.
 
-    extrinsics.yaml measures T_ab2mb with the lift AT ORIGIN. Raising
+    tf_chain.yaml measures T_ab2mb with the lift AT ORIGIN. Raising
     the lift by h lifts the arm base h above the mobile-base origin, so
     mb sits h FURTHER below ab along ab.z: t_z goes -0.652 -> -(0.652+h).
     (ab.z == mb.z == up; R is exactly Rz(180°), so only t_z moves.)

@@ -125,7 +125,9 @@ def fk_flange(q_rad):
     return M @ FLANGE
 
 
-TIP = np.array([-1.8, -245.6, 209.6])    # mm, flange frame — MEASURED 2026-09-21 (set_tool_tcp.py / robot.yaml / URDF)
+from apriltag_nav import tf_chain
+TIP = tf_chain.tip_offset_mm()    # mm, flange frame — tf_chain.yaml T_ee2tip (MEASURED 2026-09-21; set_tool_tcp.py / arm_controller / URDF read the same)
+T_AB2MB = tf_chain.load_transform('T_ab2mb')
 # The tip the RRT CSVs on disk were exported with (the design, before the
 # 2026-09-21 measurement). Their x y z are FK flange + THIS, not TIP, until
 # the planner re-exports them from the updated URDF — so pose mode, which
@@ -138,30 +140,29 @@ print('== the planner URDF')
 check(URDF_TIP_MM is not None, f'URDF found: {URDF}')
 if URDF_TIP_MM is not None:
     check(np.linalg.norm(URDF_TIP_MM - TIP) < 0.05,
-          f'URDF vision_tip offset {np.round(URDF_TIP_MM, 2).tolist()} mm == tool 1 / robot.yaml vision_tip_offset_mm {TIP.tolist()}')
-    # Since 2026-09-21 the mount is CALIBRATED (chain_calib) and lives in THREE
-    # places that must agree: extrinsics.yaml T_ab2mb (the locator chain),
-    # robot.yaml arm_calibration (= inv(T_ab2mb) as offset + Rz(yaw)Ry(ty)Rx(tx)
-    # in the body frame), and this URDF's mobile_to_base (the same transform
-    # seen from a mobile_base frame yawed 180 deg from the code's body frame).
-    import yaml as _yaml
-    _EXT = os.path.join(HERE, '..', '..', 'path_tag_locator', 'config', 'extrinsics.yaml')
-    _T_ab2mb = np.array(_yaml.safe_load(open(_EXT))['T_ab2mb_row_major'], float).reshape(4, 4)
-    _T_mb2ab = np.linalg.inv(_T_ab2mb)
+          f'URDF vision_tip offset {np.round(URDF_TIP_MM, 2).tolist()} mm == tf_chain.yaml T_ee2tip {TIP.tolist()}')
+    # Since 2026-09-21 the mount is CALIBRATED (chain_calib) and stored ONCE,
+    # tf_chain.yaml T_ab2mb (apriltag_nav/config/tf): arm_transform derives
+    # its offset + Rz(yaw)Ry(ty)Rx(tx) parametrisation from it, and this URDF's
+    # mobile_to_base must be the same transform seen from a mobile_base frame
+    # yawed 180 deg from the code's body frame.
+    _T_mb2ab = np.linalg.inv(T_AB2MB)
     _Rz180 = R.from_euler('z', np.pi).as_matrix()
     _urdf_T = _T(*URDF_MOUNT)
     _exp_t = _Rz180 @ _T_mb2ab[:3, 3]; _exp_R = _Rz180 @ _T_mb2ab[:3, :3]
     check(np.abs(_urdf_T[:3, 3] - _exp_t).max() < 1e-6 and np.abs(_urdf_T[:3, :3] - _exp_R).max() < 1e-6,
-          f'URDF mobile_to_base == inv(extrinsics T_ab2mb) seen from the 180-deg-yawed mobile_base '
-          f'(t {np.round(_urdf_T[:3, 3]*1e3, 2).tolist()} mm; extrinsics t {np.round(_T_ab2mb[:3, 3]*1e3, 2).tolist()})')
-    _blk = arm_transform.load_yaml_block('arm_calibration')
+          f'URDF mobile_to_base == inv(tf_chain T_ab2mb) seen from the 180-deg-yawed mobile_base '
+          f'(t {np.round(_urdf_T[:3, 3]*1e3, 2).tolist()} mm; T_ab2mb t {np.round(T_AB2MB[:3, 3]*1e3, 2).tolist()})')
+    _blk = tf_chain.arm_calibration_from_T_ab2mb(T_AB2MB)
     _yaml_R = (R.from_euler('z', float(_blk['arm_mount_yaw'])) * R.from_euler('y', float(_blk['arm_tilt_y']))
                * R.from_euler('x', float(_blk['arm_tilt_x']))).as_matrix()
     _yaml_t = np.array([_blk['arm_body_offset_x'], _blk['arm_body_offset_y'], _blk['arm_base_z']], float)
     check(np.abs(_yaml_t - _T_mb2ab[:3, 3]).max() < 1e-6 and np.abs(_yaml_R - _T_mb2ab[:3, :3]).max() < 1e-6,
-          'robot.yaml arm_calibration == inv(extrinsics T_ab2mb)  (offsets %s mm, yaw %.3f deg, tilts %.3f / %.3f deg)'
+          'arm_transform parametrisation round-trips T_ab2mb  (offsets %s mm, yaw %.3f deg, tilts %.3f / %.3f deg)'
           % (np.round(_yaml_t*1e3, 2).tolist(), np.degrees(float(_blk['arm_mount_yaw'])),
              np.degrees(float(_blk['arm_tilt_x'])), np.degrees(float(_blk['arm_tilt_y']))))
+    check(np.abs(tf_chain.T_ab2mb_from_arm_calibration(_blk) - T_AB2MB).max() < 1e-8,
+          'tf_chain.T_ab2mb_from_arm_calibration is the exact inverse of the derivation')
 
 print('== FK model vs the robot (2026-09-14, /arm/state at home)')
 home = np.radians([-90.00087, -90.00022, 90.00348, -89.99956, -90.00044, 0.00044])
@@ -197,13 +198,11 @@ def ang_deg(Ra, Rb):
 # the end as a known discrepancy, not hidden).
 DESIGN_CALIB = dict(arm_body_offset_x=0.0, arm_body_offset_y=-0.100, arm_base_z=0.652,
                     arm_mount_yaw=math.pi, arm_tilt_x=0.0, arm_tilt_y=0.0)
-_real_load = arm_transform.load_yaml_block
-def _design_block(name):
-    b = dict(_real_load(name))
-    if name == 'arm_calibration':
-        b.update(DESIGN_CALIB)
-    return b
-arm_transform.load_yaml_block = _design_block
+DESIGN_T_AB2MB = tf_chain.T_ab2mb_from_arm_calibration(DESIGN_CALIB)
+_real_load_transform = tf_chain.load_transform
+def _design_transform(name, path=None):
+    return DESIGN_T_AB2MB.copy() if name == 'T_ab2mb' else _real_load_transform(name, path)
+tf_chain.load_transform = _design_transform          # arm_transform calls tf_chain.load_transform
 
 print('== transform_world_to_arm orientation convention vs FK of the paired joint row (design mount, as planned)')
 for gid, d in ROWS.items():
@@ -222,8 +221,8 @@ for gid, d in ROWS.items():
             check(a > 170, f'group {gid}: the old zyx reading is {a:.1f} deg off (tool pointing up)')
 _blk = arm_transform.load_yaml_block('arm_calibration')
 check(str(_blk.get('csv_euler')) == 'ZYX', f"robot.yaml csv_euler is ZYX ({_blk.get('csv_euler')!r})")
-check(list(map(float, _blk.get('vision_tip_offset_mm', []))) == TIP.tolist(),
-      'robot.yaml vision_tip_offset_mm matches set_tool_tcp.py')
+check('vision_tip_offset_mm' not in _blk and 'arm_base_z' not in _blk,
+      'robot.yaml arm_calibration no longer carries transform numbers (tf_chain.yaml does)')
 
 
 # ---------------------------------------------------------------- _exec_pose end to end
@@ -309,7 +308,7 @@ except RuntimeError as e:
     check('refused' in str(e) and not robot3.targets, f'unknown tool frame refuses pose mode: {e}')
 
 # ---------------------------------------------------------------- the calibrated mount vs the planner's files
-arm_transform.load_yaml_block = _real_load
+tf_chain.load_transform = _real_load_transform     # back to the calibrated file
 print('== the same planner rows under the CALIBRATED mount (robot.yaml as it is)')
 _worst = 0.0
 for gid, d in ROWS.items():

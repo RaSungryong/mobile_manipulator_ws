@@ -3,7 +3,7 @@ lift_listener.py
 ================
 Live lift height for the transform chain.
 
-``T_ab2mb`` in extrinsics.yaml is measured with the lift AT ORIGIN; the
+``T_ab2mb`` in tf_chain.yaml is measured with the lift AT ORIGIN; the
 lift adds up to ~343 mm on top and is NOT reflected there. Any locate /
 calibration performed with the lift raised must therefore shift
 ``T_ab2mb``'s z by the live height — see ``chain.compensate_T_ab2mb``.

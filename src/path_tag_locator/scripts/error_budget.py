@@ -103,9 +103,10 @@ def main():
 
     # The chain runs on robot_camera_node's detections: level frame while
     # the ground-plane correction is on (T_mb2fc_chain picks it).
-    _ext = load_extrinsics_full(str(PKG / "config/extrinsics.yaml"))
+    from apriltag_nav.tf_chain import TF_CHAIN_PATH, npz_path as _tf_npz   # config/tf (2026-09-21)
+    _ext = load_extrinsics_full(TF_CHAIN_PATH)
     T_ab2mb, T_mb2fc = _ext.T_ab2mb, _ext.T_mb2fc_chain
-    T_hc2ee = load_T_hc2ee(str(PKG / "config/hand_eye/T_hc2ee.npz"))
+    T_hc2ee = load_T_hc2ee(_tf_npz("T_hc2ee"))
 
     heading = ZONE_YAW[zone]
     hr = math.radians(heading)
@@ -144,7 +145,9 @@ def main():
         return face_up(*r["position_m"], yaw_deg=r["rpy_deg"][2])
 
     base = run(T_hc2A0, T_fc2B0, tcp0)
-    assert np.linalg.norm(base - truth) < 1e-8, base - truth
+    # 1e-6: the calibrated T_ab2mb is stored to 9 decimals, so its rotation is
+    # orthonormal only to ~1e-9 and the closure carries ~1e-7 of that
+    assert np.linalg.norm(base - truth) < 1e-6, base - truth
     print("entry %d (zone %s, ref %d): geometry closes exactly; "
           "A->B lever %.3f m; hand-cam view %.2f m\n"
           % (a.entry, zone, entry["ref_tag_id"],

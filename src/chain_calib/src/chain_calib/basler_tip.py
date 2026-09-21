@@ -2,7 +2,7 @@
 basler_tip.py
 =============
 Where the wrist Basler looks, in the flange frame — the ``vision_tip``
-(robot.yaml ``arm_calibration.vision_tip_offset_mm``, the planner URDF's
+(``apriltag_nav/config/tf/tf_chain.yaml`` ``T_ee2tip``, the planner URDF's
 ``vision_tip_joint``, tool 1 of ``set_tool_tcp.py``) measured instead of
 designed, from the same printed tag sheet the hand camera sees.
 

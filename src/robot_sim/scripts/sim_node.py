@@ -159,13 +159,10 @@ class SimNode:
         # ---------- static geometry ----------
         cfg = yaml.safe_load(open(CONFIG_PATH))
         topics = cfg['topics']
+        from apriltag_nav.tf_chain import TF_CHAIN_PATH, npz_path as _tf_npz
         ex_path = p('~extrinsics_yaml',
-                    rospy.get_param('~ex', '') or None)
-        if not ex_path:
-            import rospkg
-            ex_path = (rospkg.RosPack().get_path('path_tag_locator')
-                       + '/config/extrinsics.yaml')
-        # extrinsics.yaml holds the PHYSICAL (tilted) front_cam. The sim
+                    rospy.get_param('~ex', '') or None) or TF_CHAIN_PATH
+        # tf_chain.yaml holds the PHYSICAL (tilted) front_cam. The sim
         # stands in for robot_camera_node's OUTPUT, which is the LEVEL
         # virtual camera while robot.yaml's ground-plane correction is on
         # (and the raw tilted camera when it is off) — so render through
@@ -174,10 +171,7 @@ class SimNode:
         self.T_mb2fc = ext.T_mb2fc_chain
         self.T_ab2mb = ext.T_ab2mb
         rospy.loginfo('[sim] %s', ext.note)
-        import rospkg
-        ptl = rospkg.RosPack().get_path('path_tag_locator')
-        self.T_hc2ee = load_T_hc2ee(
-            p('~hand_eye_npz', ptl + '/config/hand_eye/T_hc2ee.npz'))
+        self.T_hc2ee = load_T_hc2ee(p('~hand_eye_npz', _tf_npz('T_hc2ee')))
 
         # cameras: intrinsics + configured detector tag size
         cam_cfg = cfg.get('robot_camera', {})
@@ -198,7 +192,7 @@ class SimNode:
         floor_size = float(cfg['robot'].get('tag_size', 0.09))
         # every laid tag is a plate (robot.tag_thickness, 1 mm): its top
         # face, the plane the detector sees, is that much above the floor —
-        # the same convention extrinsics.yaml's tz (height_m + thickness)
+        # the same convention tf_chain.yaml T_mb2fc's tz (height_m + thickness)
         # and the locator chain use.
         floor_z = FLOOR_Z + float(cfg['robot'].get('tag_thickness', 0.0) or 0.0)
         for tid, info in m.items():

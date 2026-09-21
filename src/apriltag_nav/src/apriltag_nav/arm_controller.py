@@ -102,16 +102,14 @@ class ArmController:
         time.sleep(1.0)
 
         # ---------- which tool frame is the controller actually using? ----------
-        # Pose-mode CSV rows are VISION-TIP coordinates (robot.yaml
-        # arm_calibration.vision_tip_offset_mm, the same numbers
-        # tools/set_tool_tcp.py writes as tool 1). GetInverseKin has no tool
-        # argument: it solves for the controller's ACTIVE tool frame. On
-        # 2026-09-14 that frame was the FLANGE (offset 0), so every tip
-        # target put the flange there — 338.7 mm from where the paired joint
-        # row put the tip. See _probe_tool_frame / _exec_pose.
-        _ac = load_yaml_block('arm_calibration')
-        self._tip_offset_mm = np.array(
-            _ac.get('vision_tip_offset_mm', [0.0, -253.0, 225.2]), dtype=float)
+        # Pose-mode CSV rows are VISION-TIP coordinates (tf_chain.yaml
+        # T_ee2tip, the same numbers tools/set_tool_tcp.py writes as tool 1).
+        # GetInverseKin has no tool argument: it solves for the controller's
+        # ACTIVE tool frame. On 2026-09-14 that frame was the FLANGE (offset
+        # 0), so every tip target put the flange there — 338.7 mm from where
+        # the paired joint row put the tip. See _probe_tool_frame / _exec_pose.
+        from apriltag_nav.tf_chain import tip_offset_mm
+        self._tip_offset_mm = tip_offset_mm()
         self._pose_tip_to_flange = self._probe_tool_frame()
 
         # ---------- Home ----------
@@ -913,7 +911,7 @@ class ArmController:
         rospy.logerr(
             f"[Arm REAL] Active tool offset {np.round(off, 2).tolist()} is neither the "
             f"flange nor the vision tip {tip.round(1).tolist()}. POSE mode is refused — "
-            "run tools/set_tool_tcp.py or fix arm_calibration.vision_tip_offset_mm.")
+            "run tools/set_tool_tcp.py or fix config/tf/tf_chain.yaml T_ee2tip.")
         return None
 
     def _tip_to_flange(self, pos_tip_mm, rpy_deg):

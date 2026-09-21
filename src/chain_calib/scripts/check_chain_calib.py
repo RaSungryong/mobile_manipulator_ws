@@ -51,10 +51,10 @@ def check(name, ok, detail=""):
 SHEET_DIR = os.path.normpath(os.path.join(_HERE, "..", "sheet"))
 LAYOUT = os.path.join(SHEET_DIR, "A0_landscape_tag200_300-309_5x2_FINAL2_layout.json")
 PDF = os.path.join(SHEET_DIR, "A0_landscape_tag200_300-309_5x2_FINAL2.pdf")
-CFG = os.path.join(_HERE, "..", "..", "path_tag_locator", "config")
-ext = load_extrinsics_full(os.path.join(CFG, "extrinsics.yaml"))
+TF = os.path.join(_HERE, "..", "..", "apriltag_nav", "config", "tf")     # every fixed transform (2026-09-21)
+ext = load_extrinsics_full(os.path.join(TF, "tf_chain.yaml"))
 T_ab2mb, T_mb2fc = ext.T_ab2mb, ext.T_mb2fc_level
-H_file = load_T_hc2ee(os.path.join(CFG, "hand_eye", "T_hc2ee.npz"))
+H_file = load_T_hc2ee(os.path.join(TF, "T_hc2ee.npz"))
 # D435 colour 640x480 and Femto Bolt 1280x720 — the numbers the other checks use
 K_hand = np.array([[609.3, 0, 321.5], [0, 608.6, 238.7], [0, 0, 1.0]])
 D_hand = np.array([-0.05, 0.01, 0.0005, -0.0003, 0.0])

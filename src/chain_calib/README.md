@@ -288,15 +288,18 @@ rosrun chain_calib chain_calib.py solve log/chain_calib/<세션> --sx 1.0012 --s
 
 ### 3-4. 반영 (자동으로 하지 않습니다)
 
+- 모든 고정 변환은 **`apriltag_nav/config/tf/tf_chain.yaml`** 한 곳에 있고
+  (2026-09-21; 변환마다 `<이름>.npz` 쌍둥이), `tools/tf_chain_tool.py`로
+  보고/검사/기록합니다. 설계값과 측정 경위는 그 파일의 주석에 있습니다.
 - **HAND side**: `solve … --write-hand-eye hand`가
-  `path_tag_locator/config/hand_eye/T_hc2ee_chain_<날짜>.npz`를 씁니다.
-  `locator.yaml`의 `hand_eye.npz_path`를 그 파일로 바꾸고 캘리브레이션 노드를
-  재시작합니다. 기존 파일은 그대로 남습니다.
-- **BASE side**: `corrected T_ab2mb`를 `extrinsics.yaml`의 `T_ab2mb_row_major`에
-  넣습니다(locator 체인, `robot_sim`, 플랜 생성기가 읽음; 캘리브레이션 노드
-  재시작). **2026-09-21 세션의 값이 이렇게 반영되어 있습니다** —
-  [docs/CHAIN_CALIB_2026-09-21_kr.md](docs/CHAIN_CALIB_2026-09-21_kr.md), 체인 전체는
-  [docs/TF_CHAIN_2026-09-21.yaml](docs/TF_CHAIN_2026-09-21.yaml).
+  `apriltag_nav/config/tf/T_hc2ee_chain_<날짜>.npz`를 씁니다(적용 아님).
+  적용은 `tf_chain_tool.py set T_hc2ee --npz <그 파일> --source "…"` 뒤
+  캘리브레이션 노드 재시작.
+- **BASE side**: `corrected T_ab2mb`를 `tf_chain_tool.py set T_ab2mb --matrix …
+  --source "…"`로 넣습니다(locator 체인, pose 모드 IK, `robot_sim`, 플랜
+  생성기가 읽음; arm_node + 캘리브레이션 노드 재시작). **2026-09-21 세션의
+  값이 이렇게 반영되어 있습니다** —
+  [docs/CHAIN_CALIB_2026-09-21_kr.md](docs/CHAIN_CALIB_2026-09-21_kr.md).
   `check_front_cam_extrinsics.py`가 정규직교·설계 근방(3° / 50 mm)을 검사합니다.
   **같은 변환이 `robot.yaml arm_calibration`(pose 모드 IK)과 플래너 URDF의
   `mobile_to_base`에도 들어갑니다**(2026-09-21부터; `check_pose_vs_joint.py`가 셋의
@@ -434,7 +437,7 @@ rosrun chain_calib arm_offsets.py log/chain_calib/<세션> --links            # 
 hand_cam이 본 점에 Basler를 정확히 갖다 놓으려면 hand_cam↔Basler 관계가
 필요한데, 둘 다 플랜지에 붙어 있으니 그 관계는 상수 `inv(D)·T_ee2tip`이고,
 D(hand-eye)는 sweep으로 확정되므로 남는 미지수는 **비전 팁**
-(`robot.yaml arm_calibration.vision_tip_offset_mm` = 플랜지 기준으로
+(`apriltag_nav/config/tf/tf_chain.yaml`의 `T_ee2tip` = 플랜지 기준으로
 Basler 프레임 중심이 초점거리에서 닿는 점 3개 + 이미지 회전 1개)뿐이다.
 Basler는 16.5 mm 매크로라 기울기를 못 재고 K도 없으므로 hand-eye를 풀지
 않고 이 4개만 푼다 — `src/chain_calib/basler_tip.py` 모듈 docstring에 수식.
@@ -468,8 +471,8 @@ Capture hand ×4–6 → Capture Basler ×6–10("standoff first" 체크 시 Key
 읽는 법: `sheet pose … scatter`가 hand_cam 체인 자체의 정확도(모든 것의
 바닥; 스핀 간 불일치가 크면 hand-eye 오차가 드러난 것), `fit … rms`가
 Basler 샘플들의 일관성, `jackknife`가 결과의 불확실도. 결과는 자동 반영되지
-않는다 — `vision_tip_offset_mm`은 `robot.yaml`, `tools/set_tool_tcp.py`
-(tool 1), 플래너 URDF `vision_tip_joint` **세 곳을 함께** 바꿔야 한다.
+않는다 — `tf_chain_tool.py set T_ee2tip …`로 `tf_chain.yaml`에 넣고(pose 모드와
+`tools/set_tool_tcp.py`가 거기서 읽음), 플래너 URDF `vision_tip_joint`를 **함께** 바꾼다.
 오프라인 검증 `scripts/check_basler_tip.py`(11).
 
 ### 6-1. 실행 검증 — `verify` (2026-09-21, 팔이 움직인다)

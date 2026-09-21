@@ -18,7 +18,7 @@ capture-hand from different spins about the camera axis, then 6-10
 capture-basler — jog the Basler over a tag, standoff (--standoff runs
 the Keyence loop first), capture; another tag and/or the wrist spun
 30-60 deg between captures. solve prints p_tip / psi against
-robot.yaml's vision_tip_offset_mm and writes <dir>/result.yaml.
+tf_chain.yaml's T_ee2tip and writes <dir>/result.yaml (apply with tf_chain_tool.py set T_ee2tip).
 
 --sx / --sy / --tag-size: the print's measured scale (default: design,
 40 mm pitch / 20 mm tag). Default <dir>: log/chain_calib/basler_tip_<date>.

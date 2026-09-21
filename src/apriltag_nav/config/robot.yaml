@@ -21,14 +21,14 @@ robot:
   # puts the computed pose somewhere the tag grid does not agree with.
   # ⚠️ The 3 mm against the 2026-08-13 measurement is unreconciled — if 547 is
   # the true lens position, the tags are the thing to move, not this key.
-  # Must equal the tx of path_tag_locator/config/extrinsics.yaml `T_mb2fc`.
+  # Must equal the tx of config/tf/tf_chain.yaml `T_mb2fc` (generated from here).
   # This is the ONE key in this block that code actually reads
   # (mobile_controller.calculate_robot_pose).
   camera_offset: 0.550
   # Lens lateral offset from the base's rotation centre (m, body y = LEFT
   # positive). Measured by tools/calib_front_cam_pose.py from the arc the
   # lens draws during pivots (2026-09-08 data: -0.005 ± 0.005 m, i.e. inside
-  # the noise). Read by make_front_cam_extrinsics.py (T_mb2fc ty) ONLY —
+  # the noise). Read by tf_chain_tool.py front-cam (T_mb2fc ty) ONLY —
   # mobile_controller still assumes the lens is on the centreline.
   camera_lateral: 0.0
 
@@ -177,7 +177,7 @@ robot:
   #   * robot_camera.ground_plane.front_cam.height_m is the lens height
   #     above the TAG-TOP plane (that is what the tag-pair fit measures and
   #     what pose_z reports), so the lens is height_m + tag_thickness above
-  #     the floor: make_front_cam_extrinsics.py writes T_mb2fc tz as that
+  #     the floor: tf_chain_tool.py front-cam writes T_mb2fc tz as that
   #     sum and path_tag_locator's loader checks it.
   #   * a floor tag located through the front_cam chain therefore lands at
   #     z = +tag_thickness in the mb frame, not 0.
@@ -997,9 +997,9 @@ robot_camera:
   # 1 mm thick (robot.tag_thickness) the lens is height_m + 0.001 above
   # the floor / mb origin; nothing in navigation needs that sum (pose_z and
   # the z / fx pixel scale are lens-to-tag-plane), only T_mb2fc's tz does.
-  # ⚠️ These four numbers are ALSO baked into path_tag_locator/config/
-  # extrinsics.yaml T_mb2fc (the physical, tilted camera; tz = height_m +
-  # robot.tag_thickness) by scripts/make_front_cam_extrinsics.py --apply.
+  # ⚠️ These four numbers are ALSO baked into config/tf/tf_chain.yaml
+  # T_mb2fc (the physical, tilted camera; tz = height_m +
+  # robot.tag_thickness) by tools/tf_chain_tool.py front-cam --apply.
   # Re-run it after any edit here — the locator's loader refuses a matrix
   # that no longer matches (0.01 deg / 1e-6 m) rather than apply the tilt
   # twice.
@@ -1080,55 +1080,19 @@ vision_stop:
   stop_tag_ids: []          # PLACEHOLDER -- e.g. [42]. Empty = feature inert.
   center_tolerance_px: 40.0 # max pixel distance from image center to count as "centered"
 
-# 4-DOF physical mounting model — validated against 328 paired joint/pose
-# rows (mean residual 12 mm, max 27 mm). See CLAUDE.md "Transform Parameters".
-# These are the source of truth; controllers may still override via ROS
-# private params if needed.
+# Arm mount / vision tip: NOT here any more (2026-09-21). Every fixed
+# transform lives in config/tf/tf_chain.yaml (apriltag_nav.tf_chain):
+#   T_ab2mb  — the arm mount, CALIBRATED 2026-09-21 by chain_calib (design
+#              Rz(180) / (0, -0.100, 0.652)); arm_transform derives the
+#              old six numbers (offsets, mount_yaw, tilt_x/y) from it
+#              (`tools/tf_chain_tool.py show` prints them)
+#   T_ee2tip — the Basler vision tip, MEASURED 2026-09-21 (design
+#              (0, -253, 225.2) mm); arm_controller's tip -> flange
+#              conversion and tools/set_tool_tcp.py read it
+# The ~arm_body_offset_* / ~arm_base_z / ~arm_mount_yaw / ~arm_tilt_* private
+# ROS params still override for a debug session. What stays here is how a
+# CSV row is READ — a per-generator convention, not a transform.
 arm_calibration:
-  # ⚠️ CALIBRATED 2026-09-21 — this block is now the INVERSE of
-  # path_tag_locator/config/extrinsics.yaml T_ab2mb (chain_calib, A0 tag
-  # sheet, 63 views): the same chain the locator uses, so a tag located
-  # through front_cam/hand_cam and a pose-mode target sent to the arm agree
-  # (user, 2026-09-21: the corrected chain is for end-effector pose control
-  # too). Mapping: T_mb2ab = inv(T_ab2mb) = [Rz(mount_yaw) Ry(tilt_y)
-  # Rx(tilt_x) | (offset_x, offset_y, base_z)] in the body frame (x forward,
-  # y left, z up). check_pose_vs_joint.py asserts the two files agree, and
-  # that the planner URDF's mobile_to_base is the same transform seen from
-  # its 180-deg-yawed mobile_base frame. Change all three together.
-  #
-  # DESIGN values, for reference: offset (0, -0.100, 0.652), mount_yaw pi
-  # exactly, tilts 0 (the 100 mm is the 2026-08-13 arm relocation toward the
-  # wall). The calibration moved the arm base (-13.0, -20.3, -23.0) mm and
-  # yawed it +1.43 deg; roll/pitch 0.34 / 0.78 deg are the chassis attitude
-  # at that parking + the paper's slope as much as the mount (+-1 deg,
-  # record src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md §5-3) and were
-  # kept for CONSISTENCY with the locator chain, not as a mount measurement.
-  # ⚠️ Every pose-mode target moved ~35 mm at 1 m reach with this; the
-  # planner's joint paths (rrt_final_path_*) were planned with the DESIGN
-  # mount and now land that far from their pose twins until regenerated with
-  # the updated URDF. arm_node restart required.
-  #
-  # ⚠️ arm_base_z is the height WITH THE LIFT AT ITS ORIGIN. The lift adds up
-  # to 343 mm on top of it and pose-mode IK adds the live /lifter/height
-  # (transform_world_to_arm lift_m, 2026-09-11).
-  #
-  # ⚠️ Ignore any arm_base_z from before 2026-08-13: the mobile base was
-  # REPLACED that day, so older figures describe different hardware and are
-  # not discrepancies to reconcile.
-  arm_body_offset_x: -0.013008  # arm mount in body frame X (m)  [design 0.0]
-  # Moved 100 mm toward the wall (body -Y, the side_cam side) on 2026-08-13 to
-  # cancel the 100 mm the wider 0.70 m body pushes the robot centre away from
-  # the wall. Net absolute arm position is unchanged — that is the whole point.
-  # Read by arm_transform.py into p_A_W, so POSE mode follows it automatically.
-  # ⚠️ JOINT mode does not: those CSVs are absolute arm configurations and no
-  # transform touches them, so they are only still valid if the robot's stop
-  # position really does move the matching 100 mm.
-  arm_body_offset_y: -0.120318  # arm mount in body frame Y (m)  [design -0.100]
-  arm_base_z:        0.629002  # arm base height above the mb origin (m), lift at origin  [design 0.652]
-  arm_mount_yaw:     3.166578737  # rad = 181.432 deg  [design pi]
-  arm_tilt_x:        0.005926625  # rad = 0.340 deg  [design 0; see the header — parking-dependent]
-  arm_tilt_y:        0.013580283  # rad = 0.778 deg  [design 0; see the header — parking-dependent]
-
   # ---- how a POSE-mode CSV row is read (2026-09-14) ----
   # csv_euler: scipy from_euler spec applied to the columns [rx, ry, rz].
   #   "ZYX" (intrinsic, R = Rz(rx)·Ry(ry)·Rx(rz)) is what the 2026-09 RRT
@@ -1139,35 +1103,6 @@ arm_calibration:
   #   "the code is right" note was true for THOSE files only. Per-generator,
   #   so it is a key and not a constant.
   csv_euler: "ZYX"
-  # The CSV x y z are the VISION TIP: flange + this offset in the flange frame
-  # (mm), the same numbers tools/set_tool_tcp.py writes as tool 1 and the
-  # planner URDF's vision_tip_joint (frcobot_description/urdf/
-  # fr10v6_mobile_vision_0317_test.urdf, the one in use per the user). The
-  # planner's FK confirms it (0.000 m). ⚠️ The controller's ACTIVE tool frame
-  # is what GetInverseKin / GetActualTCPPose use, and on 2026-09-14 that was
-  # the FLANGE (offset 0 — /arm/state at home = the URDF flange position to
-  # 0.0 mm), so a tip target sent as-is put the flange there: 338.7 mm off.
-  # ArmController reads GetTCPOffset at start and converts tip -> flange for
-  # IK when the active offset is zero; leaves the target alone when the
-  # active tool IS the tip; refuses pose mode for anything else.
-  #
-  # MEASURED 2026-09-21 (chain_calib basler_tip_calib, A4 20 mm tag sheet,
-  # 5 hand / 10 Basler samples, session log/chain_calib/basler_tip_20260921):
-  # the sheet point the Basler's frame centre looks at with the case at the
-  # 16.5 mm Keyence standoff, in the flange frame — (-1.8, -245.6, 209.6) mm,
-  # image roll -179.1 deg about flange z (not part of the TCP: the tip frame
-  # keeps the flange orientation). Design was (0, -253.0, 225.2); the z is the
-  # 09-18 case shortening, the y a real 7 mm. Uncertainty +/-1.5 / 3 / 2 mm
-  # (the arm's ~1 deg spin-dependent orientation at this 246 mm lever, NOT the
-  # jackknife). Verified executed the same day: the measured tip lands 2.6 mm
-  # from tag 215's centre, the design tip 7.5 mm, both ending at the same
-  # flange z. Applied on the user's instruction together with
-  # tools/set_tool_tcp.py and the planner URDF's vision_tip_joint.
-  # ⚠️ The RRT CSVs in task/csv were exported with the DESIGN tip: until the
-  # planner re-exports them from the updated URDF, pose mode converts their
-  # tip coordinates with THIS offset and its flange target sits ~17 mm from
-  # where the paired joint row puts the flange. Run scan_joint_* until then.
-  vision_tip_offset_mm: [-1.8, -245.6, 209.6]
 
 # Arm home joint angles in radians. This matches the hardcoded value used
 # across every controller (arm_controller.py, tools/arm_controller_sdk.py)

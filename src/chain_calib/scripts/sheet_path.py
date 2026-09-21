@@ -98,7 +98,7 @@ def main():
     ap.add_argument("--dwell", type=float, default=3.0, help="seconds to rest at each point before measuring (default 3)")
     ap.add_argument("--spin", type=float, default=None, help="camera spin about its axis vs the sheet (deg; default: keep the current)")
     ap.add_argument("--fit", choices=["none", "hand", "base", "joint"], default="none",
-                    help="chain to use: none = extrinsics.yaml as applied (default), or a fit of <dir>/corrections.npz")
+                    help="chain to use: none = tf_chain.yaml as applied (default), or a fit of <dir>/corrections.npz")
     ap.add_argument("--corrections", default=None)
     ap.add_argument("--front-rotation", choices=["level", "measured"], default="level")
     ap.add_argument("--frames", type=int, default=20)

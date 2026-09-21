@@ -5,18 +5,17 @@ set_tool_tcp.py
 ===============
 Set Fairino robot TCP (Tool Center Point) to vision_tip position.
 
-Offset MEASURED 2026-09-21 (chain_calib basler_tip_calib on the A4 20 mm
-tag sheet; robot.yaml arm_calibration.vision_tip_offset_mm and the planner
-URDF's vision_tip_joint carry the same numbers — the three move together):
-    flange (tool_Link) → vision      : xyz = 0, 0, 0         (no offset)
-    vision             → vision_tip  : xyz = -0.0018, -0.2456, 0.2096  (m)
+The offset is READ from apriltag_nav/config/tf/tf_chain.yaml `T_ee2tip`
+(MEASURED 2026-09-21 by chain_calib basler_tip_calib on the A4 20 mm tag
+sheet: (-1.8, -245.6, 209.6) mm; design (0, -253.0, 225.2) from
+fr10v6_visionDF_addtip.urdf). The same file feeds arm_controller's
+tip -> flange conversion, and the planner URDF's vision_tip_joint must
+carry the same numbers (tools/check_pose_vs_joint.py asserts it) — so
+there is nothing to edit here after a re-measurement: `tf_chain_tool.py
+set T_ee2tip ...`, then run this script to push tool 1 to the controller.
 
-    Total from flange to vision_tip:
-        x =  -1.8   mm
-        y = -245.6   mm
-        z =  209.6   mm
-        rx = ry = rz = 0°
-    (design, until 2026-09-21: 0, -253.0, 225.2 — from fr10v6_visionDF_addtip.urdf)
+    flange (tool_Link) -> vision      : xyz = 0, 0, 0   (no offset)
+    vision             -> vision_tip  : xyz = T_ee2tip t (m), rpy 0
 
 Usage:
     python3 set_tool_tcp.py [--tool_id 1] [--robot_ip 192.168.58.2] [--dry_run]
@@ -35,14 +34,14 @@ sys.path.append(BASE_DIR + '/../../fairino_sdk/fairino-python-sdk/Linux')
 from fairino import Robot
 
 # ---------------------------------------------------------------
-# TCP offset: flange → vision_tip  (unit: mm, degrees)
+# TCP offset: flange -> vision_tip  (unit: mm, degrees) — from tf_chain.yaml
 # ---------------------------------------------------------------
-VISION_TIP_X  =   -1.8    # mm   (measured 2026-09-21)
-VISION_TIP_Y  = -245.6    # mm   (-0.2456 m)
-VISION_TIP_Z  =  209.6    # mm   (0.2096 m)
-VISION_TIP_RX =    0.0    # deg
-VISION_TIP_RY =    0.0    # deg
-VISION_TIP_RZ =    0.0    # deg
+sys.path.insert(0, BASE_DIR + '/../src')
+from apriltag_nav.tf_chain import tip_offset_mm, rpy_deg_xyz, load_transform, TF_CHAIN_PATH
+
+_T_ee2tip = load_transform('T_ee2tip')
+VISION_TIP_X, VISION_TIP_Y, VISION_TIP_Z = [float(v) for v in tip_offset_mm()]
+VISION_TIP_RX, VISION_TIP_RY, VISION_TIP_RZ = rpy_deg_xyz(_T_ee2tip)   # 0, 0, 0: the tip keeps the flange orientation
 
 TCP_COORD = [VISION_TIP_X, VISION_TIP_Y, VISION_TIP_Z,
              VISION_TIP_RX, VISION_TIP_RY, VISION_TIP_RZ]
@@ -61,7 +60,7 @@ def main():
     args = parser.parse_args()
 
     print('='*55)
-    print('vision_tip TCP offset (from flange):')
+    print('vision_tip TCP offset (from flange), %s T_ee2tip:' % TF_CHAIN_PATH)
     print(f'  x  = {VISION_TIP_X:>8.2f} mm')
     print(f'  y  = {VISION_TIP_Y:>8.2f} mm')
     print(f'  z  = {VISION_TIP_Z:>8.2f} mm')

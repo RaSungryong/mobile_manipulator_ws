@@ -10,7 +10,7 @@ ROS master, no robot::
 
 What it guards
 --------------
-`arm_calibration.arm_base_z` is measured with the lift AT ORIGIN and the
+tf_chain.yaml `T_ab2mb` is measured with the lift AT ORIGIN and the
 lift adds up to ~343 mm on top. Before this change
 `transform_world_to_arm` used the constant, so a pose-mode scan run with
 the lift raised put the TCP exactly that far ABOVE its world target — a
@@ -81,13 +81,14 @@ def g(x, y, z, rx=1.5708, ry=-0.05, rz=3.1416):
 
 # The real robot.yaml value, so the check fails if the config drifts from
 # the assumption this test is written against.
-from apriltag_nav.paths import load_yaml_block
-CAL = load_yaml_block('arm_calibration')
-BASE_Z = float(CAL.get('arm_base_z', 0.652))
+from apriltag_nav import tf_chain
+# the six numbers arm_transform derives from tf_chain.yaml T_ab2mb (2026-09-21)
+CAL = tf_chain.arm_calibration_from_T_ab2mb(tf_chain.load_transform('T_ab2mb'))
+BASE_Z = float(CAL['arm_base_z'])
 STROKE_MM = 343.35          # soft_max_counts 6900 x mm_per_count 0.04976077
 
 print(__doc__.strip().splitlines()[0])
-print(f"\narm_base_z = {BASE_Z} m (from robot.yaml), full stroke ~{STROKE_MM:.1f} mm")
+print(f"\narm_base_z = {BASE_Z:.6f} m (from tf_chain.yaml T_ab2mb), full stroke ~{STROKE_MM:.1f} mm")
 
 MSGS = [Msg(0.0, 0.0, 0.0), Msg(-1.71, 0.15, 90.0),
         Msg(1.71, -0.15, -90.0), Msg(2.18, -0.65, 90.0)]
@@ -104,8 +105,8 @@ for m in MSGS:
 check("default argument == explicit 0.0", worst == 0.0, f"max diff {worst:g}")
 
 print("\n== the lift moves the target by exactly -h along the WORLD vertical (arm frame) ==")
-# Since 2026-09-21 the mount carries a small calibrated tilt (robot.yaml
-# arm_tilt_x/y), so the lift — vertical in the WORLD — is no longer purely
+# Since 2026-09-21 the mount carries a small calibrated tilt (tf_chain.yaml
+# T_ab2mb), so the lift — vertical in the WORLD — is no longer purely
 # along arm z: it leaks h*sin(tilt) into arm x/y (0.78 deg x 343 mm ~ 5 mm),
 # which is physically right. The test is therefore against the full model:
 #   p_arm(h) - p_arm(0) == -R_AW . (0, 0, h)         (exact)

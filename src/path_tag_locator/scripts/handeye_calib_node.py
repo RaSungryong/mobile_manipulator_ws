@@ -50,6 +50,7 @@ T_cam2target re-detections over archived images, and samples must stay
 reloadable from disk across runs.
 """
 import os
+import time
 import re
 import sys
 from pathlib import Path
@@ -124,7 +125,7 @@ class HandeyeCalibNode:
         self.auto_detections_topic = str(auto.pop("detections_topic", "/hand_cam/tag_detections"))
         self.auto_detector_size_m = float(auto.pop("detector_tag_size_m", self.tag_size_m))
         self.auto_hand_eye_npz = _resolve_ros_path(
-            auto.pop("hand_eye_npz", "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"))
+            auto.pop("hand_eye_npz", "$(find apriltag_nav)/config/tf/T_hc2ee.npz"))
         self.auto_move_vel = float(auto.pop("move_vel", 15.0))
         self.auto_move_acc = float(auto.pop("move_acc", 20.0))
         self.auto_settle_s = float(auto.pop("settle_s", 0.5))
@@ -377,6 +378,7 @@ class HandeyeCalibNode:
             )
             path = save_result(result, self.output_path)
             self.last_result = result
+            self._record_in_tf_chain(result, path)
             try:
                 run_dir = self.recorder.save_result(
                     result, self.tag_id, self.tag_size_m, self.tag_family)
@@ -390,6 +392,29 @@ class HandeyeCalibNode:
         except Exception as e:
             rospy.logwarn("handeye_calib.compute: %s", e)
             return TriggerResponse(success=False, message=str(e))
+
+    def _record_in_tf_chain(self, result, npz_path):
+        """The npz is the twin of tf_chain.yaml's T_hc2ee block (apriltag_nav/
+        config/tf, the source of truth since 2026-09-21): when compute wrote
+        THAT npz, rewrite the yaml block too — source line, t_mm / rpy and the
+        matrix — so the two cannot disagree. A custom output_path only gets
+        the npz, and says so."""
+        try:
+            from apriltag_nav import tf_chain
+            canonical = os.path.realpath(tf_chain.npz_path("T_hc2ee"))
+            if os.path.realpath(str(npz_path)) != canonical:
+                rospy.logwarn("handeye_calib: output_path %s is not %s — tf_chain.yaml "
+                              "NOT updated; `tf_chain_tool.py set T_hc2ee --npz %s` to apply it",
+                              npz_path, canonical, npz_path)
+                return
+            src = ("hand-eye %s: %s, %d/%d samples, residual %.4f, tag scatter %.1f mm rms / %.1f max"
+                   % (time.strftime("%Y-%m-%d %H:%M"), result.method,
+                      result.num_samples_used, result.num_samples_total, result.residual,
+                      result.scatter_rms_m * 1e3, result.scatter_max_m * 1e3))
+            written = tf_chain.write_transform("T_hc2ee", result.T_hc2ee, src, write_npz=False)
+            rospy.loginfo("handeye_calib: tf_chain.yaml T_hc2ee updated (%s)", written[0])
+        except Exception as e:                                   # noqa: BLE001
+            rospy.logwarn("handeye_calib: tf_chain.yaml not updated: %s", e)
 
     def _on_reset(self, _req):
         if self._sweep_running():

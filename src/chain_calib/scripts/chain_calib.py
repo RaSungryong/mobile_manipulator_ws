@@ -64,14 +64,29 @@ def _ptl_cfg_dir():
     return PTL_CFG
 
 
+def _find_pkg(pkg):
+    """Source-tree sibling of this package first (the devel-space import lands
+    in devel/lib, which holds no config), else rospkg."""
+    cand = os.path.normpath(os.path.join(_HERE, "..", "..", pkg))
+    if os.path.isdir(cand):
+        return cand
+    import rospkg
+    return rospkg.RosPack().get_path(pkg)
+
+
 def _resolve(p):
     """locator.yaml paths use roslaunch's $(find pkg); resolve without a master."""
-    return re.sub(r"\$\(find path_tag_locator\)", os.path.normpath(os.path.join(_ptl_cfg_dir(), "..")), str(p))
+    return re.sub(r"\$\(find ([A-Za-z0-9_]+)\)", lambda m: _find_pkg(m.group(1)), str(p))
+
+
+def _tf_dir():
+    """apriltag_nav/config/tf — every fixed transform (2026-09-21)."""
+    return os.path.join(_find_pkg("apriltag_nav"), "config", "tf")
 
 
 def platform(hand_eye=None):
     cfg = load_locator_cfg(os.path.join(_ptl_cfg_dir(), "locator.yaml"))
-    ext = load_extrinsics_full(os.path.join(_ptl_cfg_dir(), "extrinsics.yaml"),
+    ext = load_extrinsics_full(_resolve(cfg.extrinsics_yaml),
                                front_cam_frame=getattr(cfg.detector, "front_cam_frame", "auto"))
     H = load_T_hc2ee(_resolve(hand_eye or cfg.hand_eye_npz))
     return cfg, ext, H
@@ -472,9 +487,10 @@ def cmd_solve(args):
             print("  " + CC.describe_T(Tc, "corrected T_ab2mb") + "   (current: %s)" % CC.describe_T(ext.T_ab2mb, "")[2:])
     if args.write_hand_eye:
         k = args.write_hand_eye
-        out = os.path.join(_ptl_cfg_dir(), "hand_eye", "T_hc2ee_chain_%s.npz" % time.strftime("%Y%m%d_%H%M%S"))
+        out = os.path.join(_tf_dir(), "T_hc2ee_chain_%s.npz" % time.strftime("%Y%m%d_%H%M%S"))
         np.savez(out, CC.corrected_hand_eye(H, res[k].D))
-        print("\nwrote %s (from the '%s' fit) — point locator.yaml hand_eye.npz_path at it to use it" % (out, k))
+        print("\nwrote %s (from the '%s' fit) — apply with `tf_chain_tool.py set T_hc2ee --npz %s --source ...`"
+              % (out, k, out))
     np.savez(os.path.join(args.dir, "corrections.npz"),
              D_hand=res['hand'].D, F_base=res['base'].F, D_joint=res['joint'].D, F_joint=res['joint'].F,
              sheet_sx=sheet.sx, sheet_sy=sheet.sy, sheet_tag_size_m=sheet.tag_size_m,
@@ -512,7 +528,7 @@ def main():
     p.add_argument("--pairs", choices=["hand", "base", "joint"], default=None,
                    help="also list every (hand_cam tag -> front_cam tag) pair's error, raw vs this fit")
     p.add_argument("--write-hand-eye", choices=["hand", "joint"], default=None,
-                   help="write path_tag_locator/config/hand_eye/T_hc2ee_chain_<date>.npz from this fit's D")
+                   help="write apriltag_nav/config/tf/T_hc2ee_chain_<date>.npz from this fit's D (not applied)")
     p.set_defaults(fn=cmd_solve)
     a = ap.parse_args()
     a.fn(a)

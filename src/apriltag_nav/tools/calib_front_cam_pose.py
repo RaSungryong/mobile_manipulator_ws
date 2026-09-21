@@ -45,7 +45,7 @@ Preconditions
     15 / 16 of 2026-09-08 is gone); measure the spacing as
     (outer extent + inner gap) / 2 so the printed size drops out, and pass
     it to `solve --spacing`. The fit's lens height is above the TAG-TOP
-    plane; extrinsics.yaml's tz adds robot.yaml robot.tag_thickness (1 mm).
+    plane; tf_chain.yaml T_mb2fc's tz adds robot.yaml robot.tag_thickness (1 mm).
   * frame room: the body / front bumper hides the LEFT THIRD of the
     image (`--left-edge-px`, 430), and 90 mm tags fill ~225 px each at
     0.30 m, so with 0.12 m of centre spacing the pair spans 0.21 m of the
@@ -69,7 +69,7 @@ Commands
                       Asks before the first motion.
   solve DIR           fit + rotation centre + yaw; prints the robot.yaml
                       numbers; --apply writes them and regenerates
-                      extrinsics.yaml T_mb2fc. --spacing is REQUIRED.
+                      config/tf/tf_chain.yaml T_mb2fc. --spacing is REQUIRED.
 
     rosrun apriltag_nav calib_front_cam_pose.py check
     rosrun apriltag_nav calib_front_cam_pose.py collect log/apriltag_nav/calib_pair_<date>
@@ -1075,10 +1075,10 @@ def apply_to_robot_yaml(r, yaw_deg, path=CONFIG_PATH):
     print("\nrobot.yaml written: camera_offset %.3f camera_lateral %.3f roll %.3f pitch %.3f height %.3f yaw %.3f"
           % (cfg['robot']['camera_offset'], cfg['robot']['camera_lateral'],
              gp['roll_deg'], gp['pitch_deg'], gp['height_m'], gp['yaw_deg']))
-    gen = os.path.join(WS_DIR, 'src', 'path_tag_locator', 'scripts', 'make_front_cam_extrinsics.py')
-    subprocess.check_call([sys.executable, gen, '--apply'])
+    gen = os.path.join(WS_DIR, 'src', 'apriltag_nav', 'tools', 'tf_chain_tool.py')
+    subprocess.check_call([sys.executable, gen, 'front-cam', '--apply'])
     print("\nNext: set ground_plane.front_cam.enabled back to true, restart robot_camera_node, "
-          "mobile_node (camera_offset) and the calibration nodes (extrinsics). T_mb2fc tz = height_m + "
+          "mobile_node (camera_offset) and the calibration nodes (tf_chain.yaml T_mb2fc). T_mb2fc tz = height_m + "
           "robot.tag_thickness (%.3f)." % float(cfg['robot'].get('tag_thickness', 0.0)))
 
 

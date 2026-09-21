@@ -997,7 +997,7 @@ class LiftCalibWindow(QWidget):
             L.append('  arm_calibration:')
             L.append('    arm_base_z: %.4f    # only if the measured value is '
                      'the arm base height' % (b / 1000.0))
-            L.append('  # and path_tag_locator/config/extrinsics.yaml T_ab2mb '
+            L.append('  # and apriltag_nav/config/tf/tf_chain.yaml T_ab2mb '
                      'tz must become %.4f' % (-b / 1000.0))
         L.append('# lifter_node.py STROKE_MM = %.1f (STROKE_COUNTS %d)'
                  % (a * self.soft_max, self.soft_max))

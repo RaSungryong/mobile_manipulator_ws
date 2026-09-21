@@ -38,7 +38,7 @@ path_tag_locator:
     # on-robot-verified navigation behaviour are untouched.
     front_cam_repose_from_corners: true
     # Which frame those detections are in, i.e. which T_mb2fc the chain
-    # uses (2026-09-15: extrinsics.yaml stores the PHYSICAL, 1.3 deg
+    # uses (2026-09-15: tf_chain.yaml stores the PHYSICAL, 1.3 deg
     # tilted camera; the level virtual camera is derived from it):
     #   auto     -> robot.yaml ground_plane.front_cam.enabled ? level : physical
     #   level    -> force T_mb2fc_level (detections are corrected)
@@ -59,9 +59,12 @@ path_tag_locator:
     home_before_nav:  true
 
   hand_eye:
-    npz_path:         "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    # apriltag_nav/config/tf holds every fixed transform (2026-09-21);
+    # T_hc2ee.npz is the npz twin of tf_chain.yaml's T_hc2ee block.
+    npz_path:         "$(find apriltag_nav)/config/tf/T_hc2ee.npz"
 
-  extrinsics_yaml:    "$(find path_tag_locator)/config/extrinsics.yaml"
+  # T_ab2mb + T_mb2fc are read from the same tf_chain.yaml
+  extrinsics_yaml:    "$(find apriltag_nav)/config/tf/tf_chain.yaml"
   reference_tag_yaml: "$(find path_tag_locator)/config/reference_tag.yaml"
 
   io:

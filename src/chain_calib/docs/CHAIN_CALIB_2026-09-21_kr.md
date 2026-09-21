@@ -2,9 +2,9 @@
 
 인쇄된 A0 AprilTag 시트(태그 200 + 300–309)를 참값으로 삼아 `T_hc2fc` 체인 —
 hand_cam → 플랜지(hand-eye) → arm base → mobile base → front_cam — 의 고정
-행렬 오차를 측정하고, base 쪽 보정을 `path_tag_locator/config/extrinsics.yaml`의
-`T_ab2mb`에 반영한 기록이다. **이 값이 현재 로봇에 적용된 값이다.** 절차·해석은
-[README.md](../README.md), 체인 전체 값은 [TF_CHAIN_2026-09-21.yaml](TF_CHAIN_2026-09-21.yaml),
+행렬 오차를 측정하고, base 쪽 보정을 `T_ab2mb`에 반영한 기록이다(2026-09-21 저녁부터
+모든 고정 변환은 `apriltag_nav/config/tf/tf_chain.yaml`에 있다). **이 값이 현재 로봇에 적용된 값이다.** 절차·해석은
+[README.md](../README.md), 체인 전체 값과 출처는 `apriltag_nav/config/tf/tf_chain.yaml`의 주석,
 원 데이터는 `log/chain_calib/20260921/`.
 
 | 항목 | 값 |
@@ -61,7 +61,7 @@ ground-plane 보정 코너(D 없음, `T_mb2fc_level`). 코너 순서 규약(corn
 4. `capture` × 64 (수동 조그): 4장 이상 보이는 자세만, 네 방향 기울임 + 스핀
    60~150°. **같은 자세 반복이 많았다** — 64개 중 서로 다른 기하는 20개(§5-4).
 5. `solve --holdout-every 4`로 진단, 마지막에 홀드아웃 없이 63개 전부로 최종값.
-6. `extrinsics.yaml` 반영, `check_front_cam_extrinsics` 24 / `check_chain_calib`
+6. `T_ab2mb` 반영(당시 `extrinsics.yaml`, 지금은 `tf_chain.yaml`), `check_front_cam_extrinsics` 24 / `check_chain_calib`
    37 / repose 10 통과.
 
 ## 3. 풀이 결과 (63뷰, 설계 마운트 기준, front_cam 회전 = 수평 prior)
@@ -262,7 +262,7 @@ rms·jackknife·홀드아웃이 말한다. PnP rms 0.6–0.7 px는 이 셋업의
 
 ## 6. 적용된 것 / 아닌 것
 
-- **적용:** `extrinsics.yaml T_ab2mb` (위 값). 소비자: `path_tag_locator_node`,
+- **적용:** `T_ab2mb` (위 값; 지금은 `apriltag_nav/config/tf/tf_chain.yaml`). 소비자: `path_tag_locator_node`,
   `map_calibrator_node`, hand-eye 절대 점검, `robot_sim`, 플랜 생성기(시드는
   재생성 안 함 — align 루프가 흡수). **캘리브레이션 노드는 다음 시작 때 읽는다.**
   `check_front_cam_extrinsics.py`는 정규직교·설계 근방(3° / 50 mm)을 검사.

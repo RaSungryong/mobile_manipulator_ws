@@ -22,17 +22,16 @@ T_B_world = T_A_world · T_A2B
 |------|------|
 | `config/locator.yaml` | 토픽/태그ID/로봇IP/align 파라미터 |
 | `config/reference_tag.yaml` | `T_A_world` (기준 태그 월드 좌표) |
-| `config/extrinsics.yaml` | `T_ab2mb`, `T_mb2fc` (플랫폼 기하) |
-| `config/hand_eye/T_hc2ee.npz` | 손-눈 보정 결과 (mm 아닌 **m 단위**) |
+| `apriltag_nav/config/tf/tf_chain.yaml` | `T_ab2mb`, `T_mb2fc`, `T_hc2ee`, `T_ee2tip` — 모든 고정 변환 (2026-09-21), **m 단위** |
+| `apriltag_nav/config/tf/T_hc2ee.npz` | 손-눈 보정 결과의 npz 쌍둥이 (yaml 블록과 함께 갱신됨) |
 | `scripts/path_tag_locator_node.py` | locate 노드 |
 | `scripts/handeye_calib_node.py` | 손-눈 보정 노드 |
-| `scripts/save_npz.py` | **placeholder** T_hc2ee 작성 (실보정 아님) |
+| `apriltag_nav/tools/tf_chain_tool.py` | 변환 보기/검사/기록 (`show` / `check` / `set`) |
 | `src/path_tag_locator/tcp_pose.py` | Fairino SDK 래퍼 (IK/MoveJ) |
 
 ### 노드는 시작 시 1회 캐시
 
-- `T_hc2ee.npz`
-- `extrinsics.yaml` 의 `T_ab2mb`, `T_mb2fc`
+- `tf_chain.yaml` 의 `T_hc2ee`(npz), `T_ab2mb`, `T_mb2fc`
 - `reference_tag.yaml` 의 `T_A_world`
 - `locator.yaml` 의 `align.*` 파라미터
 
@@ -52,7 +51,7 @@ T_B_world = T_A_world · T_A2B
 # 디스크의 T_hc2ee 값을 확인
 python3 -c "
 import numpy as np
-T = np.load('src/path_tag_locator/config/hand_eye/T_hc2ee.npz')['arr_0']
+T = np.load('src/apriltag_nav/config/tf/T_hc2ee.npz')['arr_0']
 print(T)
 print('||t|| =', np.linalg.norm(T[:3,3]), 'm')
 "
@@ -68,7 +67,7 @@ print('used in last run:', T[:3,3], '||t||=', np.linalg.norm(T[:3,3]))
 
 #### 원인
 
-- 디스크 파일과 **노드 캐시가 다름**. 노드 기동 후에 누가 `save_npz.py` 또는 `/handeye_calib/compute`로 npz를 갱신해도 노드는 모름.
+- 디스크 파일과 **노드 캐시가 다름**. 노드 기동 후에 누가 `tf_chain_tool.py set` 또는 `/handeye_calib/compute`로 값을 갱신해도 노드는 모름.
 
 #### 처방
 
@@ -249,7 +248,7 @@ rosservice call /handeye_calib/compute "{}"
 # 디스크의 T_hc2ee
 python3 -c "
 import numpy as np
-T = np.load('src/path_tag_locator/config/hand_eye/T_hc2ee.npz')['arr_0']
+T = np.load('src/apriltag_nav/config/tf/T_hc2ee.npz')['arr_0']
 print('disk T_hc2ee t (m):', T[:3,3])
 "
 
@@ -271,13 +270,13 @@ if runs:
 ```bash
 python3 -c "
 import numpy as np
-T = np.load('src/path_tag_locator/config/hand_eye/T_hc2ee.npz')['arr_0']
+T = np.load('src/apriltag_nav/config/tf/T_hc2ee.npz')['arr_0']
 R = T[:3,:3]
 # placeholder: R = 정확히 diag(-1,-1,1), off-diagonal=0
 off = abs(R[0,1]) + abs(R[0,2]) + abs(R[1,0]) + abs(R[1,2]) + abs(R[2,0]) + abs(R[2,1])
 print('off-diagonal magnitude:', off)
 if off < 1e-9:
-    print('⚠ PLACEHOLDER (save_npz.py 결과)')
+    print('⚠ 설계/공칭값 (실보정 아님)')
 else:
     print('실제 보정값')
 "
@@ -323,13 +322,11 @@ rosservice info /path_tag_locator/locate_path_tag
 
 ## 3. 알려진 함정
 
-### 3.1 `save_npz.py`는 보정 결과가 아니다
+### 3.1 값의 출처는 `tf_chain.yaml`의 `source` 줄로 확인한다
 
-오타 그대로 둔 파일. 하드코딩된 4x4를 npz로 저장. `T_hc2ee = diag(-1,-1,1) + 작은 t`인데 우연히 실제 보정값과 비슷할 수 있어 헷갈리기 쉬움.
-
-```bash
-# 파일에 --force 가드 있으므로 실수로 덮어쓰진 않음. 그래도 의도치 않게 실행하지 말 것.
-```
+`tf_chain_tool.py show`가 변환마다 source(측정 세션·방법)와 설계값 대비 차이를
+찍는다. `set`으로 넣은 값은 `--source`가 그대로 기록되므로, 공칭값을 넣었다면
+거기에 그렇게 써 있다.
 
 ### 3.2 단위 함정
 
@@ -337,8 +334,7 @@ rosservice info /path_tag_locator/locate_path_tag
 |----|------|
 | Fairino TCP pose | **mm, deg** (ZYX intrinsic) |
 | 체인 내부 모든 행렬 | **m, rad** |
-| `T_hc2ee.npz` 의 t | **m** |
-| `extrinsics.yaml` 의 t | **m** |
+| `tf_chain.yaml` / npz 의 t | **m** (`t_mm` 읽기용 키만 mm) |
 | `reference_tag.yaml` `position_m` | **m** |
 | 서비스 응답 `position_m` | **m** |
 | 서비스 응답 `rpy_deg` | **degrees (ZYX intrinsic)** |
@@ -358,7 +354,7 @@ rosservice info /path_tag_locator/locate_path_tag
 
 `rospy.get_param("~", {})` 으로 1회 읽음. `$MM_WS/log/...` 에 별도 저장된 yaml이나 디스크의 npz를 갱신해도 자동 반영 안 됨. **무조건 재시작**.
 
-### 3.6 `extrinsics.yaml` 규약
+### 3.6 `tf_chain.yaml` 규약
 
 `T_ab2mb` = "mb 의 ab 표현" = mb-coord → ab-coord 변환. 이전 주석은 반대로 해석되도록 쓰여 있었음(이미 수정). 다른 코드에서 같은 yaml을 다른 규약으로 읽으면 안 됨.
 
@@ -380,7 +376,7 @@ python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
 문제 발생 시 위에서 아래로:
 
 - [ ] **노드 재시작** 후에도 재현되는가? (안 되면 캐시 문제 — § 1.1)
-- [ ] `T_hc2ee.npz`가 placeholder인가? (§ 2.2)
+- [ ] `T_hc2ee`가 실보정값인가? (§ 2.2, `tf_chain_tool.py show`의 source 줄)
 - [ ] 보정 잔차 < 0.1 인가? (§ 1.6)
 - [ ] 초기 TCP가 reach 경계 (≥ 0.85 m) 안에 있는가? (§ 2.3)
 - [ ] `reference_tag.yaml` 이 identity가 아닌가? (§ 1.5)

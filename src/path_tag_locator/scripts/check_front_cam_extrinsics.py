@@ -2,16 +2,17 @@
 """
 check_front_cam_extrinsics.py
 =============================
-Offline check that extrinsics.yaml's T_mb2fc (the PHYSICAL, tilted front_cam
-since 2026-09-15) and robot.yaml's ground-plane fit agree, and that the
+Offline check that tf_chain.yaml's T_mb2fc (apriltag_nav/config/tf — the
+PHYSICAL, tilted front_cam since 2026-09-15) and robot.yaml's ground-plane
+fit agree, and that the
 chain lands a floor tag on its true world position whichever frame the
 detections come in — no robot, no cameras.
 
     python3 src/path_tag_locator/scripts/check_front_cam_extrinsics.py
 
 What is proven, in order:
-  1. the stored matrix is exactly what make_front_cam_extrinsics.py
-     produces from robot.yaml (camera_offset, roll/pitch/yaw, height_m);
+  1. the stored matrix is exactly what tf_chain.physical_T_mb2fc
+     (tf_chain_tool.py front-cam) produces from robot.yaml;
   2. load_extrinsics_full derives a level frame with rotation
      diag(1,-1,-1) and the same lens centre, follows ground_plane.enabled
      for "auto", honours the overrides, and REFUSES a hand-edited
@@ -62,10 +63,9 @@ from path_tag_locator.constants import (                               # noqa: E
 from path_tag_locator.detections import pose_from_corners, _CORNER_ORDER  # noqa: E402
 from path_tag_locator.geometry import invert_T                         # noqa: E402
 
-sys.path.insert(0, _HERE)
-from make_front_cam_extrinsics import physical_T_mb2fc               # noqa: E402
+from apriltag_nav.tf_chain import TF_CHAIN_PATH, physical_T_mb2fc    # noqa: E402
 
-EXTRINSICS = os.path.join(_PKG, "config", "extrinsics.yaml")
+EXTRINSICS = TF_CHAIN_PATH
 
 _n = [0]
 _bad = [0]
@@ -147,7 +147,7 @@ except ValueError:
 
 def _write_tmp(T):
     d = yaml.safe_load(open(EXTRINSICS))
-    d["T_mb2fc_row_major"] = [float(v) for v in T.ravel()]
+    d["T_mb2fc"]["matrix"] = [float(v) for v in T.ravel()]
     f = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
     yaml.safe_dump(d, f)
     f.close()

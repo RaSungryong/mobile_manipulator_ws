@@ -18,7 +18,7 @@ How the arm view TCP is computed (all design values, no robot needed):
   - robot stop pose: centre = tag − 0.55 m · heading  (map.yaml rule),
     heading from zone (B/D +90°, C/E −90°); mb origin on the FLOOR,
     i.e. z = −0.080 in the world frame (world z=0 = plate top).
-  - T_ab2mb from extrinsics.yaml, shifted by --lift-mm
+  - T_ab2mb from apriltag_nav/config/tf/tf_chain.yaml, shifted by --lift-mm
     (chain.compensate_T_ab2mb; default 0 = lift at origin — REGENERATE
     with the session height if map_calibrator.yaml lift_height_mm set).
   - T_hc2ee from the hand-eye npz.
@@ -293,9 +293,10 @@ def main():
     locator = yaml.safe_load(open(CFG / "locator.yaml"))["path_tag_locator"]
     view_m = (args.view_m if args.view_m is not None
               else float(locator["align"]["auto_view_distance_m"]))
-    T_ab2mb, _ = load_extrinsics(str(CFG / "extrinsics.yaml"))
+    from apriltag_nav.tf_chain import TF_CHAIN_PATH, npz_path as _tf_npz   # config/tf (2026-09-21)
+    T_ab2mb, _ = load_extrinsics(TF_CHAIN_PATH)
     T_ab2mb = compensate_T_ab2mb(T_ab2mb, args.lift_mm / 1000.0)
-    T_hc2ee = load_T_hc2ee(str(CFG / "hand_eye" / "T_hc2ee.npz"))
+    T_hc2ee = load_T_hc2ee(_tf_npz("T_hc2ee"))
 
     tags = yaml.safe_load(open(MAP))["tags"]
     refs = {1: load_refs(CFG / "reference_tags.yaml"),

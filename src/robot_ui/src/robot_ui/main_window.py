@@ -968,7 +968,7 @@ class MainWindow(QMainWindow):
             '(Arm tab). Auto-sample squares up on the tag and orbits it '
             '(tilts, spins, 3 distances) capturing at every view, then '
             'returns; or capture by hand pose by pose. Compute writes '
-            'config/hand_eye/T_hc2ee.npz — restart the calibration nodes '
+            'apriltag_nav/config/tf/T_hc2ee.npz + tf_chain.yaml — restart the calibration nodes '
             'afterwards and regenerate the plans.')
         he_note.setWordWrap(True)
         he_note.setStyleSheet('color:#888;')

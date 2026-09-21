@@ -28,16 +28,23 @@ _HERE = os.path.dirname(os.path.realpath(__file__))
 DESIGN_TIP = (0.0, -253.0, 225.2)
 
 
+def _find_pkg(pkg):
+    """Source-tree sibling of this package first (the devel-space import lands
+    in devel/lib, which holds no config), else rospkg."""
+    cand = os.path.normpath(os.path.join(_HERE, "..", "..", "..", pkg))
+    if os.path.isdir(cand):
+        return cand
+    import rospkg
+    return rospkg.RosPack().get_path(pkg)
+
+
 def _ptl_cfg_dir():
-    cand = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "path_tag_locator", "config"))
-    if not os.path.isdir(cand):
-        import rospkg
-        cand = os.path.join(rospkg.RosPack().get_path("path_tag_locator"), "config")
-    return cand
+    return os.path.join(_find_pkg("path_tag_locator"), "config")
 
 
 def _resolve(p):
-    return re.sub(r"\$\(find path_tag_locator\)", os.path.normpath(os.path.join(_ptl_cfg_dir(), "..")), str(p))
+    """locator.yaml paths use roslaunch's $(find pkg); resolve without a master."""
+    return re.sub(r"\$\(find ([A-Za-z0-9_]+)\)", lambda m: _find_pkg(m.group(1)), str(p))
 
 
 def default_sheet_json():
@@ -458,8 +465,8 @@ class BaslerTipSession:
             if res.jackknife_sd_mm is not None:
                 fh.write("jackknife_sd_mm: [%.2f, %.2f, %.2f]\n" % tuple(res.jackknife_sd_mm))
             fh.write("n_hand: %d\nn_basler: %d\nhand_eye_npz: %s\n" % (len(hand), len(bas), self.hand_eye_path))
-        lines.append("-> %s/result.yaml   (NOT applied: robot.yaml vision_tip_offset_mm, set_tool_tcp.py tool 1 and the "
-                     "planner URDF vision_tip_joint move together, on your decision)" % self.dir)
+        lines.append("-> %s/result.yaml   (NOT applied: `tf_chain_tool.py set T_ee2tip --t-mm ...` (pose mode + "
+                     "set_tool_tcp.py read it) and the planner URDF vision_tip_joint move together, on your decision)" % self.dir)
         extra = self.counts()
         extra.update(p_tip_mm=[float(v) for v in res.p_tip_mm], psi_deg=float(res.psi_deg), rms_mm=float(res.rms_mm),
                      max_mm=float(res.max_mm), sheet_scatter_mm=float(res.sheet_scatter_mm),

@@ -31,21 +31,20 @@ pip install dt_apriltags        # 누락 시
 
 ---
 
-## 1. Hand-eye 캘리브레이션 (`T_hc2ee.npz`, 로봇 1대당 1회)
+## 1. Hand-eye 캘리브레이션 (`T_hc2ee`, 로봇 1대당 1회)
 
-`config/hand_eye/T_hc2ee.npz` 를 만드는 두 가지 경로:
+`T_hc2ee`는 2026-09-21부터 **`apriltag_nav/config/tf/tf_chain.yaml`**(모든 고정 변환)
+과 그 쌍둥이 `T_hc2ee.npz`에 있다. 만드는 두 가지 경로:
 
-- **A. 정상 보정 세션**: `handeye_calib_node` 로 실제 캡처를 모아 `cv2.calibrateHandEye` 를 돌린다 (다음 절). 권장.
-- **B. 직접 입력**: 외부 (CAD, 데이터시트, 이전 보정값) 에서 측정한 값을 `config/hand_eye/T_hc2ee.yaml` 에 채워서 변환. 빠른 부트스트랩 / nominal mounting offset 으로 시작할 때 유용.
+- **A. 정상 보정 세션**: `handeye_calib_node` 로 실제 캡처를 모아 `cv2.calibrateHandEye` 를 돌린다 (다음 절). `~compute`가 npz와 yaml 블록을 함께 쓴다. 권장.
+- **B. 직접 입력**: 외부 (CAD, 이전 보정값) 값을 도구로 기록.
 
 ```bash
-# 1. config/hand_eye/T_hc2ee.yaml 의 position_m + rpy_deg (또는 matrix_4x4) 수정
-# 2. yaml -> npz 변환:
-rosrun path_tag_locator save_npz.py             # 기존 npz 가 있으면 거부 (덮어쓰지 않음)
-rosrun path_tag_locator save_npz.py --force     # 덮어쓰기 허용
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_hc2ee --t-mm x y z --rpy-deg r p y --source "출처"
+python3 src/apriltag_nav/tools/tf_chain_tool.py show      # 확인
 ```
 
-> **주의**: `T_hc2ee.npz` 를 새로 쓴 뒤에는 `path_tag_locator_node` 를 **재시작**해야 반영됨 (노드가 기동 시 1회 로드).
+> **주의**: `T_hc2ee` 를 새로 쓴 뒤에는 `path_tag_locator_node` 를 **재시작**해야 반영됨 (노드가 기동 시 1회 로드).
 
 ### 1.A 정상 보정 세션 (권장)
 
@@ -62,7 +61,7 @@ handeye_calib:
   robot:
   # (robot: 블록 삭제됨 — TCP pose 는 /arm/state 에서 읽음)
   io:
-    output_path: "$(find path_tag_locator)/config/hand_eye/T_hc2ee.npz"
+    output_path: "$(find apriltag_nav)/config/tf/T_hc2ee.npz"   # + tf_chain.yaml 블록 갱신
     min_samples: 8                               # ← 권장 ≥ 15
 ```
 
@@ -94,7 +93,7 @@ rosservice call /handeye_calib/compute "{}"
 ```
 
 응답에는 BEST method, residual, T_hc2ee 의 translation 과 RPY 가 포함됨.
-결과 파일은 `config/hand_eye/T_hc2ee.npz` 에 저장됨.
+결과는 `apriltag_nav/config/tf/T_hc2ee.npz` 와 `tf_chain.yaml`의 `T_hc2ee` 블록에 저장됨.
 
 > **참고**: `T_hc2ee.npz`는 노드가 시작 시 1회만 로드합니다. 새로 보정한 뒤에는 `path_tag_locator` 노드를 **재시작**해야 적용됩니다.
 
@@ -157,11 +156,11 @@ reference_tag:
   # matrix_4x4: [r00, r01, ..., 1]
 ```
 
-### 2b. 플랫폼 기하 `config/extrinsics.yaml`
+### 2b. 플랫폼 기하 `apriltag_nav/config/tf/tf_chain.yaml`
 
-`T_ab2mb` (mb의 ab 표현), `T_mb2fc` (fc의 mb 표현) 의 기본값이 채워져 있음. **좌표 규약**: `T_X2Y` = "Y 프레임의 X 프레임 내 표현" = Y → X 좌표 변환. 플랫폼 개조(arm 마운트/카메라 마운트 변경) 시에만 수정.
+`T_ab2mb` (mb의 ab 표현), `T_mb2fc` (fc의 mb 표현) 가 `T_hc2ee`, `T_ee2tip`과 함께 그 파일에 있다(`locator.yaml extrinsics_yaml`이 가리킴; 설계값·측정 경위는 파일 주석). **좌표 규약**: `T_X2Y` = "Y 프레임의 X 프레임 내 표현" = Y → X 좌표 변환. 플랫폼 개조(arm 마운트/카메라 마운트 변경) 시에만 수정.
 
-`T_ab2mb`는 실측값(2026-08-13 교체 베이스, arm base 652 mm, y −100 mm). `T_mb2fc`는 **2026-09-15부터 물리 카메라 자세(1.3° 틸트 포함)이며 손으로 고치지 않는다** — `robot.yaml`의 `camera_offset`(0.55) + `robot_camera.ground_plane.front_cam`(roll/pitch/yaw, `height_m` 0.302 = 렌즈→태그 윗면) + `robot.tag_thickness`(0.001, 모든 태그가 1 mm 판이므로 tz = 0.303 = 렌즈→바닥)에서 `scripts/make_front_cam_extrinsics.py --apply`가 생성한다. 바닥 태그는 체인에서 mb z = +0.001에 놓인다. 카메라를 다시 마운트하면 `tools/fit_front_cam_ground.py`로 다시 피팅 → robot.yaml → 이 스크립트 순서. 노드들은 `robot_camera_node`가 수평 가상 카메라로 보정해 내보내는 검출을 소비하므로 로더(`load_extrinsics_full`)가 수평 프레임 `T_mb2fc_level`을 만들어 쓰고(`locator.yaml detector.front_cam_frame: auto`), 원본 프레임을 직접 재검출하는 도구(`verify_arm_pointing.py`)만 저장된 물리 행렬을 쓴다. 두 값이 어긋나면 로더가 거부한다(`scripts/check_front_cam_extrinsics.py`로 점검).
+`T_ab2mb`는 2026-09-21 chain_calib 보정값(설계 Rz(180) / (0, −100, −652) mm). `T_mb2fc`는 **2026-09-15부터 물리 카메라 자세(1.3° 틸트 포함)이며 손으로 고치지 않는다** — `robot.yaml`의 `camera_offset`(0.55) + `robot_camera.ground_plane.front_cam`(roll/pitch/yaw, `height_m` 0.302 = 렌즈→태그 윗면) + `robot.tag_thickness`(0.001, 모든 태그가 1 mm 판이므로 tz = 0.303 = 렌즈→바닥)에서 `apriltag_nav/tools/tf_chain_tool.py front-cam --apply`가 생성한다. 바닥 태그는 체인에서 mb z = +0.001에 놓인다. 카메라를 다시 마운트하면 `tools/fit_front_cam_ground.py`로 다시 피팅 → robot.yaml → 이 스크립트 순서. 노드들은 `robot_camera_node`가 수평 가상 카메라로 보정해 내보내는 검출을 소비하므로 로더(`load_extrinsics_full`)가 수평 프레임 `T_mb2fc_level`을 만들어 쓰고(`locator.yaml detector.front_cam_frame: auto`), 원본 프레임을 직접 재검출하는 도구(`verify_arm_pointing.py`)만 저장된 물리 행렬을 쓴다. 두 값이 어긋나면 로더가 거부한다(`scripts/check_front_cam_extrinsics.py`로 점검).
 
 ### 2c. 메인 설정 `config/locator.yaml`
 
@@ -190,7 +189,7 @@ roslaunch path_tag_locator path_tag_locator.launch  # 메인 스택이 먼저 �
 | 서비스 | 동작 |
 |--------|------|
 | `~capture` | 현재 이미지+K+TCP 한 세트 캡처. 디스크에도 즉시 저장. |
-| `~compute` | 메모리의 모든 샘플로 `calibrateHandEye` 실행. `T_hc2ee.npz` 갱신 + 새 `run_<ts>/result.{npz,yaml}` 저장. |
+| `~compute` | 메모리의 모든 샘플로 `calibrateHandEye` 실행. `tf/T_hc2ee.npz` + `tf_chain.yaml` 블록 갱신 + 새 `run_<ts>/result.{npz,yaml}` 저장. |
 | `~status`  | 현재 샘플 수, 마지막 결과 요약. |
 | `~reset`   | 메모리 비움 + 새 `run_<ts>/` 디렉터리 시작 (디스크 기록은 보존). |
 | `~load_latest` | `run_root` 아래 **현 세션을 제외한 가장 최신** `run_*/` 디렉터리에서 샘플을 메모리에 적재. |
@@ -374,15 +373,13 @@ plan 에 entry 만 더 넣으면 됨.
 3. 보정할 path tag 1 개 (예: id 101) 를 base 가 접근 가능하고 front-cam
    으로 보이는 위치에 배치.
 
-#### Phase 1 — Hand-eye `T_hc2ee.npz` (1회)
+#### Phase 1 — Hand-eye `T_hc2ee` (1회)
 
 둘 중 하나:
 
 ```bash
-# A. 빠른 부트스트랩: yaml 에 측정/설계값 직접 입력
-nano src/path_tag_locator/config/hand_eye/T_hc2ee.yaml
-rosrun path_tag_locator save_npz.py             # 기존 파일 거부
-rosrun path_tag_locator save_npz.py --force     # 덮어쓰기
+# A. 빠른 부트스트랩: 알려진 값을 tf_chain.yaml(+npz)에 직접 기록
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_hc2ee --t-mm x y z --rpy-deg r p y --source "출처"
 
 # B. 실제 보정: 15-30 개 자세 + cv2.calibrateHandEye
 roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
@@ -743,7 +740,7 @@ awk -F',' '$2==1 && $3==12' $MM_WS/log/path_tag_locator/locate/locate_log.csv
 | `config/calibration_plan.yaml` | 지도 일괄 보정 plan (path → ref 매핑) |
 | `config/map.yaml` | apriltag_nav 의 로컬 복사본 (self-contained nav) |
 | `config/map_calibrator.yaml` | 오케스트레이터 기본 파일 경로 |
-| `config/extrinsics.yaml` | T_AB2MB / T_MB2FC |
+| `apriltag_nav/config/tf/tf_chain.yaml` | T_AB2MB / T_MB2FC / T_HC2EE / T_EE2TIP (2026-09-21) |
 | `srv/LocatePathTag.srv` | 단일 locate 서비스 정의 |
 | `srv/RunMapCalibration.srv` | 지도 일괄 보정 서비스 정의 |
 | `README.md` | 패키지 내부 README (영문) |

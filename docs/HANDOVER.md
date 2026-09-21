@@ -202,7 +202,8 @@ pull + `catkin_make` before anything below.
   up on cross tag 0 and orbit it (24 views, tilt/spin diversity), capturing
   where the tag is seen, inside clearance / xy-window / reach rules
   (`handeye_calib.yaml auto:`); `Compute & save` overwrites
-  `config/hand_eye/T_hc2ee.npz`. Needs
+  `apriltag_nav/config/tf/T_hc2ee.npz` + the `T_hc2ee` block of
+  `tf_chain.yaml` (every fixed transform lives there since 2026-09-21). Needs
   `path_tag_locator.launch use_handeye_calib:=true`. **Run on the robot
   2026-09-14 18:41 (base on 102): 23/23 views captured, no skips, no move
   failures; the result puts cross tag 0 within 1 / 0 / 5 mm of map.yaml's
@@ -486,6 +487,6 @@ pull + `catkin_make` before anything below.
 | `log/` | nav records, **Ra maps (versioned, `apriltag_nav/ra_maps`, since 2026-09-15)**, calibration sessions / locate runs / hand-eye runs, `ros/<run_id>` node logs, `apriltag_nav/calib_pair` |
 | `docs/all_tags_position.csv` | generated design positions for all 78 tags |
 | `src/path_tag_locator/docs/{USAGE_kr,TROUBLESHOOTING_kr,CALIBRATION_GUIDE_kr}.md` | tag-calibration tool docs |
-| `src/path_tag_locator/config/extrinsics.yaml` | measured truth for `T_ab2mb` / `T_mb2fc` (lift at origin) |
+| `src/apriltag_nav/config/tf/tf_chain.yaml` (+ `<name>.npz`) | **every fixed transform** — `T_ab2mb`, `T_mb2fc`, `T_hc2ee`, `T_ee2tip` — with design values and provenance; `tools/tf_chain_tool.py show / check`. `extrinsics.yaml` and `hand_eye/` are gone (2026-09-21) |
 | cell design record ("the parent directory's CLAUDE.md" in `CLAUDE.md`) | tag layout, Z datum, mounts. **Not in this checkout's parent** — on the robot PC it is `~/mobile_manipulator_ws_20260824/CLAUDE.md`, next to `make_plate_frame_csvs.py` / `tags_plate{1,2}_frame.csv` |
 | `~/navifra/` | base driver install, interface guide PDF, `param.yaml` field tuning |
