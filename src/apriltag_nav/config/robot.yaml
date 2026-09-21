@@ -1320,19 +1320,25 @@ keyence:
   # 2026-09-21: tool at the home pose, nothing in range, /keyence/value
   # -100000 = negative = "far" (arm_controller.standoff_state: side far).
   # A "near" sentinel makes the seek retreat, which is always safe.
-  #   seek_step_mm 5: must stay UNDER the sensor window (~20 mm wide;
-  #     ~4.5..27 mm case standoff on this mount — the near end is estimated
-  #     from the IL-030-like range, not measured) so the seek cannot step
-  #     across it — the first in-range reading ends the seek. Each step is
-  #     one MoveL at SetSpeed(5) + settle + 5 readings, ~1 s.
+  #   seek_step_mm 5: must stay UNDER the sensor window so the seek cannot
+  #     step across it — the first in-range reading ends the seek. The head
+  #     is an IL-100 (user, 2026-09-21): 75..130 mm from the head along the
+  #     beam, a 55 mm span. The far end measured at raw -13 (2026-09-18) puts
+  #     the 16.5 mm zero ~117 mm from the head, i.e. only ~13 mm of beam
+  #     (10 mm perpendicular, ~27 mm case standoff) on the FAR side and the
+  #     rest of the span on the near side — the case touches the surface
+  #     before the sensor runs out. Remounting the head ~35-40 mm closer to
+  #     the surface (zero near the 75 mm end) would give ~40 mm of far-side
+  #     range instead of 10; re-zero + re-measure the beam angle after.
+  #     Each step is one MoveL at SetSpeed(5) + settle + 5 readings, ~1 s.
   #   seek_max_mm 40 (user, 2026-09-21: "start possible from 4 cm"): the
   #     seek walks at most 4 cm on no measurement, so Auto standoff works
   #     from up to ~27 + 40 = 67 mm of case standoff (8 steps, ~8 s). It is
   #     ALSO the most a beam that sees NOTHING can push the tool down —
   #     the oblique spot sits 0.76 x standoff to the side (5 cm at 67 mm),
   #     so keep the surface flat under and beside the tool. The sensor
-  #     itself cannot see farther (a 30 cm "distance sense" needs another
-  #     sensor — the hand_cam's depth — not this key).
+  #     itself cannot see farther than its 55 mm span, wherever the head is
+  #     mounted; 30 cm is not an IL-100 number.
   seek_enabled:        true   # ~keyence_seek_enabled
   seek_step_mm:        5.0
   seek_max_mm:         40.0

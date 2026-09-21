@@ -1761,10 +1761,15 @@ under the ~20 mm window either way, but the budget is also how far a
 beam that sees NOTHING walks the tool down, and at 30 cm the oblique
 spot is 23 cm to the side — over a raised workpiece edge the beam reads
 the floor as "far" while the case descends onto the part. The user's
-other wish, "거리감지는 30 cm", is not this sensor's: the IL-030-class
-head reads ~4.5–27 mm of case standoff and nothing beyond; sensing the
-surface from 30 cm would be the hand_cam's DEPTH stream (D435, 0.2–3 m,
-~1–2 %), proposed, not built.
+other wish, "거리감지는 30 cm", is not this sensor's: the head is an
+**IL-100** (user), 75–130 mm from the head along the beam — a 55 mm
+span, and the −13 raw far end of 09-18 says the 16.5 mm zero sits
+~117 mm from the head, so only ~10 mm (perpendicular) of that span is on
+the FAR side; the rest is below the case-contact height. The one
+hardware lever is remounting the head ~35–40 mm closer to the surface
+(zero near the 75 mm end → ~40 mm of far-side range, re-zero and
+re-measure the beam angle after); the hand_cam depth stream was offered
+for 30 cm and declined ("깊이 카메라는 사용하지 않고").
 
 Verified offline: new `tools/check_standoff_seek.py` (20 — surface plant
 with the signed sentinel: 60 mm start seeks 11 × 3 mm then converges with
