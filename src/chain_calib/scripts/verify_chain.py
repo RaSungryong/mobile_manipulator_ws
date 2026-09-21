@@ -92,23 +92,34 @@ def targets_from(T_ab2mb, T_mb2fc, T_fc2W, lift_m, T_ab2ee_cur, Hc, sheet, heigh
     return out, T_ab2W, spin, spin_cur
 
 
-def plan_targets(S, sheet, T_ab2mb, Hc, height, spin_deg, tags):
+def plan_targets(S, sheet, T_ab2mb, Hc, height, spin_deg, tags, front_rotation="level"):
     """Live T_fc2W + current arm pose -> flange targets. Returns
     (targets [(tag, pose_mm_deg, reach_m)], info dict)."""
     f, ftags, nf = S.camera_T(S.cfg.topics.front_cam_detections, S.K_front,
                               None if S.front_frame == "level" else S.D_front, "front_cam")
     lift = S.lift.height_m() or 0.0
     cur = S.arm.get_tcp_pose()
-    out, T_ab2W, spin, spin_cur = targets_from(T_ab2mb, S.ext.T_mb2fc_chain, f.T_cam2W, lift,
+    # front_cam's ROTATION of the sheet: the same treatment `solve` used for the T_ab2mb in
+    # use (the level-floor prior by default, 2026-09-21). A single tag's out-of-plane tilt is
+    # the local slope of the paper under it, and taken as the SHEET's orientation it would put
+    # the far grid tags at the wrong height: 0.7 deg of it is 10 mm at tag 300 (0.85 m away)
+    # and 17 mm at 309. The old T_ab2mb happened to carry the equal-and-opposite tilt of the
+    # 09-18 paper, which is why the 09-18 run read flat heights — self-consistency, not truth.
+    T_fc2W = f.T_cam2W if front_rotation == "measured" else CC.level_front_observation(f.T_cam2W)
+    slope = math.degrees(math.acos(max(-1.0, min(1.0, abs(f.T_cam2W[2, 2])))))
+    out, T_ab2W, spin, spin_cur = targets_from(T_ab2mb, S.ext.T_mb2fc_chain, T_fc2W, lift,
                                                pose_fr5_to_matrix_m(cur), Hc, sheet, height, spin_deg, tags)
     info = dict(front_tags=f.tag_ids, front_rms=f.rms_px, lift=lift, spin=spin, spin_cur=spin_cur,
-                cur=cur, T_ab2W=T_ab2W, T_fc2W=f.T_cam2W)
+                cur=cur, T_ab2W=T_ab2W, T_fc2W=T_fc2W, paper_slope_deg=slope, front_rotation=front_rotation)
     return out, info
 
 
 def print_plan(targets, info, height):
     print("front_cam sees %s (PnP rms %.2f px); lift %.3f m; camera spin %.0f deg (current %.0f)"
           % (info["front_tags"], info["front_rms"], info["lift"], info["spin"], info["spin_cur"]))
+    print("front_cam sheet rotation: %s (measured paper slope under its tags %.2f deg%s)"
+          % ("level-floor prior, measured yaw kept" if info["front_rotation"] == "level" else "AS MEASURED",
+             info["paper_slope_deg"], " — would be %.0f mm of height at tag 309 if believed" % (1.45e3 * math.tan(math.radians(info["paper_slope_deg"]))) if info["front_rotation"] == "level" else ""))
     print("current flange: %s" % ["%.1f" % v for v in info["cur"]])
     print("%-4s %9s %9s %9s %8s %8s %8s  %s" % ("tag", "x_mm", "y_mm", "z_mm", "rx", "ry", "rz", "reach_m"))
     for k, p, r in targets:
@@ -127,7 +138,7 @@ def cmd_plan(args):
     T_ab2mb, Hc, note = corrected_chain(ext, H, args.corrections or os.path.join(args.dir, "corrections.npz"), args.fit)
     print("chain: %s" % note)
     S = tool.Session(cfg, sheet, ext.front_cam_frame, args.frames); S.ext = ext
-    targets, info = plan_targets(S, sheet, T_ab2mb, Hc, args.height, args.spin, args.tags)
+    targets, info = plan_targets(S, sheet, T_ab2mb, Hc, args.height, args.spin, args.tags, args.front_rotation)
     print_plan(targets, info, args.height)
     out = os.path.join(args.dir, "verify_plan_%s.csv" % args.fit)
     with open(out, "w", newline="") as fh:
@@ -146,7 +157,7 @@ def cmd_run(args):
     T_ab2mb, Hc, note = corrected_chain(ext, H, args.corrections or os.path.join(args.dir, "corrections.npz"), args.fit)
     print("chain: %s" % note)
     S = tool.Session(cfg, sheet, ext.front_cam_frame, args.frames); S.ext = ext
-    targets, info = plan_targets(S, sheet, T_ab2mb, Hc, args.height, args.spin, args.tags)
+    targets, info = plan_targets(S, sheet, T_ab2mb, Hc, args.height, args.spin, args.tags, args.front_rotation)
     d0 = print_plan(targets, info, args.height)
     if d0 > args.max_first_move:
         sys.exit("first target is %.2f m away — jog hand_cam over the grid at ~%.2f m first (or --max-first-move)" % (d0, args.height))
@@ -230,6 +241,8 @@ def main():
     ap.add_argument("--settle", type=float, default=0.8, help="s to wait after each move before measuring")
     ap.add_argument("--max-first-move", type=float, default=0.35)
     ap.add_argument("--hand-eye", default=None)
+    ap.add_argument("--front-rotation", choices=["level", "measured"], default="level",
+                    help="front_cam's sheet rotation: the level-floor prior (default; what solve used) or the single-tag PnP as measured")
     ap.add_argument("--sheet-json", default=None); ap.add_argument("--sx", type=float, default=None)
     ap.add_argument("--sy", type=float, default=None); ap.add_argument("--tag-size", type=float, default=None)
     top = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
