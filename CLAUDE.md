@@ -1794,6 +1794,28 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
+
+User (pinyin): "开机就启动 main launch 怎么做". The service from the entry
+two below was already installed and enabled, and the PC had just booted
+(uptime 2 min) — but `systemctl status` showed `activating (auto-restart)`,
+restart counter 26, every attempt dying in under a second with
+`/opt/ros/noetic/etc/catkin/profile.d/1.ros_distro.sh: line 3: ROS_DISTRO:
+unbound variable`. `run_stack.sh` runs under `set -u`, and that ROS env
+hook tests `"$ROS_DISTRO"` before it is ever set. Harmless in every shell
+the script had been dry-run from (the login profile had already exported
+it), fatal under systemd's empty environment — reproduced with `env -i bash
+-c 'set -u; source /opt/ros/noetic/setup.bash'`. Fix: `set +u` around the
+two `source` lines, `set -u` again after (comment in the script says why).
+The unit's `ExecStart` points at the script in the working tree, so the
+next 5 s auto-restart picked the fix up with no reinstall: `[run_stack]
+ROS master ok (0s) / Fairino arm ok (0s) / Keyence ok (0s)`, 9/9 nodes +
+rosbridge (9090) + web UI (8080) up at 10:37:20, `ROS_LOG_DIR` under
+`<ws>/log/ros`, front_cam seeing tag 501, arm left in place. Verified: the
+dry run in a clean `env -i` environment with and without `MM_WS`, then the
+live boot. Lesson: dry-run a systemd launcher with `env -i`, not from a
+sourced terminal.
+
 ### 2026-09-22 — Hand-eye fitting status written up for the next session; the rename had broken the stored session paths
 
 User: "현재까지 진행상황은 다른 창에 넘기게 문서 작성 Hand-eye calibration

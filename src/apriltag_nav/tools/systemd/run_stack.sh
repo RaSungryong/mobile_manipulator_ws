@@ -35,11 +35,18 @@ log() { echo "[run_stack] $*"; }
 if [ ! -f /opt/ros/noetic/setup.bash ]; then
     log "ERROR: /opt/ros/noetic/setup.bash missing" >&2; exit 1
 fi
+# The ROS setup files are not `set -u` clean: /opt/ros/noetic/etc/catkin/
+# profile.d/1.ros_distro.sh tests "$ROS_DISTRO" before it is ever set, which
+# is harmless in a login shell (the profile set it) and fatal under systemd's
+# empty environment ("ROS_DISTRO: unbound variable", exit 1, restart loop —
+# the 2026-09-22 first boot). Source them with nounset off.
+set +u
 source /opt/ros/noetic/setup.bash
 if [ ! -f "$WS/devel/setup.bash" ]; then
     log "ERROR: $WS/devel/setup.bash missing — run catkin_make in $WS" >&2; exit 1
 fi
 source "$WS/devel/setup.bash"           # exports MM_WS and ROS_LOG_DIR
+set -u
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://localhost:11311}"
 export PYTHONUNBUFFERED=1
 export HOME="${HOME:-/home/abc}"
