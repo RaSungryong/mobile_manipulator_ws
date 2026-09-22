@@ -341,6 +341,10 @@ class MobileController:
         self.camera_offset = float(self.cfg['robot'].get('camera_offset', 0.55))
         self.robot_pose_use_fore_aft = bool(
             self.cfg['robot'].get('robot_pose_use_fore_aft', True))
+        # 2026-09-22: /robot_pose heading includes the calibrated tag's
+        # laying angle (map.yaml `yaw`), see _tag_yaw_error_deg.
+        self.robot_pose_use_tag_yaw = bool(
+            self.cfg['robot'].get('robot_pose_use_tag_yaw', True))
         self.pp_lateral_reference = str(
             self.cfg['robot'].get('pp_lateral_reference', 'base')).lower()
         self._align_pulse_gain = 1.0         # achieved / commanded rotation, learned
@@ -1636,6 +1640,24 @@ class MobileController:
             rate.sleep()
 
 
+    def _tag_yaw_error_deg(self, tag_info):
+        """Deviation (deg, CCW +) of a calibrated tag's laid direction from
+        the nearest 90-deg world axis, from map.yaml `yaw`; 0.0 for a tag
+        without one or with robot.robot_pose_use_tag_yaw false. A |value|
+        over 45 deg cannot be a laying error and is ignored with a warning."""
+        if not self.robot_pose_use_tag_yaw or not tag_info:
+            return 0.0
+        yaw = tag_info.get('yaw')
+        if yaw is None:
+            return 0.0
+        err = (float(yaw) + 45.0) % 90.0 - 45.0
+        if abs(err) > 10.0:
+            rospy.logwarn_throttle(
+                30.0, f"[RobotPose] map.yaml yaw {float(yaw):.2f} deg is "
+                      f"{err:+.2f} deg off every axis — not a laying error, ignored")
+            return 0.0
+        return err
+
     def calculate_robot_pose(self, tag_id):
         """
         Calculates the robot center's pose relative to the tag, 
@@ -1667,16 +1689,22 @@ class MobileController:
         # of it. tag['x'] is the tag's distance AHEAD of the lens, so the
         # camera is that far behind the tag along the zone heading.
         fore = float(tag.get('x', 0.0)) if self.robot_pose_use_fore_aft else 0.0
+        # Calibrated laying angle (2026-09-22): the align squares the base to
+        # the TAG's edges, so a tag laid delta deg off its lane axis leaves the
+        # body delta deg off the zone heading with align_angle reading 0.
+        # map.yaml `yaw` (map calibration) is the world heading of the tag's
+        # x axis, CCW +; its deviation from the nearest axis is that delta.
+        tag_yaw_err = self._tag_yaw_error_deg(tag_info)
 
         if zone == 'A' or zone == 'DOCK':
             robot_x, robot_y = tag_x - fore, tag_y + lateral
-            heading = align_angle_deg
+            heading = align_angle_deg + tag_yaw_err
         elif zone in ['B', 'D']:
             robot_x, robot_y = tag_x - lateral, tag_y - fore
-            heading = 90 + align_angle_deg
+            heading = 90 + align_angle_deg + tag_yaw_err
         elif zone in ['C', 'E']:
             robot_x, robot_y = tag_x + lateral, tag_y + fore
-            heading = -90 + align_angle_deg
+            heading = -90 + align_angle_deg + tag_yaw_err
         else:
             robot_x, robot_y, heading = tag_x, tag_y, 0.0
 
@@ -3214,9 +3242,12 @@ class MobileController:
 
         if pose is not None:
             msg.x, msg.y, msg.theta = pose
+            info = self.map_mgr.get_tag_info(tag_id) or {}
             rospy.loginfo(
                 f"[RobotPose] tag {tag_id} "
                 f"x={msg.x:.3f}, y={msg.y:.3f}, theta={msg.theta:.2f}"
+                f" (tag yaw err {self._tag_yaw_error_deg(info):+.2f} deg, "
+                f"tag z {info.get('z', 'design')})"
             )
         else:
             rospy.logwarn(

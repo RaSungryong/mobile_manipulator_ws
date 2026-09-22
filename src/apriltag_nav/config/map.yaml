@@ -32,6 +32,15 @@
 # the trailing comment. Net: zone B within +-3 mm of design, zone C lane
 # x -16.7 +- 6.3 mm (all 13 tags, both sessions), y within 3 mm. Every
 # other tag (dock, pivots, zone A, plates D/E) is still the design value.
+#   Same day, later (user: use every calibrated value): those 26 tags also
+#   carry `z` (tag top in the calibration world frame, z 0 = plate top;
+#   pose-mode IK turns it into the floor height under the arm, see
+#   robot.yaml arm_calibration.use_tag_z) and `yaw` (world heading of the
+#   tag's x axis, CCW +; /robot_pose adds its deviation from the lane axis
+#   to theta, robot.yaml robot.robot_pose_use_tag_yaw). Neither is read by
+#   navigation itself. roll / pitch are in the map_world file only — a
+#   floor tag's tilt is the chain's measurement of the chassis attitude,
+#   not map data.
 
 # Tag Database
 tags:
@@ -162,66 +171,92 @@ tags:
   112:
     x: -1.7148   # design -1.71, calibrated 2026-09-22 (-4.8 mm)
     y: 2.9432   # design 2.95, calibrated 2026-09-22 (-6.8 mm)
+    z: -0.0593   # tag top, calibrated 2026-09-22 (design -0.079; floor +19.7 mm vs design)
+    yaw: -0.40   # tag x-axis heading, calibrated 2026-09-22 (-0.40 deg off the lane axis)
     type: WORK
     zone: B
   111:
     x: -1.7129   # design -1.71, calibrated 2026-09-22 (-2.9 mm)
     y: 2.5430   # design 2.55, calibrated 2026-09-22 (-7.0 mm)
+    z: -0.0557   # tag top, calibrated 2026-09-22 (design -0.079; floor +23.3 mm vs design)
+    yaw: -0.34   # tag x-axis heading, calibrated 2026-09-22 (-0.34 deg off the lane axis)
     type: WORK
     zone: B
   110:
     x: -1.7120   # design -1.71, calibrated 2026-09-22 (-2.0 mm)
     y: 2.1432   # design 2.15, calibrated 2026-09-22 (-6.8 mm)
+    z: -0.0914   # tag top, calibrated 2026-09-22 (design -0.079; floor -12.4 mm vs design)
+    yaw: -0.17   # tag x-axis heading, calibrated 2026-09-22 (-0.17 deg off the lane axis)
     type: WORK
     zone: B
   109:
     x: -1.7103   # design -1.71, calibrated 2026-09-22 (-0.3 mm)
     y: 1.7458   # design 1.75, calibrated 2026-09-22 (-4.2 mm)
+    z: -0.0610   # tag top, calibrated 2026-09-22 (design -0.079; floor +18.0 mm vs design)
+    yaw: -0.14   # tag x-axis heading, calibrated 2026-09-22 (-0.14 deg off the lane axis)
     type: WORK
     zone: B
   108:
     x: -1.7079   # design -1.71, calibrated 2026-09-22 (+2.1 mm)
     y: 1.3467   # design 1.35, calibrated 2026-09-22 (-3.3 mm)
+    z: -0.0565   # tag top, calibrated 2026-09-22 (design -0.079; floor +22.5 mm vs design)
+    yaw: 0.28   # tag x-axis heading, calibrated 2026-09-22 (+0.28 deg off the lane axis)
     type: WORK
     zone: B
   107:
     x: -1.7103   # design -1.71, calibrated 2026-09-22 (-0.3 mm)
     y: 0.9464   # design 0.95, calibrated 2026-09-22 (-3.6 mm)
+    z: -0.0573   # tag top, calibrated 2026-09-22 (design -0.079; floor +21.7 mm vs design)
+    yaw: 0.01   # tag x-axis heading, calibrated 2026-09-22 (+0.01 deg off the lane axis)
     type: WORK
     zone: B
   106:
     x: -1.7064   # design -1.71, calibrated 2026-09-22 (+3.6 mm)
     y: 0.5482   # design 0.55, calibrated 2026-09-22 (-1.8 mm)
+    z: -0.0615   # tag top, calibrated 2026-09-22 (design -0.079; floor +17.5 mm vs design)
+    yaw: -0.10   # tag x-axis heading, calibrated 2026-09-22 (-0.10 deg off the lane axis)
     type: WORK
     zone: B
   105:
     x: -1.7051   # design -1.71, calibrated 2026-09-22 (+4.9 mm)
     y: 0.1483   # design 0.15, calibrated 2026-09-22 (-1.7 mm)
+    z: -0.0591   # tag top, calibrated 2026-09-22 (design -0.079; floor +19.9 mm vs design)
+    yaw: 0.04   # tag x-axis heading, calibrated 2026-09-22 (+0.04 deg off the lane axis)
     type: WORK
     zone: B
   104:
     x: -1.7106   # design -1.71, calibrated 2026-09-22 (-0.6 mm)
     y: -0.2555   # design -0.25, calibrated 2026-09-22 (-5.5 mm)
+    z: -0.0347   # tag top, calibrated 2026-09-22 (design -0.079; floor +44.3 mm vs design)
+    yaw: 0.58   # tag x-axis heading, calibrated 2026-09-22 (+0.58 deg off the lane axis)
     type: WORK
     zone: B
   103:
     x: -1.7047   # design -1.71, calibrated 2026-09-22 (+5.3 mm)
     y: -0.6531   # design -0.65, calibrated 2026-09-22 (-3.1 mm)
+    z: -0.0508   # tag top, calibrated 2026-09-22 (design -0.079; floor +28.2 mm vs design)
+    yaw: -0.41   # tag x-axis heading, calibrated 2026-09-22 (-0.41 deg off the lane axis)
     type: WORK
     zone: B
   102:
     x: -1.7051   # design -1.71, calibrated 2026-09-22 (+4.9 mm)
     y: -1.0518   # design -1.05, calibrated 2026-09-22 (-1.8 mm)
+    z: -0.0566   # tag top, calibrated 2026-09-22 (design -0.079; floor +22.4 mm vs design)
+    yaw: -0.13   # tag x-axis heading, calibrated 2026-09-22 (-0.13 deg off the lane axis)
     type: WORK
     zone: B
   101:
     x: -1.7061   # design -1.71, calibrated 2026-09-22 (+3.9 mm)
     y: -1.4517   # design -1.45, calibrated 2026-09-22 (-1.7 mm)
+    z: -0.0669   # tag top, calibrated 2026-09-22 (design -0.079; floor +12.1 mm vs design)
+    yaw: -0.14   # tag x-axis heading, calibrated 2026-09-22 (-0.14 deg off the lane axis)
     type: WORK
     zone: B
   100:
     x: -1.7065   # design -1.71, calibrated 2026-09-22 (+3.5 mm)
     y: -1.8479   # design -1.85, calibrated 2026-09-22 (+2.1 mm)
+    z: -0.0672   # tag top, calibrated 2026-09-22 (design -0.079; floor +11.8 mm vs design)
+    yaw: -0.08   # tag x-axis heading, calibrated 2026-09-22 (-0.08 deg off the lane axis)
     type: WORK
     zone: B
 
@@ -229,66 +264,92 @@ tags:
   113:
     x: 1.6802   # design 1.71, calibrated 2026-09-22 (-29.8 mm)
     y: 1.8409   # design 1.85, calibrated 2026-09-22 (-9.1 mm)
+    z: -0.0585   # tag top, calibrated 2026-09-22 (design -0.079; floor +20.5 mm vs design)
+    yaw: 179.83   # tag x-axis heading, calibrated 2026-09-22 (-0.17 deg off the lane axis)
     type: WORK
     zone: C
   114:
     x: 1.6835   # design 1.71, calibrated 2026-09-22 (-26.5 mm)
     y: 1.4419   # design 1.45, calibrated 2026-09-22 (-8.1 mm)
+    z: -0.0641   # tag top, calibrated 2026-09-22 (design -0.079; floor +14.9 mm vs design)
+    yaw: -179.91   # tag x-axis heading, calibrated 2026-09-22 (+0.09 deg off the lane axis)
     type: WORK
     zone: C
   115:
     x: 1.6866   # design 1.71, calibrated 2026-09-22 (-23.4 mm)
     y: 1.0443   # design 1.05, calibrated 2026-09-22 (-5.7 mm)
+    z: -0.0624   # tag top, calibrated 2026-09-22 (design -0.079; floor +16.6 mm vs design)
+    yaw: -179.73   # tag x-axis heading, calibrated 2026-09-22 (+0.27 deg off the lane axis)
     type: WORK
     zone: C
   116:
     x: 1.6895   # design 1.71, calibrated 2026-09-22 (-20.5 mm)
     y: 0.6468   # design 0.65, calibrated 2026-09-22 (-3.2 mm)
+    z: -0.0665   # tag top, calibrated 2026-09-22 (design -0.079; floor +12.5 mm vs design)
+    yaw: 179.28   # tag x-axis heading, calibrated 2026-09-22 (-0.72 deg off the lane axis)
     type: WORK
     zone: C
   117:
     x: 1.6952   # design 1.71, calibrated 2026-09-22 (-14.8 mm)
     y: 0.2487   # design 0.25, calibrated 2026-09-22 (-1.3 mm)
+    z: -0.0547   # tag top, calibrated 2026-09-22 (design -0.079; floor +24.3 mm vs design)
+    yaw: -179.80   # tag x-axis heading, calibrated 2026-09-22 (+0.20 deg off the lane axis)
     type: WORK
     zone: C
   118:
     x: 1.6929   # design 1.71, calibrated 2026-09-22 (-17.1 mm)
     y: -0.1543   # design -0.15, calibrated 2026-09-22 (-4.3 mm)
+    z: -0.0519   # tag top, calibrated 2026-09-22 (design -0.079; floor +27.1 mm vs design)
+    yaw: -179.98   # tag x-axis heading, calibrated 2026-09-22 (+0.02 deg off the lane axis)
     type: WORK
     zone: C
   119:
     x: 1.6959   # design 1.71, calibrated 2026-09-22 (-14.1 mm)
     y: -0.5501   # design -0.55, calibrated 2026-09-22 (-0.1 mm)
+    z: -0.0551   # tag top, calibrated 2026-09-22 (design -0.079; floor +23.9 mm vs design)
+    yaw: -179.93   # tag x-axis heading, calibrated 2026-09-22 (+0.07 deg off the lane axis)
     type: WORK
     zone: C
   120:
     x: 1.6988   # design 1.71, calibrated 2026-09-22 (-11.2 mm)
     y: -0.9511   # design -0.95, calibrated 2026-09-22 (-1.1 mm)
+    z: -0.0547   # tag top, calibrated 2026-09-22 (design -0.079; floor +24.3 mm vs design)
+    yaw: 179.69   # tag x-axis heading, calibrated 2026-09-22 (-0.31 deg off the lane axis)
     type: WORK
     zone: C
   121:
     x: 1.6945   # design 1.71, calibrated 2026-09-22 (-15.5 mm)
     y: -1.3528   # design -1.35, calibrated 2026-09-22 (-2.8 mm)
+    z: -0.0551   # tag top, calibrated 2026-09-22 (design -0.079; floor +23.9 mm vs design)
+    yaw: -179.90   # tag x-axis heading, calibrated 2026-09-22 (+0.10 deg off the lane axis)
     type: WORK
     zone: C
   122:
     x: 1.6954   # design 1.71, calibrated 2026-09-22 (-14.6 mm)
     y: -1.7508   # design -1.75, calibrated 2026-09-22 (-0.8 mm)
+    z: -0.0532   # tag top, calibrated 2026-09-22 (design -0.079; floor +25.8 mm vs design)
+    yaw: 179.41   # tag x-axis heading, calibrated 2026-09-22 (-0.59 deg off the lane axis)
     type: WORK
     zone: C
   123:
     x: 1.6976   # design 1.71, calibrated 2026-09-22 (-12.4 mm)
     y: -2.1487   # design -2.15, calibrated 2026-09-22 (+1.3 mm)
+    z: -0.0519   # tag top, calibrated 2026-09-22 (design -0.079; floor +27.1 mm vs design)
+    yaw: -179.76   # tag x-axis heading, calibrated 2026-09-22 (+0.24 deg off the lane axis)
     type: WORK
     zone: C
   124:
     x: 1.7001   # design 1.71, calibrated 2026-09-22 (-9.9 mm)
     y: -2.5468   # design -2.55, calibrated 2026-09-22 (+3.2 mm)
+    z: -0.0475   # tag top, calibrated 2026-09-22 (design -0.079; floor +31.5 mm vs design)
+    yaw: 179.71   # tag x-axis heading, calibrated 2026-09-22 (-0.29 deg off the lane axis)
     type: WORK
     zone: C
   125:
     x: 1.7022   # design 1.71, calibrated 2026-09-22 (-7.8 mm)
     y: -2.9487   # design -2.95, calibrated 2026-09-22 (+1.3 mm)
+    z: -0.0381   # tag top, calibrated 2026-09-22 (design -0.079; floor +40.9 mm vs design)
+    yaw: 179.88   # tag x-axis heading, calibrated 2026-09-22 (-0.12 deg off the lane axis)
     type: WORK
     zone: C
 

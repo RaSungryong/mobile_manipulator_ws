@@ -54,7 +54,41 @@ from apriltag_nav.paths import load_yaml_block
 from apriltag_nav import tf_chain
 
 
-def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
+def tag_floor_z_m(tag_info, calib=None, tag_thickness_m=0.001):
+    """Height of the FLOOR under a calibrated floor tag above the CSV /
+    world z datum, in metres — the per-tag term `transform_world_to_arm`
+    adds to the arm base height (2026-09-22, user: use every calibrated
+    value, not only x / y).
+
+    map.yaml carries the calibrated tag `z` in the calibration world frame
+    (reference_tags.yaml: z = 0 at the plate top, the design floor at
+    `arm_calibration.world_floor_z_m` = -0.080). The tag is a 1 mm plate
+    (`robot.tag_thickness`), so the floor under it is `z - thickness`, and
+    its offset from the design floor — which is the datum the planner's
+    CSV z and `arm_base_z` are measured from — is
+        floor_z = (z - thickness) - world_floor_z_m.
+    A tag without `z`, or `arm_calibration.use_tag_z: false`, gives 0.0:
+    the pre-2026-09-22 behaviour bit for bit. |floor_z| above
+    `tag_z_max_offset_m` (0.05) is refused (raises) — the calibrated z is
+    the chain's weakest axis (~10 mm sd) and a gross value would send the
+    tool INTO the workpiece, not merely off it.
+    """
+    calib = load_yaml_block('arm_calibration') if calib is None else calib
+    if not calib.get('use_tag_z', True) or not tag_info or tag_info.get('z') is None:
+        return 0.0
+    floor_design = float(calib.get('world_floor_z_m', -0.080))
+    floor_z = float(tag_info['z']) - float(tag_thickness_m) - floor_design
+    limit = float(calib.get('tag_z_max_offset_m', 0.05))
+    if abs(floor_z) > limit:
+        raise ValueError(
+            f"calibrated tag z {float(tag_info['z']):.4f} m puts the floor "
+            f"{floor_z * 1000:+.1f} mm from the design floor "
+            f"({floor_design:.3f} m) — beyond tag_z_max_offset_m "
+            f"{limit:.3f} m; refusing (check the calibration, or raise the limit)")
+    return floor_z
+
+
+def transform_world_to_arm(g, msg, lift_m=0.0, euler=None, floor_z_m=0.0):
     """
     World frame (CSV pose frame) → arm base_link.
 
@@ -64,6 +98,11 @@ def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
              pre-2026-09-11 behaviour exactly; see the module docstring for
              why leaving it at 0 while the lift is raised puts the TCP that
              far ABOVE the target.
+    floor_z_m : height of the floor under the robot above the CSV z datum
+             [m] (`tag_floor_z_m`, from the calibrated tag z; 2026-09-22).
+             The arm base rides on that floor, so it enters exactly like
+             the lift: base height = arm_base_z + lift + floor. 0.0 = the
+             design floor, the pre-2026-09-22 result bit for bit.
 
     ⚠️ `g`'s rx/ry/rz convention is PER GENERATOR — `euler` (default:
     robot.yaml `arm_calibration.csv_euler`) is the scipy from_euler spec
@@ -97,7 +136,9 @@ def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
     p_A_W = np.array([
         x_base + c * body_off_x - s * body_off_y,
         y_base + s * body_off_x + c * body_off_y,
-        body_off_z + float(lift_m)      # lift raises the arm base, 2026-09-11
+        # lift raises the arm base (2026-09-11); the calibrated floor height
+        # under the tag does the same (2026-09-22, tag_floor_z_m)
+        body_off_z + float(lift_m) + float(floor_z_m)
     ])
 
     alpha = theta + mount_yaw
@@ -126,7 +167,7 @@ def transform_world_to_arm(g, msg, lift_m=0.0, euler=None):
     rospy.loginfo(
         f"[Arm REAL] Transform: world=({g['x']:.3f}, {g['y']:.3f}, {g['z']:.3f}) "
         f"-> arm=({pos_mm[0]:.1f}, {pos_mm[1]:.1f}, {pos_mm[2]:.1f}) mm"
-        f"  [lift {float(lift_m) * 1000.0:.1f} mm]"
+        f"  [lift {float(lift_m) * 1000.0:.1f} mm, floor {float(floor_z_m) * 1000.0:+.1f} mm]"
     )
 
     return pos_mm, rpy_deg

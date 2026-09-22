@@ -624,6 +624,15 @@ robot:
   # the zone heading. Applies to every consumer of /robot_pose (pose-mode
   # arm transform, UI). false restores the old lens-over-tag assumption.
   robot_pose_use_fore_aft: true
+  # 2026-09-22 (user: use EVERY calibrated value, not only x / y): the
+  # /robot_pose heading adds the calibrated tag's laying angle — map.yaml
+  # `yaw` (world heading of the tag's x axis from the map calibration, CCW +)
+  # minus the nearest 90-deg axis. The align squares the body to the TAG's
+  # edges, so a tag laid 0.5 deg off its lane leaves the body 0.5 deg off the
+  # zone heading with align_angle reading 0; over a 1 m arm reach that is
+  # ~9 mm. Tags without `yaw` (dock, pivots, zone A, plates D/E) are
+  # unchanged. false restores the zone-heading-only theta.
+  robot_pose_use_tag_yaw: true
   # Tightened 10 -> 4 px on 2026-09-02 (user request). The trigger now fires
   # 4 px (~1.6 mm) before the target column instead of 10 (~4 mm). ⚠️ The
   # bigger error is AFTER the trigger: on 2026-09-02 arrivals recorded the
@@ -1129,6 +1138,22 @@ arm_calibration:
   #   "the code is right" note was true for THOSE files only. Per-generator,
   #   so it is a key and not a constant.
   csv_euler: "ZYX"
+  # ---- calibrated floor height under the tag (2026-09-22) ----
+  # map.yaml's tag `z` is the tag TOP in the calibration world frame
+  # (reference_tags.yaml: z 0 = the plate top). The planner's CSV z and
+  # arm_base_z are measured from the FLOOR at the robot's stop, which the
+  # cell design puts at world_floor_z_m. The floor under a calibrated tag is
+  # therefore (z - robot.tag_thickness) - world_floor_z_m above the CSV
+  # datum, and pose-mode IK adds it to the arm base height exactly like the
+  # lift (arm_transform.tag_floor_z_m). 2026-09-22 plate 1: -57 +- 10 mm tag
+  # top, i.e. the floor ~+22 mm above the design -80 — the chain's weakest
+  # axis (z sd ~10 mm per tag, 7 mm session to session), so a gross value
+  # is refused above tag_z_max_offset_m rather than sent to the arm: at the
+  # 16.5 mm standoff, 50 mm of wrong z is a collision, not a bad reading.
+  # use_tag_z false = the design floor under every tag (pre-2026-09-22).
+  use_tag_z: true
+  world_floor_z_m: -0.080
+  tag_z_max_offset_m: 0.05
 
 # Arm home joint angles in radians. This matches the hardcoded value used
 # across every controller (arm_controller.py, tools/arm_controller_sdk.py)

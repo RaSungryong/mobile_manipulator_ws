@@ -34,7 +34,7 @@ from scipy.spatial.transform import Rotation as R
 
 from apriltag_nav import paths
 from apriltag_nav.paths import load_yaml_block
-from apriltag_nav.arm_transform import transform_world_to_arm
+from apriltag_nav.arm_transform import transform_world_to_arm, tag_floor_z_m
 from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.scan_results import ScanResultWriter
@@ -92,6 +92,12 @@ class ArmController:
             rospy.get_param('~lift_height_topic', '/lifter/height'))
         self.require_lift_height = bool(
             rospy.get_param('~require_lift_height', False))
+        # Calibrated floor height per tag (2026-09-22): map.yaml's tag `z`
+        # (map calibration) → the arm base rides that much above the design
+        # floor. Read on first use (_pose_floor_z_m); the tag comes from
+        # /robot_pose.id.
+        self._map_tags = None
+
 
         # ---------- Fairino ----------
         rospy.loginfo("[Arm REAL] Connecting to Fairino robot...")
@@ -956,9 +962,41 @@ class ArmController:
             return 0.0
         return lift_m
 
+    @staticmethod
+    def _load_map_tags():
+        """map.yaml `tags` (id → dict) for the calibrated floor height; {}
+        when the file cannot be read — pose mode then uses the design
+        floor, as before 2026-09-22, and says so per point."""
+        try:
+            import yaml
+            with open(paths.MAP_PATH) as f:
+                tags = (yaml.safe_load(f) or {}).get('tags') or {}
+            return {int(k): v for k, v in tags.items()}
+        except Exception as e:
+            rospy.logwarn(f"[Arm REAL] map.yaml not readable ({e}); pose-mode "
+                          "IK will assume the design floor under every tag")
+            return {}
+
+    def _pose_floor_z_m(self):
+        """Floor height under the current tag above the CSV z datum (m),
+        from the calibrated tag z in map.yaml; 0.0 for a tag without one."""
+        if getattr(self, '_map_tags', None) is None:
+            self._map_tags = self._load_map_tags()
+        tag_id = int(getattr(self.current_pose_msg, 'id', 0) or 0)
+        info = self._map_tags.get(tag_id)
+        thickness = float((load_yaml_block('robot') or {}).get('tag_thickness', 0.001))
+        floor_z = tag_floor_z_m(info, tag_thickness_m=thickness)
+        if info is None or info.get('z') is None:
+            rospy.logwarn_throttle(
+                30.0, f"[Arm REAL] tag {tag_id} has no calibrated z in map.yaml — "
+                      "assuming the design floor under the arm")
+        return floor_z
+
     def _exec_pose(self, p):
         lift_m = self._pose_lift_m()
-        pos_tip, rpy = transform_world_to_arm(p, self.current_pose_msg, lift_m)
+        floor_z_m = self._pose_floor_z_m()
+        pos_tip, rpy = transform_world_to_arm(p, self.current_pose_msg, lift_m,
+                                              floor_z_m=floor_z_m)
         if self._pose_tip_to_flange is None:
             raise RuntimeError(
                 "pose mode refused: the controller's active tool frame is not "

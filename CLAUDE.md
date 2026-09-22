@@ -1503,6 +1503,35 @@ CSV quat is reliable.
 0 while the lift is raised) puts the TCP exactly the lift extension **ABOVE**
 the world target — see the lift section below.
 
+**The map calibration is applied through `map.yaml`, and ALL of it since
+2026-09-22 (user: "x, y 말고 모든 값 사용").** Tags 100–125 carry the
+calibrated `x` / `y` (design + delta in a trailing comment), **`z`** (tag
+top in the calibration world frame, z 0 = the plate top) and **`yaw`**
+(world heading of the tag's x axis, CCW +). Three consumers:
+- `x` / `y` → `/robot_pose`, the hop odom distance, the prediction
+  fallback (the calibrated positions; `predictive_centering` reads the
+  newest `map_world_*.yaml` itself).
+- `yaw` → `/robot_pose.theta` (`robot.robot_pose_use_tag_yaw`,
+  `_tag_yaw_error_deg`): the align squares the body to the TAG's edges, so
+  a tag laid δ off its lane axis leaves the body δ off the zone heading
+  with `align_angle` reading 0; theta = zone + align + δ, δ = yaw − nearest
+  90° axis (≤ ±0.7° on plate 1; 9 mm at 1 m of reach).
+- `z` → pose-mode IK (`arm_calibration.use_tag_z`, `arm_transform.
+  tag_floor_z_m`): the floor under the tag is `(z − tag_thickness) −
+  world_floor_z_m` (−0.080, the cell design) above the CSV / `arm_base_z`
+  datum, and it enters `transform_world_to_arm(floor_z_m=)` exactly like
+  the lift. Plate 1 reads ~+20 mm (tag top −57 ± 10 mm vs the design
+  −79). ⚠️ z is the chain's weakest axis (sd 10 mm per tag, 7 mm session
+  to session) and a wrong z moves the tool TOWARD the workpiece, so
+  `tag_z_max_offset_m` (0.05) refuses a gross value instead of sending it;
+  watch the first pose-mode run's `[Arm REAL] Transform … floor +xx mm`
+  lines against the standoff loop.
+Tags without the keys (dock, pivots, zone A, plates D/E) behave as before;
+`use_tag_z: false` / `robot_pose_use_tag_yaw: false` restore the design
+floor / zone-only theta. `tools/check_calibrated_tag_z_yaw.py` (39).
+roll / pitch stay in the map_world file only — a floor tag's tilt is the
+chain's reading of the chassis attitude, not map data.
+
 ## Transform Parameters (4-DOF physical model)
 
 **Source of truth since 2026-09-21 (evening): `apriltag_nav/config/tf/tf_chain.yaml`**
@@ -2042,6 +2071,35 @@ pre-existing failure). **`mobile_node` must be restarted to read it**
 (`sudo systemctl restart mobile-manipulator` — the charge relay drops, as
 on every stop); the calibration nodes read `map_in_path` per session and
 need nothing.
+
+**Then (18:00, user: "x, y 말고 모든 값 사용") — z and yaw applied too.**
+map.yaml tags 100–125 gained `z` (tag top, calibration world frame) and
+`yaw` (tag x-axis heading, wrapped; zone B ≈ 0°, zone C ≈ 180°, ±0.7° off
+the axis) from the same final file; roll / pitch deliberately not (a floor
+tag's tilt = the chassis attitude the chain measured). Consumers:
+`mobile_controller._tag_yaw_error_deg` adds δ = yaw − nearest axis to
+`/robot_pose.theta` (sign pinned: `rot2rpy_deg`'s rz is the world
+heading of the tag x axis, CCW +, roll 180 notwithstanding — checked on
+a synthetic face-down tag; the align leaves the body parallel to the tag
+edges, so δ carries 1:1 into theta); `arm_transform.tag_floor_z_m` turns z
+into the floor height above the CSV datum ((z − 0.001) − (−0.080)) and
+`transform_world_to_arm(floor_z_m=)` adds it to the arm base height like
+the lift, `arm_controller._exec_pose` looking the tag up by
+`/robot_pose.id` (map.yaml read lazily on first use). Config: `robot.
+robot_pose_use_tag_yaw`, `arm_calibration.use_tag_z / world_floor_z_m /
+tag_z_max_offset_m` (0.05: a gross z is refused, since at the 16.5 mm
+standoff a wrong z is a collision). Plate 1's z says the floor is ~+20 mm
+above the design −80 under every tag (tag top −57 ± 10 mm; −35 at 104,
+−91 at 110) — real or a chain z bias is not settled; the standoff loop
+covers ±20 mm, so the first pose-mode scan is the test. Promoted to
+*Coordinate Frames*. Verified offline: new
+`tools/check_calibrated_tag_z_yaw.py` (39 — floor arithmetic, refusal,
+bit-identity at floor 0, the floor entering exactly like the lift, theta
+in zones A/B/C for six yaws incl. the ±180 wraps and the switch, the real
+map.yaml's 26 z / yaw inside their bounds), `check_lift_compensation` 11,
+`check_pose_vs_joint` 27, `check_scan_progress` 62, `check_nav_sequencing`
+14, `check_front_cam_guard` 31. Not run on the robot: `mobile_node` (map +
+theta) and `arm_node` (floor) restart required.
 
 ### 2026-09-22 — C and E re-solved for the new hand_cam K; joint offsets APPLIED to the locator chain; T_ab2mb refit — one set
 
