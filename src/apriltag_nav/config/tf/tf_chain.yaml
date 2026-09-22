@@ -62,54 +62,55 @@
 #   both signs negative because Rz(180) flips y and the inverse flips it
 #   back). No mount tilt: a 655-point real-robot fit read 0.0001 / 0.0007 rad.
 #
-# APPLIED = CALIBRATED 2026-09-22 by chain_calib (src/chain_calib) on the
-# printed A0 tag sheet, ARM session log/chain_calib/20260921_arm (65 views
-# with joint angles, spins 30 / 90 / 150 deg, hand_cam 0.25-0.56 m, tilts
-# to 41 deg): front_cam on tag 200, hand_cam on grid tags 300-309, ruler
-# print scale 1.0 / 1.0 / 90.00 mm, front_cam's rotation replaced by the
-# level-floor prior (a single tag's tilt is the paper's local slope). The
-# chain in the fit: the 2026-09-22 re-solved T_hc2ee (checkerboard hand_cam
-# K/D) and the arm joint zero offsets (arm_joint_offsets.yaml, FK(q + dq)
-# for the flange) — the FOUR are one set. Base fit F (fc frame) folded in
-# as T_ab2mb = T_ab2mb_prev . T_mb2fc . F . inv(T_mb2fc) (one base pose
-# cannot separate an arm-mount error from a front_cam error and does not
-# need to: every consumer uses the product). Chain rms after the fit 7.9 mm
-# / 0.46 deg (hold-out every 4th view 7.7), jackknife 0.4 / 0.4 / 0.9 mm;
-# the same session fits to 10.1 mm (hold-out 12.7) without the offsets.
-# vs design: t (-8.7, -3.4, +8.9) mm, yaw -0.79 deg, roll/pitch -0.45/-0.10.
+# APPLIED = CALIBRATED 2026-09-22 (evening) by chain_calib (src/chain_calib)
+# on the printed A0 tag sheet, ARM session log/chain_calib/20260921_arm (65
+# views with joint angles, spins 30 / 90 / 150 deg, hand_cam 0.25-0.56 m,
+# tilts to 41 deg): front_cam on tag 200, hand_cam on grid tags 300-309,
+# ruler print scale 1.0 / 1.0 / 90.00 mm, front_cam's rotation replaced by
+# the level-floor prior. The chain in the fit: the 2026-09-22 re-solved
+# T_hc2ee (checkerboard hand_cam K/D) and the arm joint zero offsets
+# (arm_joint_offsets.yaml, FK(q + dq) for the flange) — the FOUR are one set.
 #
-# History: 2026-09-21 value t (-7.47, -123.68, -628.44) / rpy (0.320, 0.786,
-# 178.573) from a 63-view session WITHOUT joint angles (deleted 2026-09-22
-# on the user's instruction — it can never take the offsets; git has it),
-# 34 mm / 1.66 deg from the design; 20 mm of y and 0.64 deg of yaw moved
-# with the offsets, which absorb what the J2 / J3 zeros took out of the FK.
+# RULE (user, 2026-09-22): ONLY x, y and yaw are fitted; roll = pitch = 0
+# and tz = the design -0.652 are held FIXED (`chain_calib.py solve` "planar",
+# `solver.fit_planar_T_ab2mb`). A floor-sheet session measures grid-normal-
+# vs-arm-z = mount tilt + the chassis' attitude on the floor at THAT parking
+# + the paper's slope (+-1 deg, +-10 mm of tz / tx at the 0.64 m lever, and
+# it moved 1 deg between the two 09-21 parkings), and the map calibration
+# runs at OTHER parkings — so that tilt must not live in this constant. What
+# the fit cannot absorb stays in the residual: session rms 12.5 mm / 0.65 deg
+# against 7.9 mm for the 6-DOF fit on the same views — by design. Jackknife
+# sd 0.4 / 0.4 mm / 0.01 deg on (x, y, yaw).
+# vs design: t (-8.2, -6.1, 0.0) mm, yaw -0.80 deg, roll / pitch exactly 0.
+# Robot constants, both agreed across sessions: the yaw and the in-plane
+# translation.
 #
-# What is a robot constant in it: the YAW and the in-plane translation —
-# two independent sessions agreed to 0.1 deg / 2 mm BEFORE the offsets;
-# re-check with them. What is NOT: roll / pitch (+-1 deg) and the tz / tx
-# they drag along (+-10 mm at the 0.64 m lever) — a floor-sheet session
-# measures grid-normal-vs-arm-z, i.e. mount tilt + the chassis' attitude on
-# the floor at that parking + the paper's slope; expect ~8 mm of shift per
-# re-parking. Kept because the locator chain and pose-mode IK must agree,
-# not as a mount measurement.
+# History: 2026-09-21 6-DOF value t (-7.47, -123.68, -628.44) / rpy (0.320,
+# 0.786, 178.573) from a 63-view session WITHOUT joint angles (deleted
+# 2026-09-22, git has it), 34 mm / 1.66 deg from the design; 2026-09-22
+# afternoon 6-DOF refit with the offsets t (-8.68, -103.42, -643.10) / rpy
+# (-0.451, -0.103, 179.214) — superseded the same evening by the planar
+# rule. The 20 mm of y that moved with the offsets is what the J2 / J3
+# zeros took out of the FK.
 #
 # Consequence: pose-mode targets move with this value; the planner's
-# rrt_final_path_* were planned with the DESIGN mount and land ~19 mm
-# from their assigned_workpoints_* twins (45 with the 09-21 value) until
-# the planner regenerates them with the updated URDF.
+# rrt_final_path_* were planned with the DESIGN mount and land ~15-20 mm
+# from their assigned_workpoints_* twins until the planner regenerates them
+# with the updated URDF. With roll = pitch = 0 the lift is purely along
+# arm z again (check_lift_compensation).
 #
 # Readers: arm_transform (pose-mode IK, as the six-number inverse — see
 # `arm_calibration` below), path_tag_locator / chain_calib / robot_sim
 # (the matrix), check_pose_vs_joint / check_lift_compensation.
 # -----------------------------------------------------------------------------
 T_ab2mb:
-  source: "CALIBRATED 2026-09-22 by chain_calib on the A0 tag sheet, ARM session (65 views with joint angles, log/chain_calib/20260921_arm; base fit F folded into the previous value) with the 2026-09-22 re-solved T_hc2ee, the checkerboard hand_cam K and the arm joint offsets (arm_joint_offsets.yaml) in the chain — the four are ONE set; chain rms after the fit 7.9 mm / 0.46 deg (hold-out 7.7). Design Rz(180) / (0, -0.100, -0.652)"
-  t_mm: [-8.675, -103.423, -643.095]
-  rpy_deg_xyz: [-0.4515, -0.1029, 179.2143]
+  source: "CALIBRATED 2026-09-22 (evening) by chain_calib PLANAR fit on the A0 tag sheet, ARM session (65 views with joint angles, log/chain_calib/20260921_arm): ONLY x, y, yaw fitted; roll = pitch = 0 and tz = -0.652 (design) held FIXED by rule — a floor-sheet session measures the chassis' attitude at that parking, which must not enter this constant (user, 2026-09-22). Chain: the 2026-09-22 re-solved T_hc2ee, the checkerboard hand_cam K, arm_joint_offsets.yaml. Jackknife sd 0.4 / 0.4 mm / 0.01 deg; session rms 12.5 mm (the parking tilt stays in the residual, by design; the 6-DOF fit reaches 7.9)"
+  t_mm: [-8.195, -106.126, -652.000]
+  rpy_deg_xyz: [0.0000, 0.0000, 179.1961]
   matrix:   # row-major 4x4, metres
-    [-0.999904372, -0.013725965,  0.001687208, -0.008675003,
-      0.013712224, -0.999874745, -0.007903818, -0.103422668,
-      0.001795484, -0.007879926,  0.999967341, -0.643095458,
+    [-0.999901578, -0.014029783,  0.000000000, -0.008195464,
+      0.014029783, -0.999901578,  0.000000000, -0.106125630,
+      0.000000000,  0.000000000,  1.000000000, -0.652000000,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:
     t_mm: [0.0, -100.0, -652.0]

@@ -254,6 +254,76 @@ def fit_corrections(samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc,
     return results
 
 
+def planar_T_ab2mb(tx_m, ty_m, yaw_rad, tz_m):
+    """T_ab2mb with roll = pitch = 0 EXACTLY: translation (tx, ty, tz) and a
+    pure yaw about vertical. `yaw_rad` is the full angle (design = pi)."""
+    c, s_ = math.cos(yaw_rad), math.sin(yaw_rad)
+    T = np.eye(4)
+    T[:3, :3] = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+    T[:3, 3] = [tx_m, ty_m, tz_m]
+    return T
+
+
+def planar_params(T_ab2mb):
+    """(tx, ty, yaw) of a T_ab2mb — the yaw of its z-rotation part."""
+    T = np.asarray(T_ab2mb, dtype=float)
+    return float(T[0, 3]), float(T[1, 3]), math.atan2(T[1, 0], T[0, 0])
+
+
+def _planar_residuals(params, H, As, T_mb2fc, Ss, tz_m, lifts, w_rot):
+    out = []
+    for A, S, lift in zip(As, Ss, lifts):
+        B = planar_T_ab2mb(params[0], params[1], params[2], tz_m - (lift or 0.0)) @ T_mb2fc
+        E = invert_T(H @ A @ B) @ S
+        out.append(np.concatenate([_rotvec_from_R(E[:3, :3]) * w_rot, E[:3, 3]]))
+    return np.concatenate(out)
+
+
+def fit_planar_T_ab2mb(samples: List[ChainSample], T_hc2ee, T_mb2fc, tz_m, seed_T_ab2mb=None,
+                       w_rot=0.5, jackknife=True):
+    """Fit T_ab2mb with ONLY x, y and yaw free; roll = pitch = 0 and tz fixed
+    (the design value) — the 2026-09-22 rule (user): a floor-sheet session
+    measures grid-normal-vs-arm-z, which is the mount tilt PLUS the
+    chassis' attitude at that parking PLUS the paper's slope, and the map
+    calibration runs at OTHER parkings, so that tilt must not enter the
+    constant. What the fit cannot absorb (the session's tilt) stays in
+    the residual — expect a worse rms than the 6-DOF `base` fit, that is
+    the point. Returns (T_ab2mb, (tx, ty, yaw), jackknife sd (m, m, rad)
+    or None, rms_pos_m, rms_rot_deg)."""
+    H = np.asarray(T_hc2ee, dtype=float)
+    T_mb2fc = np.asarray(T_mb2fc, dtype=float)
+    As = [invert_T(pose_fr5_to_matrix_m(s.tcp_pose_mm_deg)) for s in samples]
+    Ss = [np.asarray(s.T_hc2W) @ invert_T(np.asarray(s.T_fc2W)) for s in samples]
+    lifts = [float(s.lift_height_m or 0.0) for s in samples]
+    x0 = np.array(planar_params(seed_T_ab2mb) if seed_T_ab2mb is not None else (0.0, -0.100, math.pi))
+
+    def solve(idx):
+        f = least_squares(_planar_residuals, x0, args=(H, [As[i] for i in idx], T_mb2fc, [Ss[i] for i in idx], tz_m,
+                                                       [lifts[i] for i in idx], w_rot), method='lm', xtol=1e-12, ftol=1e-12)
+        return f.x
+    n = len(As)
+    x = solve(range(n))
+    T = planar_T_ab2mb(x[0], x[1], x[2], tz_m)
+    per = []
+    for A, S, lift in zip(As, Ss, lifts):
+        B = planar_T_ab2mb(x[0], x[1], x[2], tz_m - lift) @ T_mb2fc
+        per.append(pose_error(S, H @ A @ B))
+    p = np.array([d for d, _ in per]); r = np.array([d for _, d in per])
+    sd = None
+    if jackknife and n >= 4:
+        xs = np.array([solve([i for i in range(n) if i != k]) for k in range(n)])
+        sd = np.sqrt((n - 1) / n * ((xs - xs.mean(0)) ** 2).sum(0))
+    return T, tuple(float(v) for v in x), sd, float(np.sqrt(np.mean(p ** 2))), float(np.sqrt(np.mean(r ** 2)))
+
+
+def F_for_T_ab2mb(T_ab2mb_current, T_mb2fc, T_ab2mb_new):
+    """The fc-frame correction F that `corrected_T_ab2mb` would need to turn
+    the current T_ab2mb into `T_ab2mb_new` — so a fit expressed as an
+    absolute T_ab2mb can go through the same evaluate / pair_errors path."""
+    T_mb2fc = np.asarray(T_mb2fc)
+    return invert_T(T_mb2fc) @ invert_T(np.asarray(T_ab2mb_current)) @ np.asarray(T_ab2mb_new) @ T_mb2fc
+
+
 def evaluate(D, F, samples: List[ChainSample], T_hc2ee, T_ab2mb, T_mb2fc, lift_compensate=None,
              name='holdout') -> FitResult:
     """Residual of a GIVEN correction on samples that did not take part in

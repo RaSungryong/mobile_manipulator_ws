@@ -1583,6 +1583,21 @@ T_ab2mb → map calibration; change one, redo only what is to its right
 this section are the 09-21 ones and stay as history). Work Log
 2026-09-22 "C, E re-solved".
 
+⚠️ **Since 2026-09-22 (later that evening) `T_ab2mb` is fitted PLANAR —
+user rule: "roll/pitch는 설계값 0으로 고정하고 x, y, yaw만 피팅, 섀시
+기울기가 T_ab2mb에 들어가지 않게".** A floor-sheet session measures the
+chassis' attitude at that parking (±1°, ±10 mm at the 0.64 m lever) and
+the map calibration runs at other parkings, so that tilt cannot be a
+constant. Applied: **t (−8.20, −106.13, −652.00) mm, rpy (0, 0,
+179.196°)** — roll = pitch = 0 exactly, tz = the design −0.652, only
+(x, y, yaw) from the data (jackknife 0.4 / 0.4 mm / 0.01°); the session
+tilt stays in the residual (12.5 mm rms vs 7.9 for the 6-DOF fit — by
+design). `chain_calib.py solve` reports `planar` next to `base` / `joint`
+and saves `T_ab2mb_planar` in `corrections.npz`; `solver.fit_planar_
+T_ab2mb` / `--planar-tz`. `arm_transform`'s tilt_x / tilt_y are 0 again
+and the lift is purely along arm z. The URDF `mobile_to_base` follows
+(xyz 0.006706 0.106230 0.652000, rpy 0 0 0.014030243).
+
 **Since 2026-09-21 (later the same day, user: the corrected chain is for
 end-effector pose control too) pose-mode IK uses the SAME transform:**
 `transform_world_to_arm` derives its 4-DOF parametrisation from
@@ -2032,6 +2047,34 @@ applied value comes from them: `20260921_arm` (samples, corners, meta,
 loads with joints_deg None" case now builds its own old-format session
 (48 still); the `tf_chain.yaml` T_ab2mb / T_hc2ee comment headers
 describe the 09-22 provenance and name the 09-21 value as history.
+
+**Then, later the same evening — T_ab2mb made PLANAR on the user's
+rule.** Asked what "±8 mm per re-parking" meant, the answer was that the
+6-DOF fit's roll / pitch ARE the chassis' attitude at the sheet's
+parking (plus paper slope), and since map calibration happens at other
+parkings ("F와 G를 같은 주차 위치에서 할 수는 없어") the user chose the
+third option offered: fix roll / pitch at the design 0 and fit only
+x, y, yaw, so no chassis tilt enters the constant. Built
+`solver.fit_planar_T_ab2mb` (T_ab2mb = T(x, y, tz_design)·Rz(yaw),
+least squares on (x, y, yaw) with the lift compensation per sample,
+jackknife) and `F_for_T_ab2mb` so the planar result goes through the
+same evaluate / pair-error reporting; `chain_calib.py solve` prints a
+`planar` row + `[planar]` block and stores `T_ab2mb_planar` /
+`planar_tz_m` in `corrections.npz` (`--planar-tz` overrides the design
+tz read from `tf_chain.yaml`). On the arm session (all 61 views, new
+hand-eye, new K, offsets): **t (−8.20, −106.13, −652.00) mm, yaw
+179.196°**, jackknife 0.43 / 0.44 mm / 0.009°; rms 12.5 mm / 0.65°
+(hold-out 14.2 with every 4th view out) against 7.9 for the 6-DOF fit —
+the ~0.5° of session tilt the planar form refuses to absorb, which is
+the point. Applied to `tf_chain.yaml` + npz (comment header rewritten
+around the rule, the two 6-DOF values kept as history), the planner
+URDF `mobile_to_base` (rpy now 0 0 0.014030), README §5-A's apply
+block. Checks: `tf_chain_tool check` 13, `check_pose_vs_joint` 27,
+`check_lift_compensation` 11, `check_joint_offsets` 22,
+`check_front_cam_extrinsics` 24, `check_basler_tip` 11,
+`check_scan_progress` 62, `check_chain_calib` 48. Not run on the robot;
+the calibration launch and `arm_node` still need the restart named
+above.
 
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 

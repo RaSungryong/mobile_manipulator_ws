@@ -477,11 +477,23 @@ v11 v20 v45`(움직이는 중 캡처 / 태그 1개). 재투영 rms: 강체 **7.6
 rosrun chain_calib arm_offsets.py log/chain_calib/<세션> $A --hand-intrinsics config --exclude ...
 # 2. 적용 (yaml + npz; --disable 로 끄면 모든 소비자가 dq = 0)
 python3 src/apriltag_nav/tools/tf_chain_tool.py joint-offsets --apply log/chain_calib/<세션>/arm_offsets.npz --source "..."
-# 3. 같은 세션으로 T_ab2mb 를 다시 풀어 짝을 맞춘다 (--arm-offsets 기본 config)
+# 3. 같은 세션으로 T_ab2mb 를 다시 풀어 짝을 맞춘다 (--arm-offsets 기본 config).
+#    적용하는 값은 [planar] — x, y, yaw 만 피팅, roll = pitch = 0, tz = 설계값 (아래 규칙)
 rosrun chain_calib chain_calib.py $A solve log/chain_calib/<세션> --hand-intrinsics config --exclude ...
-python3 src/apriltag_nav/tools/tf_chain_tool.py set T_ab2mb --npz <corrected T_ab2mb> --source "..."
+python3 -c "import numpy as np; c=np.load('log/chain_calib/<세션>/corrections.npz'); np.savez('log/chain_calib/<세션>/T_ab2mb_planar.npz', T_ab2mb=c['T_ab2mb_planar'])"
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_ab2mb --npz log/chain_calib/<세션>/T_ab2mb_planar.npz --source "..."
+python3 src/apriltag_nav/tools/tf_chain_tool.py urdf       # 플래너 URDF mobile_to_base 줄을 옮겨 적는다
 python3 src/apriltag_nav/tools/tf_chain_tool.py check      # 13/13, URDF mobile_to_base 포함
 ```
+
+**T_ab2mb 는 planar 로 적용한다 (사용자 규칙, 2026-09-22).** 시트 세션이 재는
+roll / pitch 는 "그리드 법선 대 팔 z" — 마운트 기울기 + 그날 그 자리에서 섀시가
+바닥에 대해 기울어진 각 + 종이 경사 — 이고, map 캘리브레이션은 다른 주차 위치에서
+하므로 그 값이 상수에 들어가면 안 된다. `solve` 는 6-DOF `base` / `joint` 와 함께
+`planar` (x, y, yaw 만, roll = pitch = 0, tz 는 `tf_chain.yaml` 의 설계값 —
+`--planar-tz` 로 바꿀 수 있음) 를 같이 풀어 `corrections.npz` 의 `T_ab2mb_planar`
+에 저장한다. planar 의 잔차가 6-DOF 보다 큰 것은 (12.5 vs 7.9 mm, 2026-09-22 팔
+세션) 그 세션의 기울기를 흡수하지 않은 결과이며 정상이다.
 
 (hand-eye, dq, T_ab2mb, hand_cam K)는 **한 세트**다 — 하나가 바뀌면 그 오른쪽을 다시
 푼다 (CLAUDE.md *Transform Parameters*, Work Log 2026-09-22). 관절각이 기록되지 않은

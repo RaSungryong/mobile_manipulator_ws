@@ -499,11 +499,24 @@ def cmd_solve(args):
     if test:
         print("hold-out: %d sample(s) kept out of the fit: %s" % (len(test), ", ".join(s.label for s in test)))
     res = CC.fit_corrections(train, H, ext.T_ab2mb, ext.T_mb2fc_chain, compensate_T_ab2mb)
+    # the PLANAR base fit (2026-09-22, user's rule): T_ab2mb with x, y, yaw free
+    # and roll = pitch = 0, tz = the design value — the chassis' attitude at
+    # this parking must not enter the constant, because the map calibration
+    # runs at other parkings. Reported and saved next to the 6-DOF fits;
+    # `tf_chain_tool.py set T_ab2mb --npz corrections.npz:T_ab2mb_planar` applies it.
+    tz_design = float(TC.load_entry('T_ab2mb')['design']['t_mm'][2]) / 1e3 if args.planar_tz is None else float(args.planar_tz)
+    T_pl, x_pl, sd_pl, _, _ = CC.fit_planar_T_ab2mb(train, H, ext.T_mb2fc_chain, tz_design, seed_T_ab2mb=ext.T_ab2mb)
+    F_pl = CC.F_for_T_ab2mb(ext.T_ab2mb, ext.T_mb2fc_chain, T_pl)
+    Hh, As_, B_, Ss_, labels_ = CC.build_inputs(train, H, ext.T_ab2mb, ext.T_mb2fc_chain, compensate_T_ab2mb)
+    res['planar'] = CC._summarise('planar', np.eye(4), F_pl, Hh, As_, B_, Ss_, labels_)
+    res['planar'].jackknife_F_sd = sd_pl
 
     print("\n%-6s %-22s %-22s   what it means" % ("fit", "rms (mm / deg)", "max (mm / deg)"))
     notes = {'raw': "the chain as configured (T_hc2fc error per view)", 'hand': "T_hc2ee' = T_hc2ee . D  (hand-eye error)",
-             'base': "T_ab2mb' = T_ab2mb . T_mb2fc . F . inv(T_mb2fc)  (mount / front_cam)", 'joint': "both"}
-    for k in ('raw', 'hand', 'base', 'joint'):
+             'base': "T_ab2mb' = T_ab2mb . T_mb2fc . F . inv(T_mb2fc)  (mount / front_cam, 6-DOF)",
+             'planar': "T_ab2mb = (x, y, yaw) fit, roll = pitch = 0, tz %.3f m FIXED  (the applied form)" % tz_design,
+             'joint': "both (6-DOF)"}
+    for k in ('raw', 'hand', 'base', 'planar', 'joint'):
         r = res[k]
         line = "%-6s %6.2f / %-13.3f %6.2f / %-13.3f   %s" % (k, r.rms_pos_m * 1e3, r.rms_rot_deg, r.max_pos_m * 1e3, r.max_rot_deg, notes[k])
         if test:
@@ -525,7 +538,7 @@ def cmd_solve(args):
 
     print("\nthe user's metric — tag A (hand_cam axis) -> tag B (front_cam axis) through the chain vs the sheet:")
     print("  %-8s %-28s %-28s %s" % ("fit", "train pos mm mean/sd/rms/p95", "train rot deg mean/sd/rms/p95", "hold-out pos rms / rot rms"))
-    for k in ('raw', 'hand', 'base', 'joint'):
+    for k in ('raw', 'hand', 'base', 'planar', 'joint'):
         r = res[k]
         errs = CC.pair_errors(train, sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain, r.D, r.F, compensate_T_ab2mb)
         (pm, ps, pr, p95), (rm, rs, rr, r95) = CC.summarise_errors(errs)
@@ -572,9 +585,15 @@ def cmd_solve(args):
     if j.rms_pos_m > 4e-3:
         verdict += "\n         (high — hand_cam orientation per view; prefer views with >= 3-4 tags at 0.35-0.50 m, see the per-sample table)"
     print("\nverdict: %s" % verdict)
-    for k in ('hand', 'base', 'joint'):
+    for k in ('hand', 'base', 'planar', 'joint'):
         r = res[k]
         print("\n[%s]" % k)
+        if k == 'planar':
+            print("  x, y, yaw fit with roll = pitch = 0 and tz = %.4f m fixed (the session's chassis / paper tilt stays in the residual)" % tz_design)
+            print("  " + CC.describe_T(T_pl, "T_ab2mb (planar)") + "   (current: %s)" % CC.describe_T(ext.T_ab2mb, "")[2:])
+            if sd_pl is not None:
+                print("    jackknife sd: x %.2f mm, y %.2f mm, yaw %.3f deg" % (sd_pl[0] * 1e3, sd_pl[1] * 1e3, math.degrees(sd_pl[2])))
+            continue
         if k != 'base':
             print("  " + CC.describe_T(r.D, "D (ee frame)"))
             if r.jackknife_D_sd is not None:
@@ -594,6 +613,7 @@ def cmd_solve(args):
               % (out, k, out))
     np.savez(os.path.join(args.dir, "corrections.npz"),
              D_hand=res['hand'].D, F_base=res['base'].F, D_joint=res['joint'].D, F_joint=res['joint'].F,
+             T_ab2mb_planar=T_pl, planar_tz_m=tz_design,
              sheet_sx=sheet.sx, sheet_sy=sheet.sy, sheet_tag_size_m=sheet.tag_size_m,
              holdout=np.array([s.label for s in test]))
     print("\ncorrections saved -> %s/corrections.npz" % args.dir)
@@ -633,7 +653,9 @@ def main():
     p.add_argument("--holdout-every", type=int, default=0, help="hold out every k-th sample (e.g. 4)")
     p.add_argument("--min-tags", type=int, default=1, help="use only samples where hand_cam saw at least this many tags")
     p.add_argument("--max-range", type=float, default=None, help="use only samples with hand_cam within this range (m)")
-    p.add_argument("--pairs", choices=["hand", "base", "joint"], default=None,
+    p.add_argument("--planar-tz", type=float, default=None, metavar="M",
+                   help="tz (m, negative: mb origin below the arm base) held fixed in the planar fit; default = the design value in tf_chain.yaml")
+    p.add_argument("--pairs", choices=["hand", "base", "planar", "joint"], default=None,
                    help="also list every (hand_cam tag -> front_cam tag) pair's error, raw vs this fit")
     p.add_argument("--write-hand-eye", choices=["hand", "joint"], default=None,
                    help="write apriltag_nav/config/tf/T_hc2ee_chain_<date>.npz from this fit's D (not applied)")
