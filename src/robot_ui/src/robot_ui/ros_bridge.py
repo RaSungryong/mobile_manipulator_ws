@@ -47,7 +47,7 @@ from sensor_msgs.msg import BatteryState, Image
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger, SetBool
 
-from robot_msgs.msg import AprilTagDetectionArray, ArmState
+from robot_msgs.msg import AprilTagDetectionArray, ArmState, Pose2DWithFlag
 from robot_msgs.srv import CaptureImages, PredictRa
 
 
@@ -231,6 +231,16 @@ class RosBridge:
         # latest_detections().
         self._det_lock = threading.Lock()
         self._det_latest = {}
+        # Latest /robot_pose (mobile_node, once per tag arrival — after the
+        # stop align, at rest), for scripts that put the arm at a WORLD
+        # point through transform_world_to_arm the way a pose-mode scan
+        # does (plugins/tip_over_ref_tag.py). Not latched upstream, so it is
+        # kept here from the moment the bridge exists; snapshot only, no
+        # signal — poll via robot_pose_snapshot() and check `id`/`stamp`.
+        self._pose_lock = threading.Lock()
+        self._pose_latest = None
+        self._sub('/robot_pose', Pose2DWithFlag, self._cb_robot_pose,
+                  queue_size=1)
         for cam in STREAM_CAMERAS:
             self._sub(f'/{cam}/tag_detections', AprilTagDetectionArray,
                       self._cb_detections, callback_args=cam, queue_size=1)
@@ -366,6 +376,24 @@ class RosBridge:
             self._mobile_latest = state
         self._emit(self.mobile_state, state)
 
+    def _cb_robot_pose(self, msg):
+        if not self._alive:
+            return
+        with self._pose_lock:
+            self._pose_latest = {
+                'x': float(msg.x), 'y': float(msg.y),
+                'theta': float(msg.theta), 'id': int(msg.id),
+                'flag': bool(msg.flag),
+                'stamp': msg.header.stamp.to_sec(),
+            }
+
+    def robot_pose_snapshot(self):
+        """Latest /robot_pose as a dict (x, y [m] manipulator frame, theta
+        [deg], id = the tag it was computed from, stamp), or None before the
+        first arrival since this bridge started."""
+        with self._pose_lock:
+            return dict(self._pose_latest) if self._pose_latest else None
+
     def _cb_camera_state(self, msg):
         if not self._alive:
             return
@@ -449,13 +477,21 @@ class RosBridge:
             self._arm_event.wait(timeout=0.1)
         return False, 'shutting down'
 
-    def arm_move_cart(self, pose, vel=30.0, acc=50.0, timeout=60.0):
-        """Absolute Cartesian move. Blocks until arm_node reports completion."""
+    def arm_move_cart(self, pose, vel=30.0, acc=50.0, timeout=60.0,
+                      linear=True):
+        """Absolute Cartesian move. Blocks until arm_node reports completion.
+
+        ``linear=True`` (default, what the UI's MOVE button sends) = MoveL,
+        a straight TCP path; ``linear=False`` = MoveCart, joint-interpolated
+        to the same endpoint — for a big repositioning move (see
+        ArmController.move_cart: MoveL crawls or times out when the path
+        reorients the wrist)."""
         if len(pose) != 6:
             return False, 'pose needs 6 values [x y z rx ry rz]'
         seq = self.arm_seq()
         self._pub_arm_move.publish(String(json.dumps(
-            {'pose': [float(v) for v in pose], 'vel': vel, 'acc': acc})))
+            {'pose': [float(v) for v in pose], 'vel': vel, 'acc': acc,
+             'linear': bool(linear)})))
         return self.wait_for_motion(seq, timeout)
 
     def arm_jog(self, axis, delta, vel=30.0, acc=50.0, timeout=30.0):

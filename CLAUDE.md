@@ -1880,6 +1880,102 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-22 (18:00) — Tip over cross tag 0 from the 102 / 103 / 104 stops: `robot_ui.tip_check` + two Scripts-tab plugins (hover 30 mm; touch + Keyence standoff + LED capture), 3 rounds
+
+User, two requests: (1) "fc으로 102, 103, 104에서 멈췄을 때, 정반 중심
+(world, map.yaml) 기준 0번 레퍼런스 태그 (-0.60, -1.20, 0.001)보다 높은
+(-0.60, -1.20, 0.030)에 tcp(tip) 이동 — 3초 멈추고 홈, 다음 태그 …
+104까지, 다시 102부터, 3번"; then (2) the same at **(-0.60, -1.20,
+0.002)**, saving the world target + joints on arrival, 1 s later the
+Keyence standoff, the same again `_after_correction`, then the VISION
+lamp and a capture, 3 s, next. Built as robot_ui Scripts-tab plugins
+(RUN from any browser, runs on the robot PC) over ONE module,
+`src/robot_ui/src/robot_ui/tip_check.py` (`Settings` + `run_sequence`):
+**`plugins/tip_over_ref_tag.py`** (hover30) and
+**`plugins/tip_touch_ref_tag.py`** (touch). Per point: `GOTO <tag>` on
+`/task_command` (task_executor homes the arm, drives, aligns) →
+`/robot_pose` of THAT arrival → `transform_world_to_arm` (the pose-mode
+scan's own maths, live lift) → tip → flange with `T_ee2tip` → MoveCart
+to 0.20 m above → MoveL down → [touch: record before; 1 s;
+`/arm/standoff` (config target 16.5); record after_correction;
+`/camera/capture` lamp on → `results/tip_check/<session>/r<n>_tag<id>.png`]
+→ 3 s → MoveL up; the next GOTO's home takes the arm back, the last
+point homes explicitly. UNDOCK first when the BMS shows current (the
+robot was charging on 500 at 46 %). Records
+`log/apriltag_nav/tip_check/<ts>_<name>/`: `summary.csv` + one yaml per
+point (commanded world target, robot pose, arm-frame targets, and for
+before / after_correction the TCP, the six joints, the tip's position in
+WORLD axes (the affine transform inverted: target + R_AWᵀ·Δ), its error
+vs the target, the live Keyence line; the standoff result; the image).
+
+Settled with the user when asked: **z datum — both targets are from the
+PLATE TOP** (reference_tags.yaml's frame), and `transform_world_to_arm`'s
+world z is the FLOOR datum (arm_base_z above the floor), so the module
+adds 0.080 before the transform (`PLATE_TOP_ABOVE_FLOOR_M`; feeding a
+plate-top z in directly puts the tip 80 mm too LOW — the 2026-09-14
+hand-eye check added the same +0.080 by hand). Hover: tip z −542 mm arm
+frame, flange −328; touch: tip −570 (1 mm above the tag's top face — the
+tip is the surface point the Basler centre sees at the case's 16.5 mm
+zero standoff, so the case arrives ~16.5 mm above the tag and the loop
+trims it), flange −356. Tool straight down, **rz 0 at all three stops**
+((180, 0, 0) is also the flange's home orientation, so the approach is a
+pure translation); the script sends UNDOCK itself; two-stage approach;
+standoff target = robot.yaml 16.5; save BOTH the commanded target and
+the measured tip world position; capture and save only, no Ra; an
+unconverged standoff is recorded and the capture still happens; 3
+rounds. Built in without asking: the tool frame is read off `/arm/state`
+at the home joints (flange (−159, 700, 774) vs tip), the PHYSICAL flange
+is bounds-checked (reach ≤ 1.25 m, z ≥ −0.5 m, verify_chain's body-
+clearance line: below the base plane needs ≥ 0.65 m — here 0.75–0.86 m),
+and a GOTO whose base result does not confirm the tag, a `/robot_pose`
+for another tag or older than the command, an unknown lift height or an
+arm not at home REFUSE before any arm move. `DRY_RUN = True` prints the
+targets for the design stops: hover tip (−394.5, 1004.5, −542) /
+(4.2, 998.5, −542) / (401.8, 998.8, −542) mm at 102 / 103 / 104.
+
+`RosBridge` gained `robot_pose_snapshot()` (a `/robot_pose` subscription
+kept from bridge start — the topic is not latched and is published once
+per arrival, at rest after the align) and `arm_move_cart(..., linear=)`
+(the JSON key arm_node already honoured; the UI's MOVE button is
+unchanged, MoveL). Verified offline: scratch `t_tip_check.py` (**42** —
+hover: dry run moves nothing; charging → UNDOCK → 9 GOTOs → 27 moves in
+MoveCart / MoveL / MoveL order at rpy (−180, 0, 0), descend exactly
+200 mm, every descend z −327.6, home at the end, 9 rows + 9 yaml with
+the planted 0.3 mm settle error read back as tip world z 0.0303; touch:
+move-move-standoff-capture-move per point, standoff target None, LED on,
+descend z −355.6, the fake's −1.7 mm correction read back as
+`correction_dz_mm` and after-tip wz 0.0006, joints before / after, the
+PNG per point, yaml before / after_correction / standoff / capture
+blocks, the Keyence line before (18.2) and after (16.5); an unconverged
+standoff and a failed capture are recorded and the sequence continues;
+a failed GOTO stops it; wrong-tag pose, not-at-home, out-of-reach
+refuse; the tip tool frame sends tip coordinates; cancel during the
+dwell leaves the arm; a 100 mm lift lowers the target 100 mm),
+`check_web_ui.py` 128, `check_task_list_ui.py` 102. The bridge change
+needs a `robot_ui_web` restart (a hand `rosnode kill` + detached
+`roslaunch robot_ui robot_ui_web.launch` was used first; the user's
+`systemctl restart mobile-manipulator` at 18:03 then replaced it with the
+service's node, which loaded the new bridge — the plugins and `tip_check`
+are imported at RUN time, so they need only the Scripts tab's refresh).
+
+**Run on the robot by the operator the same evening.** Hover (18:05,
+`tip_check/20260922_180545_tip_over_ref_tag0.csv`, the pre-module CSV
+format): round 1 at 102 / 103 / 104 reached, controller settle ≤ 0.2 mm,
+STOP during round 2. Touch (18:41, `20260922_184115_touch/`): **9 / 9
+points, every Keyence standoff converged in 3–6 steps (|err| ≤ 0.17 mm),
+every capture saved** (`results/tip_check/20260922_184115_touch/`). The
+number to keep: the standoff correction was **−4.6 … −5.1 mm (mean
+−4.8, sd 0.16) at all three stops and all three rounds** — the chain
+placed the tip ~4.8 mm ABOVE the tag's top face and the sensor took it
+down; after the correction the model reads the tip at world z −0.0025 …
+−0.0030. A constant, stop-independent z bias of the world → arm chain
+(T_ab2mb tz / arm_base_z / T_ee2tip z / the 0.080 plate height), not
+a per-stop navigation term; xy is not measured by this (the Basler
+frames are). A first touch attempt at 18:40 stopped before moving:
+"task_executor did not start goto_102 within 20 s" — the GOTO right
+after the operator's STOP was not picked up within the ack window;
+the retry a minute later ran.
+
 ### 2026-09-22 — Map-calibration hand-cam align: orientation FIXED at the design view pose, translation-only correction to 0.50 m; plans regenerated (seeds were 190 mm off)
 
 User: "map 갤리브레이션 진행할 때 핸드카메라 어라인은 x,y 평면에서
