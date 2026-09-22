@@ -12,8 +12,8 @@
     angle — map.yaml `yaw` minus the nearest 90-deg axis — in every zone,
     with the sign of the world CCW convention; tags without `yaw`, the
     config switch off, and a nonsense yaw all give the old theta.
-  * The real map.yaml: every calibrated tag has a z inside the refusal
-    limit and a yaw within 2 deg of an axis; uncalibrated tags have neither.
+  * The real map.yaml: every calibrated tag has a yaw within 2 deg of an
+    axis, no tag carries z (user's decision), uncalibrated tags have no yaw.
 
 Runs with no ROS master (rospy / msgs stubbed by the nav harness).
 """
@@ -116,22 +116,24 @@ def main():
     # ---- the real map.yaml ----
     tags = yaml.safe_load(open(paths.MAP_PATH))['tags']
     calib_real = (yaml.safe_load(open(paths.CONFIG_PATH)).get('arm_calibration') or {})
-    have = [t for t, v in tags.items() if 'z' in v]
-    check('26 tags carry z', len(have) == 26 and sorted(have) == list(range(100, 126)), str(len(have)))
-    check('every z inside the refusal limit',
-          all(abs(tag_floor_z_m(tags[t], calib_real)) <= 0.05 for t in have))
+    have = [t for t, v in tags.items() if 'yaw' in v]
+    check('26 tags carry yaw', len(have) == 26 and sorted(have) == list(range(100, 126)), str(len(have)))
+    check('no tag carries z (user: z not used, lines removed)',
+          not any('z' in v for v in tags.values()))
     check('every yaw within 2 deg of an axis',
           all(abs((tags[t]['yaw'] + 45) % 90 - 45) < 2.0 for t in have))
     check('zone B tags laid along +x, zone C along -x',
           all(abs(tags[t]['yaw']) < 2 for t in range(100, 113)) and
           all(abs(abs(tags[t]['yaw']) - 180) < 2 for t in range(113, 126)))
-    check('uncalibrated tags have neither key',
-          all('z' not in v and 'yaw' not in v for t, v in tags.items() if t not in have))
+    check('uncalibrated tags have no yaw',
+          all('yaw' not in v for t, v in tags.items() if t not in have))
     # user's decision (2026-09-22 evening): yaw IS used, z is recorded only
     check('robot.yaml: yaw on', bool((yaml.safe_load(open(paths.CONFIG_PATH))['robot']).get('robot_pose_use_tag_yaw')))
     check('robot.yaml: z OFF (user decision)', calib_real.get('use_tag_z') is False)
-    check('with the real config every tag gives floor 0',
+    check('with the real map + config every tag gives floor 0',
           all(tag_floor_z_m(tags[t], calib_real) == 0.0 for t in have))
+    check('even a z would be ignored with the real config',
+          tag_floor_z_m({'z': -0.0585}, calib_real) == 0.0)
 
     bad = sum(1 for ok in H.checks if not ok) if hasattr(H, 'checks') else 0
     return bad
