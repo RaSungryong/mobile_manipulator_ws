@@ -191,11 +191,14 @@ the hand-cam can see tag A. The node will:
 2. Detect tag A in the hand-cam image, then iteratively move the arm so
    that the tag appears at image center at `align.target_distance_m`
    (0.50 m). **`align.orientation: fixed` (default since 2026-09-22):**
-   the orientation of the seed pose is kept for the whole align — rz is
-   the planner's free camera spin, rx/ry the design "parallel to the
-   tag" through the calibrated chain — and every step is a pure
-   TRANSLATION: x/y in the image plane, z along the optical axis
-   (vertical) to the target range. The tilt the camera reads is recorded
+   nothing about the orientation comes from the tag — rz is the
+   planner's free camera spin (kept as the seed left it), rx/ry are
+   held at `fixed_rx_deg` / `fixed_ry_deg` (−180 / 0 = tool straight
+   down the arm z; `null` = the seed's own design values) — and every
+   step is a TRANSLATION: x/y in the image plane, z along the optical
+   axis (vertical) to the target range (the first step also turns rx/ry
+   onto the fixed value, ≤ 1° from a design seed). The approach to the
+   seed is not held to it. The tilt the camera reads is recorded
    per iteration (`history[].tilt_deg`) and warned about above
    `tilt_warn_deg`, never corrected — it is the arm's orientation error
    plus the tag's slope, which the 6-DOF chain observation does not need

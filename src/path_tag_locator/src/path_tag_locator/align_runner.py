@@ -168,6 +168,13 @@ def run_auto_align(*,
     orientation = str(getattr(align_cfg, "orientation", "correct")).lower()
     fix_orientation = orientation == "fixed"
     tilt_warn_deg = float(getattr(align_cfg, "tilt_warn_deg", 0.0) or 0.0)
+    # rx / ry held at a fixed value during the align steps (rz kept);
+    # None = the seed's own. The approach to the seed is not held to it.
+    fixed_rpy = None
+    _frx = getattr(align_cfg, "fixed_rx_deg", None)
+    _fry = getattr(align_cfg, "fixed_ry_deg", None)
+    if fix_orientation and _frx is not None and _fry is not None:
+        fixed_rpy = (float(_frx), float(_fry))
     depth_tol_m = float(getattr(align_cfg, "depth_tol_m", 0.0) or 0.0)
     target_d = float(align_cfg.target_distance_m or 0.0)
 
@@ -175,6 +182,7 @@ def run_auto_align(*,
         report = {
             "iterations": iters,
             "orientation": orientation,
+            "fixed_rx_ry_deg": list(fixed_rpy) if fixed_rpy else None,
             "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
             "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
             "final_tcp": None,
@@ -229,7 +237,13 @@ def run_auto_align(*,
         T_target = compute_target_ee_pose(
             T_cur, T_hc2ee, T_cam2tag,
             target_distance_m=align_cfg.target_distance_m,
-            fix_orientation=fix_orientation)
+            fix_orientation=fix_orientation, fixed_rpy=fixed_rpy)
+        if fix_orientation and iters == 1:
+            tp = matrix_m_to_pose_fr5(T_target)
+            rospy.loginfo(
+                "auto_align: orientation held at rx=%.2f ry=%.2f (rz %.2f kept)%s",
+                tp[3], tp[4], tp[5],
+                "" if fixed_rpy else " — the seed's own")
         step = clamp_step(T_cur, T_target,
                           max_step_m=align_cfg.max_step_m,
                           max_step_deg=align_cfg.max_step_deg)
@@ -259,6 +273,7 @@ def run_auto_align(*,
     return {
         "iterations": iters,
         "orientation": orientation,
+        "fixed_rx_ry_deg": list(fixed_rpy) if fixed_rpy else None,
         "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
         "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
         "final_tcp": final_tcp,

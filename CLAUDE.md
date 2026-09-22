@@ -409,8 +409,8 @@ Since the 2026-09-01 refactor they own **no** hardware: arm via
 `/arm/move_cart`, base via `MobileClient`, observations via
 `/<cam>/tag_detections`. ⚠️ `map_calibrator` is a second commander of
 `/mobile/goto_tag`: no `TASK`/`GOTO` during a calibration session. **Since 2026-09-22 the hand-cam align of a
-calibration entry keeps the seed orientation (rz free, rx/ry the design
-"parallel to the tag") and corrects TRANSLATION only, z to 0.50 m
+calibration entry commands rx −180 / ry 0 with rz free (the seed's spin)
+and corrects TRANSLATION only, z to 0.50 m
 (`locator.yaml align.orientation: fixed`) — the measured tilt is
 recorded, not chased; regenerate the plans after any tf_chain change.**
 
@@ -1841,7 +1841,22 @@ rotations, and the final camera orientation differed per entry.
   the final orientation, so the plans must be current — regenerate
   after any tf_chain change from now on.
 
-Verified offline: new `scripts/check_align_fixed_orientation.py` (34 —
+- **rx / ry held at −180 / 0, rz free (user, later the same day: "어라인
+  중에 RX −180 RY 0 유지, 태그 접근 중에는 안 해도 됨").** `align.fixed_rx_deg`
+  / `fixed_ry_deg` (`null` / `null` = the seed's own design rx/ry). The
+  align target's rotation is `Rz(rz_now)·Ry(0)·Rx(−180)` — the tool
+  straight down the arm's z with the planner's spin kept — and the
+  camera is placed at `d` along that axis through the tag centre
+  (`p_hc = p_tag − d·z_hc`), so the first step turns the seed's design
+  rx/ry (≤ 1°) onto the fixed value together with the translation and
+  every later step is a pure translation. The approach to the seed is
+  not held to it. Consequence for the recorded tilt: the hand-eye's
+  optical axis is 0.47° off the flange z (`T_hc2ee`) and the base sits
+  0.85° off vertical (`T_ab2mb`), so a flat tag reads ~0.5–1.3° of
+  tilt routinely — the 3° warning is set above that. Report key
+  `fixed_rx_ry_deg`.
+
+Verified offline: new `scripts/check_align_fixed_orientation.py` (54 —
 real `T_hc2ee.npz`, real runner against a fake arm + detector: from a
 seed 1.5° off the normal, 50 mm off-centre, 0.63 m up, the final rx ry
 rz equal the seed to 1e-16°, every commanded move carries the seed
@@ -1850,7 +1865,10 @@ orientation, tag centred to 0.00 mm at 0.500 m in 3 MoveLs, tilt still
 4° tilt warns and still converges; square camera + 130 mm range error
 moves straight down along arm z; `correct` still squares to 0.000°;
 bad orientation value refused; locator.yaml loads fixed / 0.50 ==
-auto_view_distance_m), `check_handeye_sweep.py` 74 unchanged, both
+auto_view_distance_m; with fixed −180 / 0 a plan-like seed (−179.5,
+−0.3, 25) ends at |rx| 180 / ry 0 / rz 25 to 1e-9°, the first step
+turning 0.5°, later steps 0 rotation, a planted 0.7° tag slope read
+as tilt and constant over the iterations; rx without ry refused), `check_handeye_sweep.py` 74 unchanged, both
 plans load (26 / 25). Not run on the robot: restart the calibration
 launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
 deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines

@@ -144,6 +144,12 @@ class AlignCfg:
     orientation: str = "correct"
     depth_tol_m: float = 0.005
     tilt_warn_deg: float = 3.0
+    # 'fixed' only: rx / ry the align STEPS command (rz = the seed's,
+    # free). None = keep the seed's own rx / ry. User rule 2026-09-22:
+    # -180 / 0 = tool straight down the arm z. The approach to the seed
+    # is not held to it.
+    fixed_rx_deg: float = None
+    fixed_ry_deg: float = None
 
     def __post_init__(self):
         self.orientation = str(self.orientation).lower()
@@ -151,6 +157,10 @@ class AlignCfg:
             raise ValueError(
                 "align.orientation must be 'correct' or 'fixed', got %r"
                 % (self.orientation,))
+        if (self.fixed_rx_deg is None) != (self.fixed_ry_deg is None):
+            raise ValueError(
+                "align.fixed_rx_deg / fixed_ry_deg must be set together "
+                "(both, or both null)")
 
 
 @dataclass

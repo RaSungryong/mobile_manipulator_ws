@@ -23,6 +23,14 @@ What it pins:
     ~1.5 deg in every history entry and reported, and the report says
     'fixed'. A 40 deg spin (rz) seed is kept. A 4 deg tilt raises the
     warning and still converges.
+  * fixed_rx_deg -180 / fixed_ry_deg 0 (the user's rule, later the same
+    day): from a plan-like seed (rx -179.5, ry -0.3, rz 25) the first
+    step turns rx/ry onto -180 / 0 with rz kept, every later step is a
+    pure translation, the final pose reads |rx| 180 / ry 0 / rz 25 to
+    1e-9 deg, the tag is centred at 0.50 m, and the recorded tilt is the
+    tag's slope vs the arm vertical (0.7 deg planted -> 0.7 read, plus
+    the hand-eye's 0.1 deg axis offset), constant over the iterations.
+    The approach (initial move) is NOT held to it.
   * The same seed with 'correct' still squares the camera (tilt < tol,
     rotation changed) — the hand-eye sweep's behaviour is intact.
   * AlignCfg refuses an unknown orientation; the real locator.yaml
@@ -58,7 +66,8 @@ except ImportError:
 import rospy  # noqa: E402
 from path_tag_locator import align_runner                                  # noqa: E402
 from path_tag_locator.align import (alignment_metrics, clamp_step,          # noqa: E402
-                                    compute_target_ee_pose, is_converged)
+                                    compute_target_ee_pose, is_converged,
+                                    fixed_orientation_R)
 from path_tag_locator.constants import AlignCfg, load_locator_cfg_from_dict  # noqa: E402
 from path_tag_locator.geometry import (invert_T, matrix_m_to_pose_fr5,      # noqa: E402
                                         pose_fr5_to_matrix_m, rpy_deg_to_R)
@@ -240,8 +249,58 @@ check(any("tilt 4.00 deg > 3.0" in w for w in warns), "4 deg tilt warned about")
 check(alignment_metrics(observe(arm4.T)).xy_offset_m <= 0.001 and abs(rep4["tilt_deg"] - 4.0) < 1e-3,
       "and the loop still converges with the tilt left at 4 deg")
 
-# vertical decomposition at the seed: z step is along the camera axis, which
-# with the design (square) orientation is the tag normal
+print("§3b fixed rx -180 / ry 0, rz kept")
+
+
+def seed_from_rpy(rx, ry, rz, T_tag, z_range, xy_off):
+    """EE pose with the given FR5 rx ry rz whose camera sees ``T_tag``
+    ``xy_off`` off-axis at ``z_range``."""
+    R_ee = rpy_deg_to_R(rx, ry, rz)
+    R_hc = R_ee @ T_ee2hc[:3, :3]
+    p_hc = T_tag[:3, 3] - z_range * R_hc[:, 2] + R_hc @ np.array([xy_off[0], xy_off[1], 0.0])
+    return T_of(R_hc, p_hc) @ T_hc2ee
+
+
+def observe_tag(T_ab2ee, T_tag):
+    return invert_T(T_ab2ee @ T_ee2hc) @ T_tag
+
+
+# The hand-eye's optical axis is not exactly the flange z; with rx -180 /
+# ry 0 the camera reads a flat floor tag at this constant tilt.
+R_vert = rpy_deg_to_R(-180.0, 0.0, 25.0)
+z_cam_vert = (R_vert @ T_ee2hc[:3, :3])[:, 2]
+he_axis_deg = math.degrees(math.acos(float(np.clip(-z_cam_vert[2], -1, 1))))
+print("  (hand-eye optical axis vs flange z: %.3f deg)" % he_axis_deg)
+
+Rf = fixed_orientation_R(rpy_deg_to_R(-179.5, -0.3, 25.0), (-180.0, 0.0))
+check(rot_angle_deg(Rf, R_vert) < 1e-9, "fixed_orientation_R: rx/ry replaced, rz 25 kept")
+check(np.array_equal(fixed_orientation_R(R_vert, None), R_vert), "fixed_orientation_R(None) is the input itself")
+
+for slope_deg in (0.0, 0.7):
+    T_tag_s = T_of(rpy_deg_to_R(slope_deg, 0.0, 0.0) @ np.diag([1.0, -1.0, -1.0]), [0.30, 0.90, -0.57])
+    align_runner.wait_for_tag_detections = lambda topic, tid, n, timeout=0, _T=T_tag_s: [observe_tag(ARM[0].T, _T)]
+    T_seed = seed_from_rpy(-179.5, -0.3, 25.0, T_tag_s, 0.63, (0.04, -0.03))
+    warns.clear()
+    rep, arm = run(Cfg(fixed_rx_deg=-180.0, fixed_ry_deg=0.0), T_seed)
+    fin = rep["final_tcp"]
+    check(rep["fixed_rx_ry_deg"] == [-180.0, 0.0], "slope %.1f: report carries the fixed rx/ry" % slope_deg)
+    check(abs(abs(fin[3]) - 180.0) < 1e-9 and abs(fin[4]) < 1e-9 and abs(fin[5] - 25.0) < 1e-9,
+          "slope %.1f: final rx %.6f ry %.6f rz %.6f (|rx| 180, ry 0, rz kept)" % (slope_deg, fin[3], fin[4], fin[5]))
+    first_rot = rot_angle_deg(pose_fr5_to_matrix_m(arm.moves[0][0])[:3, :3], T_seed[:3, :3])
+    check(0.2 < first_rot < 1.0, "slope %.1f: first step turned %.3f deg onto the fixed rx/ry" % (slope_deg, first_rot))
+    later = [rot_angle_deg(pose_fr5_to_matrix_m(p)[:3, :3], R_vert) for p, _ in arm.moves[1:]]
+    check(all(r < 1e-9 for r in later), "slope %.1f: later steps are pure translations (%d)" % (slope_deg, len(later)))
+    mf = alignment_metrics(observe_tag(arm.T, T_tag_s))
+    check(mf.xy_offset_m <= 0.001 and abs(mf.z_distance_m - 0.50) <= 0.005,
+          "slope %.1f: tag centred (%.2f mm) at %.4f m" % (slope_deg, mf.xy_offset_m * 1e3, mf.z_distance_m))
+    check(abs(mf.tilt_deg - slope_deg) < he_axis_deg + 0.02,
+          "slope %.1f: recorded tilt %.3f deg = the tag's slope vs the arm vertical" % (slope_deg, mf.tilt_deg))
+    tilts = [h["tilt_deg"] for h in rep["history"][1:]]
+    check(max(tilts) - min(tilts) < 1e-6, "slope %.1f: tilt constant over the iterations after the first step" % slope_deg)
+    check(not [w for w in warns if "tilt" in w], "slope %.1f: no tilt warning" % slope_deg)
+# restore the default plant
+align_runner.wait_for_tag_detections = lambda topic, tid, n, timeout=0: [observe(ARM[0].T)]
+
 print("§4 run_auto_align, orientation correct (sweep behaviour intact)")
 repc, armc = run(Cfg(orientation="correct"), T0)
 mc = alignment_metrics(observe(armc.T))
@@ -264,6 +323,13 @@ check(abs(cfg.align.target_distance_m - 0.50) < 1e-9
       and abs(cfg.align.target_distance_m - cfg.align.auto_view_distance_m) < 1e-9,
       "locator.yaml: target_distance_m 0.50 == auto_view_distance_m")
 check(cfg.align.depth_tol_m > 0 and cfg.align.tilt_warn_deg > 0, "depth_tol_m / tilt_warn_deg set")
+check(cfg.align.fixed_rx_deg == -180.0 and cfg.align.fixed_ry_deg == 0.0, "locator.yaml: fixed rx -180 / ry 0")
+try:
+    Cfg2["orientation"] = "fixed"; Cfg2["fixed_rx_deg"] = -180.0
+    AlignCfg(**Cfg2)
+    check(False, "fixed_rx without fixed_ry refused")
+except ValueError:
+    check(True, "fixed_rx without fixed_ry refused")
 
 print("\n%d ok, %d fail" % (N_OK, N_FAIL))
 sys.exit(1 if N_FAIL else 0)

@@ -16,15 +16,22 @@ Two orientation policies (``compute_target_ee_pose(fix_orientation=)``):
     camera so its optical axis is perpendicular to the tag plane (tilt
     -> 0), preserving the spin about the axis.
 ``fixed`` (map calibration / locate since 2026-09-22, user rule): the
-    orientation is NEVER commanded by the loop. The seed pose — the
-    plan's design view TCP, computed by ``view_pose.compute_view_tcp``
-    so the optical axis is parallel to the tag normal through the
-    calibrated chain, with the camera yaw (rz) left free for the
-    reach optimisation — is kept, and the loop moves the camera in
-    TRANSLATION only: x/y in the image plane (parallel to the tag) and
-    z along the optical axis (vertical) to the target range. The tilt
-    the camera actually reads is measured and recorded (it is the
-    arm's orientation error plus the tag's slope), not chased.
+    orientation is never derived from the tag. rz (the camera spin about
+    its axis) is FREE — the planner's reach choice, kept as the seed
+    left it — and rx / ry are held at a FIXED VALUE: ``fixed_rpy``
+    (locator.yaml ``align.fixed_rx_deg`` −180 / ``fixed_ry_deg`` 0 =
+    the tool pointing straight down the arm's z, user rule, later the
+    same day) or, when None, the seed's own rx / ry (the plan's design
+    "parallel to the tag" through the calibrated chain). The loop then
+    moves the camera in TRANSLATION: x/y in the image plane (parallel
+    to the tag) and z along the optical axis (vertical) to the target
+    range; the first step also turns rx / ry onto the fixed value
+    (≤ 1° from a design seed), after which every step is a pure
+    translation. The tilt the camera actually reads is measured and
+    recorded (the tag's slope vs the arm vertical plus the arm's
+    orientation error), not chased. The APPROACH to the seed
+    (``align_runner.approach_pose``) is not held to it — the user does
+    not need it during the approach — only the align steps are.
 """
 import math
 from dataclasses import dataclass
@@ -32,7 +39,7 @@ from typing import Tuple
 
 import numpy as np
 
-from .geometry import invert_T, rot2rpy_deg
+from .geometry import invert_T, rot2rpy_deg, rpy_deg_to_R
 
 
 # What the recorded camera-frame numbers mean. persistence.py writes it
@@ -128,11 +135,25 @@ def _target_T_cam2tag(T_cam2tag_now: np.ndarray,
     return T
 
 
+def fixed_orientation_R(R_ab2ee_now: np.ndarray, fixed_rpy) -> np.ndarray:
+    """The EE rotation the ``fixed`` policy commands: ``fixed_rpy`` None
+    -> the current rotation itself (bit for bit); ``(rx_deg, ry_deg)``
+    -> Rz(rz_now) · Ry(ry) · Rx(rx) with rz_now the current pose's rz
+    (FR5 ZYX intrinsic, as ``matrix_m_to_pose_fr5`` reports it) — the
+    spin stays free, roll / pitch go to the fixed value."""
+    if fixed_rpy is None:
+        return R_ab2ee_now
+    rx, ry = float(fixed_rpy[0]), float(fixed_rpy[1])
+    rz_now = float(rot2rpy_deg(R_ab2ee_now)[2])
+    return rpy_deg_to_R(rx, ry, rz_now)
+
+
 def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
                            T_hc2ee: np.ndarray,
                            T_cam2tag_now: np.ndarray,
                            target_distance_m: float = 0.0,
-                           fix_orientation: bool = False) -> np.ndarray:
+                           fix_orientation: bool = False,
+                           fixed_rpy=None) -> np.ndarray:
     """Compute T_ab2ee_target that places the tag at the image centre.
 
     ``fix_orientation=False`` (``correct``): also square the optical axis
@@ -141,22 +162,31 @@ def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
         T_ab2hc_target = T_ab2tag · inv(T_target_cam2tag)
         T_ab2ee_target = T_ab2hc_target · T_hc2ee
 
-    ``fix_orientation=True`` (``fixed``): the rotation of the target is
-    BIT-FOR-BIT the current rotation; only the translation moves. The
-    camera-frame error is ``e = t_cam2tag − (0, 0, d)`` (x/y = the tag's
-    offset from the optical axis, i.e. in the image plane; z = range
-    error along the axis), and a rigid translation of the tool by
-    ``R_ab2hc · e`` puts the tag on the axis at range ``d`` with the
-    camera pointing exactly where it pointed before. The residual tilt
-    is left as it is — see the module docstring.
+    ``fix_orientation=True`` (``fixed``): the target rotation is
+    ``fixed_orientation_R(R_now, fixed_rpy)`` — the current rotation bit
+    for bit, or rx / ry at the configured fixed value with rz kept —
+    and NOTHING about it comes from the tag. The camera is then placed
+    at range ``d`` along ITS OWN target optical axis through the tag
+    centre (``p_hc = p_tag − d · z_hc``), so the tag lands on the axis
+    (x/y = image plane, z = along the axis = vertical for a downward
+    camera). With the rotation unchanged this is exactly a translation
+    by ``R_ab2hc · (t_cam2tag − (0, 0, d))``. The residual tilt is left
+    as it is — see the module docstring.
     """
     if fix_orientation:
         d = (float(target_distance_m) if target_distance_m and target_distance_m > 0.0
              else float(T_cam2tag_now[2, 3]))
-        e_cam = T_cam2tag_now[:3, 3] - np.array([0.0, 0.0, d])
-        R_ab2hc = T_ab2ee_now[:3, :3] @ invert_T(T_hc2ee)[:3, :3]
-        T = T_ab2ee_now.copy()
-        T[:3, 3] = T_ab2ee_now[:3, 3] + R_ab2hc @ e_cam
+        T_ee2hc = invert_T(T_hc2ee)
+        T_ab2tag = T_ab2ee_now @ T_ee2hc @ T_cam2tag_now
+        R_ab2ee_t = fixed_orientation_R(T_ab2ee_now[:3, :3], fixed_rpy)
+        R_ab2hc_t = R_ab2ee_t @ T_ee2hc[:3, :3]
+        T_ab2hc_t = np.eye(4, dtype=np.float64)
+        T_ab2hc_t[:3, :3] = R_ab2hc_t
+        T_ab2hc_t[:3, 3] = T_ab2tag[:3, 3] - d * R_ab2hc_t[:, 2]
+        T = T_ab2hc_t @ T_hc2ee
+        # Keep the rotation exactly the one decided above (the product
+        # above only reintroduces fp residue into it).
+        T[:3, :3] = R_ab2ee_t
         return T
     T_target = _target_T_cam2tag(T_cam2tag_now, target_distance_m)
     T_ee2hc = invert_T(T_hc2ee)
