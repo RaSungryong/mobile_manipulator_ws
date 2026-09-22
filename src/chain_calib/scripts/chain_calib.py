@@ -104,12 +104,23 @@ def sheet_from_args(args, meta=None):
     session's meta, then the design values (with a warning)."""
     meta = meta or {}
     path = getattr(args, "sheet_json", None) or meta.get("sheet_json", DEFAULT_SHEET)
-    if not os.path.exists(path) and path == DEFAULT_SHEET:      # install space: the source tree is elsewhere
-        try:
-            import rospkg
-            path = os.path.join(rospkg.RosPack().get_path("chain_calib"), "sheet", os.path.basename(DEFAULT_SHEET))
-        except Exception:
-            pass
+    if not os.path.exists(path):
+        # A session's meta stores the layout's ABSOLUTE path at capture time,
+        # and the workspace moved on 2026-09-22 (ws_20260902 -> ws), so the
+        # pre-move sessions name a file that is no longer there — the same
+        # as the hand-eye fallback in platform(). The layout lives in this
+        # package's sheet/ (source tree, or the install space via rospkg):
+        # the same file by basename, new home.
+        cand = os.path.join(os.path.dirname(DEFAULT_SHEET), os.path.basename(path))
+        if not os.path.exists(cand):
+            try:
+                import rospkg
+                cand = os.path.join(rospkg.RosPack().get_path("chain_calib"), "sheet", os.path.basename(path))
+            except Exception:
+                pass
+        if os.path.exists(cand):
+            print("! sheet layout %s no longer exists — using %s" % (path, cand))
+            path = cand
     sx = args.sx if args.sx is not None else float(meta.get("sheet_sx", 1.0))
     sy = args.sy if args.sy is not None else float(meta.get("sheet_sy", 1.0))
     ts = args.tag_size if args.tag_size is not None else meta.get("sheet_tag_size_m")

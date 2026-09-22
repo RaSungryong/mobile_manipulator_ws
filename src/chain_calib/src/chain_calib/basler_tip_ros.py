@@ -170,8 +170,23 @@ class BaslerTipSession:
         self.hand, self.bas, self.meta = BT.load_session(self.dir)
         self.cfg = load_locator_cfg(os.path.join(_ptl_cfg_dir(), "locator.yaml"))
         self.hand_eye_path = hand_eye or self.meta.get("hand_eye_npz") or _resolve(self.cfg.hand_eye_npz)
+        if not os.path.exists(self.hand_eye_path):
+            # The session meta stores ABSOLUTE paths from capture time; the
+            # workspace moved on 2026-09-22 (ws_20260902 -> ws) and the
+            # hand-eye file itself moved on 09-21 (path_tag_locator/config/
+            # hand_eye -> apriltag_nav/config/tf), so a pre-move session
+            # names a file that is gone. Same transform, configured home —
+            # identical to chain_calib.py platform().
+            print("! hand-eye %s no longer exists — using the configured %s"
+                  % (self.hand_eye_path, _resolve(self.cfg.hand_eye_npz)))
+            self.hand_eye_path = _resolve(self.cfg.hand_eye_npz)
         self.H = load_T_hc2ee(self.hand_eye_path)
         path = sheet_json or self.meta.get("sheet_json") or default_sheet_json()
+        if not os.path.exists(path):
+            cand = os.path.join(os.path.dirname(default_sheet_json()), os.path.basename(path))
+            if os.path.exists(cand):
+                print("! sheet layout %s no longer exists — using %s" % (path, cand))
+                path = cand
         sx = sx if sx is not None else float(self.meta.get("sheet_sx", 1.0))
         sy = sy if sy is not None else float(self.meta.get("sheet_sy", 1.0))
         ts = tag_size_m if tag_size_m is not None else self.meta.get("sheet_tag_size_m")

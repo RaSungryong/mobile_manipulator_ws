@@ -1794,6 +1794,38 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-22 — Hand-eye fitting status written up for the next session; the rename had broken the stored session paths
+
+User: "현재까지 진행상황은 다른 창에 넘기게 문서 작성 Hand-eye calibration
+fitting results". **`docs/HANDEYE_FITTING_STATUS_2026-09-22_kr.md`** — the
+applied values, every hand-eye candidate with its score on the two sheet
+sessions, the arm-session and chain-session fits, why the 20 mm z was an
+artefact, the revised order (joint offsets with the hand-eye FIXED, then
+the command-side `MoveJ(IK − δq)`, then `sheet_path` at two spins), and
+the exact commands. HANDOVER §2-0c got a pointer. Every number was RE-RUN
+today rather than copied: arm session hand-eye-free 1.06 px (hold-out
+1.99), J2 −1.160 / J3 −0.366 / J4 +0.246 / J5 −0.101°, Δt (+8.6, +3.7,
+−16.6) mm; chain session raw 6.62 / joint 4.40 mm — identical to the
+09-21 late entry. Found on the way: the working-tree tf files are back
+at HEAD (the 09-18 hand-eye, `tf_chain_tool.py check` 12/12), so the
+20:09 sweep value is applied nowhere and the "(d)" inconsistency of
+HANDOVER §2-0c no longer exists; the 20:09 result survives only in
+`run_20260921_195136/result.npz` (untracked).
+
+**The rename bit here first.** Session `meta.yaml` / `session.json` store
+ABSOLUTE paths from capture time (sheet layout json, hand-eye npz); after
+`ws_20260902 → ws` the first `arm_offsets.py` run died with
+`FileNotFoundError` on the layout. `chain_calib.py sheet_from_args` and
+`basler_tip_ros.BaslerTipSession` now fall back to the package's copy by
+basename (and the configured hand-eye) with a `! … no longer exists —
+using …` line, the same rule `platform()` already had for the hand-eye.
+`check_chain_calib.py` 48, `check_basler_tip.py` 11, `basler_tip_calib.py
+status` on the real session all pass through the stale paths.
+`chain_calib.py`'s `--sx / --sy / --tag-size` are GLOBAL options and must
+precede `solve` — written into the doc's command block after tripping on
+it. Fits were run on scratch copies so the tracked `arm_offsets.npz` /
+`corrections.npz` were not rewritten.
+
 ### 2026-09-22 — Workspace folder renamed: `~/mobile_manipulator_ws_20260902` → `~/mobile_manipulator_ws`
 
 User (pinyin): rename the project to `mobile_manipulator_ws`, folder

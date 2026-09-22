@@ -34,6 +34,13 @@ or superseded; it is in git history if you need it.
 State when the session that wrote this ended. Everything below is committed
 on `real` and pushed; nothing in it is APPLIED to the robot's config.
 
+> **2026-09-22 status note — read `docs/HANDEYE_FITTING_STATUS_2026-09-22_kr.md`
+> first.** It has every number below re-run at the renamed workspace path
+> (`~/mobile_manipulator_ws`), the candidate table, and the revised order.
+> The "(d)" inconsistency is resolved: the tf files equal HEAD (the 09-18
+> hand-eye; chain raw 6.62 mm), the 20:09 sweep value lives only in
+> `run_20260921_195136/result.npz`.
+
 **Where we are.** The front_cam ↔ hand_cam chain was calibrated on
 2026-09-21 (`log/chain_calib/20260921`, 63 views, level-floor prior, ruler
 scale 1.0 / 1.0 / 90 mm) and APPLIED: `T_ab2mb` in
