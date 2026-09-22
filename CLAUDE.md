@@ -1563,6 +1563,26 @@ attitude at that parking PLUS the paper's slope (±1°, and ±10 mm of tz/tx
 at the 0.64 m lever), so expect ~8 mm of shift per re-parking. Everything
 on the locator / calibration chain (`path_tag_locator`, `robot_sim`, the
 plan generator, `verify_chain.py --fit none`, `sheet_path.py`) uses it.
+⚠️ **Since 2026-09-22 (evening) the applied set is FOUR things, refit
+together, and `T_ab2mb` moved again:** `T_hc2ee` re-solved from the
+09-18 sweep frames with the checkerboard hand_cam K (5.4 mm / 0.22°),
+**`config/tf/arm_joint_offsets.yaml`** (J2..J6 zero offsets −0.34 /
+−0.53 / −0.05 / −0.13 / −0.50°, fitted on the 65-view arm session with
+that hand-eye fixed; `tf_chain.arm_flange_T` makes the LOCATOR chain's
+flange FK_urdf(q + dq) instead of the controller's TCP — pose-mode
+commands do not use them), and `T_ab2mb` refit on the same arm session
+with all of that in the chain: **t (−8.68, −103.42, −643.10) mm, rpy
+(−0.451, −0.103, 179.214°)**, 12.9 mm / 0.91° from the design (the 09-21
+value was 34 mm / 1.66°; 20 mm of y and 0.64° of yaw moved with the
+offsets — they absorb what the J2/J3 offsets took out of the FK). Chain
+rms on that session 10.1 → 7.9 mm, hold-out 12.7 → 7.7. The calibration
+dependency order that makes them one set (A → B ∥ C → D, E → F):
+hand_cam K → (front_cam fit ∥ hand-eye) → (T_ee2tip, joint offsets) →
+T_ab2mb → map calibration; change one, redo only what is to its right
+(`tf_chain_tool.py check` asserts the files agree; the numbers below in
+this section are the 09-21 ones and stay as history). Work Log
+2026-09-22 "C, E re-solved".
+
 **Since 2026-09-21 (later the same day, user: the corrected chain is for
 end-effector pose control too) pose-mode IK uses the SAME transform:**
 `transform_world_to_arm` derives its 4-DOF parametrisation from
@@ -1890,6 +1910,104 @@ plans load (26 / 25). Not run on the robot: restart the calibration
 launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
 deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
 staying at the seed's, and convergence in 2–3 iterations.
+
+### 2026-09-22 — C and E re-solved for the new hand_cam K; joint offsets APPLIED to the locator chain; T_ab2mb refit — one set
+
+User, in three steps: (1) "지금 fc과 hc이 보는 화면을 보고 태그 200번 기준으로
+307 / 309의 좌표를 계산" — the calibration GOAL stated: the map-calibration
+CSV must reproduce real dimensions, tags 307 / 309 at (1000, 450, 0) /
+(1000, 600, 0) mm in tag 200's frame, **xy within 2 mm**. (2) "오늘 A가
+바뀌었으므로 C와 E는 저장 데이터로 다시 풀어줘". (3) "관절 오프셋 넣어줘.
+없는 것보다는 낫잖아" — after being told the fit reaches ~4.4 mm, not 2.
+
+**Live measurement first (arm at TCP (−159, 550, 63), hand_cam 0.55 m
+over 305/307/308/309, front_cam on 200, 20-frame corner means, scatter
+≤ 0.06 px):** through the applied chain of the moment (09-18 hand-eye,
+09-21 T_ab2mb) tags 307 / 309 landed at (1005.0, 438.8) / (1004.9, 589.0)
+mm — **one constant (+5, −11) mm shift for all four tags**, sub-mm
+internal geometry (307↔309 150.2 mm, 305↔307 150.1), z −19 mm with
+front_cam's measured 1.6° tilt of tag 200 (paper lift) or +8 mm with
+the level prior. Repeatable to 0.2 mm between captures. Reading: the
+chain is biased, the tags are read fine; a single view cannot split the
+bias into hand-eye vs base. The 2 mm goal is reachable without the
+chain (ref tag + path tag in ONE hand_cam frame, both at 1.0–1.2 m —
+proposed, not built); with the chain, a per-view-pose correction table
+or the joint offsets are the options, neither guaranteed to 2 mm.
+
+**Dependency order, written for the user:** A hand_cam K/D → (B
+front_cam fit ∥ C hand-eye) → D T_ee2tip (needs A, C; not in the map
+chain) / E T_ab2mb (needs A, B, C, arm FK, parking) → F map
+calibration. Change X, redo only what is right of X. Today A changed
+(the checkerboard K/D from `hand_cam_intr_20260922`, another session,
+applied in robot.yaml and running in `robot_camera_node` — fx 601.87 fy
+601.93 cx 321.35 cy 238.51, k1 +0.177 k2 −0.348), so C → E → F.
+
+- **C:** the 35 sweep samples of `run_20260918_144420` re-detected on
+  frames rectified with the new K/D (`Rectifier`, the node's own path):
+  with the driver K the file reproduces HEAD to 0.00 mm (method check);
+  with the new K **t (36.46, −331.77, −156.14) mm, rpy (−0.047, −0.435,
+  −179.343°)**, 5.4 mm / 0.22° from HEAD, tag scatter 2.66 → 2.06 mm rms.
+  Saved as `result_sweep123_refined_K20260922.npz` in the run dir and
+  applied (`tf_chain_tool.py set T_hc2ee`).
+- **Joint offsets (user's decision):** the 09-21 chain session (63 views)
+  was captured BEFORE joints were recorded, so it cannot take offsets;
+  the 65-view arm session (`20260921_arm`) can. `arm_offsets.py` with the
+  new hand-eye FIXED and the new K (v11 v13 v20 v45 excluded, all views
+  in the fit): **J2 −0.341, J3 −0.529, J4 −0.051, J5 −0.134, J6
+  −0.496°** (jackknife sd 0.42 / 0.36 / 0.29 / 0.06 / 0.06), corner
+  reprojection 7.43 → 3.39 px (hold-out 7.75 → 3.51 with every 4th view
+  out). The near/far ±2° disagreement of the earlier fit stands — this
+  is an average — and the other session's finding that the offsets
+  explain little of `sheet_path`'s ±13 mm is not contradicted; what they
+  DO buy is below. Applied as `config/tf/arm_joint_offsets.yaml` (+
+  npz; `enabled: false` switches every consumer back to dq = 0).
+- **E:** `chain_calib.py solve` on the arm session with the new hand-eye,
+  new K and the offsets in the chain (new `--arm-offsets config|none|NPZ`,
+  default `config` = what the locator applies): raw 14.5 mm (the old
+  T_ab2mb no longer pairs), base fit → **7.92 mm / 0.46°**, jackknife
+  0.4 / 0.4 / 0.9 mm; the same session WITHOUT offsets fits to 10.1 mm
+  (hold-out 12.7 vs 7.7 with). Applied: t (−8.68, −103.42, −643.10) mm,
+  rpy (−0.451, −0.103, 179.214°). Planner URDF `mobile_to_base` updated
+  to match (xyz 0.006101 0.108596 0.642272, rpy −0.007903911
+  −0.001687209 0.013726417). The 09-21 63-view session can no longer be
+  scored with this set (no joints), so "6.6 mm raw" is not comparable
+  with today's 7.9.
+
+**Code:** `apriltag_nav/arm_fk.py` (ArmChain moved from chain_calib,
+which re-exports), `tf_chain.load_joint_offsets / write_joint_offsets /
+check_joint_offsets / arm_flange_T` (FK(q) must agree with the
+controller TCP within 2 mm / 0.1° or the pose is used unchanged with a
+warning — joints and pose from different states, or a different URDF),
+`tf_chain_tool.py joint-offsets [--apply NPZ | --enable | --disable]` +
+`show` / `check` lines, `path_tag_locator.chain.compute_T_A2B(joints_deg,
+joint_offsets_deg)` → `joint_offsets_applied` in the result,
+`ArmInterface.get_pose_and_joints()` (ONE /arm/state for both),
+`path_tag_locator_node` + `CalibrationOrchestrator` pass them and record
+`joints_deg` / `joint_offsets_deg` / `joint_offsets_applied` per run /
+entry; `arm_offsets.py` stores hand_eye / urdf / K source in its npz.
+NOT changed: pose-mode commands (`MoveJ(IK − δq)` is still not built —
+the offsets act on the MEASUREMENT chain only), `verify_chain.py` /
+`sheet_path.py` (they command flange targets), robot_sim (an ArmState
+without joints falls back to the pose).
+
+Verified offline: new `tools/check_joint_offsets.py` (22 — FK(q) ==
+the reported TCP 0.001 mm; dq = 0 / no joints / 5 joints / disabled file
+/ pose-joint mismatch all give the controller pose bit-for-bit; +1° J6 =
++1° spin of the flange about its z; J2 lever 9.8 mm/°; yaml/npz round
+trip and the 6-value / 5° refusals; compute_T_A2B with and without),
+`tf_chain_tool.py check` 13/13 (new offsets line), `check_pose_vs_joint`
+27 (its "expected discrepancy" bound widened 20 → 5 mm: the new mount is
+closer to the design, so the planner files are now 19 mm off, not 45),
+`check_lift_compensation` 11, `check_front_cam_extrinsics` 24,
+`check_repose_from_corners` 10, `check_chain_calib` 48, `check_basler_tip`
+11, `check_handeye_sweep` 74, `check_scan_progress` 62,
+`check_camera_intrinsics_override` 20. **Not run on the robot.** Restart
+the calibration launch (all four nodes read tf at start) and `arm_node`
+(T_ab2mb for pose-mode IK) — ⚠️ a map calibration ran at 15:11–15:15
+today (tags 121–125, `locate_log.csv`) on the OLD chain and predates all
+of this. The docs of the other session that say the offsets are "NOT
+applied" (`HANDEYE_FITTING_STATUS` §0/§6, HANDOVER §2-0c) got a dated
+line saying they now are.
 
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 

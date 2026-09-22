@@ -127,6 +127,14 @@ class ArmInterface:
         """Return current joint angles (deg) as a list."""
         return [float(v) for v in self._wait_state('get_joints').joints]
 
+    def get_pose_and_joints(self):
+        """(tcp_pose, joints) from ONE /arm/state message, so the chain's
+        joint-offset FK (tf_chain.arm_flange_T) sees the pose and the
+        joints of the same instant. joints is [] on an ArmState without
+        them (older arm_node, robot_sim) — the chain then keeps the pose."""
+        st = self._wait_state('get_pose_and_joints')
+        return [float(v) for v in st.tcp_pose], [float(v) for v in (st.joints or [])]
+
     # ------------------------------------------------------------------
     def move_home(self, timeout_s=90.0):
         """Synchronous arm-home via arm_node's Trigger service (the ARM

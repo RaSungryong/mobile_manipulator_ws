@@ -41,6 +41,8 @@ from path_tag_locator import WS_DIR                                    # noqa: E
 from path_tag_locator.chain import compensate_T_ab2mb                  # noqa: E402
 from path_tag_locator.constants import load_extrinsics_full, load_locator_cfg  # noqa: E402
 from path_tag_locator.hand_eye import load_T_hc2ee                     # noqa: E402
+from path_tag_locator.geometry import matrix_m_to_pose_fr5              # noqa: E402
+from apriltag_nav import tf_chain as TC                                # noqa: E402
 
 PTL_CFG = None      # resolved lazily: path_tag_locator/config
 DEFAULT_OUT = os.path.join(WS_DIR, "log", "chain_calib")
@@ -170,6 +172,39 @@ def resolve_samples(samples, meta, sheet, front_rotation="level", hand_intrinsic
     return len(samples)
 
 
+def load_arm_offsets(spec):
+    """dq_deg for ``--arm-offsets``: ``config`` = config/tf/arm_joint_offsets.yaml
+    (what the locator chain applies at run time — the default, so `solve`
+    fits T_ab2mb for the chain as it will be used), ``none`` = the
+    controller's own FK, or a path to an arm_offsets.py npz."""
+    if spec in (None, "", "none"):
+        return np.zeros(6), "none (controller FK)"
+    if spec == "config":
+        dq = TC.load_joint_offsets()
+        return dq, ("config/tf/arm_joint_offsets.yaml %s" % np.round(dq, 3).tolist()) if np.any(dq) else "config (absent or disabled: dq = 0)"
+    dq = np.asarray(np.load(spec)["dq_deg"], dtype=float).ravel()
+    return dq, "%s %s" % (spec, np.round(dq, 3).tolist())
+
+
+def apply_arm_offsets(samples, dq_deg, warn=print):
+    """Replace each sample's tcp_pose_mm_deg (the CONTROLLER's FK(q)) by
+    FK_urdf(q + dq) from its recorded joints — the same `arm_flange_T` the
+    locator chain uses — so build_inputs / pair_errors see the corrected
+    flange. Samples without joints keep the controller pose (counted).
+    The stored session is never modified: samples keep the controller pose
+    on disk, and `tcp_pose_ctrl` on the object."""
+    n_app = n_nojoints = 0
+    for s in samples:
+        if getattr(s, "tcp_pose_ctrl", None) is None:
+            s.tcp_pose_ctrl = list(s.tcp_pose_mm_deg)
+        T, applied = TC.arm_flange_T(s.tcp_pose_ctrl, s.joints_deg if s.joints_deg else None, dq_deg,
+                                     warn=lambda m, lab=s.label: warn("! %s: %s" % (lab, m)))
+        s.tcp_pose_mm_deg = matrix_m_to_pose_fr5(T) if applied else list(s.tcp_pose_ctrl)
+        n_app += applied
+        n_nojoints += (not s.joints_deg) and bool(np.any(dq_deg))
+    return n_app, n_nojoints
+
+
 # ----------------------------------------------------------------------
 # ROS side: read the arm and the two detectors, nothing else
 # ----------------------------------------------------------------------
@@ -288,13 +323,17 @@ def print_sample(sample, info, H, ext, sheet, front_rotation="level"):
     # and the fit agree; the slope line above is the MEASURED single-tag tilt on purpose.
     import copy as _copy
     sm = _copy.copy(sample)
+    dq, dq_note = load_arm_offsets(getattr(ARGS, "arm_offsets", "config"))
+    if np.any(dq):
+        apply_arm_offsets([sm], dq)
     if front_rotation == "level":
         sm.T_fc2W = CC.level_front_observation(sm.T_fc2W)
     (lab, a, b, dp, dr, e) = CC.pair_errors([sm], sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain,
                                             lift_compensate=compensate_T_ab2mb)[0]
     print("  raw chain error at this view: tag %d (hand_cam) -> tag %d (front_cam): %.1f mm / %.2f deg  "
-          "(in B's frame: x %+.1f, y %+.1f, z %+.1f mm)%s"
-          % (a, b, dp * 1e3, dr, e[0], e[1], e[2], "" if front_rotation == "level" else "  [front rotation as measured]"))
+          "(in B's frame: x %+.1f, y %+.1f, z %+.1f mm)%s%s"
+          % (a, b, dp * 1e3, dr, e[0], e[1], e[2], "" if front_rotation == "level" else "  [front rotation as measured]",
+             "  [joint offsets applied]" if np.any(dq) else ""))
 
 
 def _holdout_split(samples, args):
@@ -371,6 +410,19 @@ def cmd_capture(args):
     print("saved -> %s (%d samples)" % (args.dir, len(samples)))
 
 
+def _offsets_line(samples, args):
+    dq, note = load_arm_offsets(args.arm_offsets)
+    if np.any(dq):
+        n_app, n_no = apply_arm_offsets(samples, dq)
+        print("arm joint offsets: %s — applied to %d sample(s)%s" % (
+            note, n_app, (", %d without joint angles keep the controller pose" % n_no) if n_no else ""))
+    else:
+        print("arm joint offsets: %s" % note)
+
+
+ARGS = argparse.Namespace(arm_offsets="config")
+
+
 def cmd_status(args):
     samples, meta = load_samples(args.dir)
     if not samples:
@@ -378,6 +430,7 @@ def cmd_status(args):
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
     resolve_samples(samples, meta, sheet, args.front_rotation)
+    _offsets_line(samples, args)
     print("%d samples; %s" % (len(samples), sheet.describe()))
     errs = CC.pair_errors(samples, sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain, lift_compensate=compensate_T_ab2mb)
     for s, (lab, a, b, dp, dr, e) in zip(samples, errs):
@@ -409,6 +462,7 @@ def cmd_solve(args):
           % (len(samples), meta.get("date"), meta.get("frames_per_sample", 0), n))
     print(sheet.describe())
     print("hand-eye: %s\nextrinsics: %s" % (_resolve(args.hand_eye or meta.get("hand_eye_npz")), ext.note))
+    _offsets_line(samples, args)
     if args.exclude:
         samples = [s for s in samples if s.label not in set(args.exclude)]
     if args.min_tags > 1 or args.max_range:
@@ -553,6 +607,10 @@ def main():
     ap.add_argument("--tag-size", type=float, default=None, help="tag black edge as measured on the print (m)")
     ap.add_argument("--frames", type=int, default=20, help="frames averaged per camera per capture")
     ap.add_argument("--hand-eye", default=None, help="hand-eye npz to evaluate (default: locator.yaml's)")
+    ap.add_argument("--arm-offsets", default="config", metavar="config|none|NPZ",
+                    help="arm joint zero offsets folded into the flange pose (FK(q+dq) from the recorded joints): "
+                         "'config' = config/tf/arm_joint_offsets.yaml as the locator chain applies it (default), "
+                         "'none' = the controller's own TCP, or an arm_offsets.py npz")
     ap.add_argument("--front-rotation", choices=["level", "measured"], default="level",
                     help="what the fit uses for front_cam's sheet ROTATION: 'level' (default) = the level-floor "
                          "prior, only the measured yaw kept — a single tag's tilt is the paper's local slope, not "
@@ -581,6 +639,8 @@ def main():
                    help="write apriltag_nav/config/tf/T_hc2ee_chain_<date>.npz from this fit's D (not applied)")
     p.set_defaults(fn=cmd_solve)
     a = ap.parse_args()
+    global ARGS
+    ARGS = a
     a.fn(a)
 
 

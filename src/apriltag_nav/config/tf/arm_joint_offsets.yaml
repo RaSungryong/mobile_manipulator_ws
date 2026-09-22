@@ -1,0 +1,16 @@
+# FR10v6 joint ZERO offsets (deg), ADDED to the controller's joint reading =
+# the physical angle. Consumed by apriltag_nav.tf_chain.arm_flange_T: the
+# locator chain's T_ab2ee is FK_urdf(q + dq_deg) instead of the TCP the
+# controller reports (= FK_urdf(q), agreement 0.00 mm). J1 is 0 by
+# construction (a J1 offset is a base yaw, which T_ab2mb holds).
+# Fitted with the hand-eye below FIXED, so (T_hc2ee, dq_deg, T_ab2mb) are one
+# set — a new hand-eye or a new K means refitting this and T_ab2mb after it.
+# `enabled: false` makes every consumer use dq = 0 (the controller's pose).
+# Writer: tools/tf_chain_tool.py joint-offsets --apply <session arm_offsets.npz>.
+enabled: true
+dq_deg: [0.000000, -0.341177, -0.528839, -0.050559, -0.133867, -0.496218]
+source: "FITTED 2026-09-22 by chain_calib/arm_offsets.py on the 65-view arm session log/chain_calib/20260921_arm (v11 v13 v20 v45 excluded), corner reprojection residual, hand-eye FIXED at the 2026-09-22 re-solved T_hc2ee, hand_cam K = the 2026-09-22 checkerboard override; reproj rms 7.43 -> 3.39 px, hold-out 7.75 -> 3.51 px; jackknife sd J2 0.42 J3 0.36 J4 0.29 J5 0.06 J6 0.06 deg"
+hand_eye: "/home/abc/mobile_manipulator_ws/log/path_tag_locator/handeye_calib/run_20260918_144420/result_sweep123_refined_K20260922.npz"
+urdf: "/home/abc/mobile_manipulator_ws/src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf"
+session: "/home/abc/mobile_manipulator_ws/log/chain_calib/20260921_arm"
+note: "Subsets (near/far, spin) disagree by up to +-2 deg on J2/J3 (HANDEYE_FITTING_STATUS_2026-09-22 §6) — an average, applied on the user's decision (2026-09-22: better than nothing); with the matching T_ab2mb the arm session's chain hold-out went 12.7 -> 7.7 mm. Pose-mode commands (MoveJ / IK) do NOT use these; only the locator chain does."

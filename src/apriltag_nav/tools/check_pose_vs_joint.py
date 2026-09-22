@@ -316,7 +316,7 @@ for gid, d in ROWS.items():
     pos, rpy = transform_world_to_arm(d['pose'], d['msg'], 0.0)
     tip_fk = (Mq[:3, 3] + Mq[:3, :3] @ (TIP / 1000)) * 1000
     _worst = max(_worst, float(np.linalg.norm(np.asarray(pos) - tip_fk)))
-check(20.0 < _worst < 80.0,
+check(5.0 < _worst < 80.0,      # 45 mm with the 09-21 mount, 19 mm with the 09-22 one (closer to the design)
       f'pose rows now land {_worst:.1f} mm from their joint-row twins: EXPECTED — rrt_final_path_* were planned with the '
       'design mount; regenerate them with the updated URDF before trusting scan_joint_* against scan_pose_*')
 

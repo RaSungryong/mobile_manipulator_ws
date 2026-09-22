@@ -339,8 +339,12 @@ def main():
             s.label, e0[i, 0] * 1e3, e0[i, 1], e1[i, 0] * 1e3, e1[i, 1], px, len(s.hand_corners or []), flag))
     out = os.path.join(args.dir, "arm_offsets.npz")
     np.savez(out, dq_deg=dq, link_scale=scale, T_ab2W_fit=T_ab2W, T_ab2W_chain=T_ab2W0,
-             labels=np.array([s.label for s in samples]), holdout=np.array([samples[i].label for i in test]))
-    print("\nsaved -> %s   (NOT applied anywhere — see the record for how offsets enter a command)" % out)
+             labels=np.array([s.label for s in samples]), holdout=np.array([samples[i].label for i in test]),
+             hand_eye=np.array(tool._resolve(args.hand_eye or meta.get("hand_eye_npz"))), urdf=np.array(chain.path),
+             hand_intrinsics=np.array(getattr(args, "hand_intrinsics", "meta")))
+    print("\nsaved -> %s   (not applied by this tool: `tf_chain_tool.py joint-offsets --apply %s` writes\n"
+          "           config/tf/arm_joint_offsets.yaml, which the locator chain reads — then re-solve T_ab2mb with\n"
+          "           `chain_calib.py solve --arm-offsets config`, the pair must agree)" % (out, out))
 
 
 if __name__ == "__main__":

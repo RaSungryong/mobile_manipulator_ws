@@ -11,7 +11,12 @@ Chain (user notation T_X2Y = pose of Y in X):
 where
     - T_A2hc    : invert(T_hc2A), hand-cam observation of tag A
     - T_hc2ee   : hand-eye calibration (loaded npz)
-    - T_ee2ab   : invert(pose_fr5_to_matrix_m(tcp_pose))
+    - T_ee2ab   : invert(T_ab2ee) with T_ab2ee = pose_fr5_to_matrix_m(tcp_pose)
+                  — or, since 2026-09-22, FK_urdf(q + dq) from the joint
+                  angles when joint zero offsets are configured
+                  (apriltag_nav.tf_chain.arm_flange_T / config/tf/
+                  arm_joint_offsets.yaml); the controller's TCP is FK(q)
+                  with dq = 0
     - T_ab2mb   : platform constant (arm_base -> mobile_base)
     - T_mb2fc   : platform constant (mobile_base -> front_cam)
     - T_fc2B    : front-cam observation of tag B
@@ -55,11 +60,17 @@ def compute_T_A2B(*,
                   T_hc2ee: np.ndarray,
                   T_ab2mb: np.ndarray,
                   T_mb2fc: np.ndarray,
-                  lift_height_m: float = 0.0) -> dict:
+                  lift_height_m: float = 0.0,
+                  joints_deg=None,
+                  joint_offsets_deg=None,
+                  warn=None) -> dict:
     """Compute T_A2B from the two camera observations and return
     intermediates. ``lift_height_m`` (live, from /lifter/height) shifts
     T_ab2mb per ``compensate_T_ab2mb``; 0.0 keeps the lift-at-origin
-    matrix unchanged."""
+    matrix unchanged. ``joints_deg`` + ``joint_offsets_deg`` (both given,
+    offsets non-zero) replace the controller's TCP by FK_urdf(q + dq) —
+    see ``tf_chain.arm_flange_T``; the result carries
+    ``joint_offsets_applied``."""
     if T_hc2A is None:
         raise RuntimeError("T_hc2A is None (tag A not observed)")
     if T_fc2B is None:
@@ -67,7 +78,8 @@ def compute_T_A2B(*,
 
     T_A2hc = invert_T(T_hc2A)
 
-    T_ab2ee = pose_fr5_to_matrix_m(tcp_pose_mm_deg)
+    from apriltag_nav.tf_chain import arm_flange_T
+    T_ab2ee, offsets_applied = arm_flange_T(tcp_pose_mm_deg, joints_deg, joint_offsets_deg, warn=warn)
     T_ee2ab = invert_T(T_ab2ee)
 
     T_ab2mb = compensate_T_ab2mb(T_ab2mb, lift_height_m)
@@ -82,6 +94,7 @@ def compute_T_A2B(*,
         "position_m": (float(pos[0]), float(pos[1]), float(pos[2])),
         "rpy_deg": rpy,
         "lift_height_m": float(lift_height_m),
+        "joint_offsets_applied": bool(offsets_applied),
         "intermediates": {
             "T_A2hc": T_A2hc,
             "T_hc2ee": T_hc2ee,

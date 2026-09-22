@@ -91,6 +91,14 @@ class PathTagLocatorNode:
         rospy.loginfo("path_tag_locator: reference_tag_yaml = %s", ref_tag_path)
 
         self.T_hc2ee = load_T_hc2ee(hand_eye_path)
+        # arm joint zero offsets (config/tf/arm_joint_offsets.yaml, 2026-09-22):
+        # the chain's flange is FK_urdf(q + dq) instead of the controller's TCP
+        from apriltag_nav.tf_chain import load_joint_offsets
+        self.joint_offsets_deg = load_joint_offsets()
+        rospy.loginfo("path_tag_locator: arm joint offsets %s",
+                      ("J1..J6 = %s deg (FK(q+dq) replaces the controller TCP in the chain)"
+                       % [round(float(v), 3) for v in self.joint_offsets_deg])
+                      if np.any(self.joint_offsets_deg) else "none (controller TCP)")
         assert_rigid(self.T_hc2ee, name="T_hc2ee")
 
         # tf_chain.yaml stores the PHYSICAL (tilted) front_cam; the chain
@@ -180,7 +188,7 @@ class PathTagLocatorNode:
                 align_tilt = align_result["tilt_deg"]
                 align_final_tcp = align_result["final_tcp"]
 
-            tcp_pose = self.tcp_client.get_tcp_pose()
+            tcp_pose, joints = self.tcp_client.get_pose_and_joints()
 
             # Tag observations from the shared detector, rescaled from the
             # detector's per-camera tag size to the actual tag sizes.
@@ -211,12 +219,17 @@ class PathTagLocatorNode:
                 T_hc2A=T_hc2A,
                 T_fc2B=T_fc2B,
                 tcp_pose_mm_deg=tcp_pose,
+                joints_deg=joints, joint_offsets_deg=self.joint_offsets_deg,
+                warn=rospy.logwarn,
                 T_hc2ee=self.T_hc2ee,
                 T_ab2mb=self.T_ab2mb,
                 T_mb2fc=self.T_mb2fc,
                 lift_height_m=lift_height_m,
             )
             request_echo["lift_height_m"] = float(lift_height_m)
+            request_echo["joints_deg"] = [float(v) for v in joints]
+            request_echo["joint_offsets_deg"] = [float(v) for v in self.joint_offsets_deg]
+            request_echo["joint_offsets_applied"] = bool(out.get("joint_offsets_applied", False))
             T_A2B = out["T_A2B"]
             T_B_world = compute_T_B_world(T_A_world, T_A2B)
             pos, quat = matrix_to_pose(T_B_world)

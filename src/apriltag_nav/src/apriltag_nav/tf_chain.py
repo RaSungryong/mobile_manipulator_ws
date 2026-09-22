@@ -65,6 +65,11 @@ TF_CHAIN_PATH = os.path.join(TF_DIR, 'tf_chain.yaml')
 # Every transform the yaml must carry. Loading refuses a file missing one.
 NAMES = ('T_ab2mb', 'T_mb2fc', 'T_hc2ee', 'T_ee2tip')
 
+# The arm's joint zero offsets (2026-09-22): not a transform, but part of the
+# same calibrated set — see `load_joint_offsets` / `arm_flange_T`.
+JOINT_OFFSETS_PATH = os.path.join(TF_DIR, 'arm_joint_offsets.yaml')
+JOINT_OFFSETS_NPZ = os.path.join(TF_DIR, 'arm_joint_offsets.npz')
+
 # Rotation of the LEVEL virtual front_cam in the mobile-base frame: x = image
 # right = forward, y = image down = robot right, z = optical axis = down.
 R_MB2FC_LEVEL = np.diag([1.0, -1.0, -1.0])
@@ -187,6 +192,143 @@ def load_npz(path):
     T = np.asarray(data[data.files[0]], dtype=np.float64)
     assert_rigid(T, os.path.basename(path))
     return T
+
+
+# ---------------------------------------------------------------- joint offsets
+def load_joint_offsets(path=None, require_enabled=True):
+    """dq_deg (6,) — the FR10v6 joint ZERO offsets, ADDED to the controller's
+    reading to get the physical angle (chain_calib/arm_offsets.py's
+    convention). Zeros when the file is absent or `enabled: false`
+    (`require_enabled=False` returns the stored values regardless).
+
+    What they are for: the controller reports its TCP as FK(q) with the
+    URDF's nominal zeros; the sheet sessions showed the lens landing
+    +-15 mm from where that FK puts it depending on the configuration.
+    `arm_flange_T` recomputes T_ab2ee = FK(q + dq) from the joints, so the
+    locator chain (path_tag_locator, chain_calib) sees the corrected
+    flange. They were fitted with the applied T_hc2ee FIXED (`hand_eye`
+    below names it), so the pair (T_hc2ee, dq) is one set — refitting
+    either means refitting the other and T_ab2mb after it."""
+    import yaml
+    path = path or JOINT_OFFSETS_PATH
+    if not os.path.exists(path):
+        return np.zeros(6)
+    with open(path, 'r') as fh:
+        d = yaml.safe_load(fh) or {}
+    dq = np.asarray(d.get('dq_deg') or [0.0] * 6, dtype=np.float64).ravel()
+    if dq.size != 6:
+        raise ValueError('%s: dq_deg must hold 6 values, got %d' % (path, dq.size))
+    if np.abs(dq).max() > 5.0:
+        raise ValueError('%s: an offset over 5 deg (%s) is not a zero offset — refused' % (path, dq.round(3).tolist()))
+    if require_enabled and not bool(d.get('enabled', True)):
+        return np.zeros(6)
+    return dq
+
+
+def load_joint_offsets_entry(path=None):
+    import yaml
+    with open(path or JOINT_OFFSETS_PATH, 'r') as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def write_joint_offsets(dq_deg, source, hand_eye, urdf, session='', enabled=True, note='',
+                        path=None, npz_path_=None):
+    """Write arm_joint_offsets.yaml (+ its npz twin). Whole-file rewrite —
+    unlike the transform blocks this file is small and has no design
+    block to preserve; the provenance goes into the fields."""
+    dq = np.asarray(dq_deg, dtype=np.float64).ravel()
+    if dq.size != 6:
+        raise ValueError('dq_deg must hold 6 values')
+    path = path or JOINT_OFFSETS_PATH
+    npz_path_ = npz_path_ or os.path.join(os.path.dirname(path), 'arm_joint_offsets.npz')
+    lines = [
+        '# FR10v6 joint ZERO offsets (deg), ADDED to the controller\'s joint reading =',
+        '# the physical angle. Consumed by apriltag_nav.tf_chain.arm_flange_T: the',
+        '# locator chain\'s T_ab2ee is FK_urdf(q + dq_deg) instead of the TCP the',
+        '# controller reports (= FK_urdf(q), agreement 0.00 mm). J1 is 0 by',
+        '# construction (a J1 offset is a base yaw, which T_ab2mb holds).',
+        '# Fitted with the hand-eye below FIXED, so (T_hc2ee, dq_deg, T_ab2mb) are one',
+        '# set — a new hand-eye or a new K means refitting this and T_ab2mb after it.',
+        '# `enabled: false` makes every consumer use dq = 0 (the controller\'s pose).',
+        '# Writer: tools/tf_chain_tool.py joint-offsets --apply <session arm_offsets.npz>.',
+        'enabled: %s' % ('true' if enabled else 'false'),
+        'dq_deg: [%s]' % ', '.join('%.6f' % v for v in dq),
+        'source: %s' % _yaml_str(source),
+        'hand_eye: %s' % _yaml_str(hand_eye),
+        'urdf: %s' % _yaml_str(urdf),
+        'session: %s' % _yaml_str(session),
+        'note: %s' % _yaml_str(note),
+        '',
+    ]
+    with open(path, 'w') as fh:
+        fh.write('\n'.join(lines))
+    np.savez(npz_path_, dq_deg=dq)
+    back = load_joint_offsets(path, require_enabled=False)
+    if np.abs(back - dq).max() > 1e-5:
+        raise RuntimeError('%s: read-back differs from what was written' % path)
+    return path, npz_path_
+
+
+def check_joint_offsets(path=None, atol=1e-6):
+    """(ok, reason): yaml == npz, 6 values, all under 5 deg. ok with 'absent'
+    when there is no file (offsets are optional)."""
+    path = path or JOINT_OFFSETS_PATH
+    if not os.path.exists(path):
+        return True, 'absent (dq = 0)'
+    try:
+        dq = load_joint_offsets(path, require_enabled=False)
+        npz = os.path.join(os.path.dirname(path), 'arm_joint_offsets.npz')
+        if not os.path.exists(npz):
+            return False, 'npz twin missing: %s' % npz
+        d = float(np.abs(np.load(npz)['dq_deg'] - dq).max())
+        if d > atol:
+            return False, 'npz != yaml (%.1e deg)' % d
+        en = bool(load_joint_offsets_entry(path).get('enabled', True))
+        return True, '%s, dq %s deg' % ('enabled' if en else 'DISABLED', dq.round(3).tolist())
+    except Exception as e:                            # noqa: BLE001
+        return False, str(e)
+
+
+_ARM_CHAIN = None
+
+
+def arm_flange_T(tcp_pose_mm_deg, joints_deg=None, dq_deg=None, tol_mm=2.0, tol_deg=0.1, warn=None):
+    """T_ab2ee (4x4, m) for the locator chain.
+
+    With joints and non-zero offsets: FK_urdf(q + dq). Guard: FK_urdf(q)
+    must reproduce the controller's TCP within `tol_mm` / `tol_deg` —
+    otherwise the joints and the pose are not from the same state (or the
+    URDF is not the controller's model) and the controller's pose is used
+    unchanged, with `warn(msg)` called if given. Without joints, or with
+    dq = 0, it is exactly pose_fr5_to_matrix_m(tcp_pose): bit-for-bit the
+    pre-2026-09-22 chain.
+
+    Returns (T_ab2ee, applied: bool)."""
+    global _ARM_CHAIN
+    from path_tag_locator.geometry import pose_fr5_to_matrix_m
+    T_ctrl = pose_fr5_to_matrix_m([float(v) for v in tcp_pose_mm_deg])
+    dq = None if dq_deg is None else np.asarray(dq_deg, dtype=np.float64).ravel()
+    if joints_deg is None or dq is None or not np.any(dq):
+        return T_ctrl, False
+    q = np.asarray(joints_deg, dtype=np.float64).ravel()
+    if q.size != 6:
+        if warn:
+            warn('arm_flange_T: %d joint value(s), need 6 — joint offsets NOT applied' % q.size)
+        return T_ctrl, False
+    if _ARM_CHAIN is None:
+        from apriltag_nav.arm_fk import ArmChain
+        _ARM_CHAIN = ArmChain()
+    T_fk = _ARM_CHAIN.fk_flange(q)
+    dt = 1e3 * float(np.linalg.norm(T_fk[:3, 3] - T_ctrl[:3, 3]))
+    c = (np.trace(T_fk[:3, :3].T @ T_ctrl[:3, :3]) - 1.0) / 2.0
+    dr = math.degrees(math.acos(max(-1.0, min(1.0, c))))
+    if dt > tol_mm or dr > tol_deg:
+        if warn:
+            warn('arm_flange_T: URDF FK(q) is %.2f mm / %.3f deg from the controller TCP (joints and pose '
+                 'from different states, or the URDF is not the controller model) — joint offsets NOT applied'
+                 % (dt, dr))
+        return T_ctrl, False
+    return _ARM_CHAIN.fk_flange(q, dq_deg=dq), True
 
 
 # ---------------------------------------------------------------- derived forms

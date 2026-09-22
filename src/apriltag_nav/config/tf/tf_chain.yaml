@@ -94,13 +94,13 @@
 # (the matrix), check_pose_vs_joint / check_lift_compensation.
 # -----------------------------------------------------------------------------
 T_ab2mb:
-  source: "CALIBRATED 2026-09-21 by chain_calib on the A0 tag sheet (63 views, session log/chain_calib/20260921, base fit F folded into the design mount); design Rz(180) / (0, -0.100, -0.652)"
-  t_mm: [-7.466, -123.682, -628.440]
-  rpy_deg_xyz: [0.3201, 0.7863, 178.5729]
+  source: "CALIBRATED 2026-09-22 by chain_calib on the A0 tag sheet, ARM session (65 views with joint angles, log/chain_calib/20260921_arm; base fit F folded into the previous value) with the 2026-09-22 re-solved T_hc2ee, the checkerboard hand_cam K and the arm joint offsets (arm_joint_offsets.yaml) in the chain — the four are ONE set; chain rms after the fit 7.9 mm / 0.46 deg (hold-out 7.7). Design Rz(180) / (0, -0.100, -0.652)"
+  t_mm: [-8.675, -103.423, -643.095]
+  rpy_deg_xyz: [-0.4515, -0.1029, 179.2143]
   matrix:   # row-major 4x4, metres
-    [-0.999595683, -0.024981180, -0.013579865, -0.007466274,
-      0.024902589, -0.999672319,  0.005926043, -0.123681765,
-     -0.013723455,  0.005585474,  0.999890229, -0.628439510,
+    [-0.999904372, -0.013725965,  0.001687208, -0.008675003,
+      0.013712224, -0.999874745, -0.007903818, -0.103422668,
+      0.001795484, -0.007879926,  0.999967341, -0.643095458,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:
     t_mm: [0.0, -100.0, -652.0]
@@ -216,13 +216,13 @@ T_mb2fc:
 # a change — they cache it at start.
 # -----------------------------------------------------------------------------
 T_hc2ee:
-  source: "hand-eye sweep 2026-09-18, 35 sweep samples over cross tag 0 (run_20260918_144420 + the 15:10 sweep), PARK + tag-scatter refinement; chain_calib 2026-09-21 puts its error at ~6 mm / 0.6 deg"
-  t_mm: [35.629, -334.495, -151.540]
-  rpy_deg_xyz: [0.1437, -0.4486, -179.4428]
+  source: "CALIBRATED 2026-09-18 sweep (35 samples, run_20260918_144420 + 15:10 sweep, PARK + tag-scatter refine), RE-SOLVED 2026-09-22 from the archived frames rectified with the checkerboard hand_cam intrinsics (robot.yaml intrinsics_override, hand_cam_intr_20260922): 5.4 mm / 0.22 deg from the 09-21 value, scatter 2.66 -> 2.06 mm rms"
+  t_mm: [36.460, -331.770, -156.143]
+  rpy_deg_xyz: [-0.0465, -0.4348, -179.3431]
   matrix:   # row-major 4x4, metres
-    [-0.999922069,  0.009743968,  0.007804595,  0.035629180,
-     -0.009724063, -0.999949381,  0.002584381, -0.334494660,
-      0.007829382,  0.002508287,  0.999966204, -0.151540126,
+    [-0.999905477,  0.011459003,  0.007597955,  0.036460053,
+     -0.011464836, -0.999934014, -0.000724547, -0.331770136,
+      0.007589151, -0.000811588,  0.999970873, -0.156143352,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:
     t_mm: null

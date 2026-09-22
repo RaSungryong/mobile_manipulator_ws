@@ -16,6 +16,11 @@ tf_chain_tool.py — look at, check and update config/tf/tf_chain.yaml.
     python3 tools/tf_chain_tool.py export-npz           rewrite every npz from the yaml
     python3 tools/tf_chain_tool.py urdf                 the mobile_to_base / vision_tip_joint
                                                         lines the planner URDF must hold
+    python3 tools/tf_chain_tool.py joint-offsets        the arm joint zero offsets in use
+    python3 tools/tf_chain_tool.py joint-offsets --apply <session>/arm_offsets.npz --source "..."
+                                                        write config/tf/arm_joint_offsets.yaml (+ npz)
+                                                        from an arm_offsets.py result
+    python3 tools/tf_chain_tool.py joint-offsets --disable | --enable
 
 `set` and `front-cam --apply` rewrite the block's source / t_mm / rpy /
 matrix lines in place; comments and the `design` block stay. Restart
@@ -87,6 +92,14 @@ def cmd_show(args):
     for k in ('arm_mount_yaw', 'arm_tilt_x', 'arm_tilt_y'):
         print('  %-18s %+.9f rad = %+.3f deg' % (k, c[k], math.degrees(c[k])))
     _print_urdf(chain)
+    jo = os.path.join(os.path.dirname(args.tf_yaml), 'arm_joint_offsets.yaml')
+    if os.path.exists(jo):
+        e = TC.load_joint_offsets_entry(jo)
+        print('\narm joint zero offsets (%s): J1..J6 = %s deg  (%s)'
+              % ('enabled' if e.get('enabled', True) else 'DISABLED',
+                 ', '.join('%+.3f' % v for v in TC.load_joint_offsets(jo, require_enabled=False)), e.get('source', '')))
+    else:
+        print('\narm joint zero offsets: none (dq = 0)')
 
 
 def _print_urdf(chain):
@@ -138,8 +151,38 @@ def cmd_check(args):
               'planner URDF vision_fixed + vision_tip_joint == T_ee2tip (urdf %s m)' % _fmt(np.array(txyz) + np.array(fxyz), 4))
     else:
         print('  [skip] planner URDF not found: %s' % URDF)
+    ok, why = TC.check_joint_offsets(os.path.join(os.path.dirname(args.tf_yaml), 'arm_joint_offsets.yaml'))
+    check(ok, 'arm_joint_offsets.yaml: %s' % why)
     print('%d failed' % bad)
     return 1 if bad else 0
+
+
+def cmd_joint_offsets(args):
+    path = os.path.join(os.path.dirname(args.tf_yaml), 'arm_joint_offsets.yaml')
+    if args.apply:
+        d = np.load(args.apply)
+        dq = np.asarray(d['dq_deg'], dtype=float).ravel()
+        he = str(d['hand_eye']) if 'hand_eye' in d.files else ''
+        urdf = str(d['urdf']) if 'urdf' in d.files else URDF
+        TC.write_joint_offsets(dq, args.source, he, urdf, session=os.path.dirname(os.path.abspath(args.apply)),
+                               enabled=not args.disable, note=args.note, path=path)
+        print('-- wrote %s (+ npz)' % path)
+    elif args.disable or args.enable:
+        e = TC.load_joint_offsets_entry(path)
+        TC.write_joint_offsets(e['dq_deg'], e.get('source', ''), e.get('hand_eye', ''), e.get('urdf', ''),
+                               session=e.get('session', ''), enabled=bool(args.enable), note=e.get('note', ''), path=path)
+        print('-- %s %s' % ('enabled' if args.enable else 'DISABLED', path))
+    if not os.path.exists(path):
+        print('no %s — dq = 0 (the controller\'s own FK)' % path)
+        return 0
+    e = TC.load_joint_offsets_entry(path)
+    dq = TC.load_joint_offsets(path, require_enabled=False)
+    print('arm joint zero offsets (%s): J1..J6 = %s deg' % ('enabled' if e.get('enabled', True) else 'DISABLED',
+                                                          ', '.join('%+.3f' % v for v in dq)))
+    for k in ('source', 'hand_eye', 'urdf', 'session', 'note'):
+        if e.get(k):
+            print('  %-9s %s' % (k, e[k]))
+    return 0
 
 
 def cmd_front_cam(args):
@@ -205,6 +248,11 @@ def main():
     sp.add_parser('urdf')
     sp.add_parser('export-npz')
     p = sp.add_parser('front-cam'); p.add_argument('--apply', action='store_true')
+    p = sp.add_parser('joint-offsets')
+    p.add_argument('--apply', metavar='ARM_OFFSETS_NPZ', help='an arm_offsets.py result (dq_deg, hand_eye, urdf)')
+    p.add_argument('--source', default='')
+    p.add_argument('--note', default='')
+    p.add_argument('--disable', action='store_true'); p.add_argument('--enable', action='store_true')
     p = sp.add_parser('set')
     p.add_argument('name', choices=TC.NAMES)
     p.add_argument('--npz')
@@ -217,7 +265,7 @@ def main():
         ap.print_help()
         return 2
     return {'show': cmd_show, 'check': cmd_check, 'urdf': cmd_urdf, 'front-cam': cmd_front_cam,
-            'set': cmd_set, 'export-npz': cmd_export}[args.cmd](args) or 0
+            'set': cmd_set, 'export-npz': cmd_export, 'joint-offsets': cmd_joint_offsets}[args.cmd](args) or 0
 
 
 if __name__ == '__main__':

@@ -463,6 +463,33 @@ v11 v20 v45`(움직이는 중 캡처 / 태그 1개). 재투영 rms: 강체 **7.6
 0.55)·기울임(≥15°, 모든 자리) 추가 수집 → 부분집합이 2 mm / 0.2° 안에서 일치할 때
 적용.
 
+### 적용 (2026-09-22) — 측정 체인에만, 설정 파일로
+
+위 "적용은 명령 쪽" 설명은 2026-09-22에 바뀌었다. 오프셋은 **측정 체인**에 들어간다:
+`apriltag_nav/config/tf/arm_joint_offsets.yaml`(+ npz)에 저장되고, `path_tag_locator`
+(locate / map 캘리브레이션)와 `chain_calib.py solve`는 컨트롤러 TCP 대신
+`FK_urdf(q + dq)`를 플랜지로 쓴다 (`apriltag_nav.tf_chain.arm_flange_T`; 관절각이 없는
+샘플·상태는 그대로 TCP). 명령 쪽(`MoveJ(IK − δq)`)은 여전히 없다.
+
+```bash
+# 1. hand-eye 고정, 현재 K (config) 로 피팅 — 전체 뷰
+rosrun chain_calib arm_offsets.py log/chain_calib/<세션> $A --hand-intrinsics config --exclude ...
+# 2. 적용 (yaml + npz; --disable 로 끄면 모든 소비자가 dq = 0)
+python3 src/apriltag_nav/tools/tf_chain_tool.py joint-offsets --apply log/chain_calib/<세션>/arm_offsets.npz --source "..."
+# 3. 같은 세션으로 T_ab2mb 를 다시 풀어 짝을 맞춘다 (--arm-offsets 기본 config)
+rosrun chain_calib chain_calib.py $A solve log/chain_calib/<세션> --hand-intrinsics config --exclude ...
+python3 src/apriltag_nav/tools/tf_chain_tool.py set T_ab2mb --npz <corrected T_ab2mb> --source "..."
+python3 src/apriltag_nav/tools/tf_chain_tool.py check      # 13/13, URDF mobile_to_base 포함
+```
+
+(hand-eye, dq, T_ab2mb, hand_cam K)는 **한 세트**다 — 하나가 바뀌면 그 오른쪽을 다시
+푼다 (CLAUDE.md *Transform Parameters*, Work Log 2026-09-22). 관절각이 기록되지 않은
+세션(2026-09-21 11:29 의 63뷰)은 오프셋을 적용할 수 없으므로 `solve` 가 그 샘플 수를
+알려주고 컨트롤러 TCP 로 계산한다. 첫 적용값: J2 −0.341, J3 −0.529, J4 −0.051, J5
+−0.134, J6 −0.496° (팔 세션 65뷰, 재투영 7.43 → 3.39 px); 같은 세션의 체인 잔차는
+오프셋 없이 10.1 mm, 오프셋 + T_ab2mb 재피팅 후 7.9 mm (홀드아웃 12.7 → 7.7).
+부분집합 ±2° 불일치는 그대로이므로 "평균값"이다.
+
 ## 6. Basler 비전 팁 측정 — `basler_tip_calib.py` (2026-09-18)
 
 hand_cam이 본 점에 Basler를 정확히 갖다 놓으려면 hand_cam↔Basler 관계가

@@ -129,6 +129,13 @@ class CalibrationOrchestrator:
         self.cfg = cfg
         self.T_hc2ee = T_hc2ee
         self.T_ab2mb = T_ab2mb        # lift-at-origin (tf_chain.yaml)
+        # arm joint zero offsets (config/tf/arm_joint_offsets.yaml, 2026-09-22):
+        # the chain's flange is FK_urdf(q + dq) from the joints, not the TCP
+        from apriltag_nav.tf_chain import load_joint_offsets
+        self.joint_offsets_deg = load_joint_offsets()
+        rospy.loginfo("[Calibrator] arm joint offsets %s",
+                      ("J1..J6 = %s deg" % [round(float(v), 3) for v in self.joint_offsets_deg])
+                      if np.any(self.joint_offsets_deg) else "none (controller TCP)")
         self.T_mb2fc = T_mb2fc
         self.tcp_client = tcp_client   # arm_interface.ArmInterface
         self.base = base               # base_interface.BaseInterface
@@ -768,7 +775,7 @@ class CalibrationOrchestrator:
             det_b, self.cfg.tag_b_size_m,
             self.cfg.front_cam_detector_size_m,
             camera_K=self._front_cam_K())
-        tcp_pose = self.tcp_client.get_tcp_pose()
+        tcp_pose, joints = self.tcp_client.get_pose_and_joints()
         # Remember how far the aligned pose sits from the plan seed, so a
         # later entry whose seed misses its tag can be re-seeded from the
         # tags already measured (see _retry_view_tcp). Only entries that
@@ -791,6 +798,8 @@ class CalibrationOrchestrator:
         }
         rec["observations"] = observations
         rec["tcp_pose_mm_deg"] = [float(v) for v in tcp_pose]
+        rec["joints_deg"] = [float(v) for v in joints]
+        rec["joint_offsets_deg"] = [float(v) for v in self.joint_offsets_deg]
 
         lift_height_m = self._lift_height_m()
         rec["lift_height_m"] = float(lift_height_m)
@@ -811,10 +820,13 @@ class CalibrationOrchestrator:
         out = compute_T_A2B(
             T_hc2A=T_hc2A, T_fc2B=T_fc2B,
             tcp_pose_mm_deg=tcp_pose,
+            joints_deg=joints, joint_offsets_deg=self.joint_offsets_deg,
+            warn=rospy.logwarn,
             T_hc2ee=self.T_hc2ee,
             T_ab2mb=self.T_ab2mb, T_mb2fc=self.T_mb2fc,
             lift_height_m=lift_height_m,
         )
+        rec["joint_offsets_applied"] = bool(out.get("joint_offsets_applied", False))
         T_A2B = out["T_A2B"]
         T_B_world = compute_T_B_world(ref.T_world, T_A2B)
         pos_m = T_B_world[:3, 3]
