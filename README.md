@@ -34,6 +34,14 @@ catkin_make --pkg path_tag_locator
 roslaunch apriltag_nav mobile_manipulator.launch
 ```
 
+**로봇 부팅 시 자동 실행 (2026-09-22):** 같은 launch가 systemd 서비스
+`mobile-manipulator`로 등록되어 navifra 드라이버 뒤에 자동으로 뜬다. 설치는
+`sudo src/apriltag_nav/tools/systemd/install_service.sh` 한 번; 운영은
+`sudo systemctl {start|stop|restart|status} mobile-manipulator`,
+로그는 `journalctl -u mobile-manipulator -f`. 손으로 launch를 띄우기 전에는
+반드시 `sudo systemctl stop mobile-manipulator`. 자세한 것은
+`docs/STOP_LAUNCH_kr.md` §0.5.
+
 카메라 일부를 끄고 실행:
 
 ```bash

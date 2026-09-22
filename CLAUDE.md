@@ -74,6 +74,25 @@ roslaunch apriltag_nav mobile_manipulator.launch   # starts all nine nodes
                                                    # + the WEB operator UI on :8080 (use_web_ui:=false)
 ```
 
+**Since 2026-09-22 the main launch starts at robot boot as the systemd
+service `mobile-manipulator`** (`src/apriltag_nav/tools/systemd/`:
+unit template, `run_stack.sh` = ExecStart, `mobile-manipulator.env` for
+`LAUNCH_ARGS` and the wait limits, `install_service.sh` to install /
+`--uninstall`, needs sudo). `Requires=` / `After=` / `PartOf=
+navifra-robot.service`, so it comes up after the driver's roscore and
+follows a driver restart; `run_stack.sh` waits (bounded: master 120 s,
+Fairino RPC port 20003 180 s, Keyence 30 s) and launches anyway with a
+warning if a device is late — `sudo systemctl restart mobile-manipulator`
+once it is on. Operate with `sudo systemctl {start|stop|restart|status}
+mobile-manipulator`, `journalctl -u mobile-manipulator -f`; file logs
+still go to `<ws>/log/ros` (the env hook is sourced). ⚠️ **Stop the
+service before a hand-started `roslaunch` of the same file** — two copies
+kill each other's nodes and collide on 9090 / 8080; `stop_stack.sh`
+refuses to touch a service-run launch and `install_service.sh --start`
+refuses while a hand launch runs. `systemctl stop` / reboot runs every
+shutdown hook, charge relay off included. Korean procedure:
+`docs/STOP_LAUNCH_kr.md` §0.5.
+
 The Navifra systemd service already runs `roscore` — do not start one.
 `rosrun apriltag_nav task_executor.py` starts *only* the orchestrator and is a
 debug path, not the way to bring the stack up.
@@ -1774,6 +1793,56 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-22 — Main launch at robot boot: systemd `mobile-manipulator`, after the navifra driver
+
+User: "main launch 를 robot 시작할때부터 실행". Until now the PC booted into
+the navifra driver only (`navifra-robot.service`, up at 09:38 today) and
+the operator started `mobile_manipulator.launch` by hand from a VS Code
+terminal (09:42) — the terminal whose frozen pty produced the 2026-09-21
+stop failure. Built the same way the driver is run: a unit + a launcher
+script, `src/apriltag_nav/tools/systemd/`.
+
+- **Unit** (`mobile-manipulator.service`, installed with the workspace
+  path substituted): `Requires=` / `After=` / `PartOf=navifra-robot.service`
+  — roscore lives in the driver, so the stack cannot start without it and
+  restarts with it; `User=abc`, `KillSignal=SIGINT` to the cgroup (=
+  Ctrl-C, every shutdown hook runs, 40 s before SIGKILL), `Restart=
+  on-failure` 5 s, `EnvironmentFile` = the env file in the repo.
+- **`run_stack.sh`** sources `/opt/ros/noetic` + `devel/setup.bash` (so
+  `MM_WS` / `ROS_LOG_DIR` are the env hook's, file logs stay in
+  `<ws>/log/ros`), `PYTHONUNBUFFERED=1` + `stdbuf -oL` (a non-tty stdout
+  is block-buffered — the driver only had stdbuf, which does nothing for
+  Python's own buffer), then WAITS: master via `getSystemState` (120 s,
+  fail → exit 1 → restart), the Fairino RPC port 192.168.58.2:20003
+  (180 s — the controller boots slower than the PC and `arm_node`
+  connects once at start), Keyence 64000 (30 s). A late device is a
+  warning, not a refusal: cameras / base / web UI work without the arm,
+  and `systemctl restart` picks it up. `DRY_RUN=1` prints the command.
+- **`install_service.sh`** (sudo): copy, `daemon-reload`, `enable`;
+  `--start` refuses while a hand-started launch is running; `--uninstall`.
+  **`stop_stack.sh`** now exits with the systemctl instruction when the
+  launch is the service (a SIGINT from it would also have left
+  `Restart=on-failure` to decide).
+- Docs: `STOP_LAUNCH_kr.md` §0.5 (operation, the hand-launch conflict, the
+  charge relay dropping on stop / reboot as on Ctrl-C), README, Build &
+  Run above.
+
+Verified offline: `bash -n`, `DRY_RUN` with and without `MM_WS` in the
+environment (both resolve the ws and print the roslaunch line), the
+wait helper against an open and a closed port on the live arm
+(20003 open, 8080 / 8082 too — 20003 is the SDK's RPC port),
+`systemd-analyze verify` on the substituted unit (no finding for it; the
+noise is other units), master probe returns code 1 on the live master.
+**Not installed:** sudo needs a password in this session, and the stack
+was running by hand (PID 3435) — installing + starting would have
+collided with it. To finish: `sudo src/apriltag_nav/tools/systemd/
+install_service.sh` (enables for the next boot), then at a convenient
+moment `src/apriltag_nav/tools/stop_stack.sh` → `sudo systemctl start
+mobile-manipulator` → `journalctl -u mobile-manipulator -f` and watch the
+three `[run_stack] … ok` lines and the nine nodes come up. First boot to
+check: the arm wait — if the controller takes longer than 180 s, raise
+`WAIT_ARM_S` in the env file.
 
 ### 2026-09-21 (late) — hand_cam intrinsics were wrong (D ≠ 0, fx 1.2 % high): a per-camera override in robot.yaml, applied by remapping in robot_camera_node; the hand-eye re-checked from every stored photo — it is NOT the 20 mm
 

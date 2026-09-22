@@ -1,0 +1,37 @@
+# mobile-manipulator.service — the main stack at robot boot.
+# Installed by tools/systemd/install_service.sh (copies this file to
+# /etc/systemd/system with the workspace path substituted).
+#
+#   sudo systemctl start|stop|restart|status mobile-manipulator
+#   journalctl -u mobile-manipulator -f          # node output (screen)
+#   <ws>/log/ros/<run_id>/                       # roslaunch + node logs
+#
+# The navifra driver (navifra-robot.service) runs roscore, so this unit is
+# Requires=/After=/PartOf= it: it starts after the driver, does not start
+# without it, and follows a `systemctl restart navifra-robot`.
+# Stop = SIGINT to the whole cgroup, identical to Ctrl-C in the launch
+# terminal: every node runs its shutdown hook (VISION lamp off, camera
+# closed, arm disconnect, charge relay OFF — re-issue CHARGE afterwards).
+[Unit]
+Description=Mobile manipulator stack (apriltag_nav mobile_manipulator.launch)
+After=navifra-robot.service network-online.target
+Requires=navifra-robot.service
+PartOf=navifra-robot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=abc
+Group=abc
+Environment=HOME=/home/abc
+Environment=MM_WS=@WS@
+EnvironmentFile=-@WS@/src/apriltag_nav/tools/systemd/mobile-manipulator.env
+WorkingDirectory=@WS@
+ExecStart=@WS@/src/apriltag_nav/tools/systemd/run_stack.sh
+KillSignal=SIGINT
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
