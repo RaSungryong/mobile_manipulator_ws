@@ -113,6 +113,37 @@ Ctrl-S(XOFF)를 잘못 누른 경우라면 그 탭에서 Ctrl-Q 로 풀린다.
 강제 종료 시 실행되지 못하는 훅은 `task_executor`의 STATUS 램프 off 뿐이라
 녹색 램프가 켜진 채 남는다 — 다음 launch가 덮어쓴다.
 
+### 3.1. 종료할 때만이 아니라 **실행 중에도** 걸린다 (2026-09-22 16:02)
+
+같은 원인이 map 캘리브레이션 세션을 **도중에** 멈췄다. `path_tag_locator.launch`
+를 VS Code 터미널(pts/0)에서 띄우고 캘리브레이션을 돌리던 중, 그 터미널이 출력을
+받아가지 않게 되자 `map_calibrator`가 123번 태그의 `initial MoveJ 1/4` 로그 한 줄을
+stdout에 쓰다가 그대로 멈췄다 — 파일 로그(`log/ros/…/map_calibrator-2.log`)에는
+그 줄이 남았지만 바로 다음의 `/arm/move_cart` publish는 나가지 않았고,
+로그 락에 다른 스레드까지 걸려 60 s 타임아웃도 안 찍힌다. `arm_node`에는 명령이
+도착한 흔적이 없고 `rosnode list`에는 멀쩡히 남아 있다. 진단은 §3과 같다
+(`timeout 3 bash -c 'echo > /dev/pts/N'` 가 124, 스레드 wchan `wait_woken`).
+Ctrl-S는 아니었다(`termios.tcflow(TCOON)` 보내도 그대로).
+
+**규칙: 손으로 띄우는 launch(캘리브레이션 launch 포함)는 VS Code 터미널 패널에
+붙이지 말고 detached로, 출력은 파일로:**
+
+```bash
+cd ~/mobile_manipulator_ws && source devel/setup.bash
+setsid nohup roslaunch path_tag_locator path_tag_locator.launch \
+    > log/ros/calib_launch_$(date +%Y%m%d_%H%M).out 2>&1 &
+tail -f log/ros/calib_launch_*.out      # 보고 싶으면 이렇게
+```
+
+멈춘 세션은 살릴 수 없다(kill -9 + `rosnode cleanup`, §3). 세션 기록은 항목마다
+원자적으로 저장되므로 잃는 것은 없고, 남은 태그만 subset plan으로 돌린 뒤 두
+`map_world_*.yaml`을 합치면 된다 — 단, **재시작한 노드가 읽는 tf 체인이 멈춘
+세션의 것과 같은지 먼저 확인**할 것(항목 yaml의 `joint_offsets_applied` 유무,
+`config/tf/*` 수정 시각). 2026-09-22에는 그 사이에 체인이 바뀌어 100–122(옛 체인)와
+123–125(새 체인)가 20 mm 이상 어긋났고, 병합본은 쓰지 못하고
+`calibrate/20260922_161657/map_world_plate1_merged_CHAIN_MISMATCH.yaml` 로
+남겨 두었다 — 결국 전체를 새 체인으로 다시 돌려야 한다.
+
 ## 4. 재시작 체크리스트
 
 - 새(얼지 않은) 터미널, `source devel/setup.bash` (→ `MM_WS`, `ROS_LOG_DIR=log/ros`)

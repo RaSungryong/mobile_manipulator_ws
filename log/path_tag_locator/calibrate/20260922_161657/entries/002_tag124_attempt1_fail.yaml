@@ -1,0 +1,48 @@
+seq: 2
+recorded_at: '2026-09-22T16:17:49.291'
+path_tag_id: 124
+ref_tag_id: 5
+attempt: 1
+status: fail
+error: 'auto_align: tag A (id=5) not detected at iteration 1 — adjust initial pose
+  (tag 5 not detected on /hand_cam/tag_detections within 3.0s)'
+plan_entry:
+  retry_count: 1
+  align_required: true
+  arm_view_tcp_mm_deg:
+  - 582.7
+  - 722.4
+  - 107.2
+  - -179.7
+  - -0.4
+  - -37.0
+arm_homed_before_nav: true
+nav:
+  nav_start_id: null
+  arrived_tag_id: 124
+  base_theta_deg: -151.2290057041086
+view_tcp_mm_deg:
+- 582.7
+- 722.4
+- 107.2
+- -179.7
+- -0.4
+- -37.0
+view_tcp_source: entry-override
+align_required: true
+auto_align:
+  iterations: 1
+  orientation: fixed
+  fixed_rx_ry_deg:
+  - -180.0
+  - 0.0
+  fixed_rpy_frame: camera
+  xy_offset_m: 0.0
+  tilt_deg: 0.0
+  final_tcp: null
+  tag_in_cam: null
+  history: []
+  degraded: 'initial move failed, using current pose: get_tcp_pose: no fresh pose_valid
+    /arm/state within 5.0s — is arm_node running and the arm reachable?'
+  error: 'auto_align: tag A (id=5) not detected at iteration 1 — adjust initial pose
+    (tag 5 not detected on /hand_cam/tag_detections within 3.0s)'

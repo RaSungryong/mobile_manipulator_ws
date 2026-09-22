@@ -23,6 +23,15 @@
 #   distances. The plate-to-plate distance was measured at 3.90 m the same
 #   day (design 3.89) — applied to reference_tags_plate2.yaml (the cross
 #   tags ON 정반 2), NOT to the D/E floor lanes, which stay at 2.18 / 5.6.
+#
+# 2026-09-22 — zone B + C WORK tags (100-125) carry the CALIBRATED position
+# from the map calibration of that day (two complete plate-1 sessions on
+# the 2026-09-22 tf chain, per-tag mean; session-to-session xy 0.3/0.4 mm
+# sd, max 0.9 mm): log/path_tag_locator/map_world_20260922_plate1_final.yaml
+# (copy: config/map_world_plate1_20260922.yaml). The design value stays in
+# the trailing comment. Net: zone B within +-3 mm of design, zone C lane
+# x -16.7 +- 6.3 mm (all 13 tags, both sessions), y within 3 mm. Every
+# other tag (dock, pivots, zone A, plates D/E) is still the design value.
 
 # Tag Database
 tags:
@@ -151,135 +160,135 @@ tags:
 
   # Zone B Work Tags (112 -> 100)
   112:
-    x: -1.71
-    y: 2.95
+    x: -1.7148   # design -1.71, calibrated 2026-09-22 (-4.8 mm)
+    y: 2.9432   # design 2.95, calibrated 2026-09-22 (-6.8 mm)
     type: WORK
     zone: B
   111:
-    x: -1.71
-    y: 2.55
+    x: -1.7129   # design -1.71, calibrated 2026-09-22 (-2.9 mm)
+    y: 2.5430   # design 2.55, calibrated 2026-09-22 (-7.0 mm)
     type: WORK
     zone: B
   110:
-    x: -1.71
-    y: 2.15
+    x: -1.7120   # design -1.71, calibrated 2026-09-22 (-2.0 mm)
+    y: 2.1432   # design 2.15, calibrated 2026-09-22 (-6.8 mm)
     type: WORK
     zone: B
   109:
-    x: -1.71
-    y: 1.75
+    x: -1.7103   # design -1.71, calibrated 2026-09-22 (-0.3 mm)
+    y: 1.7458   # design 1.75, calibrated 2026-09-22 (-4.2 mm)
     type: WORK
     zone: B
   108:
-    x: -1.71
-    y: 1.35
+    x: -1.7079   # design -1.71, calibrated 2026-09-22 (+2.1 mm)
+    y: 1.3467   # design 1.35, calibrated 2026-09-22 (-3.3 mm)
     type: WORK
     zone: B
   107:
-    x: -1.71
-    y: 0.95
+    x: -1.7103   # design -1.71, calibrated 2026-09-22 (-0.3 mm)
+    y: 0.9464   # design 0.95, calibrated 2026-09-22 (-3.6 mm)
     type: WORK
     zone: B
   106:
-    x: -1.71
-    y: 0.55
+    x: -1.7064   # design -1.71, calibrated 2026-09-22 (+3.6 mm)
+    y: 0.5482   # design 0.55, calibrated 2026-09-22 (-1.8 mm)
     type: WORK
     zone: B
   105:
-    x: -1.71
-    y: 0.15
+    x: -1.7051   # design -1.71, calibrated 2026-09-22 (+4.9 mm)
+    y: 0.1483   # design 0.15, calibrated 2026-09-22 (-1.7 mm)
     type: WORK
     zone: B
   104:
-    x: -1.71
-    y: -0.25
+    x: -1.7106   # design -1.71, calibrated 2026-09-22 (-0.6 mm)
+    y: -0.2555   # design -0.25, calibrated 2026-09-22 (-5.5 mm)
     type: WORK
     zone: B
   103:
-    x: -1.71
-    y: -0.65
+    x: -1.7047   # design -1.71, calibrated 2026-09-22 (+5.3 mm)
+    y: -0.6531   # design -0.65, calibrated 2026-09-22 (-3.1 mm)
     type: WORK
     zone: B
   102:
-    x: -1.71
-    y: -1.05
+    x: -1.7051   # design -1.71, calibrated 2026-09-22 (+4.9 mm)
+    y: -1.0518   # design -1.05, calibrated 2026-09-22 (-1.8 mm)
     type: WORK
     zone: B
   101:
-    x: -1.71
-    y: -1.45
+    x: -1.7061   # design -1.71, calibrated 2026-09-22 (+3.9 mm)
+    y: -1.4517   # design -1.45, calibrated 2026-09-22 (-1.7 mm)
     type: WORK
     zone: B
   100:
-    x: -1.71
-    y: -1.85
+    x: -1.7065   # design -1.71, calibrated 2026-09-22 (+3.5 mm)
+    y: -1.8479   # design -1.85, calibrated 2026-09-22 (+2.1 mm)
     type: WORK
     zone: B
 
   # Zone C Work Tags (113 -> 125)
   113:
-    x: 1.71
-    y: 1.85
+    x: 1.6802   # design 1.71, calibrated 2026-09-22 (-29.8 mm)
+    y: 1.8409   # design 1.85, calibrated 2026-09-22 (-9.1 mm)
     type: WORK
     zone: C
   114:
-    x: 1.71
-    y: 1.45
+    x: 1.6835   # design 1.71, calibrated 2026-09-22 (-26.5 mm)
+    y: 1.4419   # design 1.45, calibrated 2026-09-22 (-8.1 mm)
     type: WORK
     zone: C
   115:
-    x: 1.71
-    y: 1.05
+    x: 1.6866   # design 1.71, calibrated 2026-09-22 (-23.4 mm)
+    y: 1.0443   # design 1.05, calibrated 2026-09-22 (-5.7 mm)
     type: WORK
     zone: C
   116:
-    x: 1.71
-    y: 0.65
+    x: 1.6895   # design 1.71, calibrated 2026-09-22 (-20.5 mm)
+    y: 0.6468   # design 0.65, calibrated 2026-09-22 (-3.2 mm)
     type: WORK
     zone: C
   117:
-    x: 1.71
-    y: 0.25
+    x: 1.6952   # design 1.71, calibrated 2026-09-22 (-14.8 mm)
+    y: 0.2487   # design 0.25, calibrated 2026-09-22 (-1.3 mm)
     type: WORK
     zone: C
   118:
-    x: 1.71
-    y: -0.15
+    x: 1.6929   # design 1.71, calibrated 2026-09-22 (-17.1 mm)
+    y: -0.1543   # design -0.15, calibrated 2026-09-22 (-4.3 mm)
     type: WORK
     zone: C
   119:
-    x: 1.71
-    y: -0.55
+    x: 1.6959   # design 1.71, calibrated 2026-09-22 (-14.1 mm)
+    y: -0.5501   # design -0.55, calibrated 2026-09-22 (-0.1 mm)
     type: WORK
     zone: C
   120:
-    x: 1.71
-    y: -0.95
+    x: 1.6988   # design 1.71, calibrated 2026-09-22 (-11.2 mm)
+    y: -0.9511   # design -0.95, calibrated 2026-09-22 (-1.1 mm)
     type: WORK
     zone: C
   121:
-    x: 1.71
-    y: -1.35
+    x: 1.6945   # design 1.71, calibrated 2026-09-22 (-15.5 mm)
+    y: -1.3528   # design -1.35, calibrated 2026-09-22 (-2.8 mm)
     type: WORK
     zone: C
   122:
-    x: 1.71
-    y: -1.75
+    x: 1.6954   # design 1.71, calibrated 2026-09-22 (-14.6 mm)
+    y: -1.7508   # design -1.75, calibrated 2026-09-22 (-0.8 mm)
     type: WORK
     zone: C
   123:
-    x: 1.71
-    y: -2.15
+    x: 1.6976   # design 1.71, calibrated 2026-09-22 (-12.4 mm)
+    y: -2.1487   # design -2.15, calibrated 2026-09-22 (+1.3 mm)
     type: WORK
     zone: C
   124:
-    x: 1.71
-    y: -2.55
+    x: 1.7001   # design 1.71, calibrated 2026-09-22 (-9.9 mm)
+    y: -2.5468   # design -2.55, calibrated 2026-09-22 (+3.2 mm)
     type: WORK
     zone: C
   125:
-    x: 1.71
-    y: -2.95
+    x: 1.7022   # design 1.71, calibrated 2026-09-22 (-7.8 mm)
+    y: -2.9487   # design -2.95, calibrated 2026-09-22 (+1.3 mm)
     type: WORK
     zone: C
 

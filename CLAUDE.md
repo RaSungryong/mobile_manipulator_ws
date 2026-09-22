@@ -1939,6 +1939,110 @@ launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
 deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
 staying at the seed's, and convergence in 2–3 iterations.
 
+### 2026-09-22 (16:00) — Map calibration froze at tag 123: the VS Code launch terminal again; 26/26 finished with a subset plan and merged
+
+User: "map 갤리브레이션 진행했는데 하다가 123번태그에서 멈추었어요". Session
+`20260922_154103` had 100–122 all ok (23 entries); at 16:02:41 the
+calibrator logged `arrived at tag 123` and `auto_align: initial MoveJ 1/4`
+and then NOTHING — not the `[ArmInterface] move_cart ->` line that follows
+within 2 ms on every other entry, no 60 s timeout, and `arm_node` never
+received a command (its next motion was the operator's jog at 16:04:50).
+`rosnode list` still showed `/map_calibrator`. Cause is the 2026-09-21 one,
+mid-run this time: `path_tag_locator.launch` was started in a VS Code
+integrated terminal (`/dev/pts/0`), the pty stopped being drained, and
+`rospy.loginfo`'s stdout handler blocked inside that log call holding the
+logging lock — the file handler had already written the line, the publish
+after it never ran, every other thread queued on the lock (`wait_woken`
+wchans). Proved with `timeout 3 bash -c 'echo > /dev/pts/0'` → 124; not
+XOFF (`tcflow(TCOON)` changed nothing); py-spy absent and ptrace_scope 1
+blocked gdb, so the Python stack was inferred from the log ordering.
+Nothing in the calibration code was at fault and nothing was lost (entries
+are written atomically per attempt).
+
+Recovery: subset plan `log/path_tag_locator/calibrate/plan_plate1_tags123-125.yaml`
+(the plate-1 header + entries 123–125, validated with the real loader),
+run through `/map_calibrator/run_calibration plan_path=…` on a relaunched
+calibration stack (user, 16:16): 123 ok, 124 ok on retry (tag 5 not seen
+at the seed once), 125 ok — session `20260922_161657`.
+
+⚠️ **The two halves are on DIFFERENT chains, so they were NOT merged into
+a usable map.** The 15:41 session ran on calibration nodes started at
+11:35 — before the joint offsets / refit T_ab2mb / new T_hc2ee of this
+afternoon existed on disk — and its entries carry no
+`joint_offsets_applied`; the 16:16 relaunch read the new tf files
+(`joint_offsets_applied: true`). Tags measured by both (the 15:16 session
+vs the subset): 123 old (1705.8, −2127.8) → new (1697.7, −2148.9) mm,
+124 (1715.4, −2521.7) → (1699.7, −2546.8), 125 (1724.6, −2922.4) →
+(1702.0, −2948.8) — the new chain moves them 8–23 mm in x and 21–27 mm
+in y, onto the design grid (1710, −2150 / −2550 / −2950) where the old
+chain had a +22 mm y bias and an x drift along the lane. So **every
+plate-1 session of today before 16:16 (14:21, 14:51, 15:16, 15:41) is
+old-chain data; the only new-chain map_world is the 3-tag
+`map_world_20260922_161657.yaml`.** A 26-tag merge was built, checked
+(lane spacing 388–419 mm, seam 122→123 412 mm — the seam itself does not
+show the mismatch, the absolute offset does) and then parked as
+`calibrate/20260922_161657/map_world_plate1_merged_CHAIN_MISMATCH.yaml`
+with a `WARNING_chain_inconsistent` key, OUT of the `map_world_*.yaml`
+glob that `predictive_centering.map_world_path: latest` reads (that glob
+sorts by name, so `latest` is now the 3-tag file; blind steering falls
+back to map.yaml for the other tags, the documented fallback). **Next:
+re-run the whole plate-1 plan on the new chain, from a detached launch.**
+
+`STOP_LAUNCH_kr.md` §3.1 records the mid-run form of the failure and the
+rule: **every hand launch — the calibration launch included — goes
+`setsid nohup … > log/ros/….out 2>&1 &`, never into a VS Code terminal
+pane.** The relaunched calibration stack of 16:16 is still on a VS Code
+pty (`pts/6`, draining for now); restart it detached before the full
+re-run.
+
+**Later (17:16): plate 1 re-run TWICE on the new chain and the result
+filed.** Sessions `20260922_162335` (16:23–16:48) and `20260922_165326`
+(16:53–17:16), 26/26 each (two 16:51 starts failed instantly — nodes not
+ready — and are noise). Session-to-session: xy sd 0.3 / 0.4 mm, **max
+0.9 mm**, z sd 7.4 mm, yaw sd 0.03°. Against the old chain (14:51 /
+15:16, themselves repeatable to 0.5 mm) the new chain moves tags by up
+to 35 mm (y sd 17 mm) — and lands on the design grid: zone B dx
++1.3 ± 3.2 / dy −3.5 ± 2.5 mm, zone C dx **−16.7 ± 6.3** / dy −2.4 ±
+3.5 mm (old chain: 12–18 mm biases with 10–13 mm sd), z −57 ± 10 mm
+(design −80; the z scatter is the known depth term). The zone C lane
+reading 17 mm closer to the plate centre than map.yaml is consistent
+across both sessions and all 13 tags, so it is where the tags are (or a
+constant chain term), not noise. Result = per-tag MEAN of the two:
+`log/path_tag_locator/map_world_20260922_plate1_final.yaml` (header
+`method` / `source_sessions`, per tag `spread_mm` / `dev_from_design_mm`;
+sorts after the session files, so `map_world_path: latest` picks it) and
+a copy **next to map.yaml: `src/apriltag_nav/config/map_world_plate1_20260922.yaml`**
+(user: "주요결과는 map.yaml 같은 폴더에 복사"). It is NOT a drop-in map.yaml
+(world frame = reference_tags.yaml's tag-0 frame; same origin and axes
+as map.yaml by design, hence the small deviations, but the generator's
+note stands). The old-chain sessions of the day are kept as records only.
+
+**Then (17:30, user: "이 결과 실제로 작용") — APPLIED to `map.yaml`.**
+Where the calibrated positions act: `mobile_node` re-resolves
+`predictive_centering.map_world_path: latest` per hop, so blind-segment
+steering had already picked the final file up at 17:17:55 (`loaded 26
+calibrated tag positions`). Everything else reads **map.yaml** —
+`calculate_robot_pose` (`/robot_pose`, hence pose-mode
+`transform_world_to_arm`), the hop odom distance (`hypot` of the two map
+positions in `go_to_next_tag`) and the prediction fallback — so tags
+**100–125 in `config/map.yaml` now carry the calibrated x / y** (4
+decimals, design value + delta in a trailing comment, header block dated
+2026-09-22; CRLF endings kept, 52 value lines changed). Dock, pivots,
+zone A and plates D/E are untouched. Consequences: `/robot_pose` on a
+work tag is the calibrated world position (zone C reads x 1.693, not
+1.71, and the arm's world→arm transform follows); hop distances are the
+measured 388–419 mm instead of a flat 0.400 (the pivot-exit hops 505→112
+/ 506→113 change by a few mm, the align absorbs it);
+`generate_calibration_artifacts.py` would now seed from the calibrated
+stop poses (≤ 17 mm from the current plan seeds — not regenerated, the
+align covers it). Verified offline: yaml parses (72 tags / 142 edges),
+`MapManager` routes 500→105 and 500→125 unchanged, `check_nav_sequencing`
+14, `check_front_cam_guard` 31, `check_task_discovery` 47/48 (the known
+pre-existing failure). **`mobile_node` must be restarted to read it**
+(`sudo systemctl restart mobile-manipulator` — the charge relay drops, as
+on every stop); the calibration nodes read `map_in_path` per session and
+need nothing.
+
 ### 2026-09-22 — C and E re-solved for the new hand_cam K; joint offsets APPLIED to the locator chain; T_ab2mb refit — one set
 
 User, in three steps: (1) "지금 fc과 hc이 보는 화면을 보고 태그 200번 기준으로
