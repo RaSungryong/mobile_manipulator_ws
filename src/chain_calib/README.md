@@ -297,9 +297,10 @@ rosrun chain_calib chain_calib.py solve log/chain_calib/<세션> --sx 1.0012 --s
   캘리브레이션 노드 재시작.
 - **BASE side**: `corrected T_ab2mb`를 `tf_chain_tool.py set T_ab2mb --matrix …
   --source "…"`로 넣습니다(locator 체인, pose 모드 IK, `robot_sim`, 플랜
-  생성기가 읽음; arm_node + 캘리브레이션 노드 재시작). **2026-09-21 세션의
-  값이 이렇게 반영되어 있습니다** —
-  [docs/CHAIN_CALIB_2026-09-21_kr.md](docs/CHAIN_CALIB_2026-09-21_kr.md).
+  생성기가 읽음; arm_node + 캘리브레이션 노드 재시작). **2026-09-22 팔 세션의
+  값이 이렇게 반영되어 있습니다** — 출처와 수치는 `tf_chain.yaml`의 `T_ab2mb`
+  블록 주석과 CLAUDE.md Work Log 2026-09-22 (09-21 세션과 그 기록 문서는 관절각이
+  없어 오프셋을 적용할 수 없으므로 2026-09-22에 삭제; git에 있음).
   `check_front_cam_extrinsics.py`가 정규직교·설계 근방(3° / 50 mm)을 검사합니다.
   **같은 변환이 `robot.yaml arm_calibration`(pose 모드 IK)과 플래너 URDF의
   `mobile_to_base`에도 들어갑니다**(2026-09-21부터; `check_pose_vs_joint.py`가 셋의

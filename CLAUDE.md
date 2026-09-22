@@ -2009,6 +2009,30 @@ of this. The docs of the other session that say the offsets are "NOT
 applied" (`HANDEYE_FITTING_STATUS` §0/§6, HANDOVER §2-0c) got a dated
 line saying they now are.
 
+**Then, on the user's instruction ("63뷰 체인 세션은 앞으로도 못 쓸 테니
+삭제, 그 외에 다시는 사용할 일 없는 것들도"), deleted — git has them:**
+`log/chain_calib/20260921` (the 63-view 11:29 session, no joint angles,
+so it can never take the offsets) and its record
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`; hand-eye runs
+`run_20260918_152111` (0 samples) and `run_20260921_195136` (the 20:09
+sweep, never applied, untracked); the superseded solves
+`result_sweep_only_refined.npz` / `result_sweep123_refined.npz` in
+`run_20260918_144420` (the K20260922 re-solve is the applied one; the
+35 sample frames stay); and in `20260921_arm` the rejected hand-eye-free
+candidate `T_hc2ee_fit_20260921_arm.npz` with its three report txt files
+and the other session's `arm_offsets_20260922_handeye_fixed_newK.txt`
+(numbers survive in the status doc §6 / Work Log). **Kept**, because an
+applied value comes from them: `20260921_arm` (samples, corners, meta,
+`arm_offsets.npz`, `corrections.npz`, `T_ab2mb_20260922_offsets.npz`),
+`basler_tip_20260921`, `hand_cam_intr_20260922` + the checkerboard PDF,
+`run_20260918_144420` (frames + `result.npz` + the K20260922 npz),
+`log/apriltag_nav/calib_pair_20260915_a`, and the `locate/` /
+`calibrate/` map-calibration outputs (results, not inputs — today's
+15:11 run predates the new chain). `check_chain_calib.py`'s "old session
+loads with joints_deg None" case now builds its own old-format session
+(48 still); the `tf_chain.yaml` T_ab2mb / T_hc2ee comment headers
+describe the 09-22 provenance and name the 09-21 value as history.
+
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 
 User (pinyin): "开机就启动 main launch 怎么做". The service from the entry

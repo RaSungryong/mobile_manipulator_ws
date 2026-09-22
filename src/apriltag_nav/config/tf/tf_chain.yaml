@@ -62,32 +62,41 @@
 #   both signs negative because Rz(180) flips y and the inverse flips it
 #   back). No mount tilt: a 655-point real-robot fit read 0.0001 / 0.0007 rad.
 #
-# APPLIED = CALIBRATED 2026-09-21 by chain_calib (src/chain_calib, record
-# src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md, data log/chain_calib/
-# 20260921): the printed A0 tag sheet is the ground truth — front_cam on tag
-# 200, 63 hand_cam views over grid tags 300-309 (20 distinct geometries, 90
-# deg of spin), ruler print scale 1.0 / 1.0 / 90.00 mm, front_cam's rotation
-# replaced by the level-floor prior (a single tag's tilt is the paper's local
-# slope). The fit puts a correction F in the fc frame — (+11.4, -8.2, -16.0)
-# mm / (+0.32, -0.79, +1.43) deg, jackknife 0.3 / 0.3 / 1.0 mm, 0.06 deg —
-# and folds it in as T_ab2mb = T_ab2mb_design . T_mb2fc . F . inv(T_mb2fc),
-# so the generated T_mb2fc is untouched (one base pose cannot separate an
-# arm-mount error from a front_cam error and does not need to: every consumer
-# uses the product). Sheet error 22.9 mm / 1.79 deg -> 8.5 mm / 0.65 deg.
-# vs design: t (-7.5, -23.7, +23.6) mm, yaw +1.43 deg, roll/pitch 0.32 / 0.79.
+# APPLIED = CALIBRATED 2026-09-22 by chain_calib (src/chain_calib) on the
+# printed A0 tag sheet, ARM session log/chain_calib/20260921_arm (65 views
+# with joint angles, spins 30 / 90 / 150 deg, hand_cam 0.25-0.56 m, tilts
+# to 41 deg): front_cam on tag 200, hand_cam on grid tags 300-309, ruler
+# print scale 1.0 / 1.0 / 90.00 mm, front_cam's rotation replaced by the
+# level-floor prior (a single tag's tilt is the paper's local slope). The
+# chain in the fit: the 2026-09-22 re-solved T_hc2ee (checkerboard hand_cam
+# K/D) and the arm joint zero offsets (arm_joint_offsets.yaml, FK(q + dq)
+# for the flange) — the FOUR are one set. Base fit F (fc frame) folded in
+# as T_ab2mb = T_ab2mb_prev . T_mb2fc . F . inv(T_mb2fc) (one base pose
+# cannot separate an arm-mount error from a front_cam error and does not
+# need to: every consumer uses the product). Chain rms after the fit 7.9 mm
+# / 0.46 deg (hold-out every 4th view 7.7), jackknife 0.4 / 0.4 / 0.9 mm;
+# the same session fits to 10.1 mm (hold-out 12.7) without the offsets.
+# vs design: t (-8.7, -3.4, +8.9) mm, yaw -0.79 deg, roll/pitch -0.45/-0.10.
 #
-# What is a robot constant in it: the YAW (1.43 deg about vertical) and the
-# in-plane translation (~2 mm) — two independent sessions agreed. What is
-# NOT: roll / pitch (+-1 deg) and the tz / tx they drag along (+-10 mm at the
-# 0.64 m lever) — a floor-sheet session measures grid-normal-vs-arm-z, i.e.
-# mount tilt + the chassis' attitude on the floor at that parking + the
-# paper's slope; expect ~8 mm of shift per re-parking. Kept because the
-# locator chain and pose-mode IK must agree, not as a mount measurement.
+# History: 2026-09-21 value t (-7.47, -123.68, -628.44) / rpy (0.320, 0.786,
+# 178.573) from a 63-view session WITHOUT joint angles (deleted 2026-09-22
+# on the user's instruction — it can never take the offsets; git has it),
+# 34 mm / 1.66 deg from the design; 20 mm of y and 0.64 deg of yaw moved
+# with the offsets, which absorb what the J2 / J3 zeros took out of the FK.
 #
-# Consequence: every pose-mode target moved ~35 mm at 1 m reach vs the
-# design mount; the planner's rrt_final_path_* were planned with the DESIGN
-# mount and land ~45 mm from their assigned_workpoints_* twins until the
-# planner regenerates them with the updated URDF.
+# What is a robot constant in it: the YAW and the in-plane translation —
+# two independent sessions agreed to 0.1 deg / 2 mm BEFORE the offsets;
+# re-check with them. What is NOT: roll / pitch (+-1 deg) and the tz / tx
+# they drag along (+-10 mm at the 0.64 m lever) — a floor-sheet session
+# measures grid-normal-vs-arm-z, i.e. mount tilt + the chassis' attitude on
+# the floor at that parking + the paper's slope; expect ~8 mm of shift per
+# re-parking. Kept because the locator chain and pose-mode IK must agree,
+# not as a mount measurement.
+#
+# Consequence: pose-mode targets move with this value; the planner's
+# rrt_final_path_* were planned with the DESIGN mount and land ~19 mm
+# from their assigned_workpoints_* twins (45 with the 09-21 value) until
+# the planner regenerates them with the updated URDF.
 #
 # Readers: arm_transform (pose-mode IK, as the six-number inverse — see
 # `arm_calibration` below), path_tag_locator / chain_calib / robot_sim
@@ -193,9 +202,12 @@ T_mb2fc:
 # log/path_tag_locator/handeye_calib/run_20260918_144420 + the third sweep of
 # 15:10; 35 sweep samples — the 14 bootstrap rotations dropped, they scatter
 # 17-22 mm each at 1.2 m; PARK closed form, then REFINED by minimising the
-# fixed tag's re-projection scatter over the 6 parameters,
-# result_sweep123_refined.npz): tag 0 through the 35 poses scatters 2.7 mm
-# rms / 5.1 max, normal 0.8 deg; jackknife 2.8 / 2.2 / 1.5 mm on t. The
+# fixed tag's re-projection scatter over the 6 parameters): tag 0 through
+# the 35 poses scattered 2.7 mm rms / 5.1 max, normal 0.8 deg; jackknife
+# 2.8 / 2.2 / 1.5 mm on t. RE-SOLVED 2026-09-22 from the same archived
+# frames rectified with the checkerboard hand_cam K/D (robot.yaml
+# intrinsics_override): result_sweep123_refined_K20260922.npz in the run
+# dir, 5.4 mm / 0.22 deg from the 09-21 value, scatter 2.06 mm rms. The
 # 2026-09-21 chain_calib joint fit puts its remaining error at ~6 mm /
 # 0.6 deg — inside this data's resolution — and a 62 vs 152 deg spin test
 # moved the FK grid normal 0.55 deg, inside per-view scatter: no sign the

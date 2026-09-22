@@ -21,7 +21,7 @@ the hand-eye:
 So the base may stand anywhere front_cam sees tag 200; the sheet's own
 rigidity carries the rest. front_cam's single-tag ROTATION is replaced by
 the level-floor prior (the same choice `solve` and `verify_chain` make —
-one tag's tilt is the paper's local slope, see CHAIN_CALIB_2026-09-21_kr.md).
+one tag's tilt is the paper's local slope, CLAUDE.md Work Log 2026-09-21).
 
 At each point, after the dwell, hand_cam re-solves the sheet from every tag
 it sees and reports the LENS's actual position in W against the commanded

@@ -433,9 +433,16 @@ try:
         check("'reproj rms' with the fit under 0.5 px (0.3 px corner noise)",
               any("reproj rms" in l and float(l.split("reproj rms")[1].split("px")[0]) < 0.5 for l in _r.stdout.splitlines()
                   if l.startswith("base pose + joint offsets")), " | ".join(l for l in _r.stdout.splitlines() if l.startswith("base pose")))
-    check("a session recorded before joint angles existed loads with joints_deg None",
-          all(x.joints_deg is None for x in _load(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921"))[0])
-          if os.path.isdir(os.path.join(_HERE, "..", "..", "..", "log", "chain_calib", "20260921")) else True)
+    # a session written before joint angles existed (the deleted 2026-09-21 11:29 one) must load with joints_deg None
+    _d3 = tempfile.mkdtemp()
+    try:
+        _old = [_CS("o%02d" % i, list(s.tcp_pose_mm_deg), s.T_hc2W, s.T_fc2W, 0.0, hand_corners=s.hand_corners,
+                    front_corners=s.front_corners) for i, s in enumerate(_smp2[:3])]
+        _save(_d3, _old, dict(mode="sheet"))
+        check("a session recorded before joint angles existed loads with joints_deg None",
+              all(x.joints_deg is None for x in _load(_d3)[0]))
+    finally:
+        shutil.rmtree(_d3)
 finally:
     shutil.rmtree(_d)
 
