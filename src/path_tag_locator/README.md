@@ -189,11 +189,23 @@ the hand-cam can see tag A. The node will:
 1. Move to the supplied pose (`MoveJ` after IK, clamped by
    `align.max_initial_step_*`).
 2. Detect tag A in the hand-cam image, then iteratively move the arm so
-   that the tag appears at image center with the camera optical axis
-   perpendicular to the tag plane. Each step is clamped by
-   `align.max_step_m` / `align.max_step_deg` for safety.
-3. Stop when both `xy_offset ≤ position_tol_m` and `tilt ≤ angle_tol_deg`,
-   or after `max_iterations` (set `max_iterations: 1` for one-shot).
+   that the tag appears at image center at `align.target_distance_m`
+   (0.50 m). **`align.orientation: fixed` (default since 2026-09-22):**
+   the orientation of the seed pose is kept for the whole align — rz is
+   the planner's free camera spin, rx/ry the design "parallel to the
+   tag" through the calibrated chain — and every step is a pure
+   TRANSLATION: x/y in the image plane, z along the optical axis
+   (vertical) to the target range. The tilt the camera reads is recorded
+   per iteration (`history[].tilt_deg`) and warned about above
+   `tilt_warn_deg`, never corrected — it is the arm's orientation error
+   plus the tag's slope, which the 6-DOF chain observation does not need
+   removed. `orientation: correct` restores the old loop (tilt also
+   servoed to 0, spin kept), which the hand-eye sweep's square-up still
+   uses through its own config. Each step is clamped by
+   `align.max_step_m` (/ `max_step_deg` when correcting) for safety.
+3. Stop when `xy_offset ≤ position_tol_m` and (fixed) the range is within
+   `depth_tol_m` of the target / (correct) `tilt ≤ angle_tol_deg`, or
+   after `max_iterations` (set `max_iterations: 1` for one-shot).
 4. Then run the usual locate computation on the aligned pose.
 
 ```bash

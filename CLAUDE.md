@@ -408,7 +408,11 @@ stack for a calibration session — the main launch must already be up.
 Since the 2026-09-01 refactor they own **no** hardware: arm via
 `/arm/move_cart`, base via `MobileClient`, observations via
 `/<cam>/tag_detections`. ⚠️ `map_calibrator` is a second commander of
-`/mobile/goto_tag`: no `TASK`/`GOTO` during a calibration session.
+`/mobile/goto_tag`: no `TASK`/`GOTO` during a calibration session. **Since 2026-09-22 the hand-cam align of a
+calibration entry keeps the seed orientation (rz free, rx/ry the design
+"parallel to the tag") and corrects TRANSLATION only, z to 0.50 m
+(`locator.yaml align.orientation: fixed`) — the measured tilt is
+recorded, not chased; regenerate the plans after any tf_chain change.**
 
 ⚠️ **`/lifter/*` (this workspace) and `/lift/*` (the navifra driver) differ by
 one character.** `/lift/*` is the raw driver with none of the guards below —
@@ -1793,6 +1797,64 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-22 — Map-calibration hand-cam align: orientation FIXED at the design view pose, translation-only correction to 0.50 m; plans regenerated (seeds were 190 mm off)
+
+User: "map 갤리브레이션 진행할 때 핸드카메라 어라인은 x,y 평면에서
+어라인하고 z 수직이동만, 각도는 태그하고 평행, 즉 handcam 각도보정은
+정한 값으로 유지"; then "0.50 m 사용, 회전은 rz 자유, 나머지는 어라인
+중에는 tag하고 일치". Until now `run_auto_align` built a 6-DOF target
+every step (tag centred + optical axis squared to the tag, spin kept)
+and required tilt ≤ 0.5° to converge — so it chased the arm's own
+orientation error (0.6–2.7° on 09-21) and the paper's slope with
+rotations, and the final camera orientation differed per entry.
+
+- **`align.orientation: fixed`** (`locator.yaml`, `AlignCfg`; `correct`
+  = the old loop, still what the hand-eye sweep's square-up does through
+  `handeye_calib.yaml`). `compute_target_ee_pose(fix_orientation=True)`
+  keeps the current rotation BIT FOR BIT and moves the tool by
+  `R_ab2hc · (t_cam2tag − (0, 0, d))`: x/y in the image plane (parallel
+  to the tag), z along the optical axis (vertical) to `target_distance_m`
+  **0.50** (= `auto_view_distance_m`; was 0 = keep depth, which left the
+  09-04 entries measuring from 0.63 m after a clamped seed).
+  `clamp_step` snaps a zero-rotation delta to the exact identity (acos
+  near 1 reads a 1e-14 trace error as 2e-7 rad), so the commanded rx ry
+  rz ARE the seed's. Convergence: xy ≤ `position_tol_m` and range within
+  `depth_tol_m` (5 mm); the tilt is recorded per iteration and in the
+  report (`orientation` key added) and warned about above
+  `tilt_warn_deg` (3°), never corrected — with the orientation fixed it
+  is the arm's orientation error plus the tag's slope, a chain
+  diagnostic, and the 6-DOF chain observation does not need it removed.
+  The seed orientation is the plan's design view TCP
+  (`compute_view_tcp`: optical axis parallel to the tag normal through
+  the calibrated `T_ab2mb` / `T_hc2ee`, rz the planner's free reach
+  choice). The locate service shares the cfg, so `auto_align` there
+  behaves the same.
+- **Plans regenerated** (`generate_calibration_artifacts.py`, both
+  plates + yaw sweeps + `docs/all_tags_position.csv`): the tracked seeds
+  dated from the 09-14 hand-eye, before the 09-18 remount (camera
+  0.37 m from the flange, 180° spun) and the 09-21 `T_ab2mb` — every
+  seed moved **175–197 mm** (mean 190) and the design rx/ry from a
+  single (−179.5, −0.7) to (−179.9…+179.3, −0.4…+0.3) varying with the
+  spin (the calibrated mount tilt rotates with rz). The old loop would
+  have iterated the 19 cm away; with the orientation fixed the seed IS
+  the final orientation, so the plans must be current — regenerate
+  after any tf_chain change from now on.
+
+Verified offline: new `scripts/check_align_fixed_orientation.py` (34 —
+real `T_hc2ee.npz`, real runner against a fake arm + detector: from a
+seed 1.5° off the normal, 50 mm off-centre, 0.63 m up, the final rx ry
+rz equal the seed to 1e-16°, every commanded move carries the seed
+orientation, tag centred to 0.00 mm at 0.500 m in 3 MoveLs, tilt still
+1.50° in every history entry and the report; a 40° spin seed kept; a
+4° tilt warns and still converges; square camera + 130 mm range error
+moves straight down along arm z; `correct` still squares to 0.000°;
+bad orientation value refused; locator.yaml loads fixed / 0.50 ==
+auto_view_distance_m), `check_handeye_sweep.py` 74 unchanged, both
+plans load (26 / 25). Not run on the robot: restart the calibration
+launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
+deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
+staying at the seed's, and convergence in 2–3 iterations.
 
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 

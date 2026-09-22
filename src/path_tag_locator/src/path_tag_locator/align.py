@@ -6,10 +6,25 @@ Pure-numpy logic for aligning the hand camera squarely onto an AprilTag.
 Goal (per iteration):
     Given current T_ab2ee, T_hc2ee (calibration), and the latest detection
     T_cam2tag, compute a new T_ab2ee_target such that the tag appears at
-    image center and the camera's optical axis is perpendicular to the tag
-    plane. Clamp the step displacement for safety, then return both the
-    raw target and the clamped target (the latter is what should be sent
-    to ``MoveJ``).
+    image center at the target range. Clamp the step displacement for
+    safety, then return both the raw target and the clamped target (the
+    latter is what should be sent to ``MoveJ``).
+
+Two orientation policies (``compute_target_ee_pose(fix_orientation=)``):
+
+``correct`` (default, the hand-eye sweep's square-up): also rotate the
+    camera so its optical axis is perpendicular to the tag plane (tilt
+    -> 0), preserving the spin about the axis.
+``fixed`` (map calibration / locate since 2026-09-22, user rule): the
+    orientation is NEVER commanded by the loop. The seed pose — the
+    plan's design view TCP, computed by ``view_pose.compute_view_tcp``
+    so the optical axis is parallel to the tag normal through the
+    calibrated chain, with the camera yaw (rz) left free for the
+    reach optimisation — is kept, and the loop moves the camera in
+    TRANSLATION only: x/y in the image plane (parallel to the tag) and
+    z along the optical axis (vertical) to the target range. The tilt
+    the camera actually reads is measured and recorded (it is the
+    arm's orientation error plus the tag's slope), not chased.
 """
 import math
 from dataclasses import dataclass
@@ -116,14 +131,33 @@ def _target_T_cam2tag(T_cam2tag_now: np.ndarray,
 def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
                            T_hc2ee: np.ndarray,
                            T_cam2tag_now: np.ndarray,
-                           target_distance_m: float = 0.0) -> np.ndarray:
-    """Compute T_ab2ee_target that places the camera squarely on the tag.
+                           target_distance_m: float = 0.0,
+                           fix_orientation: bool = False) -> np.ndarray:
+    """Compute T_ab2ee_target that places the tag at the image centre.
 
-    Derivation (user notation T_X2Y = pose of Y in X):
+    ``fix_orientation=False`` (``correct``): also square the optical axis
+    to the tag plane, spin preserved. Derivation (T_X2Y = pose of Y in X):
         T_ab2tag = T_ab2ee_now · inv(T_hc2ee) · T_cam2tag_now      (fixed)
         T_ab2hc_target = T_ab2tag · inv(T_target_cam2tag)
         T_ab2ee_target = T_ab2hc_target · T_hc2ee
+
+    ``fix_orientation=True`` (``fixed``): the rotation of the target is
+    BIT-FOR-BIT the current rotation; only the translation moves. The
+    camera-frame error is ``e = t_cam2tag − (0, 0, d)`` (x/y = the tag's
+    offset from the optical axis, i.e. in the image plane; z = range
+    error along the axis), and a rigid translation of the tool by
+    ``R_ab2hc · e`` puts the tag on the axis at range ``d`` with the
+    camera pointing exactly where it pointed before. The residual tilt
+    is left as it is — see the module docstring.
     """
+    if fix_orientation:
+        d = (float(target_distance_m) if target_distance_m and target_distance_m > 0.0
+             else float(T_cam2tag_now[2, 3]))
+        e_cam = T_cam2tag_now[:3, 3] - np.array([0.0, 0.0, d])
+        R_ab2hc = T_ab2ee_now[:3, :3] @ invert_T(T_hc2ee)[:3, :3]
+        T = T_ab2ee_now.copy()
+        T[:3, 3] = T_ab2ee_now[:3, 3] + R_ab2hc @ e_cam
+        return T
     T_target = _target_T_cam2tag(T_cam2tag_now, target_distance_m)
     T_ee2hc = invert_T(T_hc2ee)
     T_ab2tag = T_ab2ee_now @ T_ee2hc @ T_cam2tag_now
@@ -192,6 +226,17 @@ def clamp_step(T_ab2ee_now: np.ndarray,
         t_norm = max_step_m
 
     axis, angle = _R_to_axis_angle(R_delta)
+    if (np.array_equal(T_ab2ee_target[:3, :3], T_ab2ee_now[:3, :3])
+            or angle < 1e-6):
+        # No rotation asked for (the fixed-orientation target carries the
+        # current rotation bit for bit): snap the fp residue of R_nowᵀ·R_now
+        # to the exact identity so the commanded orientation IS the current
+        # one. acos near 1 is ill-conditioned (a 1e-14 trace error reads as
+        # ~2e-7 rad), hence the equality test first and a 1e-6 rad
+        # (6e-5 deg) floor for near-identity deltas — far below anything
+        # the loop ever commands on purpose.
+        R_delta = np.eye(3, dtype=np.float64)
+        angle = 0.0
     max_rad = math.radians(max_step_deg) if max_step_deg > 0.0 else float("inf")
     if angle > max_rad:
         R_delta = _axis_angle_to_R(axis, max_rad)
@@ -213,6 +258,19 @@ def clamp_step(T_ab2ee_now: np.ndarray,
 
 def is_converged(metrics: AlignMetrics,
                  position_tol_m: float,
-                 angle_tol_deg: float) -> bool:
-    return (metrics.xy_offset_m <= position_tol_m
-            and metrics.tilt_deg <= angle_tol_deg)
+                 angle_tol_deg: float,
+                 check_tilt: bool = True,
+                 target_distance_m: float = 0.0,
+                 depth_tol_m: float = 0.0) -> bool:
+    """``check_tilt=False`` (orientation ``fixed``): the tilt is not
+    driven, so it must not gate convergence either — only the in-plane
+    offset does, plus the range when ``depth_tol_m`` > 0 and a target
+    range is set (the fixed-orientation loop moves z to it)."""
+    if metrics.xy_offset_m > position_tol_m:
+        return False
+    if check_tilt and metrics.tilt_deg > angle_tol_deg:
+        return False
+    if depth_tol_m > 0.0 and target_distance_m and target_distance_m > 0.0:
+        if abs(metrics.z_distance_m - float(target_distance_m)) > depth_tol_m:
+            return False
+    return True

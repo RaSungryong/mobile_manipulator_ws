@@ -79,16 +79,36 @@ path_tag_locator:
     default_save_dir:   "${MM_WS}/log/path_tag_locator"
 
   # Auto-align parameters used when the LocatePathTag service request has
-  # auto_align=true. Before computing T_B_world, the arm moves to the
-  # user-supplied approximate pose, then iteratively centers tag A in the
-  # hand-cam image with the camera optical axis perpendicular to the tag.
+  # auto_align=true and by map_calibrator for every entry. Before computing
+  # T_B_world, the arm moves to the seed pose (the plan's design view TCP),
+  # then iteratively centres tag A in the hand-cam image.
   align:
-    target_distance_m:     0.0     # 0 => keep current depth (z) from tag
+    # Orientation policy (2026-09-22, user rule): 'fixed' = the seed
+    # orientation is kept for the whole align — rz (camera spin) is the
+    # planner's free choice, rx/ry are the design "parallel to the tag"
+    # through the calibrated chain — and the loop moves in TRANSLATION
+    # only: x/y in the image plane (parallel to the tag), z along the
+    # optical axis (vertical) to target_distance_m. The tilt the camera
+    # reads (arm orientation error + tag slope) is recorded per iteration
+    # and warned about above tilt_warn_deg, never corrected. 'correct' =
+    # also square the camera to the tag every step (tilt -> 0, the
+    # behaviour before 09-22; the hand-eye sweep's square-up keeps it
+    # through handeye_calib.yaml regardless of this key).
+    orientation:           fixed
+    tilt_warn_deg:         3.0
+    target_distance_m:     0.50    # hand-cam range to the tag the loop moves
+                                   # z to (= auto_view_distance_m below);
+                                   # 0 => keep the current depth. Was 0 until
+                                   # 2026-09-22: a seed reached short in z
+                                   # (09-04: 0.63 m) then measured from there.
+    depth_tol_m:           0.005   # convergence on the range ('fixed' only)
     max_iterations:        10       # set to 1 for one-shot
     position_tol_m:        0.001   # convergence: tag x-y offset in cam frame
     angle_tol_deg:         0.5     # convergence: tilt between cam +z and tag +z
+                                   # ('correct' only — ignored when fixed)
     max_step_m:            0.10    # per-iteration translation clamp
-    max_step_deg:          15.0    # per-iteration rotation clamp
+    max_step_deg:          15.0    # per-iteration rotation clamp ('correct';
+                                   # a fixed-orientation step has 0 rotation)
     max_initial_step_m:    0.80    # clamp on ONE step of the initial move
     max_initial_step_deg:  180.0   # clamp on ONE step of the initial move
     # The initial move is chunked into up to this many clamped steps so

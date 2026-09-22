@@ -131,6 +131,26 @@ class AlignCfg:
     # the camera by this much (m) to widen the field of view. Used only
     # when no session correction / anchor estimate is available.
     retry_raise_m: float = 0.25
+    # Orientation policy of the align loop (2026-09-22, user rule for map
+    # calibration): 'correct' = square the optical axis to the tag every
+    # step (tilt -> 0, spin kept; the pre-09-22 behaviour, still what the
+    # hand-eye sweep's square-up does through its own cfg); 'fixed' = the
+    # seed orientation (the plan's design view TCP: camera parallel to
+    # the tag through the chain, rz free) is never commanded — the loop
+    # moves in translation only, x/y in the image plane and z along the
+    # optical axis to target_distance_m. Convergence is then xy (+ depth
+    # within depth_tol_m); the measured tilt is recorded and, above
+    # tilt_warn_deg, warned about, never corrected.
+    orientation: str = "correct"
+    depth_tol_m: float = 0.005
+    tilt_warn_deg: float = 3.0
+
+    def __post_init__(self):
+        self.orientation = str(self.orientation).lower()
+        if self.orientation not in ("correct", "fixed"):
+            raise ValueError(
+                "align.orientation must be 'correct' or 'fixed', got %r"
+                % (self.orientation,))
 
 
 @dataclass

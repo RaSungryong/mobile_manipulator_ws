@@ -12,10 +12,14 @@ Logic (per iteration):
     2. Wait for a hand-cam detection of tag A on the shared detector's
        detections topic; not detected within timeout -> RuntimeError.
     3. Compute alignment metrics (xy_offset, tilt).
-    4. If both metrics ≤ tolerances -> converged.
-    5. Else compute target EE pose via ``compute_target_ee_pose``,
-       clamp by per-step thresholds, move to the clamped target,
-       settle, and loop.
+    4. Converged? ``align.orientation: correct`` -> xy AND tilt inside
+       tolerance; ``fixed`` (map calibration since 2026-09-22) -> xy
+       inside tolerance and the range within ``depth_tol_m`` of
+       ``target_distance_m``; the tilt is measured and recorded only.
+    5. Else compute target EE pose via ``compute_target_ee_pose``
+       (``fixed``: translation only, the seed orientation is never
+       commanded), clamp by per-step thresholds, move to the clamped
+       target, settle, and loop.
 
 ``tcp_client`` is duck-typed: anything with ``get_tcp_pose()`` and
 ``move_j_to_pose(pose, settle_s=...)`` works — since the refactor that
@@ -109,9 +113,10 @@ def run_auto_align(*,
                    detection_wait_timeout_s: float,
                    initial_tcp_mm_deg,
                    skip_initial_move: bool = False) -> dict:
-    """Drive the hand camera squarely onto tag A. Returns a report dict::
+    """Drive the hand camera onto tag A. Returns a report dict::
 
-        {"iterations": int, "xy_offset_m": float, "tilt_deg": float,
+        {"iterations": int, "orientation": "correct" | "fixed",
+         "xy_offset_m": float, "tilt_deg": float,
          "final_tcp": list[float],
          "tag_in_cam": dict,          # final observation, CAMERA frame
          "history": list[dict]}       # one tag_in_cam dict per iteration
@@ -157,10 +162,19 @@ def run_auto_align(*,
     last_metrics = None
     history = []
     iters = 0
+    # Orientation policy: 'correct' squares the camera to the tag every
+    # step (hand-eye sweep, pre-2026-09-22 behaviour); 'fixed' keeps the
+    # seed orientation and moves in translation only (see align.py).
+    orientation = str(getattr(align_cfg, "orientation", "correct")).lower()
+    fix_orientation = orientation == "fixed"
+    tilt_warn_deg = float(getattr(align_cfg, "tilt_warn_deg", 0.0) or 0.0)
+    depth_tol_m = float(getattr(align_cfg, "depth_tol_m", 0.0) or 0.0)
+    target_d = float(align_cfg.target_distance_m or 0.0)
 
     def _fail(msg):
         report = {
             "iterations": iters,
+            "orientation": orientation,
             "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
             "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
             "final_tcp": None,
@@ -189,11 +203,24 @@ def run_auto_align(*,
         last_metrics = metrics
         history.append(dict(iteration=iters, **metrics.as_report()))
         rospy.loginfo(
-            "auto_align iter %d/%d: xy=%.4f m, tilt=%.3f deg, z=%.3f m",
+            "auto_align iter %d/%d: xy=%.4f m, tilt=%.3f deg%s, z=%.3f m",
             iters, align_cfg.max_iterations,
-            metrics.xy_offset_m, metrics.tilt_deg, metrics.z_distance_m)
+            metrics.xy_offset_m, metrics.tilt_deg,
+            " (recorded, not corrected)" if fix_orientation else "",
+            metrics.z_distance_m)
+        if fix_orientation and tilt_warn_deg > 0.0 and metrics.tilt_deg > tilt_warn_deg:
+            # Not an alignment failure: with the orientation fixed at the
+            # design view pose this is the arm's orientation error plus the
+            # tag's slope — worth a look at the chain, not a reason to stop.
+            rospy.logwarn(
+                "auto_align: tag tilt %.2f deg > %.1f with the orientation "
+                "fixed — arm orientation / chain error, left uncorrected",
+                metrics.tilt_deg, tilt_warn_deg)
         if is_converged(metrics, align_cfg.position_tol_m,
-                        align_cfg.angle_tol_deg):
+                        align_cfg.angle_tol_deg,
+                        check_tilt=not fix_orientation,
+                        target_distance_m=target_d if fix_orientation else 0.0,
+                        depth_tol_m=depth_tol_m if fix_orientation else 0.0):
             rospy.loginfo("auto_align: converged at iteration %d", iters)
             break
 
@@ -201,7 +228,8 @@ def run_auto_align(*,
         T_cur = pose_fr5_to_matrix_m(cur_tcp)
         T_target = compute_target_ee_pose(
             T_cur, T_hc2ee, T_cam2tag,
-            target_distance_m=align_cfg.target_distance_m)
+            target_distance_m=align_cfg.target_distance_m,
+            fix_orientation=fix_orientation)
         step = clamp_step(T_cur, T_target,
                           max_step_m=align_cfg.max_step_m,
                           max_step_deg=align_cfg.max_step_deg)
@@ -230,6 +258,7 @@ def run_auto_align(*,
     final_tcp = tcp_client.get_tcp_pose()
     return {
         "iterations": iters,
+        "orientation": orientation,
         "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
         "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
         "final_tcp": final_tcp,
