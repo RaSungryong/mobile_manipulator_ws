@@ -50,7 +50,7 @@ sudo src/apriltag_nav/tools/systemd/install_service.sh --uninstall
 ## 1. 한 줄로: `tools/stop_stack.sh`
 
 ```bash
-cd ~/mobile_manipulator_ws_20260902 && source devel/setup.bash
+cd ~/mobile_manipulator_ws && source devel/setup.bash
 src/apriltag_nav/tools/stop_stack.sh                       # mobile_manipulator.launch
 src/apriltag_nav/tools/stop_stack.sh path_tag_locator.launch
 src/apriltag_nav/tools/stop_stack.sh --force               # SIGKILL 전 y/n 생략

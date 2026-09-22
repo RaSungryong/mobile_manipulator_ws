@@ -1794,6 +1794,32 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-22 — Workspace folder renamed: `~/mobile_manipulator_ws_20260902` → `~/mobile_manipulator_ws`
+
+User (pinyin): rename the project to `mobile_manipulator_ws`, folder
+included. The stack was up by hand (idle on dock 500, charging), so:
+`stop_stack.sh --force` (clean SIGINT exit, 4 s) → `mv` → `rm -rf build
+devel` + full `catkin_make` (the build cache and every devel setup file
+hardcode the absolute path; a `catkin_make` in the old tree fails on the
+CMakeCache directory check) → relaunch from the new path. Nothing inside
+the repo depends on the folder name: `MM_WS` comes from the env hook's
+devel prefix, `paths.WS_DIR` from the source space, the launch from
+`optenv`. What did carry the old name: the three Korean guides'
+`source ~/…/devel/setup.bash` lines (updated), the retired `ws_dev`
+worktree entry (pruned — the directory was already gone), and Claude
+Code's per-project memory directory, which is keyed by the cwd
+(`~/.claude/projects/-home-abc-mobile-manipulator-ws`, copied over from
+the old key with the paths inside updated). The systemd unit from the
+entry below substitutes the path at install time, so it needs no change;
+install it from the new location. Work Log entries naming
+`ws_20260902` are history and were left alone. Stopping the stack dropped
+the charge relay (as on every Ctrl-C); CHARGE was re-issued after the
+relaunch: the base was still on 500, so `battery_return` did lift origin
+homing, "already at 500", relay on, and the BMS confirmed 15.7 A at
+76.5 % two seconds later — no motion. Relaunched detached (`setsid
+nohup`, output in `log/ros/launch_20260922_manual.out`), 9/9 nodes +
+rosbridge + web UI up, `MM_WS` / `ROS_LOG_DIR` resolving to the new path.
+
 ### 2026-09-22 — Main launch at robot boot: systemd `mobile-manipulator`, after the navifra driver
 
 User: "main launch 를 robot 시작할때부터 실행". Until now the PC booted into

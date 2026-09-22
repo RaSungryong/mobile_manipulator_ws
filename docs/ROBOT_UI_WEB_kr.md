@@ -34,7 +34,7 @@ Windows PC ─┘   (JSON + JPEG / WebSocket)                        lifter_node
 기본 true). 스택을 올리면 같이 뜬다:
 
 ```bash
-source ~/mobile_manipulator_ws_20260902/devel/setup.bash
+source ~/mobile_manipulator_ws/devel/setup.bash
 roslaunch apriltag_nav mobile_manipulator.launch
 ```
 

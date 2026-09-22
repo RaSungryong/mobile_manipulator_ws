@@ -32,7 +32,7 @@ Windows PC (192.168.0.x) ─ 공유기(192.168.0.1) ─ 무선 ─ 피닉스 AP�
    `roscore`를 따로 실행하지 않는다.
 2. 터미널에서 스택을 올린다. rosbridge가 함께 뜬다.
    ```bash
-   source ~/mobile_manipulator_ws_20260902/devel/setup.bash
+   source ~/mobile_manipulator_ws/devel/setup.bash
    roslaunch apriltag_nav mobile_manipulator.launch
    ```
 3. 다른 터미널에서 rosbridge가 듣고 있는지 확인한다.
