@@ -39,6 +39,8 @@ def main():
     ap.add_argument("--sx", type=float, default=None); ap.add_argument("--sy", type=float, default=None)
     ap.add_argument("--tag-size", type=float, default=None, help="measured black edge [m]")
     ap.add_argument("--hand-eye", default=None, help="T_hc2ee npz (default: locator.yaml's)")
+    ap.add_argument("--hand-intrinsics", choices=["meta", "config"], default="meta",
+                    help="hand_cam K/D for re-solving the stored corners: the session's (meta) or robot.yaml's override (config)")
     ap.add_argument("--frames", type=int, default=20, help="hand_cam detection frames per sample")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
@@ -57,7 +59,7 @@ def main():
     import rospy
     rospy.init_node("basler_tip_calib", anonymous=True)
     d = getattr(args, "dir", None) or default_session_dir()
-    S = BaslerTipSession(d, args.sheet_json, args.sx, args.sy, args.tag_size, args.hand_eye, args.frames)
+    S = BaslerTipSession(d, args.sheet_json, args.sx, args.sy, args.tag_size, args.hand_eye, args.frames, hand_intrinsics=args.hand_intrinsics)
     if S.design_scale and args.cmd != "status":
         print("! sheet scale is the DESIGN value (40 mm pitch, 20 mm tag) — --sx --sy --tag-size to use the measured print")
     if args.cmd == "check":

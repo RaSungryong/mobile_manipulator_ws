@@ -275,13 +275,13 @@ T_hc2ee:
 # flange until the planner re-exports them from the updated URDF.
 # -----------------------------------------------------------------------------
 T_ee2tip:
-  source: "MEASURED 2026-09-21 by chain_calib basler_tip_calib on the A4 20 mm tag sheet (session log/chain_calib/basler_tip_20260921, 5 hand + 10 Basler samples, 5.5 mm rms); design (0, -253.0, 225.2)"
-  t_mm: [-1.800, -245.600, 209.600]
+  source: "MEASURED 2026-09-21 by chain_calib basler_tip_calib on the A4 20 mm tag sheet (session log/chain_calib/basler_tip_20260921: 5 hand samples spins 0/+-40/+-80, 10 Basler samples spins 0/+-45/+-90 at standoff 16.3-16.7 mm), RE-SOLVED 2026-09-22 with the re-solved T_hc2ee and the checkerboard hand_cam K (result_K20260922_HE20260922.npz; the 09-21 pair reproduces the previous -1.8/-245.6/209.6 exactly): fit 6.0 mm rms / 12.3 max, jackknife 1.8 / 0.8 / 0.4 mm; +4.8 mm z from the hand-eye's z re-solve, xy within the noise of the 09-21 robot verification (tag 215: -0.1 / +2.6 mm). Image roll -179.1 deg is not part of the TCP. Honest uncertainty +-1.5 / +-3 / +-2 mm (x/y/z): the residual is the arm's spin-dependent orientation error at the 246 mm lever"
+  t_mm: [-2.000, -245.200, 214.400]
   rpy_deg_xyz: [0.0000, 0.0000, 0.0000]
   matrix:   # row-major 4x4, metres
-    [ 1.000000000,  0.000000000,  0.000000000, -0.001800000,
-      0.000000000,  1.000000000,  0.000000000, -0.245600000,
-      0.000000000,  0.000000000,  1.000000000,  0.209600000,
+    [ 1.000000000,  0.000000000,  0.000000000, -0.002000000,
+      0.000000000,  1.000000000,  0.000000000, -0.245200000,
+      0.000000000,  0.000000000,  1.000000000,  0.214400000,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:
     t_mm: [0.0, -253.0, 225.2]

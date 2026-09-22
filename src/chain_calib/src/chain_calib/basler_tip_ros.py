@@ -163,7 +163,8 @@ class _Ros:
 
 # ----------------------------------------------------------------------
 class BaslerTipSession:
-    def __init__(self, dir_=None, sheet_json=None, sx=None, sy=None, tag_size_m=None, hand_eye=None, frames=20):
+    def __init__(self, dir_=None, sheet_json=None, sx=None, sy=None, tag_size_m=None, hand_eye=None, frames=20,
+                 hand_intrinsics="meta"):
         from path_tag_locator.constants import load_locator_cfg
         from path_tag_locator.hand_eye import load_T_hc2ee
         self.dir = dir_ or default_session_dir()
@@ -181,6 +182,13 @@ class BaslerTipSession:
                   % (self.hand_eye_path, _resolve(self.cfg.hand_eye_npz)))
             self.hand_eye_path = _resolve(self.cfg.hand_eye_npz)
         self.H = load_T_hc2ee(self.hand_eye_path)
+        # ``meta``: the K / D recorded at capture. ``config``: robot.yaml
+        # robot_camera.intrinsics_override.hand_cam applied to the session's
+        # RAW corners — for sessions captured before the override existed
+        # (2026-09-21: driver K, D = 0). Refused on a session captured WITH
+        # the override (its corners are already rectified). Same rule as
+        # chain_calib.py --hand-intrinsics.
+        self.hand_intrinsics = hand_intrinsics
         path = sheet_json or self.meta.get("sheet_json") or default_sheet_json()
         if not os.path.exists(path):
             cand = os.path.join(os.path.dirname(default_sheet_json()), os.path.basename(path))
@@ -333,11 +341,26 @@ class BaslerTipSession:
                                                                    ["%.1f" % v for v in tcp]))
         return True, "\n".join(lines), self.counts()
 
+    def _hand_KD(self):
+        K = np.asarray(self.meta["K_hand"], float).reshape(3, 3)
+        D = np.asarray(self.meta.get("D_hand") or [], float)
+        if self.hand_intrinsics == "meta":
+            return K, D
+        if self.hand_intrinsics != "config":
+            raise RuntimeError("hand_intrinsics must be 'meta' or 'config'")
+        from apriltag_nav.camera_intrinsics import intrinsics_override
+        o = intrinsics_override("hand_cam")
+        if o is None:
+            raise RuntimeError("hand_intrinsics=config: robot.yaml has no robot_camera.intrinsics_override.hand_cam")
+        if "override" in str(self.meta.get("hand_cam_intrinsics", "")):
+            raise RuntimeError("hand_intrinsics=config: this session was captured WITH the override (rectified corners) "
+                               "— use 'meta'")
+        return o.K.copy(), o.D.copy()
+
     def _resolved(self, exclude=()):
         if not self.hand or not self.bas:
             raise RuntimeError("need hand and basler samples (%d / %d)" % (len(self.hand), len(self.bas)))
-        K = np.asarray(self.meta["K_hand"], float).reshape(3, 3)
-        D = np.asarray(self.meta.get("D_hand") or [], float)
+        K, D = self._hand_KD()
         BT.resolve_hand(self.hand, self.sheet, K, D, self.H)
         hand = [h for h in self.hand if h.T_ab2W is not None and h.label not in set(exclude)]
         bas = [b for b in self.bas if b.label not in set(exclude)]
@@ -469,7 +492,9 @@ class BaslerTipSession:
             res = BT.fit_tip(hand, bas, DESIGN_TIP)
         except Exception as e:
             return False, str(e), self.counts()
-        lines = ["%d hand / %d basler samples; hand-eye %s" % (len(hand), len(bas), self.hand_eye_path),
+        K, _ = self._hand_KD()
+        lines = ["%d hand / %d basler samples; hand-eye %s; hand_cam K %s (fx %.1f)" % (
+                     len(hand), len(bas), self.hand_eye_path, self.hand_intrinsics, K[0, 0]),
                  BT.summarize(res, self.H, DESIGN_TIP)]
         T = BT.T_ee2tip(res)
         np.savez(os.path.join(self.dir, "result.npz"), p_tip_mm=res.p_tip_mm, psi_deg=res.psi_deg, T_ee2tip=T,
@@ -482,7 +507,8 @@ class BaslerTipSession:
             fh.write("fit_rms_mm: %.2f\nfit_max_mm: %.2f\nsheet_scatter_mm: %.2f\n" % (res.rms_mm, res.max_mm, res.sheet_scatter_mm))
             if res.jackknife_sd_mm is not None:
                 fh.write("jackknife_sd_mm: [%.2f, %.2f, %.2f]\n" % tuple(res.jackknife_sd_mm))
-            fh.write("n_hand: %d\nn_basler: %d\nhand_eye_npz: %s\n" % (len(hand), len(bas), self.hand_eye_path))
+            fh.write("n_hand: %d\nn_basler: %d\nhand_eye_npz: %s\nhand_intrinsics: %s (fx %.2f)\n"
+                     % (len(hand), len(bas), self.hand_eye_path, self.hand_intrinsics, K[0, 0]))
         lines.append("-> %s/result.yaml   (NOT applied: `tf_chain_tool.py set T_ee2tip --t-mm ...` (pose mode + "
                      "set_tool_tcp.py read it) and the planner URDF vision_tip_joint move together, on your decision)" % self.dir)
         extra = self.counts()

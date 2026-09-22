@@ -11,7 +11,7 @@ tf_chain_tool.py — look at, check and update config/tf/tf_chain.yaml.
     python3 tools/tf_chain_tool.py front-cam [--apply]  regenerate T_mb2fc from robot.yaml
                                                         (after a front_cam re-fit / remount)
     python3 tools/tf_chain_tool.py set T_hc2ee --npz F --source "..."
-    python3 tools/tf_chain_tool.py set T_ee2tip --t-mm -1.8 -245.6 209.6 --rpy-deg 0 0 0 --source "..."
+    python3 tools/tf_chain_tool.py set T_ee2tip --t-mm -2.0 -245.2 214.4 --rpy-deg 0 0 0 --source "..."
                                                         write one block + its npz
     python3 tools/tf_chain_tool.py export-npz           rewrite every npz from the yaml
     python3 tools/tf_chain_tool.py urdf                 the mobile_to_base / vision_tip_joint

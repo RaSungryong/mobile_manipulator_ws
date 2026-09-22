@@ -1598,6 +1598,19 @@ T_ab2mb` / `--planar-tz`. `arm_transform`'s tilt_x / tilt_y are 0 again
 and the lift is purely along arm z. The URDF `mobile_to_base` follows
 (xyz 0.006706 0.106230 0.652000, rpy 0 0 0.014030243).
 
+**And `T_ee2tip` was re-solved into the same set (2026-09-22, evening):**
+the 09-21 Basler-tip session re-solved with the re-solved hand-eye and
+the checkerboard K (`basler_tip_calib.py --hand-intrinsics config`; the
+09-21 pair reproduces the old −1.8 / −245.6 / 209.6 exactly) gives
+**(−2.0, −245.2, 214.4) mm** — z +4.8 from the hand-eye's z re-solve, xy
+inside the robot verification's noise. Applied to `tf_chain.yaml`, the
+URDF `vision_tip_joint`, and the three tool-extent copies
+(`generate_calibration_artifacts.py`, `handeye_calib.yaml`,
+`handeye_sweep.py`); the calibration plans were regenerated for the
+whole 09-22 set (seeds moved 23 mm mean / 37 max). So the applied set
+is now FIVE values from one chain: K → T_hc2ee → joint offsets →
+T_ab2mb (planar) → T_ee2tip; `tf_chain_tool.py check` 13/13.
+
 **Since 2026-09-21 (later the same day, user: the corrected chain is for
 end-effector pose control too) pose-mode IK uses the SAME transform:**
 `transform_world_to_arm` derives its 4-DOF parametrisation from
@@ -2075,6 +2088,37 @@ block. Checks: `tf_chain_tool check` 13, `check_pose_vs_joint` 27,
 `check_scan_progress` 62, `check_chain_calib` 48. Not run on the robot;
 the calibration launch and `arm_node` still need the restart named
 above.
+
+**"지금 모든 요소의 캘리브레이션 짝이 맞는 거지?" — checked file by
+file, one was not.** `T_hc2ee` == the K20260922 re-solve (4e-10),
+`arm_joint_offsets.yaml`'s recorded hand-eye == the applied one,
+`T_ab2mb` == `corrections.npz` `T_ab2mb_planar`, robot.yaml's override
+K == the checkerboard result — but `T_ee2tip` was still the 09-21 solve
+(09-18 hand-eye, driver K fx 609.3, D = 0), i.e. D in the dependency
+order had not followed A and C. `basler_tip_ros.BaslerTipSession` got
+`hand_intrinsics` (`meta` / `config`, the chain_calib rule: the override
+applied to RAW corners, refused on an override-captured session) and
+the CLI `--hand-intrinsics`; the old pair reproduces the applied value
+exactly, the new hand-eye alone moves it to (−2.0, −245.2, 213.2), new
+hand-eye + new K to **(−2.0, −245.2, 214.4) mm**, roll −179.2°, fit
+6.0 mm rms / jackknife 1.8 / 0.8 / 0.4. Applied everywhere the number
+lives (tf yaml + npz, URDF `vision_tip_joint` −0.0020 −0.2452 0.2144,
+`TOOL_OFFSET_MM`, `handeye_calib.yaml` / `handeye_sweep.py`
+`tool_points_mm`, `set_tool_tcp.py` docstring — its dry run prints the
+new numbers); record `result_K20260922_HE20260922.{npz,yaml}` in the
+session dir. Then `generate_calibration_artifacts.py` for the whole
+09-22 set (the plans of commit `2cbb62f` were made with the 09-18
+hand-eye + 09-21 T_ab2mb): 26 + 25 entries, seeds moved 22.7 / 21.4 mm
+mean, 37.4 max (the align loop absorbs that; the 09-04 loss was at
+1.15 m), flange reach 0.51–1.04 m, 0/51 over 1.40; `docs/all_tags_
+position.csv` regenerated. Checks: `tf_chain_tool check` 13,
+`check_pose_vs_joint` 27, `check_scan_progress` 62, `check_basler_tip`
+11, `check_handeye_sweep` 74, `check_joint_offsets` 22. The other
+session's `docs/TF_CHAIN_CALIBRATION_STATUS_kr.md` (untracked) got its
+T_ee2tip row and §3.7 updated. Consequence for pose mode: the RRT CSVs
+(design tip) are now |Δ| ≈ 13 mm from the flange the joint rows put —
+`check_pose_vs_joint` carries the figure; still `scan_joint_*` until the
+planner re-exports.
 
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 

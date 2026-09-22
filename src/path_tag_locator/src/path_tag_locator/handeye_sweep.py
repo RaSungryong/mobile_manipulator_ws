@@ -102,7 +102,7 @@ class SweepCfg:
     # Flange-frame points (mm) that must clear the plate: the flange
     # itself and the vision tip (apriltag_nav/config/tf/tf_chain.yaml T_ee2tip).
     tool_points_mm: List[List[float]] = field(
-        default_factory=lambda: [[0.0, 0.0, 0.0], [-1.8, -245.6, 209.6]])
+        default_factory=lambda: [[0.0, 0.0, 0.0], [-2.0, -245.2, 214.4]])
     min_clearance_m: float = 0.12
     max_xy_from_start_m: float = 0.30
     max_flange_reach_m: float = 1.25

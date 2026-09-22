@@ -7,7 +7,7 @@ Set Fairino robot TCP (Tool Center Point) to vision_tip position.
 
 The offset is READ from apriltag_nav/config/tf/tf_chain.yaml `T_ee2tip`
 (MEASURED 2026-09-21 by chain_calib basler_tip_calib on the A4 20 mm tag
-sheet: (-1.8, -245.6, 209.6) mm; design (0, -253.0, 225.2) from
+sheet: (-2.0, -245.2, 214.4) mm since 2026-09-22 (was -1.8, -245.6, 209.6); design (0, -253.0, 225.2) from
 fr10v6_visionDF_addtip.urdf). The same file feeds arm_controller's
 tip -> flange conversion, and the planner URDF's vision_tip_joint must
 carry the same numbers (tools/check_pose_vs_joint.py asserts it) — so
