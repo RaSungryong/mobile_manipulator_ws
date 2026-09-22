@@ -175,6 +175,7 @@ def run_auto_align(*,
     _fry = getattr(align_cfg, "fixed_ry_deg", None)
     if fix_orientation and _frx is not None and _fry is not None:
         fixed_rpy = (float(_frx), float(_fry))
+    fixed_frame = str(getattr(align_cfg, "fixed_rpy_frame", "camera")).lower()
     depth_tol_m = float(getattr(align_cfg, "depth_tol_m", 0.0) or 0.0)
     target_d = float(align_cfg.target_distance_m or 0.0)
 
@@ -183,6 +184,7 @@ def run_auto_align(*,
             "iterations": iters,
             "orientation": orientation,
             "fixed_rx_ry_deg": list(fixed_rpy) if fixed_rpy else None,
+            "fixed_rpy_frame": fixed_frame if fixed_rpy else None,
             "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
             "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
             "final_tcp": None,
@@ -237,13 +239,19 @@ def run_auto_align(*,
         T_target = compute_target_ee_pose(
             T_cur, T_hc2ee, T_cam2tag,
             target_distance_m=align_cfg.target_distance_m,
-            fix_orientation=fix_orientation, fixed_rpy=fixed_rpy)
+            fix_orientation=fix_orientation, fixed_rpy=fixed_rpy,
+            fixed_rpy_frame=fixed_frame)
         if fix_orientation and iters == 1:
             tp = matrix_m_to_pose_fr5(T_target)
-            rospy.loginfo(
-                "auto_align: orientation held at rx=%.2f ry=%.2f (rz %.2f kept)%s",
-                tp[3], tp[4], tp[5],
-                "" if fixed_rpy else " — the seed's own")
+            if fixed_rpy:
+                rospy.loginfo(
+                    "auto_align: %s frame held at rx=%.1f ry=%.1f (spin kept) "
+                    "-> flange rx=%.2f ry=%.2f rz=%.2f",
+                    fixed_frame, fixed_rpy[0], fixed_rpy[1], tp[3], tp[4], tp[5])
+            else:
+                rospy.loginfo(
+                    "auto_align: orientation held at the seed's rx=%.2f ry=%.2f rz=%.2f",
+                    tp[3], tp[4], tp[5])
         step = clamp_step(T_cur, T_target,
                           max_step_m=align_cfg.max_step_m,
                           max_step_deg=align_cfg.max_step_deg)
@@ -274,6 +282,7 @@ def run_auto_align(*,
         "iterations": iters,
         "orientation": orientation,
         "fixed_rx_ry_deg": list(fixed_rpy) if fixed_rpy else None,
+        "fixed_rpy_frame": fixed_frame if fixed_rpy else None,
         "xy_offset_m": last_metrics.xy_offset_m if last_metrics else 0.0,
         "tilt_deg": last_metrics.tilt_deg if last_metrics else 0.0,
         "final_tcp": final_tcp,

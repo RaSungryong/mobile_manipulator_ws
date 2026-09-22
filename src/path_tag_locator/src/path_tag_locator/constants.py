@@ -150,6 +150,11 @@ class AlignCfg:
     # is not held to it.
     fixed_rx_deg: float = None
     fixed_ry_deg: float = None
+    # Which frame fixed_rx/ry describe: 'camera' = the hand-cam optical
+    # frame in the arm frame (hand-eye applied: -180 / 0 = optical axis
+    # straight down arm z, the flange follows); 'flange' = the TCP pose
+    # itself (the hand-eye's 0.47 deg axis offset then stays in the view).
+    fixed_rpy_frame: str = "camera"
 
     def __post_init__(self):
         self.orientation = str(self.orientation).lower()
@@ -157,6 +162,11 @@ class AlignCfg:
             raise ValueError(
                 "align.orientation must be 'correct' or 'fixed', got %r"
                 % (self.orientation,))
+        self.fixed_rpy_frame = str(self.fixed_rpy_frame).lower()
+        if self.fixed_rpy_frame not in ("camera", "flange"):
+            raise ValueError(
+                "align.fixed_rpy_frame must be 'camera' or 'flange', got %r"
+                % (self.fixed_rpy_frame,))
         if (self.fixed_rx_deg is None) != (self.fixed_ry_deg is None):
             raise ValueError(
                 "align.fixed_rx_deg / fixed_ry_deg must be set together "

@@ -95,14 +95,19 @@ path_tag_locator:
     # behaviour before 09-22; the hand-eye sweep's square-up keeps it
     # through handeye_calib.yaml regardless of this key).
     orientation:           fixed
-    # rx / ry every align STEP commands ('fixed' only; rz = the seed's,
-    # free): -180 / 0 = tool straight down the arm's z (user, 2026-09-22
-    # — "어라인 중에 RX -180 RY 0 유지"). The first step turns the seed's
-    # design rx/ry (-179.9…179.3 / -0.4…0.3, the calibrated mount tilt)
-    # onto it, the rest are pure translations. null / null = keep the
-    # seed's own rx / ry. The approach to the seed is not held to it.
+    # rx / ry every align STEP commands ('fixed' only; rz = the spin the
+    # seed left, free): -180 / 0 = straight down the arm's z (user,
+    # 2026-09-22 — "어라인 중에 RX -180 RY 0 유지"). fixed_rpy_frame says
+    # WHOSE rx/ry: 'camera' (user, same day: "핸드아이 광축 보정 적용") =
+    # the hand-cam OPTICAL AXIS is put vertical and the flange follows
+    # through T_hc2ee (whose axis is 0.47 deg off the flange z); 'flange'
+    # = the TCP pose itself reads -180 / 0. The first step turns the
+    # seed's design orientation (≤ 1 deg away) onto it, the rest are pure
+    # translations. null / null = keep the seed's own rx / ry. The
+    # approach to the seed is not held to it.
     fixed_rx_deg:          -180.0
     fixed_ry_deg:          0.0
+    fixed_rpy_frame:       camera
     tilt_warn_deg:         3.0
     target_distance_m:     0.50    # hand-cam range to the tag the loop moves
                                    # z to (= auto_view_distance_m below);

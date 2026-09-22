@@ -193,8 +193,10 @@ the hand-cam can see tag A. The node will:
    (0.50 m). **`align.orientation: fixed` (default since 2026-09-22):**
    nothing about the orientation comes from the tag — rz is the
    planner's free camera spin (kept as the seed left it), rx/ry are
-   held at `fixed_rx_deg` / `fixed_ry_deg` (−180 / 0 = tool straight
-   down the arm z; `null` = the seed's own design values) — and every
+   held at `fixed_rx_deg` / `fixed_ry_deg` (−180 / 0 = straight down
+   the arm z, for the **camera optical frame** with `fixed_rpy_frame:
+   camera` — the hand-eye applied, the flange follows — or for the TCP
+   itself with `flange`; `null` = the seed's own design values) — and every
    step is a TRANSLATION: x/y in the image plane, z along the optical
    axis (vertical) to the target range (the first step also turns rx/ry
    onto the fixed value, ≤ 1° from a design seed). The approach to the

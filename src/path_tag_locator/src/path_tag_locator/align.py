@@ -20,9 +20,11 @@ Two orientation policies (``compute_target_ee_pose(fix_orientation=)``):
     its axis) is FREE — the planner's reach choice, kept as the seed
     left it — and rx / ry are held at a FIXED VALUE: ``fixed_rpy``
     (locator.yaml ``align.fixed_rx_deg`` −180 / ``fixed_ry_deg`` 0 =
-    the tool pointing straight down the arm's z, user rule, later the
-    same day) or, when None, the seed's own rx / ry (the plan's design
-    "parallel to the tag" through the calibrated chain). The loop then
+    the CAMERA OPTICAL AXIS straight down the arm's z when
+    ``fixed_rpy_frame`` is "camera" — the hand-eye applied, the flange
+    following — or the flange itself when "flange"; user rule, later
+    the same day) or, when None, the seed's own rx / ry (the plan's
+    design "parallel to the tag" through the calibrated chain). The loop then
     moves the camera in TRANSLATION: x/y in the image plane (parallel
     to the tag) and z along the optical axis (vertical) to the target
     range; the first step also turns rx / ry onto the fixed value
@@ -135,17 +137,35 @@ def _target_T_cam2tag(T_cam2tag_now: np.ndarray,
     return T
 
 
-def fixed_orientation_R(R_ab2ee_now: np.ndarray, fixed_rpy) -> np.ndarray:
-    """The EE rotation the ``fixed`` policy commands: ``fixed_rpy`` None
-    -> the current rotation itself (bit for bit); ``(rx_deg, ry_deg)``
-    -> Rz(rz_now) · Ry(ry) · Rx(rx) with rz_now the current pose's rz
-    (FR5 ZYX intrinsic, as ``matrix_m_to_pose_fr5`` reports it) — the
-    spin stays free, roll / pitch go to the fixed value."""
+def fixed_orientation_R(R_ab2ee_now: np.ndarray, fixed_rpy,
+                        R_hc2ee: np.ndarray = None) -> np.ndarray:
+    """The EE rotation the ``fixed`` policy commands.
+
+    ``fixed_rpy`` None -> the current rotation itself (bit for bit).
+
+    ``(rx_deg, ry_deg)`` with ``R_hc2ee`` None (``fixed_rpy_frame:
+    flange``) -> the FLANGE at Rz(rz_now)·Ry(ry)·Rx(rx), rz_now the
+    current pose's rz (FR5 ZYX intrinsic) — spin free, roll / pitch at
+    the fixed value.
+
+    ``(rx_deg, ry_deg)`` with ``R_hc2ee`` given (``fixed_rpy_frame:
+    camera``, the default since 2026-09-22, user: "핸드아이 광축이 플랜지
+    이러한 보정은 적용") -> the CAMERA OPTICAL FRAME is put at
+    Rz(rz_cam_now)·Ry(ry)·Rx(rx) in the arm frame (−180 / 0 = optical
+    axis straight down the arm's z, the camera's own spin kept), and
+    the flange rotation follows through the hand-eye:
+    R_ab2ee = R_ab2hc · R_hc2ee. This absorbs the hand-eye's axis
+    offset (0.47° on the applied file) that a flange-frame −180 / 0
+    leaves in the view."""
     if fixed_rpy is None:
         return R_ab2ee_now
     rx, ry = float(fixed_rpy[0]), float(fixed_rpy[1])
-    rz_now = float(rot2rpy_deg(R_ab2ee_now)[2])
-    return rpy_deg_to_R(rx, ry, rz_now)
+    if R_hc2ee is None:
+        rz_now = float(rot2rpy_deg(R_ab2ee_now)[2])
+        return rpy_deg_to_R(rx, ry, rz_now)
+    R_ab2hc_now = R_ab2ee_now @ R_hc2ee.T
+    rz_cam = float(rot2rpy_deg(R_ab2hc_now)[2])
+    return rpy_deg_to_R(rx, ry, rz_cam) @ R_hc2ee
 
 
 def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
@@ -153,7 +173,8 @@ def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
                            T_cam2tag_now: np.ndarray,
                            target_distance_m: float = 0.0,
                            fix_orientation: bool = False,
-                           fixed_rpy=None) -> np.ndarray:
+                           fixed_rpy=None,
+                           fixed_rpy_frame: str = "camera") -> np.ndarray:
     """Compute T_ab2ee_target that places the tag at the image centre.
 
     ``fix_orientation=False`` (``correct``): also square the optical axis
@@ -163,9 +184,11 @@ def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
         T_ab2ee_target = T_ab2hc_target · T_hc2ee
 
     ``fix_orientation=True`` (``fixed``): the target rotation is
-    ``fixed_orientation_R(R_now, fixed_rpy)`` — the current rotation bit
-    for bit, or rx / ry at the configured fixed value with rz kept —
-    and NOTHING about it comes from the tag. The camera is then placed
+    ``fixed_orientation_R(R_now, fixed_rpy, R_hc2ee)`` — the current
+    rotation bit for bit, or rx / ry at the configured fixed value with
+    rz kept, in the CAMERA optical frame (``fixed_rpy_frame`` "camera",
+    hand-eye applied) or the flange's ("flange") — and NOTHING about it
+    comes from the tag. The camera is then placed
     at range ``d`` along ITS OWN target optical axis through the tag
     centre (``p_hc = p_tag − d · z_hc``), so the tag lands on the axis
     (x/y = image plane, z = along the axis = vertical for a downward
@@ -178,7 +201,9 @@ def compute_target_ee_pose(T_ab2ee_now: np.ndarray,
              else float(T_cam2tag_now[2, 3]))
         T_ee2hc = invert_T(T_hc2ee)
         T_ab2tag = T_ab2ee_now @ T_ee2hc @ T_cam2tag_now
-        R_ab2ee_t = fixed_orientation_R(T_ab2ee_now[:3, :3], fixed_rpy)
+        R_ab2ee_t = fixed_orientation_R(
+            T_ab2ee_now[:3, :3], fixed_rpy,
+            R_hc2ee=T_hc2ee[:3, :3] if str(fixed_rpy_frame) == "camera" else None)
         R_ab2hc_t = R_ab2ee_t @ T_ee2hc[:3, :3]
         T_ab2hc_t = np.eye(4, dtype=np.float64)
         T_ab2hc_t[:3, :3] = R_ab2hc_t

@@ -409,7 +409,8 @@ Since the 2026-09-01 refactor they own **no** hardware: arm via
 `/arm/move_cart`, base via `MobileClient`, observations via
 `/<cam>/tag_detections`. ⚠️ `map_calibrator` is a second commander of
 `/mobile/goto_tag`: no `TASK`/`GOTO` during a calibration session. **Since 2026-09-22 the hand-cam align of a
-calibration entry commands rx −180 / ry 0 with rz free (the seed's spin)
+calibration entry puts the hand-cam OPTICAL AXIS at rx −180 / ry 0 (hand-eye
+applied, spin free)
 and corrects TRANSLATION only, z to 0.50 m
 (`locator.yaml align.orientation: fixed`) — the measured tilt is
 recorded, not chased; regenerate the plans after any tf_chain change.**
@@ -1855,8 +1856,19 @@ rotations, and the final camera orientation differed per entry.
   0.85° off vertical (`T_ab2mb`), so a flat tag reads ~0.5–1.3° of
   tilt routinely — the 3° warning is set above that. Report key
   `fixed_rx_ry_deg`.
+- **`fixed_rpy_frame: camera` (user, right after: "핸드아이 광축이 플랜지
+  이러한 보정은 적용").** The fixed rx/ry now describe the hand-cam
+  OPTICAL frame in the arm frame: `R_ab2hc = Rz(spin_now)·Ry(0)·Rx(−180)`
+  (optical axis exactly along −arm z, the camera's own spin kept) and
+  the flange follows through the hand-eye, `R_ab2ee = R_ab2hc·R_hc2ee`
+  — so the flange reads (−179.86, +0.45, rz − 0.00) with the applied
+  `T_hc2ee`, and a flat tag's recorded tilt is the tag's slope vs the
+  arm vertical alone (the 0.47° hand-eye offset is gone from it; the
+  base's 0.85° `T_ab2mb` tilt is NOT applied — the reference is the
+  arm's z, not the floor normal — so ~0.9° stays on a level floor).
+  `flange` restores the TCP-frame reading. Report key `fixed_rpy_frame`.
 
-Verified offline: new `scripts/check_align_fixed_orientation.py` (54 —
+Verified offline: new `scripts/check_align_fixed_orientation.py` (76 —
 real `T_hc2ee.npz`, real runner against a fake arm + detector: from a
 seed 1.5° off the normal, 50 mm off-centre, 0.63 m up, the final rx ry
 rz equal the seed to 1e-16°, every commanded move carries the seed
@@ -1868,7 +1880,12 @@ bad orientation value refused; locator.yaml loads fixed / 0.50 ==
 auto_view_distance_m; with fixed −180 / 0 a plan-like seed (−179.5,
 −0.3, 25) ends at |rx| 180 / ry 0 / rz 25 to 1e-9°, the first step
 turning 0.5°, later steps 0 rotation, a planted 0.7° tag slope read
-as tilt and constant over the iterations; rx without ry refused), `check_handeye_sweep.py` 74 unchanged, both
+as tilt and constant over the iterations; rx without ry refused; with
+`fixed_rpy_frame: camera` the final CAMERA rotation equals
+Rz(spin)·Rx(−180) to 1e-12 with its axis exactly −arm z, the flange
+reading −179.86 / +0.45, a flat tag's tilt 0.000 and a 0.7° slope
+0.700 exactly; `flange` keeps the TCP-frame result; unknown frame
+refused), `check_handeye_sweep.py` 74 unchanged, both
 plans load (26 / 25). Not run on the robot: restart the calibration
 launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
 deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
