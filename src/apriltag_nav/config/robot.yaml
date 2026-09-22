@@ -1151,7 +1151,11 @@ arm_calibration:
   # is refused above tag_z_max_offset_m rather than sent to the arm: at the
   # 16.5 mm standoff, 50 mm of wrong z is a collision, not a bad reading.
   # use_tag_z false = the design floor under every tag (pre-2026-09-22).
-  use_tag_z: true
+  # ⚠️ OFF by the user's decision (2026-09-22 evening, "z는 사용 안하기로"):
+  # the +20 mm it would apply is not separable from the chain's z bias, and
+  # a wrong z moves the tool toward the workpiece. map.yaml keeps the
+  # calibrated z as a RECORD; nothing reads it while this is false.
+  use_tag_z: false
   world_floor_z_m: -0.080
   tag_z_max_offset_m: 0.05
 

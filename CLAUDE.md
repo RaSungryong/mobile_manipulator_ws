@@ -1503,11 +1503,12 @@ CSV quat is reliable.
 0 while the lift is raised) puts the TCP exactly the lift extension **ABOVE**
 the world target — see the lift section below.
 
-**The map calibration is applied through `map.yaml`, and ALL of it since
-2026-09-22 (user: "x, y 말고 모든 값 사용").** Tags 100–125 carry the
-calibrated `x` / `y` (design + delta in a trailing comment), **`z`** (tag
-top in the calibration world frame, z 0 = the plate top) and **`yaw`**
-(world heading of the tag's x axis, CCW +). Three consumers:
+**The map calibration is applied through `map.yaml`: x, y and yaw since
+2026-09-22 (user: "x, y 말고 모든 값 사용"), z recorded but NOT used
+(user's decision the same evening: "z는 사용 안하기로").** Tags 100–125
+carry the calibrated `x` / `y` (design + delta in a trailing comment),
+**`z`** (tag top in the calibration world frame, z 0 = the plate top) and
+**`yaw`** (world heading of the tag's x axis, CCW +). Three consumers:
 - `x` / `y` → `/robot_pose`, the hop odom distance, the prediction
   fallback (the calibrated positions; `predictive_centering` reads the
   newest `map_world_*.yaml` itself).
@@ -1516,19 +1517,20 @@ top in the calibration world frame, z 0 = the plate top) and **`yaw`**
   a tag laid δ off its lane axis leaves the body δ off the zone heading
   with `align_angle` reading 0; theta = zone + align + δ, δ = yaw − nearest
   90° axis (≤ ±0.7° on plate 1; 9 mm at 1 m of reach).
-- `z` → pose-mode IK (`arm_calibration.use_tag_z`, `arm_transform.
-  tag_floor_z_m`): the floor under the tag is `(z − tag_thickness) −
-  world_floor_z_m` (−0.080, the cell design) above the CSV / `arm_base_z`
-  datum, and it enters `transform_world_to_arm(floor_z_m=)` exactly like
-  the lift. Plate 1 reads ~+20 mm (tag top −57 ± 10 mm vs the design
-  −79). ⚠️ z is the chain's weakest axis (sd 10 mm per tag, 7 mm session
-  to session) and a wrong z moves the tool TOWARD the workpiece, so
-  `tag_z_max_offset_m` (0.05) refuses a gross value instead of sending it;
-  watch the first pose-mode run's `[Arm REAL] Transform … floor +xx mm`
-  lines against the standoff loop.
+- `z` → pose-mode IK, **OFF** (`arm_calibration.use_tag_z: false`): the
+  path exists (`arm_transform.tag_floor_z_m`: the floor under the tag is
+  `(z − tag_thickness) − world_floor_z_m` (−0.080, the cell design) above
+  the CSV / `arm_base_z` datum, entering `transform_world_to_arm(
+  floor_z_m=)` exactly like the lift; `tag_z_max_offset_m` 0.05 refuses a
+  gross value) but the user switched it off: plate 1 reads ~+20 mm (tag
+  top −57 ± 10 mm vs the design −79), z is the chain's weakest axis (sd
+  10 mm per tag, 7 mm session to session), the +20 mm cannot be told from
+  a chain z bias, and a wrong z moves the tool TOWARD the workpiece. With
+  it off pose-mode IK uses the design floor, bit for bit as before.
 Tags without the keys (dock, pivots, zone A, plates D/E) behave as before;
-`use_tag_z: false` / `robot_pose_use_tag_yaw: false` restore the design
-floor / zone-only theta. `tools/check_calibrated_tag_z_yaw.py` (39).
+`robot_pose_use_tag_yaw: false` restores the zone-only theta.
+`tools/check_calibrated_tag_z_yaw.py` (41) pins the arithmetic of both,
+that yaw is on and z is off in robot.yaml.
 roll / pitch stay in the map_world file only — a floor tag's tilt is the
 chain's reading of the chassis attitude, not map data.
 
@@ -2092,7 +2094,10 @@ standoff a wrong z is a collision). Plate 1's z says the floor is ~+20 mm
 above the design −80 under every tag (tag top −57 ± 10 mm; −35 at 104,
 −91 at 110) — real or a chain z bias is not settled; the standoff loop
 covers ±20 mm, so the first pose-mode scan is the test. Promoted to
-*Coordinate Frames*. Verified offline: new
+*Coordinate Frames*. **Then the user decided against z ("z는 사용
+안하기로"): `use_tag_z: false`, the z lines stay in map.yaml as a record,
+the code path and its check stay (41 with the off-state asserted), yaw
+stays ON.** Verified offline: new
 `tools/check_calibrated_tag_z_yaw.py` (39 — floor arithmetic, refusal,
 bit-identity at floor 0, the floor entering exactly like the lift, theta
 in zones A/B/C for six yaws incl. the ±180 wraps and the switch, the real

@@ -33,9 +33,10 @@
 # x -16.7 +- 6.3 mm (all 13 tags, both sessions), y within 3 mm. Every
 # other tag (dock, pivots, zone A, plates D/E) is still the design value.
 #   Same day, later (user: use every calibrated value): those 26 tags also
-#   carry `z` (tag top in the calibration world frame, z 0 = plate top;
-#   pose-mode IK turns it into the floor height under the arm, see
-#   robot.yaml arm_calibration.use_tag_z) and `yaw` (world heading of the
+#   carry `z` (tag top in the calibration world frame, z 0 = plate top —
+#   RECORD ONLY: the user decided the same evening NOT to use z, so
+#   robot.yaml arm_calibration.use_tag_z is false and pose-mode IK keeps
+#   the design floor) and `yaw` (world heading of the
 #   tag's x axis, CCW +; /robot_pose adds its deviation from the lane axis
 #   to theta, robot.yaml robot.robot_pose_use_tag_yaw). Neither is read by
 #   navigation itself. roll / pitch are in the map_world file only — a

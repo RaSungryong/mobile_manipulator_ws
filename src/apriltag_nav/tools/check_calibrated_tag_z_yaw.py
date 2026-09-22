@@ -127,8 +127,11 @@ def main():
           all(abs(abs(tags[t]['yaw']) - 180) < 2 for t in range(113, 126)))
     check('uncalibrated tags have neither key',
           all('z' not in v and 'yaw' not in v for t, v in tags.items() if t not in have))
-    check('robot.yaml switches on', bool(calib_real.get('use_tag_z')) and
-          bool((yaml.safe_load(open(paths.CONFIG_PATH))['robot']).get('robot_pose_use_tag_yaw')))
+    # user's decision (2026-09-22 evening): yaw IS used, z is recorded only
+    check('robot.yaml: yaw on', bool((yaml.safe_load(open(paths.CONFIG_PATH))['robot']).get('robot_pose_use_tag_yaw')))
+    check('robot.yaml: z OFF (user decision)', calib_real.get('use_tag_z') is False)
+    check('with the real config every tag gives floor 0',
+          all(tag_floor_z_m(tags[t], calib_real) == 0.0 for t in have))
 
     bad = sum(1 for ok in H.checks if not ok) if hasattr(H, 'checks') else 0
     return bad
