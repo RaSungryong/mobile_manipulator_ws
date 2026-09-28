@@ -238,7 +238,8 @@ class RosBridge:
         # kept here from the moment the bridge exists; snapshot only, no
         # signal — poll via robot_pose_snapshot() and check `id`/`stamp`.
         self._pose_lock = threading.Lock()
-        self._pose_latest = None
+        self._pose_latest = None        # last flag-True (arrival) pose
+        self._pose_live = None          # last flag-False (live stream) pose, 2026-09-28
         self._sub('/robot_pose', Pose2DWithFlag, self._cb_robot_pose,
                   queue_size=1)
         for cam in STREAM_CAMERAS:
@@ -379,20 +380,34 @@ class RosBridge:
     def _cb_robot_pose(self, msg):
         if not self._alive:
             return
+        d = {
+            'x': float(msg.x), 'y': float(msg.y),
+            'theta': float(msg.theta), 'id': int(msg.id),
+            'flag': bool(msg.flag),
+            'stamp': msg.header.stamp.to_sec(),
+        }
         with self._pose_lock:
-            self._pose_latest = {
-                'x': float(msg.x), 'y': float(msg.y),
-                'theta': float(msg.theta), 'id': int(msg.id),
-                'flag': bool(msg.flag),
-                'stamp': msg.header.stamp.to_sec(),
-            }
+            # flag True = the at-rest arrival pose (what tip_check and the
+            # arm use); flag False = mobile_node's live stream (2026-09-28),
+            # kept separately so a live estimate never poses as a stop pose.
+            if d['flag']:
+                self._pose_latest = d
+            else:
+                self._pose_live = d
 
     def robot_pose_snapshot(self):
-        """Latest /robot_pose as a dict (x, y [m] manipulator frame, theta
-        [deg], id = the tag it was computed from, stamp), or None before the
-        first arrival since this bridge started."""
+        """Latest ARRIVAL /robot_pose (flag True) as a dict (x, y [m]
+        manipulator frame, theta [deg], id = the tag it was computed from,
+        stamp), or None before the first arrival since this bridge started.
+        The live stream is robot_pose_live()."""
         with self._pose_lock:
             return dict(self._pose_latest) if self._pose_latest else None
+
+    def robot_pose_live(self):
+        """Latest LIVE /robot_pose (flag False, ~10 Hz from mobile_node) as
+        the same dict, or None before the first one."""
+        with self._pose_lock:
+            return dict(self._pose_live) if self._pose_live else None
 
     def _cb_camera_state(self, msg):
         if not self._alive:

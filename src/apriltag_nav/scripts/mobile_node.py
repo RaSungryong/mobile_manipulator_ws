@@ -44,6 +44,16 @@ Interface
                               Mirrors a task switch.
   /mobile/clear_stop(Trigger) clear both flags so the next move may start.
   /mobile/state     (String)  JSON, published at ~`rate_hz`.
+  /robot_pose (Pose2DWithFlag) TWO kinds of message since 2026-09-28:
+                              flag True  = the at-rest ARRIVAL pose, once per
+                                           tag arrival (as before; what the
+                                           arm's pose-mode IK uses);
+                              flag False = the LIVE estimate, ~10 Hz
+                                           (robot.robot_pose_live): from the
+                                           map tag in front_cam when one is
+                                           in view, else the last tag-based
+                                           pose carried forward on /odom.
+                              Not latched; `id` = the anchoring tag.
 
 Why goto is a topic and not a service
 -------------------------------------
@@ -140,6 +150,15 @@ class MobileNode:
         self._publish_state()
         self._timer = rospy.Timer(rospy.Duration(1.0 / max(rate_hz, 0.1)),
                                   self._publish_state)
+        # Live /robot_pose stream (2026-09-28): tag-based while a map tag is
+        # in front_cam, odom-carried in between. flag False; the arrival
+        # message (flag True) is unchanged. See MobileController.live_robot_pose.
+        live_hz = float(getattr(self.mobile, 'live_pose_rate_hz', 0.0) or 0.0)
+        self._live_pose_timer = None
+        if getattr(self.mobile, 'live_pose_enabled', False) and live_hz > 0:
+            self._live_pose_timer = rospy.Timer(rospy.Duration(1.0 / live_hz),
+                                                self._publish_live_pose)
+            rospy.loginfo(f"[Mobile] live /robot_pose stream at {live_hz:g} Hz")
 
     # ==========================================================
     # HELPERS
@@ -325,6 +344,12 @@ class MobileNode:
             self.pub_busy.publish(Bool(self._busy_what is not None))
         except Exception:
             pass
+
+    def _publish_live_pose(self, _event=None):
+        try:
+            self.mobile.publish_live_robot_pose()
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Mobile] live robot_pose failed: {e}")
 
     # ==========================================================
     # SHUTDOWN

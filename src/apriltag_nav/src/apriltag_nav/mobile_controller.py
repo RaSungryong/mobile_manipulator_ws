@@ -345,6 +345,24 @@ class MobileController:
         # laying angle (map.yaml `yaw`), see _tag_yaw_error_deg.
         self.robot_pose_use_tag_yaw = bool(
             self.cfg['robot'].get('robot_pose_use_tag_yaw', True))
+        # Live /robot_pose stream (2026-09-28, user: "실시간으로 로봇 현재
+        # 위치 계속 보내고 싶어"). Until then /robot_pose went out ONCE per
+        # arrival (flag True: the at-rest pose the arm's pose-mode IK uses,
+        # published by publish_robot_pose). mobile_node now also calls
+        # publish_live_robot_pose() on a timer: while a MAP tag is in
+        # front_cam the pose is computed from that frame (the same
+        # calculate_robot_pose), and while none is, the last tag-based pose
+        # is carried forward with the /odom delta since it was taken (any
+        # tag-based pose, arrival or live, re-anchors it). Live messages
+        # carry flag False; the consumers that need the authoritative stop
+        # pose (arm_controller.pose_cb, robot_ui.tip_check) keep flag True
+        # only, so nothing that scans changed. See live_robot_pose().
+        live_cfg = self.cfg['robot'].get('robot_pose_live', {}) or {}
+        self.live_pose_enabled = bool(live_cfg.get('enabled', True))
+        self.live_pose_rate_hz = float(live_cfg.get('rate_hz', 10.0))
+        self.live_pose_odom_extrapolate = bool(live_cfg.get('odom_extrapolate', True))
+        self.live_pose_odom_max_age_s = float(live_cfg.get('odom_max_age_s', 1.0))
+        self._live_anchor = None            # see _set_live_anchor
         self.pp_lateral_reference = str(
             self.cfg['robot'].get('pp_lateral_reference', 'base')).lower()
         self._align_pulse_gain = 1.0         # achieved / commanded rotation, learned
@@ -3242,6 +3260,7 @@ class MobileController:
 
         if pose is not None:
             msg.x, msg.y, msg.theta = pose
+            self._set_live_anchor(tag_id, pose)
             info = self.map_mgr.get_tag_info(tag_id) or {}
             rospy.loginfo(
                 f"[RobotPose] tag {tag_id} "
@@ -3258,3 +3277,92 @@ class MobileController:
             msg.theta = 0.0
 
         self.pose_pub.publish(msg)
+
+    # ------------------------------------------------------------------
+    # Live /robot_pose stream (2026-09-28) — see the note in __init__
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _manip_to_world(mx, my):
+        """Inverse of calculate_robot_pose's step 2 (manip_cam_x = -robot_y,
+        manip_cam_y = -robot_x): world_x = -m_y, world_y = -m_x."""
+        return -my, -mx
+
+    def _set_live_anchor(self, tag_id, pose):
+        """Remember a tag-based pose together with the /odom reading it was
+        taken at, so live_robot_pose() can carry it forward on odom while
+        no map tag is in view. No odom yet -> no anchor (nothing to
+        integrate against)."""
+        if pose is None or self.odom_stamp is None:
+            return
+        wx, wy = self._manip_to_world(pose[0], pose[1])
+        self._live_anchor = {
+            'tag': int(tag_id), 'wx': float(wx), 'wy': float(wy),
+            'heading_deg': float(pose[2]),
+            'odom_x': float(self.odom_x), 'odom_y': float(self.odom_y),
+            'odom_theta': float(self.current_theta),
+            't': rospy.Time.now().to_sec(),
+        }
+
+    def _live_map_tag_id(self):
+        """The visible tag nearest the lens that the map knows (a tag laid
+        for a calibration, e.g. 15/16/149, has no map entry and must not
+        produce a pose); None if no such tag is in view."""
+        best, best_d = None, None
+        for tid, t in self.detected_tags.items():
+            info = self.map_mgr.get_tag_info(tid)
+            if not info or 'x' not in info or 'y' not in info:
+                continue
+            d = math.hypot(float(t.get('x', 0.0)), float(t.get('y', 0.0)))
+            if best_d is None or d < best_d:
+                best, best_d = tid, d
+        return best
+
+    def live_robot_pose(self):
+        """(x, y, theta_deg, tag_id, source) in the /robot_pose convention,
+        or None when nothing can be said. source 'tag': a map tag is in
+        front_cam and the pose is computed from that frame (and becomes
+        the odom anchor); 'odom': no map tag in view, the last tag-based
+        pose carried forward by the odom delta since it was taken —
+        translation rotated from the odom frame into the world by the
+        anchor's (world heading - odom yaw), heading by the odom yaw delta.
+        None before the first tag-based pose, with odom extrapolation off,
+        or when /odom is older than odom_max_age_s."""
+        tid = self._live_map_tag_id()
+        if tid is not None:
+            pose = self.calculate_robot_pose(tid)
+            if pose is not None:
+                self._set_live_anchor(tid, pose)
+                return float(pose[0]), float(pose[1]), float(pose[2]), int(tid), 'tag'
+        a = self._live_anchor
+        if a is None or not self.live_pose_odom_extrapolate or self.odom_stamp is None:
+            return None
+        if (rospy.Time.now() - self.odom_stamp).to_sec() > self.live_pose_odom_max_age_s:
+            return None
+        dxo = float(self.odom_x) - a['odom_x']
+        dyo = float(self.odom_y) - a['odom_y']
+        dth = float(self.current_theta) - a['odom_theta']
+        rot = math.radians(a['heading_deg']) - a['odom_theta']
+        wx = a['wx'] + math.cos(rot) * dxo - math.sin(rot) * dyo
+        wy = a['wy'] + math.sin(rot) * dxo + math.cos(rot) * dyo
+        heading = a['heading_deg'] + math.degrees(dth)
+        heading = (heading + 180.0) % 360.0 - 180.0
+        return -wy, -wx, heading, a['tag'], 'odom'
+
+    def publish_live_robot_pose(self):
+        """One tick of the live stream (mobile_node's timer). flag False =
+        a live estimate, NOT the at-rest arrival pose; `id` = the tag the
+        estimate is anchored on. Returns the source ('tag' / 'odom') or
+        None when nothing was published."""
+        if not self.live_pose_enabled:
+            return None
+        live = self.live_robot_pose()
+        if live is None:
+            return None
+        x, y, theta, tid, source = live
+        msg = Pose2DWithFlag()
+        msg.header.stamp = rospy.Time.now()
+        msg.flag = False
+        msg.id = int(tid)
+        msg.x, msg.y, msg.theta = float(x), float(y), float(theta)
+        self.pose_pub.publish(msg)
+        return source

@@ -290,6 +290,12 @@ class ArmController:
     # ROS CALLBACKS
     # --------------------------------------------------
     def pose_cb(self, msg):
+        # Since 2026-09-28 mobile_node also streams a LIVE estimate on
+        # /robot_pose (flag False, ~10 Hz: tag-based or odom-carried).
+        # Pose-mode IK must keep using the at-rest ARRIVAL pose only
+        # (flag True), exactly as before the stream existed.
+        if not getattr(msg, 'flag', True):
+            return
         self.current_pose_msg = msg
 
     def keyence_cb(self, msg):

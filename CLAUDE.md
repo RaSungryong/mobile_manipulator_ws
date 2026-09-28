@@ -301,6 +301,24 @@ Two facts from the previous warning that are still load-bearing:
   tag 12–16 cm ahead of the lens. There is still **no body-width term
   anywhere in the pipeline**, so changing the chassis does not move where
   the robot stops. `wall_dist_*` is documentation.
+- **`/robot_pose` is a LIVE stream since 2026-09-28** (user: "실시간으로
+  로봇 현재 위치 계속 보내고 싶어"). Two kinds of message, told apart by
+  `flag`: `flag True` is the at-rest ARRIVAL pose, published once per
+  tag arrival exactly as before (`publish_robot_pose`) and the ONLY kind
+  `arm_controller.pose_cb` / `robot_ui.tip_check` accept; `flag False`
+  is the live estimate `mobile_node` publishes at `robot_pose_live.rate_hz`
+  (10): the same `calculate_robot_pose` on the map tag nearest the lens
+  whenever one is in front_cam (a non-map tag, e.g. a calibration pair,
+  produces nothing), and while no map tag is visible the last tag-based
+  pose (arrival or live) carried forward on the `/odom` delta rotated
+  into the world (`live_robot_pose`; off when `/odom` is older than
+  `odom_max_age_s`, silent before the first tag-based pose). While
+  moving the tag-based value lags by the image latency × speed (~5 mm at
+  0.05 m/s); at rest it equals the arrival pose. Not latched — a fresh
+  `rostopic echo /robot_pose` shows the stream at once, and `id` says
+  which tag it is anchored on. `robot_ui`'s `robot_pose_snapshot()` keeps
+  the arrival pose, `robot_pose_live()` the stream.
+  `tools/check_robot_pose_live.py` (30).
 - Joint mode reads no transform at all: the CSV rows are absolute joint angles
   fed straight to `MoveJ`.
 
@@ -342,7 +360,7 @@ owner node per device, other nodes reach it over topics/services.
 | Node | Owns | Interface |
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
-| `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state` |
+| `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
 | `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
@@ -1879,6 +1897,48 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-28 (night) — `/robot_pose` streams the live position: tag-based at 10 Hz, odom-carried between tags
+
+User: `rostopic echo /robot_pose` "왜 안 되요", then "실시간으로 로봇
+현재 위치 계속 보내고 싶어". Nothing was broken: the topic was not
+latched and went out ONCE per arrival (`publish_robot_pose`, last one
+17:08:05 on tag 104), so an echo started afterwards saw nothing. Now
+`mobile_node` runs a timer (`robot.robot_pose_live`, 10 Hz) calling
+`MobileController.publish_live_robot_pose()`: with a MAP tag in
+front_cam the pose is `calculate_robot_pose` on the tag nearest the
+lens, every tick; with none, the last tag-based pose is carried forward
+on the `/odom` delta (translation rotated by the anchor's world heading
+minus odom yaw, heading by the odom yaw delta; anchor = every tag-based
+pose, arrival or live). Refuses to guess: nothing before the first
+tag-based pose, nothing from a tag the map does not know, nothing when
+`/odom` is older than 1 s. **The arrival message is untouched and the
+two are told apart by `flag`** (True = arrival, False = live):
+`arm_controller.pose_cb` (and the `arm_controller_sdk` variant) drop
+flag-False messages, so pose-mode IK still uses the at-rest arrival pose
+bit for bit; `robot_ui`'s bridge keeps the arrival pose for
+`robot_pose_snapshot()` (tip_check) and the stream in a new
+`robot_pose_live()`. Promoted to the *Mobile base split* section.
+
+Verified offline: new `tools/check_robot_pose_live.py` (30 — tag pose
+== `calculate_robot_pose` and == the plant; odom carry-forward with the
+odom frame yawed 30° vs the world: +0.20 m along the lane and +10° of
+heading recovered to 1e-9; stale odom silent; a returning tag re-anchors
+and discards the odom drift; non-map tag and no-anchor cases publish
+nothing; arrival flag True and the live message at rest identical;
+`enabled: false` restores the once-per-arrival behaviour; a real driven
+106→107 hop streams 384 messages, both sources, within 8 mm of the plant
+on every tick (the 0.1 s image latency × speed) and 1 mm at rest;
+`pose_cb` keeps an arrival across later live messages),
+`check_front_cam_guard` 31, `check_nav_sequencing` 14,
+`check_scan_progress` 73, `check_web_ui` 130, `check_task_list_ui` 104,
+`check_tip_tour` 20, `check_charging_manager` 21. Not run on the robot:
+`mobile_node` (the stream), `arm_node` (the flag filter) and
+`robot_ui_web_node` (the bridge) need a restart — `sudo systemctl
+restart mobile-manipulator` (sudo needs a password; the base was idle on
+tag 104, not charging). Then `rostopic echo /robot_pose` should print at
+10 Hz with `flag: False`, `id: 104`, and keep printing when the tag
+leaves the frame.
 
 ### 2026-09-22 (18:00) — Tip over cross tag 0 from the 102 / 103 / 104 stops: `robot_ui.tip_check` + two Scripts-tab plugins (hover 30 mm; touch + Keyence standoff + LED capture), 3 rounds
 

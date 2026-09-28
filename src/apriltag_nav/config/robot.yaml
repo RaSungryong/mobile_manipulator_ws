@@ -633,6 +633,23 @@ robot:
   # ~9 mm. Tags without `yaw` (dock, pivots, zone A, plates D/E) are
   # unchanged. false restores the zone-heading-only theta.
   robot_pose_use_tag_yaw: true
+  # Live /robot_pose stream (2026-09-28, user: "실시간으로 로봇 현재 위치
+  # 계속 보내고 싶어"). Before this /robot_pose went out ONCE per tag
+  # arrival (flag True — the at-rest pose the arm's pose-mode IK uses;
+  # unchanged). mobile_node now also publishes a flag-False estimate at
+  # rate_hz: computed from the map tag in front_cam whenever one is in
+  # view (same maths as the arrival pose, so at rest they agree), and
+  # while no map tag is visible the last tag-based pose carried forward
+  # on the /odom delta (odom_extrapolate; stops when /odom is older than
+  # odom_max_age_s). arm_controller / robot_ui.tip_check ignore flag
+  # False, so the stream changes nothing that scans. `id` = the tag the
+  # estimate is anchored on. enabled false = the old once-per-arrival
+  # behaviour.
+  robot_pose_live:
+    enabled: true
+    rate_hz: 10.0
+    odom_extrapolate: true
+    odom_max_age_s: 1.0
   # Tightened 10 -> 4 px on 2026-09-02 (user request). The trigger now fires
   # 4 px (~1.6 mm) before the target column instead of 10 (~4 mm). ⚠️ The
   # bigger error is AFTER the trigger: on 2026-09-02 arrivals recorded the
