@@ -2,9 +2,11 @@
 
 인쇄된 **A0 태그 시트**(`sheet/`)를 참값(ground truth)으로 삼아 **front_cam과
 hand_cam 사이의 변환 체인 오차**를 재고, 그 오차를 체인 안의 고정 행렬에 대한
-상수 보정값으로 풀어내는 패키지입니다. 팔은 **사람이 조그로** 자세를 잡고,
-도구는 자세마다 `capture` 한 번으로 샘플을 저장합니다. 팔을 자동으로 움직이는
-기능은 없습니다 (2026-09-15의 자동 스윕이 팔을 로봇 몸체에 부딪혀서 뺐습니다).
+상수 보정값으로 풀어내는 패키지입니다. 수집은 두 가지: 팔을 **사람이 조그로**
+잡고 자세마다 `capture` 하는 길(§3), 그리고 **`sheet_sweep.py`의 자동 수집**(§3-0,
+2026-09-28)입니다. 자동 수집은 2026-09-15의 자동 스윕이 팔을 몸체에 부딪힌 뒤
+없앴다가, 모든 목표와 모든 이동 구간에 안전 규칙(몸체 여유선·시트 위 공구
+높이·reach·시작 자세 대비 회전 60° 이내)을 걸고 다시 만든 것입니다.
 
 시트는 태그 11장(200, 300~309)이 **한 강체 위에 설계 좌표로** 있는 기준물이라,
 사람이 자로 재서 태그를 깔 일이 없습니다. 카메라마다 **보이는 모든 태그의 코너를
@@ -16,11 +18,14 @@ src/chain_calib/
   scripts/chain_calib.py        운영자 도구  check / capture / status / drop / solve
   scripts/check_chain_calib.py  오프라인 검증 (PDF 코너 규약 + 합성 세션, 37개 검사)
   scripts/verify_chain.py       보정 검증: 체인으로 계산한 자세로 hand_cam을 태그 위로 보내 실제 중심 편차를 잼
+  scripts/sheet_sweep.py        자동 수집 (§3-0): 태그 화이트리스트 위 뷰 계획 → 규칙 검사 → MoveL 청크 → capture, 세션에 바로 저장
+  scripts/check_sheet_sweep.py  그 오프라인 검증 (실제 tf 체인 + 09-21 세션 기하 + 가짜 팔, 33개 검사)
   src/chain_calib/solver.py     수학 (AX = YB 피팅, 홀드아웃 평가, 태그 쌍 지표), ROS 없음
   src/chain_calib/sheet.py      시트 레이아웃, 프레임 누적, multi-tag PnP, ROS 없음
   src/chain_calib/session.py    샘플 저장, 자세 설명, 커버리지 조언, ROS 없음
   sheet/                        A0 시트 PDF(인쇄용) + layout.json(설계 좌표) + 인수인계 문서
 log/chain_calib/<세션>/         samples.npz, corners.json, meta.yaml, corrections.npz
+                                (+ 자동 수집이면 sweep_plan.csv, sweep_log.csv)
 ```
 
 ---
@@ -178,6 +183,51 @@ CameraInfo D를 그대로 적용(현재 펌웨어는 0 보고), front_cam은 gro
 ---
 
 ## 3. 절차
+
+### 3-0. 자동 수집 — `sheet_sweep.py` (2026-09-28)
+
+사용자 요구: hand_cam은 격자 중 **301 303 305 307 309만** 쓰고, 수집은 자동으로,
+회전은 **최대 60°**까지만 (충돌 위험). 그 셋을 그대로 코드로 만든 것입니다.
+
+```bash
+# 시작 자세: hand_cam을 태그 305 위 ~0.45 m, 똑바로 아래. path_tag_locator.launch는 내려 둔다.
+rosrun chain_calib sheet_sweep.py --sx <..> --sy <..> --tag-size <..> --dry-run     # 계획만 (이동 없음)
+rosrun chain_calib sheet_sweep.py --sx <..> --sy <..> --tag-size <..>               # 계획 → y 한 번 → 자동
+#   옵션: --tags 301,303,305,307,309  --heights 0.45,0.55  --tilt 15  --spins 0,40,-40  --max-rot 60
+#         --vel 20  --settle 0.8  --no-return  [DIR]  (DIR 생략 = log/chain_calib/<YYYYMMDD>_sheet_auto)
+```
+
+- **기록 위치**: `log/chain_calib/<YYYYMMDD>_sheet_auto/` — `samples.npz` /
+  `corners.json` / `meta.yaml`(뷰마다 즉시 저장, `meta.hand_tags`에 화이트리스트),
+  `sweep_plan.csv`(계획·거부 사유), `sweep_log.csv`(뷰마다 태그·rms·scatter·raw
+  chain error·TCP·관절각). `solve`가 `corrections.npz`를 더합니다. 같은 디렉터리로
+  다시 돌리면 이어서 붙습니다.
+- **뷰**: 태그당 7개 — 첫 높이에서 수직 1 + 시트 ±x·±y 기울임 4, 둘째 높이에서
+  수직 1 + 기울임 1. 스핀은 **현재 카메라 스핀 기준** 0 / +40 / −40°를 돌려 가며.
+  5 × 7 = 35개, 6~8분. 규칙에 걸리는 뷰는 5/10/15 cm 높여 다시 시도하고, 그래도
+  안 되면 사유와 함께 건너뜁니다 (09-28 실제 기하에서 33/35).
+- **규칙 (목표마다, 그리고 이동 구간의 청크 끝점마다)**: 플랜지·비전 팁이 시트
+  평면 위 ≥ 0.12 m; `verify_chain`의 몸체 여유선(플랜지가 베이스 평면 아래면
+  수평 reach ≥ 0.65 m); reach 0.25~1.25 m; 플랜지 xy는 시작에서 0.70 m 안;
+  **자세는 시작 자세에서 60° 안**(`--max-rot`; 기울임 ≤ 20°, 스핀 ≤ 60°는 별도
+  상한); hand_cam에 화이트리스트 태그가 **2장 이상** 온전히 보이는 것으로 예측.
+  **팔 베이스 쪽으로** 기울이는 뷰(플랜지가 몸체로 접히는 방향)는 `--body-tilt`
+  8°로 줄이고, 몸체 여유선은 평면 위 20 mm까지 여유를 두고 적용합니다 (첫 dry
+  run에서 reach 0.49 m에 평면 위 0.8 mm인 자세가 규칙을 통과했기 때문).
+  이동은 ≤ 0.20 m / 30°의 MoveL 청크이고, 직선 경로가 규칙에 걸리면 0.10 m
+  올라가서 건너간 뒤 내려옵니다. 이동 실패는 그 뷰만 건너뜀. **Ctrl-C는 지금
+  단계 뒤에 멈추고 팔을 그 자리에 둡니다**(복귀 이동 없음). 끝나면 시작 자세로
+  돌아옵니다(`--no-return`으로 끔). 비상정지에 손.
+- **화이트리스트는 세션의 속성**: 프레임에 300/302…가 같이 보여도 PnP에 넣지
+  않고, `solve` / `status` / `arm_offsets.py`도 `meta.hand_tags`로 저장 코너를
+  거릅니다. 수동 세션에도 `chain_calib.py --hand-tags 301,303,305,307,309
+  capture …`로 같은 것을 쓸 수 있습니다 (전역 옵션, 쉼표 구분, 서브커맨드 앞).
+- 뷰마다 front_cam의 200 위치를 시작과 비교해 3 mm 넘게 움직이면 경고합니다
+  (몸체가 움직였다는 뜻; 기록은 됩니다).
+- 검증: `python3 src/chain_calib/scripts/check_sheet_sweep.py` (33) — 실제
+  tf_chain + 09-21 세션의 front_cam 기하 + 가짜 팔/검출기로 계획·청크·실행
+  루프·건너뛰기·Ctrl-C를 확인 (36). 2026-09-28 스택 상대 `--dry-run` 35/35 계획,
+  최대 회전 43.8°.
 
 ### 3-1. 시작 자세와 점검
 
@@ -470,7 +520,12 @@ v11 v20 v45`(움직이는 중 캡처 / 태그 1개). 재투영 rms: 강체 **7.6
 `apriltag_nav/config/tf/arm_joint_offsets.yaml`(+ npz)에 저장되고, `path_tag_locator`
 (locate / map 캘리브레이션)와 `chain_calib.py solve`는 컨트롤러 TCP 대신
 `FK_urdf(q + dq)`를 플랜지로 쓴다 (`apriltag_nav.tf_chain.arm_flange_T`; 관절각이 없는
-샘플·상태는 그대로 TCP). 명령 쪽(`MoveJ(IK − δq)`)은 여전히 없다.
+샘플·상태는 그대로 TCP). 명령 쪽은 2026-09-28에 만들어졌지만 **기본 OFF**다
+(`apriltag_nav/joint_offset_cmd.py`, `arm_node ~apply_joint_offsets_cmd`, 절대 목표에
+`physical: true`): 지금 상수 세트는 T_A2B 지표에서는 맞지만 팔의 절대 위치에서는
+시트 뷰에서 z를 +10 mm(측정 −6.5), 09-22 터치 자세에서 +9…11 mm(측정 +4.8)로
+예측하므로, 명령 쪽에 넣으면 터치 목표에서 팁이 4–6 mm 판 속으로 들어간다.
+CLAUDE.md Work Log 2026-09-28.
 
 ```bash
 # 1. hand-eye 고정, 현재 K (config) 로 피팅 — 전체 뷰

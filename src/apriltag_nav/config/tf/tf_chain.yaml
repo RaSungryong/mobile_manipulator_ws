@@ -104,12 +104,12 @@
 # (the matrix), check_pose_vs_joint / check_lift_compensation.
 # -----------------------------------------------------------------------------
 T_ab2mb:
-  source: "CALIBRATED 2026-09-22 (evening) by chain_calib PLANAR fit on the A0 tag sheet, ARM session (65 views with joint angles, log/chain_calib/20260921_arm): ONLY x, y, yaw fitted; roll = pitch = 0 and tz = -0.652 (design) held FIXED by rule — a floor-sheet session measures the chassis' attitude at that parking, which must not enter this constant (user, 2026-09-22). Chain: the 2026-09-22 re-solved T_hc2ee, the checkerboard hand_cam K, arm_joint_offsets.yaml. Jackknife sd 0.4 / 0.4 mm / 0.01 deg; session rms 12.5 mm (the parking tilt stays in the residual, by design; the 6-DOF fit reaches 7.9)"
-  t_mm: [-8.195, -106.126, -652.000]
+  source: "CALIBRATED 2026-09-22 (evening) PLANAR fit on the A0 sheet arm session (x, y, yaw only; roll = pitch = 0, tz = -0.652 design, by rule) — x, y SHIFTED 2026-09-28 by (-1.0, +7.0) mm (user's decision): the 2026-09-28 automatic sheet session (log/chain_calib/20260928_sheet_auto, tags 301/303/305/307/309, body-side views excluded, joint offsets applied) showed a CONSTANT T_A2B xy bias of (-7.1, +1.0) mm in the sheet frame (sd 1.5 / 2.0 mm, the same across spin / range / tilt subsets) that the planar least squares left at (-4.8, +1.3) because its residual also carries the parking tilt's z; a pure x, y translation of T_ab2mb removes it (bias -> ~0, xy rms 7.6 -> 2.5 mm). yaw 179.196 deg and tz unchanged. z is NOT corrected (user: only x, y matter)."
+  t_mm: [-9.195, -99.126, -652.000]
   rpy_deg_xyz: [0.0000, 0.0000, 179.1961]
   matrix:   # row-major 4x4, metres
-    [-0.999901578, -0.014029783,  0.000000000, -0.008195464,
-      0.014029783, -0.999901578,  0.000000000, -0.106125630,
+    [-0.999901578, -0.014029783,  0.000000000, -0.009195464,
+      0.014029783, -0.999901578,  0.000000000, -0.099125630,
       0.000000000,  0.000000000,  1.000000000, -0.652000000,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:

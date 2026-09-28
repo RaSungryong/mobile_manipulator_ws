@@ -134,8 +134,9 @@ class FakeRobot:
     def GetInverseKin(self, t, target, config=-1):
         self.calls.append(('IK', tuple(round(v, 1) for v in target))); return self._ik(target)
 
-    def MoveJ(self, joints, tool, user):
+    def MoveJ(self, joints, tool, user, **kw):
         self.calls.append(('MoveJ', tool, tuple(round(v, 1) for v in joints)))
+        self.movej_kw = dict(kw)
         if self.movej_error:
             return self.movej_error
         self.joints = list(joints)
@@ -334,6 +335,19 @@ robot = FakeRobot(); ac = make_controller(robot)
 ac.execute_scan_points([pose_pt(7, 0.2847, 1.7139, q0=False)])
 check(any(c[0] == 'IK' for c in robot.calls) and not any(c[0] == 'IKref' for c in robot.calls),
       'GetInverseKin path taken without a seed')
+
+# 2026-09-28: pose-mode targets are world points, so the joint zero offsets
+# are applied on the command side — MoveJ receives IK joints minus dq.
+from apriltag_nav.joint_offset_cmd import CommandCorrector
+robot = FakeRobot(); ac = make_controller(robot)
+ac._cmd_corr = CommandCorrector([0.0, -0.341, -0.529, -0.051, -0.134, -0.496], fk=None)
+ac.execute_scan_points([pose_pt(8, -1.30, 0.20)])
+check(robot.calls[-1] == ('MoveJ', TOOL_ID, (1.0, 2.3, 3.5, 4.1, 5.1, 6.5)),
+      f'pose mode commands IK joints minus the joint offsets: {robot.calls[-1]}')
+robot = FakeRobot(); ac = make_controller(robot)
+ac._cmd_corr = CommandCorrector([0.0] * 6, fk=None)
+ac.execute_scan_points([pose_pt(9, -1.30, 0.20)])
+check(robot.calls[-1] == ('MoveJ', TOOL_ID, (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)), 'zero offsets: IK joints sent as is')
 check(events()[2]['phase'] == 'failed' and events()[2]['message'].startswith('IK failed (code 112)'),
       'same failure report on that path')
 
@@ -397,6 +411,129 @@ ac._adjust_distance_to_surface = _fail_adjust
 ok, message, _ = ac.adjust_standoff(None)
 check(not ok and 'NOT corrected: out of range' in message,
       f'a non-converged loop reports failure with its reason: {message!r}')
+
+# ================================================================ scenario 5
+# Joint control for robot_ui (2026-09-21): move_joint = one MoveJ to six
+# angles, jog_joint = read the live joints, add delta to ONE of them, MoveJ.
+robot = FakeRobot()
+ac = make_controller(robot)
+ac.busy = False
+robot.calls.clear()
+ok, msg = ac.move_joint([-90, -80, 100, -95, -90, 12.5], vel=25.0, acc=40.0)
+check(ok and msg == 'move_joint ok', f'move_joint ok: {msg!r}')
+check(robot.calls[-1] == ('MoveJ', TOOL_ID, (-90.0, -80.0, 100.0, -95.0, -90.0, 12.5))
+      and robot.movej_kw == {'vel': 25.0, 'acc': 40.0},
+      f'one MoveJ with the six angles, tool {TOOL_ID}, vel/acc passed: {robot.calls[-1]} {robot.movej_kw}')
+check(robot.joints == [-90, -80, 100, -95, -90, 12.5], 'the fake arm is at the target')
+ok, msg = ac.move_joint([1, 2, 3])
+check(not ok and 'needs 6' in msg, 'five-or-fewer values refused before any RPC')
+robot.movej_error = 7
+ok, msg = ac.move_joint([0] * 6)
+check(not ok and msg == 'move_joint failed: MoveJ error 7' and ac.busy is False,
+      f'a MoveJ error code is reported and busy released: {msg!r}')
+robot.movej_error = 0
+robot.calls.clear()
+ok, msg = ac.jog_joint('j3', -2.5, vel=20.0)
+check(ok and msg == 'jog j3 -2.5 deg ok', f'jog_joint j3 -2.5: {msg!r}')
+check(robot.calls[-1] == ('MoveJ', TOOL_ID, (-90.0, -80.0, 97.5, -95.0, -90.0, 12.5)),
+      f'only J3 moved, by -2.5 deg from the LIVE joints: {robot.calls[-1]}')
+ok, msg = ac.jog_joint(6, 1.0)
+check(ok and robot.joints[5] == 13.5 and msg == 'jog j6 +1 deg ok', 'a 1..6 integer names the joint too')
+ok, msg = ac.jog_joint('j7', 1.0)
+check(not ok and 'unknown joint' in msg, 'unknown joint refused')
+n = len(robot.calls)
+ok, msg = ac.jog_joint('j1', 80.0, max_step=50.0)
+check(not ok and 'exceeds max_step' in msg and len(robot.calls) == n, 'a jog over max_step never reaches the RPC')
+ok, msg = ac.jog_joint('j1', 'x')
+check(not ok and 'not a number' in msg, 'a non-numeric delta refused')
+ac.busy = True
+ok, msg = ac.move_joint([0] * 6)
+check(not ok and msg == 'refused: arm busy', 'refused while busy')
+ok, msg = ac.jog_joint('j1', 1.0)
+check(not ok and msg == 'refused: arm busy', 'jog refused while busy')
+ac.busy = False
+
+# Error recovery (2026-09-28): reset_error = ResetAllError -> RobotEnable(1)
+# -> Mode(0), no motion; ok judged from GetRobotErrorCode afterwards.
+print('\n--- reset_error ---')
+
+
+class FakeFaultRobot(FakeRobot):
+    """A latched controller error: ResetAllError clears it unless `sticky`
+    (a joint still beyond its soft limit re-trips at once)."""
+    def __init__(self):
+        super().__init__()
+        self.err = [5, 3]
+        self.sticky = False
+        self.reset_ret = 0
+        self.error_shape = 'tuple'
+
+    def ResetAllError(self):
+        self.calls.append(('ResetAllError',))
+        if self.reset_ret == 0 and not self.sticky:
+            self.err = [0, 0]
+        return self.reset_ret
+
+    def RobotEnable(self, s):
+        self.calls.append(('RobotEnable', s)); return 0
+
+    def Mode(self, m):
+        self.calls.append(('Mode', m)); return 0
+
+    def GetRobotErrorCode(self):
+        if self.error_shape == 'raise':
+            raise RuntimeError('socket busy')
+        return 0, list(self.err)
+
+
+import apriltag_nav.arm_controller as _acmod
+_real_sleep = _acmod.time.sleep
+_acmod.time.sleep = lambda _s: None
+try:
+    frobot = FakeFaultRobot()
+    fac = make_controller(frobot)
+    ok, msg = fac.reset_error()
+    check(ok and msg == 'error cleared (code (0, [5, 3]) -> (0, [0, 0]))',
+          f'latched error cleared: {msg!r}')
+    check([c[0] for c in frobot.calls] == ['ResetAllError', 'RobotEnable', 'Mode']
+          and ('RobotEnable', 1) in frobot.calls and ('Mode', 0) in frobot.calls,
+          f'ResetAllError -> RobotEnable(1) -> Mode(0), in that order: {frobot.calls}')
+    check(not any(c[0] == 'MoveJ' for c in frobot.calls), 'no motion commanded')
+    check(fac.busy is False, 'busy released')
+
+    frobot = FakeFaultRobot(); frobot.sticky = True
+    fac = make_controller(frobot)
+    ok, msg = fac.reset_error()
+    check(not ok and 'still set after reset' in msg and 'soft limit' in msg,
+          f'an error that re-trips is reported, with the joint-limit hint: {msg!r}')
+
+    frobot = FakeFaultRobot(); frobot.reset_ret = 4
+    fac = make_controller(frobot)
+    ok, msg = fac.reset_error()
+    check(not ok and msg.startswith('ResetAllError refused (code 4)'),
+          f'a refused ResetAllError is a failure: {msg!r}')
+
+    frobot = FakeFaultRobot(); frobot.error_shape = 'raise'
+    fac = make_controller(frobot)
+    ok, msg = fac.reset_error()
+    check(ok and 'unconfirmed' in msg,
+          f'unreadable error code: reset sent, reported as unconfirmed: {msg!r}')
+
+    frobot = FakeFaultRobot()
+    fac = make_controller(frobot)
+    fac.busy = True
+    ok, msg = fac.reset_error()
+    check(not ok and msg == 'refused: arm busy' and frobot.calls == [],
+          'refused while busy, nothing sent')
+    fac.busy = False
+
+    ec = ArmController.error_is_clear
+    check(ec((0, [0, 0])) is True and ec((0, [5, 3])) is False
+          and ec(0) is True and ec(7) is False and ec((-1, [0, 0])) is None
+          and ec(None) is None and ec('x') is None,
+          'error_is_clear: tuple / int / failed read / unknown shapes')
+finally:
+    _acmod.time.sleep = _real_sleep
 
 print(f'\n{N_OK} ok, {N_FAIL} failed')
 sys.exit(1 if N_FAIL else 0)

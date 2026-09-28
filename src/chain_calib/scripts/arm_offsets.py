@@ -214,7 +214,8 @@ def main():
     cfg, ext, H = tool.platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = tool.sheet_from_args(args, meta)
     if all(s.hand_corners for s in samples) and meta.get("K_hand"):
-        tool.resolve_samples(samples, meta, sheet, args.front_rotation, args.hand_intrinsics)      # PnP at the sheet scale given
+        tool.resolve_samples(samples, meta, sheet, args.front_rotation, args.hand_intrinsics,       # PnP at the sheet scale given
+                             hand_tags=meta.get("hand_tags"))                                      # the session's whitelist, if any
     else:
         print("(no stored corners — using the T_hc2W / T_fc2W as saved)")
     if args.exclude:

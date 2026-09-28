@@ -42,7 +42,7 @@ import numpy as np
 
 from robot_ui import paths
 from robot_ui.plugin_runner import PluginRunner
-from robot_ui.ros_bridge import ARM_AXES, STREAM_CAMERAS
+from robot_ui.ros_bridge import ARM_AXES, ARM_JOINTS, STREAM_CAMERAS
 
 # 900 px is what inference_node centre-crops to; drawn on the Basler view
 # so what the operator frames is what the model sees.
@@ -196,6 +196,7 @@ class UiController:
         self._frames = {}           # cam -> newest full-res frame
         self._last_capture = None
         self._arm_pose = [0.0] * 6
+        self._arm_joints = [0.0] * 6
         self._busy_calls = 0
         self._preview_calls = 0
         self._preview_hz = 5.0
@@ -320,6 +321,9 @@ class UiController:
         if state.get('pose_valid'):
             with self._lock:
                 self._arm_pose = list(state['tcp_pose'])
+                # Same poll cycle, same validity flag (ArmState.msg).
+                if len(state.get('joints') or ()) == 6:
+                    self._arm_joints = list(state['joints'])
         self.sink.state('state', 'arm_state', state)
 
     def _on_lamp_state(self, on):
@@ -792,9 +796,50 @@ class UiController:
         with self._lock:
             return {'ok': True, 'pose': list(self._arm_pose)}
 
+    # Joint control (2026-09-21): the joint-space twins of jog / move_cart.
+    # Same conventions — one press = one bounded step, blank target field =
+    # keep the live angle, refused by arm_node while a scan holds the arm.
+    def api_arm_jog_joint(self, joint, delta, vel=20.0):
+        if joint not in ARM_JOINTS:
+            return {'ok': False, 'message': f'unknown joint {joint}'}
+        delta = float(delta)
+        res = self._run(self.bridge.arm_jog_joint, joint, delta, float(vel),
+                        label=f'jog {joint} {delta:+g} deg').result()
+        return self._result(res)
+
+    def api_arm_move_joint(self, fields, vel=20.0):
+        """fields: six entries [j1..j6] deg, each a number or null/'' = keep
+        the live angle of that joint."""
+        if not isinstance(fields, (list, tuple)) or len(fields) != 6:
+            return {'ok': False, 'message': 'need 6 joint fields'}
+        with self._lock:
+            live = list(self._arm_joints)
+        joints = []
+        for i, name in enumerate(ARM_JOINTS):
+            v = fields[i]
+            if v is None or (isinstance(v, str) and not v.strip()):
+                joints.append(live[i])
+                continue
+            try:
+                joints.append(float(v))
+            except (TypeError, ValueError):
+                return {'ok': False,
+                        'message': f'{name} is not a number: "{v}"'}
+        res = self._run(self.bridge.arm_move_joint, joints, float(vel),
+                        label='move_joint').result()
+        return self._result(res)
+
+    def api_arm_joints(self):
+        with self._lock:
+            return {'ok': True, 'joints': list(self._arm_joints)}
+
     def api_arm_home(self):
         return self._result(self._run(self.bridge.arm_home,
                                       label='arm home').result())
+
+    def api_arm_reset_error(self):
+        return self._result(self._run(self.bridge.arm_reset_error,
+                                      label='arm reset error').result())
 
     def api_arm_cancel(self):
         self.bridge.arm_cancel()

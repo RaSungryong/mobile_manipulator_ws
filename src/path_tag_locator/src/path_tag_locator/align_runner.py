@@ -90,9 +90,12 @@ def approach_pose(tcp_client, target_tcp_mm_deg, align_cfg, what="initial"):
                       _fmt_pose(step_pose))
         # Big repositioning move: joint-interpolated. A straight-line MoveL
         # here crawled (22-34 s, two 60 s timeouts) on 2026-09-02.
+        # The seed is an ABSOLUTE pose (the plan's design view TCP), so the
+        # joint zero offsets are applied on the command side; the align's
+        # correction steps below are "reading + camera delta" and are not.
         tcp_client.move_j_to_pose(step_pose,
                                   settle_s=align_cfg.move_settle_s,
-                                  linear=False)
+                                  linear=False, physical=True)
         if not step.clamped:
             return k, True
     rospy.logwarn(

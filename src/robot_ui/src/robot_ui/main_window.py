@@ -41,7 +41,7 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
 from robot_ui import paths
 from robot_ui.image_view import ImageView
 from robot_ui.plugin_runner import PluginRunner
-from robot_ui.ros_bridge import ARM_AXES, STREAM_CAMERAS
+from robot_ui.ros_bridge import ARM_AXES, ARM_JOINTS, STREAM_CAMERAS
 
 
 class _WorkerSignals(QObject):
@@ -570,6 +570,60 @@ class MainWindow(QMainWindow):
         jog_layout.addLayout(grid)
         layout.addWidget(jog_box)
 
+        # ---- Joints (2026-09-21) ----
+        # Live J1..J6 from /arm/state (same poll cycle and validity flag as
+        # the pose), a per-joint ± jog with its own step in degrees, and an
+        # absolute joint target (blank = keep the live angle) sent as ONE
+        # MoveJ. Speed shares the Cartesian jog's spinbox.
+        joint_box = QGroupBox('Joints  (J1..J6, deg — MoveJ, no IK)')
+        joint_layout = QVBoxLayout(joint_box)
+        jgrid = QGridLayout()
+        self.lbl_joint = {}
+        self.edit_joint_target = {}
+        for i, name in enumerate(ARM_JOINTS):
+            jgrid.addWidget(QLabel(name.upper()), 0, i, Qt.AlignCenter)
+            value = QLabel('—')
+            value.setFont(QFont('monospace', 12))
+            value.setAlignment(Qt.AlignCenter)
+            value.setStyleSheet('border:1px solid #555; padding:4px;')
+            jgrid.addWidget(value, 1, i)
+            self.lbl_joint[name] = value
+            plus = QPushButton('+')
+            minus = QPushButton('−')
+            plus.clicked.connect(lambda _, j=name: self._on_jog_joint(j, +1))
+            minus.clicked.connect(lambda _, j=name: self._on_jog_joint(j, -1))
+            jgrid.addWidget(plus, 2, i)
+            jgrid.addWidget(minus, 3, i)
+            field = QLineEdit()
+            field.setPlaceholderText('—')
+            jgrid.addWidget(field, 4, i)
+            self.edit_joint_target[name] = field
+        joint_layout.addLayout(jgrid)
+        jrow = QHBoxLayout()
+        jrow.addWidget(QLabel('jog step [deg]'))
+        self.spin_joint_step = QDoubleSpinBox()
+        self.spin_joint_step.setRange(0.1, 50.0)
+        self.spin_joint_step.setValue(1.0)
+        self.spin_joint_step.setDecimals(2)
+        self.spin_joint_step.setToolTip(
+            'One press moves ONE joint by this many degrees (bounded by '
+            'arm_node ~jog_max_step). Speed = the jog speed box above.')
+        jrow.addWidget(self.spin_joint_step)
+        btn_jfill = QPushButton('Fill from current')
+        btn_jfill.clicked.connect(self._on_fill_joint_target)
+        jrow.addWidget(btn_jfill)
+        btn_jmove = QPushButton('MOVE J')
+        btn_jmove.setToolTip(
+            'MoveJ to the six target angles (blank = keep the live angle). '
+            'No reach or collision check — the same bare MoveJ a joint task '
+            'uses per row.')
+        btn_jmove.clicked.connect(self._on_move_joint)
+        jrow.addWidget(btn_jmove)
+        jrow.addStretch(1)
+        joint_layout.addLayout(jrow)
+        layout.addWidget(joint_box)
+        self._arm_joints = [0.0] * 6
+
         # ---- Distance-sensor assist (2026-09-15) ----
         # The Keyence DL-EN1 on the tool reads 0 at its 10 mm zero, negative
         # when too far, positive when too close; arm_node projects the oblique
@@ -636,9 +690,17 @@ class MainWindow(QMainWindow):
             'origin homing — that is a different device (see the Task tab).')
         btn_home.clicked.connect(
             lambda: self._run(self.bridge.arm_home, label='arm home'))
+        btn_reset = QPushButton('Reset arm error')
+        btn_reset.setToolTip(
+            'Clear the controller error after a joint-limit / collision stop '
+            '(ResetAllError, no motion). Then jog the joint back inward and '
+            'press Arm home pose.')
+        btn_reset.clicked.connect(
+            lambda: self._run(self.bridge.arm_reset_error,
+                              label='arm reset error'))
         btn_cancel = QPushButton('Cancel arm motion')
         btn_cancel.clicked.connect(lambda: self.bridge.arm_cancel())
-        for b in (btn_fill, btn_move, btn_home, btn_cancel):
+        for b in (btn_fill, btn_move, btn_home, btn_reset, btn_cancel):
             btn_row.addWidget(b)
         move_layout.addLayout(btn_row)
         layout.addWidget(move_box)
@@ -1594,11 +1656,17 @@ class MainWindow(QMainWindow):
         self._refresh_calib_labels()
 
     def _on_arm_state(self, state):
+        joints = list(state.get('joints') or ())
+        joints_ok = state['pose_valid'] and len(joints) == 6
         if state['pose_valid']:
             self._arm_pose = state['tcp_pose']
+        if joints_ok:
+            self._arm_joints = joints
         for i, axis in enumerate(ARM_AXES):
             text = f'{state["tcp_pose"][i]:.2f}' if state['pose_valid'] else '—'
             self.lbl_pose[axis].setText(text)
+        for i, name in enumerate(ARM_JOINTS):
+            self.lbl_joint[name].setText(f'{joints[i]:.2f}' if joints_ok else '—')
         flag = 'BUSY' if state['busy'] else state['state'].upper()
         self.lbl_arm.setText(f'ARM {flag}')
         self._tint(self.lbl_arm, '#553311' if state['busy'] else '#1b3a1b')
@@ -1810,6 +1878,10 @@ class MainWindow(QMainWindow):
             text, colour = 'BASE E-LATCHED', '#552222'
         elif busy:
             text, colour = f'BASE {busy}', '#553311'
+        elif state.get('front_cam_ok') is False:
+            # mobile_node refuses every tag-driven command while front_cam's
+            # detections are absent or stale (2026-09-22); manual moves work.
+            text, colour = 'BASE NO CAM', '#552222'
         elif state.get('stop_requested'):
             text, colour = 'BASE STOPPED', '#553311'
         else:
@@ -1819,8 +1891,11 @@ class MainWindow(QMainWindow):
         tags = state.get('visible_tags') or []
         last = state.get('last_known_tag')
         res = state.get('result') or {}
+        cam = (f' | {state.get("front_cam_reason")}'
+               if state.get('front_cam_ok') is False else '')
         self.lbl_mob_status.setText(
             f'base: {busy or "idle"} | visible tags {tags} | last tag {last}'
+            + cam
             + (f' | last result: {res.get("message")}' if res else ''))
 
     def _on_battery(self, state):
@@ -1977,6 +2052,31 @@ class MainWindow(QMainWindow):
                   label=f'base pivot {angle:+.1f} deg',
                   on_done=lambda _r: self._set_mobile_inflight(False),
                   on_error=lambda _m: self._set_mobile_inflight(False))
+
+    def _on_jog_joint(self, joint, sign):
+        step = self.spin_joint_step.value() * sign
+        self._run(self.bridge.arm_jog_joint, joint, step, self.spin_vel.value(),
+                  label=f'jog {joint} {step:+g} deg')
+
+    def _on_fill_joint_target(self):
+        for i, name in enumerate(ARM_JOINTS):
+            self.edit_joint_target[name].setText(f'{self._arm_joints[i]:.2f}')
+
+    def _on_move_joint(self):
+        joints = []
+        for i, name in enumerate(ARM_JOINTS):
+            text = self.edit_joint_target[name].text().strip()
+            if not text:
+                joints.append(self._arm_joints[i])   # blank = keep this joint
+                continue
+            try:
+                joints.append(float(text))
+            except ValueError:
+                QMessageBox.warning(self, 'Bad target',
+                                    f'{name} is not a number: "{text}"')
+                return
+        self._run(self.bridge.arm_move_joint, joints, self.spin_vel.value(),
+                  label='move_joint')
 
     def _on_fill_target(self):
         for i, axis in enumerate(ARM_AXES):

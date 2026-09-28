@@ -72,12 +72,13 @@ PyQt 창과 같은 배치다.
 
 | 영역 | 내용 |
 |---|---|
+| 탭 바 오른쪽 **ⓘ hints** | 각 그룹의 설명문(회색 문단)을 켜고 끔. 기본은 꺼짐(2026-09-21 정리), 브라우저별로 기억. 버튼의 툴팁(마우스 올리기)은 항상 그대로 |
 | 상단 System 바 | E-STOP / BAT / CHARGE / ARM / LIFT / BASE / TASK / SCAN / CAM 칩, 접속 상태, **STOP ALL (soft)** |
 | 왼쪽 카메라 | 큰 화면 1개 + 아래 썸네일 3개. 썸네일 **클릭** → 큰 화면으로 교체, **더블클릭** → 전체 화면(다시 더블클릭으로 복귀). "Last capture" 탭에 마지막 촬영 + Ra |
 | 태그 카메라 칸 | `on`(카메라+검출기 켜기/끄기), `tags`(오버레이 ↔ 원본), 현재 검출된 태그 ID |
 | Basler 칸 | 드래그로 ROI, 우클릭으로 해제. 초록 사각형 = 추론이 잘라 쓰는 900 px 중앙 영역 |
 | Collect | Live preview, VISION lamp 홀드, 촬영(저장 폴더·접두어·장수·램프·저장·Ra 예측·ROI 사용), **CAPTURE** |
-| Arm | 현재 TCP 자세, 조그(축별 ±, step/speed), Keyence 거리 보조(실시간 standoff, Auto standoff), 절대 이동(빈 칸 = 현재값 유지), Arm home pose, Cancel |
+| Arm | 현재 TCP 자세 + 축별 ± 조그 + 절대 목표를 한 표로(live / jog + / jog − / target 행, step/speed), **Joints (2026-09-21): 현재 관절각 J1..J6, 관절별 ± 조그(deg step), MOVE J 절대 관절 이동(빈 칸 = 현재값 유지, MoveJ 한 번, IK·도달·충돌 검사 없음)**, Keyence 거리 보조(실시간 standoff, Auto standoff), Arm home pose / Cancel arm motion(탭 상단) |
 | Task | `/task_list`의 태스크 선택 + 상세, Send TASK, Reload tasks, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지) |
 | Mobile | 거리 전진/후진, 각도 회전(속도 지정), Stop base, Clear stop latch, 베이스 상태 |
 | Calibration | 맵 캘리브레이션 세션(플레이트/야우 스윕 선택, dry run, START/Cancel, 진행 카운트), 핸드-아이(auto-sample, capture, compute, load, reset, status), 단일 태그 locate |

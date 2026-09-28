@@ -34,7 +34,7 @@ sudo systemctl restart mobile-manipulator     # 재시작 (팔·센서가 늦게
 journalctl -u mobile-manipulator -f           # 노드 출력 (output=screen), 실시간
 ls log/ros/                                   # roslaunch·노드 로그 (ROS_LOG_DIR, 기존과 동일)
 sudo systemctl disable mobile-manipulator     # 자동 시작만 끄기 (설치는 유지)
-sudo src/apriltag_nav/tools/systemd/install_service.sh --uninstall
+sudo src/apriltag_nav/tools/systemd/install_service.sh --uninstall    # 아예 삭제.(재부팅 해도 안켜짐)
 ```
 
 | | |

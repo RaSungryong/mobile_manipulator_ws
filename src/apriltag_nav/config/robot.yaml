@@ -359,6 +359,20 @@ robot:
   # 0.01 m/s stop speed the shortfall was 0.3 mm; at 0.033 m/s steering
   # 1 mm. Records carry tag_age_raw_s alongside the capped tag_age_s.
   camera_latency_max_s: 0.5
+  # front_cam liveness gate (2026-09-22, user rule: if the front camera is
+  # not working, refuse EVERY command that drives by tag). robot_camera_node
+  # publishes a /front_cam/tag_detections array for every frame, empty or
+  # not, so "working" = a message newer than this many seconds. Older, or
+  # none since start (node down, camera off via set_enabled, stalled
+  # stream): /mobile/goto_tag is refused with "front_cam not working: ..."
+  # (every TASK / GOTO / CHARGE hop goes through it), a route in progress
+  # stops before its next hop, and the control loops see NO tags instead
+  # of the last frame frozen in place. 1.0 s = 30 missed frames at the
+  # measured 30 Hz — a hiccup does not trip it, a dead camera does within
+  # a second. The odom-only manual moves (robot_ui Mobile tab) are not
+  # tag driving and stay available. <= 0 disables the gate (never on the
+  # robot; for offline plants without a camera feed).
+  front_cam_alive_timeout_s: 1.0
   pp_gain_forward: 1.0
   pp_gain_backward: 0.8
 
@@ -648,6 +662,21 @@ robot:
   # ~9 mm. Tags without `yaw` (dock, pivots, zone A, plates D/E) are
   # unchanged. false restores the zone-heading-only theta.
   robot_pose_use_tag_yaw: true
+  # 2026-09-28 (night): project the camera -> base-centre lever
+  # (camera_offset) and the tag's fore / lateral offsets along the BODY
+  # HEADING (zone + align residual + laying angle), not the bare zone axis.
+  # The align squares the body to the tag edges, so a tag laid delta off its
+  # lane leaves the body delta off the zone heading and the base centre
+  # 0.55 * sin(delta) beside the zone-axis estimate — 9.6 mm per degree.
+  # Measured on the 22-stop tip tour (tip error vs body yaw r = 0.87; tag 116
+  # at delta -0.77 deg was +9.7 mm). false = the old zone-axis projection.
+  robot_pose_offset_along_heading: true
+  # The align's settled measurement (and the pose publish_robot_pose sends)
+  # is the median of this many frames at rest, not one frame; the aligned
+  # view is used by publish_robot_pose while younger than
+  # align_view_max_age_s (else the newest frame, as before).
+  align_record_frames: 3
+  align_view_max_age_s: 10.0
   # Live /robot_pose stream (2026-09-28, user: "실시간으로 로봇 현재 위치
   # 계속 보내고 싶어"). Before this /robot_pose went out ONCE per tag
   # arrival (flag True — the at-rest pose the arm's pose-mode IK uses;
@@ -999,15 +1028,29 @@ robot_camera:
   # captured before this are re-solved on their raw corners with
   # --hand-intrinsics config. Remove the entry (or enabled: false) to go
   # back to the driver's CameraInfo. K row-major 3x3, D plumb_bob.
+  
+  #-------------------------------------------------------------
+  # 카메라 내부 파라미터를 드라이버 자체 디폴트값이 아닌 직접 측정 후 덮어쓰기 하였음.
+  # robot_camera_node가 hand_cam 프레임을 이 값으로 펴서(리매핑) 검출
+
   intrinsics_override:
     hand_cam:
       enabled: true
       image_size: [640, 480]
-      K: [601.72, 0.0, 322.02,
-          0.0, 603.87, 238.46,
+
+      K: [601.87, 0.0, 321.35,
+          0.0, 601.93, 238.51,
           0.0, 0.0, 1.0]
-      D: [0.1598, -0.3222, 0.0, 0.0, 0.0]
-      note: "calibrateCamera over log/chain_calib/20260921 corners (60 views, rms 0.27 px); fx/fy sd 1.1, cx/cy sd 0.35, k1 +-0.01 across subsets"
+      # 여기서 K는 카메라의 초점거리와 중심점을 묶은 3*3 숫자표인데 실제로 의미 있는 숫자는 4개 (fx, fy, cx, cy)
+        # fx, fy: 초점거리(픽셀단위)."1 m 앞의 1 m 물체가 사진에서 몇 픽셀로 보이나" 드라이버가 609.3 / 608.6이라 했는데 실제로는 601.9 / 601.9
+        #   (2026-09-22 체커보드 캘리브레이션; 09-21 A0 시트 값 601.7 / 603.9 와 fx 는 0.15 px 차이, fy 는 A0 인쇄물의 y 스케일 오차가 섞여 있던 것)
+        # cx, cy: 렌즈의 정중앙이 사진의 어느 픽셀에 오는지. 640×480 사진이면 대략 (320, 240) 근처임. 실제로는 321.4 / 238.5
+
+      D: [0.1771, -0.3483, 0.0, 0.0, 0.0]
+        # 여기서 D는 렌즈 왜곡 계수 (k1 k2; 화면 구석 r=320 px 에서 7.1 px 의 왜곡)
+
+      note: "calibrateCamera k1k2 over log/chain_calib/hand_cam_intr_20260922 (11x8 checkerboard, 14.99 mm measured, 67 views 0.19-0.56 m, tilts to 52 deg, 10 corner views; rms 0.41 px; fx +-0.56 k1 +-0.0026 formal; odd/even halves fx 0.9 px k1 0.0006; 3-fold hold-out 0.412 px vs 0.441 for the 09-21 value; near/far halves differ 4.4 px because each half alone is fx-k1 degenerate)"
+  #------------------------------------------------------------
 
   # dt_apriltags quad_decimate, PER CAMERA. The library default is 2.0
   # (detect on a half-resolution image, then refine). Fine for front_cam —

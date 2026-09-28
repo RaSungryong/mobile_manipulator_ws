@@ -15,7 +15,18 @@
   방향인데, 그 세션의 뷰(정면, 한 거리)로는 **관측 불가능**한 축이다 — fit
   artefact. hand_cam 내부 파라미터(K, D)가 틀렸던 것은 찾아서 적용했고, 그래도
   이 결론은 그대로다.
-- **다음 할 일은 hand-eye 재촬영이 아니라 관절 offset 적용**이다 (§6).
+- ~~**다음 할 일은 hand-eye 재촬영이 아니라 관절 offset 적용**이다 (§6).~~
+  **2026-09-22 오후 갱신: 관절 offset 은 피팅했고 적용하지 않는다** (§6 참조).
+  offset 이 렌즈 위치를 바꾸는 양은 시트 전체에서 ±1.5 mm 뿐이고, `sheet_path`
+  의 ±13 mm 는 hand_cam 2–3 태그 PnP 의 측정 오차가 대부분이다. 다음은 측정을
+  고치는 것 (≥ 4 태그 뷰, hand_cam 내부 파라미터, 인쇄물 y 스케일 실측).
+- **2026-09-22 저녁 갱신: 사용자 결정으로 관절 offset 을 APPLIED** ("없는 것보다는
+  낫잖아") — 체커보드 K 로 hand-eye 재해석(5.4 mm) → hand-eye 고정 offset 피팅(J2
+  −0.34 / J3 −0.53 / J4 −0.05 / J5 −0.13 / J6 −0.50°) → 팔 세션으로 T_ab2mb 재피팅,
+  세 파일 + `config/tf/arm_joint_offsets.yaml` 이 한 세트. 측정 체인(locator)에만
+  들어가고 명령 쪽은 그대로. 팔 세션 체인 홀드아웃 12.7 → 7.7 mm. 자세한 것은
+  CLAUDE.md Work Log 2026-09-22 "C and E re-solved". 아래 §6 의 "적용하지 않음" 은
+  그 시점의 결정이다.
 
 ## 1. 지금 적용되어 있는 값 (`src/apriltag_nav/config/tf/tf_chain.yaml`)
 
@@ -101,11 +112,11 @@ T_ab2mb 가 서로 일관" 의 기준값 — 20:09 값을 꽂으면 17.8 mm 가 
 | 무엇 | 어디 |
 |---|---|
 | 적용 변환 + 주석(설계값, 측정법) | `src/apriltag_nav/config/tf/tf_chain.yaml`, `*.npz` |
-| 팔 세션 (65뷰, joints 포함) | `log/chain_calib/20260921_arm/` — `samples.npz`, `corners.json`, `meta.yaml`, `arm_offsets_handeye_free.txt` (09-21 밤, **옛 K**), `T_hc2ee_fit_20260921_arm.npz` (후보, 미적용), `arm_offsets.npz`, `corrections.npz` |
-| 체인 세션 (63뷰) | `log/chain_calib/20260921/` — 적용된 T_ab2mb 의 근거 |
+| 팔 세션 (65뷰, joints 포함) | `log/chain_calib/20260921_arm/` — `samples.npz`, `corners.json`, `meta.yaml`, `arm_offsets.npz` (적용값), `corrections.npz`, `T_ab2mb_20260922_offsets.npz` (적용값). hand-eye-free 후보 npz 와 그 보고서 txt 들은 2026-09-22 저녁 삭제 (채택 안 함; 수치는 이 문서와 Work Log 에) |
+| 체인 세션 (63뷰) | ~~`log/chain_calib/20260921/`~~ **2026-09-22 저녁 삭제** (관절각 없음 → 오프셋 적용 불가; git 에 있음). 적용된 T_ab2mb 의 근거는 이제 팔 세션 |
 | Basler tip 세션 | `log/chain_calib/basler_tip_20260921/` |
-| hand-eye 스윕 원본 | `log/path_tag_locator/handeye_calib/run_20260918_144420` (35샘플 refine 결과 `result_sweep123_refined.npz` = 적용값), `run_20260918_152111`, `run_20260921_195136` (20:09, untracked) |
-| 기록 문서 | `src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`, `src/chain_calib/README.md` |
+| hand-eye 스윕 원본 | `log/path_tag_locator/handeye_calib/run_20260918_144420` (35샘플, 새 K 재해석 `result_sweep123_refined_K20260922.npz` = 적용값). `run_20260918_152111` (0 샘플), `run_20260921_195136` (20:09, 미적용), 옛 K 의 refine npz 두 개는 2026-09-22 저녁 삭제 |
+| 기록 문서 | `src/chain_calib/README.md`; `CHAIN_CALIB_2026-09-21_kr.md` 는 세션과 함께 삭제 (CLAUDE.md Work Log 2026-09-21 에 요지) |
 | 도구 | `src/chain_calib/scripts/{arm_offsets,chain_calib,verify_chain,sheet_path,basler_tip_calib}.py`, `path_tag_locator` 의 `handeye_calib_node` (Auto-sample / Compute) |
 
 ⚠️ **세션 `meta.yaml` / `session.json` 에는 캡처 당시의 절대 경로가 박혀 있고,
@@ -114,22 +125,49 @@ T_ab2mb 가 서로 일관" 의 기준값 — 20:09 값을 꽂으면 17.8 mm 가 
 위치(설정된 hand-eye, 패키지의 sheet/ 레이아웃)로 대체한다 (2026-09-22 수정:
 `chain_calib.py sheet_from_args`, `basler_tip_ros.py`). 이 경고는 정상이다.
 
-## 6. 다음 순서 (HANDOVER §2-0c "Revised order" 그대로, (d) 는 해소)
+## 6. 관절 offset 피팅 결과 (2026-09-22 오후) — 적용하지 않음
 
-1. **관절 offset 을 hand-eye 고정으로 피팅** — `arm_offsets.py … --hand-intrinsics
-   config` (hand-eye-free 없이). 09-21 late 값: J2..J5 로 시트 산포 5.7 → 2.7 mm.
-   near/far, spin 별 서브셋이 ~0.2° 안에서 일치할 때만 채택.
-2. **명령 쪽에 적용** — `arm_controller` 에서 `MoveJ(IK(target) − δq)` 또는 목표
-   Cartesian 을 미리 왜곡. 설정값 편집으로는 안 들어간다 (HANDOVER §2-0c 4).
-   `arm_node` 재시작.
-3. **검증** — `sheet_path.py` 를 두 spin(60°, 92°) 에서: 목표는 그리드 태그 위
-   렌즈 xy. 지금 ±15–20 mm → 관절 offset 후 몇 mm 가 목표.
-4. hand-eye 재촬영은 **스윕 한 번의 10 mm 재현성을 먼저 고친 뒤에만** 의미가
-   있다: 스윕당 range 0.30 + 0.55 m, 모든 위치에서 tilt ≥ 15°, spin 30–150°.
-   시트는 테이프로 평평하게 (`capture` 의 paper slope < 0.5°).
-5. 새 시트 세션을 찍는다면 hand_cam 은 이미 override 로 rectified 되어 나오므로
-   `--hand-intrinsics meta` (기본) 로 풀어야 한다 — `config` 는 D 를 두 번 적용하게
-   되어 거부된다.
+전체 보고서 ~~`log/chain_calib/20260921_arm/arm_offsets_20260922_handeye_fixed_newK.txt`~~ (2026-09-22 저녁 삭제; 아래 표가 요약)
+(hand-eye 고정, 새 K, v13 v11 v20 v45 제외, hold-out 매 4번째). 근거는 CLAUDE.md
+Work Log 2026-09-22 "Joint offsets fitted" 항목.
+
+| | rigid | offsets |
+|---|---|---|
+| 전체 61뷰 reproj rms | 7.63 px | 3.55 px |
+| hold-out | 7.90 px | 3.59 px |
+| J2 / J3 / J4 / J5 / J6 (jackknife sd) | — | −0.11 (0.54) / −0.66 (0.44) / −0.16 (0.35) / −0.15 (0.08) / −0.52 (0.09)° |
+| near (≤ 0.42 m, 15뷰) J2 / J3 | — | −3.48 / +1.13° |
+| far (46뷰) J2 / J3 | — | +0.53 / −1.07° |
+
+1. **서브셋이 ±2° 로 갈린다** (near/far, spin 30/90/150, tilt/flat 모두). 기하
+   자체는 식별 가능 (심은 offset 을 모든 서브셋에서 0.03° 로 복원, 한 서브셋의
+   offset 이 다른 서브셋 잔차를 7.6 → 4.3 px 로 줄임) — 값이 흔들리는 것은
+   모델 오차 위에서 J2/J3/시트자세가 서로 바꿔치기하기 때문. hand-eye xy, tz,
+   focal, k1, 태그별 시트 보정을 각각 풀어 봐도 (rms 2.6–3.1 px) 일치하지 않는다.
+2. **결정적 검증:** `sheet_path` 세 런의 각 점을 URDF IK 로 풀어 offset 이
+   예측하는 렌즈 오차를 계산 → 점별 변동 **1.2–1.6 mm rms** (측정은 12.7–13.2 mm,
+   상관 −0.35…+0.16). offset 은 로봇에서 본 패턴을 설명하지 못한다.
+3. **±15–20 mm 의 정체 = hand_cam PnP.** 같은 세션에서 모델 대비 PnP 렌즈 xy:
+   2태그 9.8 mm, 3태그 15.4, 4태그 8.3, 5태그 6.8, 6태그 9.4 (rigid); offset 후
+   7.2 / 13.8 / 5.5 / 3.9 / 1.8. 0.5 px 코너 노이즈 몬테카를로만으로 2태그 5.2 mm,
+   4–6태그 2.2–3.1 mm — 나머지는 3 px 계통 잔차가 2태그 평면 모호성으로 증폭된
+   것. `sheet_path` 17:00 런의 x 오차는 시트 열(x 850 / 1000)에 따라 ±8…19 mm 로
+   교대한다 — 인쇄물/측정 프레임 서명이지 관절이 아니다. **팔 + rigid 체인은 ≥ 4
+   태그 뷰에서 ~8 mm xy.**
+4. 남은 계통 잔차 (3.5 px vs 바닥 0.3): 반경 방향 −0.7 → −2.4 px (r 350) —
+   hand_cam K 가 가장자리에서 아직 ~0.7 % 틀림; 태그별 보정은 y 만 −0.7…−1 %
+   (309 에서 −5.8 mm; 자로 잰 0.35 % 와 다르다 — 300↔308 을 다시 재라).
+
+**다음 순서 (수정):**
+
+1. 측정을 먼저 고친다 — `sheet_path` / `verify_chain` 을 0.55 m (4–6 태그) 에서
+   돌리거나 ≥ 4 태그 뷰만 채점; hand_cam 내부 파라미터를 가장자리까지 덮는
+   0.25–0.6 m 세트로 다시; 인쇄물 y 스케일을 자로 실측; 시트를 테이프로 고정.
+2. 그 뒤에도 ≥ 4 태그 뷰에서 몇 mm 이상 자세 의존 오차가 남으면 그때 관절
+   offset (그때는 range 0.30 + 0.55 m, tilt ≥ 15°, spin 30–150° 로 다시 촬영).
+3. `MoveJ(IK − δq)` 명령측 변경은 만들지 않는다 (지금 값으로는 1.5 mm 효과).
+4. hand-eye 재촬영 조건은 그대로 (스윕 재현성 10 mm 를 먼저).
+5. 새 시트 세션은 `--hand-intrinsics meta` (기본) 로 (override 로 이미 rectified).
 
 ## 7. 명령 (새 경로, 그대로 실행 가능)
 
@@ -145,10 +183,10 @@ python3 src/chain_calib/scripts/arm_offsets.py log/chain_calib/20260921_arm \
   --sx 1.0 --sy 1.0 --tag-size 0.090 --hand-intrinsics config \
   --exclude v13 v11 v20 v45 --holdout-every 4 --hand-eye-free --quick
 
-# 체인 세션 재해석 (raw 6.62 mm 가 나와야 정상)
+# 체인 재해석은 이제 팔 세션으로 (63뷰 세션은 삭제됨). 오프셋은 --arm-offsets config 가 기본
 # ⚠️ --sx/--sy/--tag-size 는 전역 옵션: `solve` 앞에 써야 한다
 python3 src/chain_calib/scripts/chain_calib.py --sx 1.0 --sy 1.0 --tag-size 0.090 \
-  solve log/chain_calib/20260921 --hand-intrinsics config --holdout-every 4
+  solve log/chain_calib/20260921_arm --hand-intrinsics config --exclude v13 v11 v20 v45 --holdout-every 4
 
 # 적용 상태 확인
 python3 src/apriltag_nav/tools/tf_chain_tool.py check     # 12/12
@@ -166,8 +204,9 @@ python3 src/chain_calib/scripts/check_basler_tip.py       # 11
 ## 8. 로봇 / 환경 상태 (2026-09-22 10:30)
 
 - 워크스페이스 `~/mobile_manipulator_ws` (이름 변경, 전체 재빌드 완료).
-- 메인 스택은 새 경로에서 **수동 실행 중** (systemd 서비스 `mobile-manipulator` 는
-  만들어졌지만 아직 미설치 — `docs/STOP_LAUNCH_kr.md` §0.5). 캘리브레이션 launch
+- 메인 스택은 **systemd 서비스 `mobile-manipulator` 로 부팅 시 자동 실행** (10:37
+  부터, 9/9 노드; `docs/STOP_LAUNCH_kr.md` §0.5). 서비스 재기동/재부팅은 충전
+  릴레이를 떨어뜨리므로 (11:00 BMS −4.4 A, 방전 중) 필요하면 `CHARGE` 재발행. 캘리브레이션 launch
   (`path_tag_locator.launch`) 는 **떠 있지 않다** — hand-eye 노드를 쓰려면
   `use_handeye_calib:=true` 로 띄울 것.
 - 로봇: 도크 500, 충전 중 (BMS 15.7 A, 76 %).

@@ -150,9 +150,17 @@ class ArmInterface:
     # ------------------------------------------------------------------
     def move_j_to_pose(self, target_pose_mm_deg,
                        vel=None, acc=None, ovl=None,
-                       settle_s: float = 0.2, linear: bool = True):
+                       settle_s: float = 0.2, linear: bool = True,
+                       physical: bool = False):
         """Command an absolute Cartesian TCP move through arm_node and
         block until it completes.
+
+        ``physical=True`` (2026-09-28): the target is where the PHYSICAL
+        flange must land and arm_node applies the joint zero offsets on
+        the command side (apriltag_nav.joint_offset_cmd). Use it for
+        absolute targets (a sheet point, a plan seed, a world point);
+        leave it False for a target built as "current reading + delta"
+        (the align's correction steps) — there the offsets cancel.
 
         Same semantics as the old SDK path (IK + MoveJ to a mm/deg ZYX
         descriptor pose); ``ovl`` is accepted for signature compatibility
@@ -184,6 +192,7 @@ class ArmInterface:
             # moves; MoveL crawls (or times out) when the wrist has to
             # reorient along a straight path — measured 2026-09-02.
             'linear': bool(linear),
+            'physical': bool(physical),
         }
         rospy.loginfo('[ArmInterface] move_cart -> %s',
                       ['%.2f' % v for v in payload['pose']])

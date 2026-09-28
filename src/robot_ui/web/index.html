@@ -53,6 +53,8 @@
         <button class="tab" data-tab="mobile">Mobile</button>
         <button class="tab" data-tab="calib">Calibration</button>
         <button class="tab" data-tab="scripts">Scripts</button>
+        <span class="spacer"></span>
+        <button id="btn-hints" class="hints-toggle" title="Show / hide the explanatory notes in every group">ⓘ hints</button>
       </div>
 
       <div id="ctl-pages">
@@ -64,6 +66,7 @@
             <div class="row">
               <label><input type="checkbox" id="chk-preview"> Live preview</label>
               <label title="Hold the VISION lamp on while aiming (the preview is otherwise lamp-off). basler_camera_node drives the relay and turns it off again whenever the camera closes — idle timeout, preview off, STOP ALL."><input type="checkbox" id="chk-lamp"> VISION lamp</label>
+              <span class="spacer"></span>
               <label>rate <input type="number" id="num-preview-hz" min="0.2" max="5" step="0.2" value="5" title="Camera maximum is 5 fps (acA5472-5gm)."> Hz</label>
             </div>
           </div>
@@ -76,47 +79,65 @@
               <input type="text" id="txt-prefix" value="capture">
               <label>Frames per shot</label>
               <input type="number" id="num-samples" min="1" max="20" value="1">
-              <span></span><label title="Ra inference expects the lamp on. Turn it off only for diagnostics where ambient light is intended."><input type="checkbox" id="chk-led" checked> VISION lamp on during capture</label>
-              <span></span><label><input type="checkbox" id="chk-save" checked> Save frames to disk</label>
-              <span></span><label><input type="checkbox" id="chk-infer" checked> Predict Ra after capture</label>
-              <span></span><label title="Off by default: inference centre-crops 900x900 itself, and a hand-drawn ROI smaller than that gets zero-padded, which is not what the model was trained on."><input type="checkbox" id="chk-roi"> Send ROI crop to inference (else full frame)</label>
-              <span></span><button id="btn-capture" class="btn-capture">CAPTURE</button>
+              <label>Options</label>
+              <div class="checks">
+                <label title="Ra inference expects the lamp on. Turn it off only for diagnostics where ambient light is intended."><input type="checkbox" id="chk-led" checked> VISION lamp on during capture</label>
+                <label><input type="checkbox" id="chk-save" checked> Save frames to disk</label>
+                <label><input type="checkbox" id="chk-infer" checked> Predict Ra after capture</label>
+                <label title="Off by default: inference centre-crops 900x900 itself, and a hand-drawn ROI smaller than that gets zero-padded, which is not what the model was trained on."><input type="checkbox" id="chk-roi"> Send ROI crop to inference (else full frame)</label>
+              </div>
             </div>
+            <button id="btn-capture" class="btn-capture">CAPTURE</button>
           </div>
         </div>
 
         <!-- ---------- Arm ---------- -->
         <div class="page" data-page="arm" hidden>
-          <div class="group">
-            <div class="group-title">Current TCP pose  (tool = vision_tip)</div>
-            <div class="pose-grid" id="pose-grid"></div>
+          <div class="toolbar">
+            <button id="btn-arm-home" title="MoveJ to the stored home joint configuration. This is NOT lift origin homing — that is a different device (see the Task tab).">Arm home pose</button>
+            <button id="btn-arm-reset" title="Clear the controller error after a joint-limit / collision stop (ResetAllError, no motion). Then jog the joint back inward with the Joints group and press Arm home pose.">Reset arm error</button>
+            <span class="spacer"></span>
+            <button id="btn-arm-cancel" class="btn-warn">Cancel arm motion</button>
           </div>
           <div class="group">
-            <div class="group-title">Jog</div>
-            <p class="note">Each press is ONE move of the step size below — it is not continuous. Refused while the arm is scanning.</p>
-            <div class="row">
-              <label>step <input type="number" id="num-step" min="0.1" max="50" step="0.1" value="1"></label>
-              <label>speed <input type="number" id="num-vel" min="1" max="100" step="1" value="20"></label>
+            <div class="group-title">TCP pose &amp; Cartesian jog  (tool = vision_tip)</div>
+            <p class="note">One row per kind: the live pose, a ± jog per axis (each press is ONE move of the step, not continuous), and an absolute target — blank target = keep the live value on that axis. Refused while the arm is scanning.</p>
+            <div class="axis-grid">
+              <div class="contents" id="pose-grid"></div>
+              <div class="contents" id="jog-grid"></div>
+              <div class="contents" id="target-grid"></div>
             </div>
-            <div class="jog-grid" id="jog-grid"></div>
+            <div class="toolbar">
+              <label>step <input type="number" id="num-step" min="0.1" max="50" step="0.1" value="1" title="mm for x/y/z, deg for rx/ry/rz — bounded by arm_node ~jog_max_step"></label>
+              <label>speed <input type="number" id="num-vel" min="1" max="100" step="1" value="20" title="MoveL / MoveJ velocity percentage — shared with the joint block below"></label>
+              <span class="spacer"></span>
+              <button id="btn-fill">Fill from current</button>
+              <button id="btn-move" class="btn-primary" title="MoveL to the six target fields (blank = keep the live value)">MOVE</button>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Joints  (J1..J6 deg — MoveJ, no IK)</div>
+            <p class="note">Live joint angles from /arm/state. ± jogs ONE joint by the step below; MOVE J sends the six target angles as one MoveJ (blank = keep the live angle). No reach or collision check — the same bare MoveJ a joint task uses per row. Speed = the speed box above.</p>
+            <div class="axis-grid">
+              <div class="contents" id="joint-grid"></div>
+              <div class="contents" id="jog-joint-grid"></div>
+              <div class="contents" id="joint-target-grid"></div>
+            </div>
+            <div class="toolbar">
+              <label>step [deg] <input type="number" id="num-jstep" min="0.1" max="50" step="0.1" value="1" title="One press moves ONE joint by this many degrees (bounded by arm_node ~jog_max_step). Speed = the box in the block above."></label>
+              <span class="spacer"></span>
+              <button id="btn-joint-fill">Fill from current</button>
+              <button id="btn-joint-move" class="btn-primary" title="MoveJ to the six target angles (blank = keep the live angle). No reach or collision check.">MOVE J</button>
+            </div>
           </div>
           <div class="group">
             <div class="group-title">Distance sensor assist  (Keyence standoff)</div>
             <div class="readout" id="lbl-standoff">standoff: —  (no /arm/standoff_state yet)</div>
-            <div class="row">
+            <div class="toolbar">
               <label>target [mm] <input type="number" id="num-standoff" min="1" max="30" step="0.5" value="16.5" title="Perpendicular standoff (tool-case bottom to surface) the loop drives to. 16.5 mm is the sensor zero (2026-09-18, shortened case) and where the Basler focus / Ra model were set. A value typed here applies to this button only — TASK scans keep robot.yaml's target."></label>
-              <button id="btn-standoff" title="Move the tool along its own Z axis until the Keyence reads the target standoff. Needs the surface inside the sensor range. Refused while the arm is scanning.">Auto standoff</button>
+              <span class="spacer"></span>
+              <button id="btn-standoff" class="btn-primary" title="Move the tool along its own Z axis until the Keyence reads the target standoff. Needs the surface inside the sensor range. Refused while the arm is scanning.">Auto standoff</button>
               <button id="btn-standoff-cancel">Cancel</button>
-            </div>
-          </div>
-          <div class="group">
-            <div class="group-title">Absolute move</div>
-            <div class="target-grid" id="target-grid"></div>
-            <div class="row">
-              <button id="btn-fill">Fill from current</button>
-              <button id="btn-move">MOVE</button>
-              <button id="btn-arm-home" title="MoveJ to the stored home joint configuration. This is NOT lift origin homing — that is a different device (see the Task tab).">Arm home pose</button>
-              <button id="btn-arm-cancel">Cancel arm motion</button>
             </div>
           </div>
         </div>
@@ -126,37 +147,45 @@
           <div class="group">
             <div class="group-title">Task command</div>
             <p class="note">Tasks are the path-data files in task/csv, as task_executor reports them on /task_list: assigned_workpoints_* (end-effector poses) → scan_pose_*, rrt_final_path_* (joint angles) → scan_joint_*. A task never returns to the start tag on its own — "scan then come back" is two commands. Send TASK go_home separately.</p>
-            <div class="row">
-              <div class="combo grow" id="task-combo">
-                <input type="text" id="txt-task" class="grow" autocomplete="off" placeholder="waiting for /task_list from task_executor …">
-                <div class="combo-list" id="task-dropdown" hidden></div>
+            <div class="form">
+              <label>TASK</label>
+              <div class="row">
+                <div class="combo grow" id="task-combo">
+                  <input type="text" id="txt-task" class="grow" autocomplete="off" placeholder="waiting for /task_list from task_executor …">
+                  <div class="combo-list" id="task-dropdown" hidden></div>
+                </div>
+                <button id="btn-task" class="btn-primary">Send TASK</button>
+                <button id="btn-reload-tasks" title="RELOAD_TASKS: task_executor re-scans task/csv (refused while a task is running).">Reload</button>
               </div>
-              <button id="btn-task">Send TASK</button>
-              <button id="btn-reload-tasks" title="RELOAD_TASKS: task_executor re-scans task/csv (refused while a task is running).">Reload tasks</button>
-            </div>
-            <div class="detail" id="lbl-task-detail"></div>
-            <div class="row">
-              <label>GOTO tag <input type="number" id="num-goto" min="0" max="999" value="105"></label>
-              <button id="btn-goto">Send GOTO</button>
-            </div>
-            <div class="row">
-              <button id="btn-charge" title="CHARGE: lift origin home → drive to the dock tag → /crevis/charging true → wait for the BMS to report current. Preempts a running task.">Dock &amp; charge (tag 500)</button>
-              <button id="btn-undock" title="UNDOCK: /crevis/charging false → drive forward off the dock. No automatic return until the next task.">Undock / stop charging</button>
-              <span class="detail" id="lbl-charge-detail"></span>
-            </div>
-            <div class="row">
-              <input type="text" id="txt-raw" class="grow" placeholder="raw /task_command line, e.g. STATE">
-              <button id="btn-raw">Send</button>
+              <span></span>
+              <div class="detail" id="lbl-task-detail"></div>
+              <label>GOTO tag</label>
+              <div class="row">
+                <input type="number" id="num-goto" min="0" max="999" value="105">
+                <button id="btn-goto" class="btn-primary">Send GOTO</button>
+              </div>
+              <label>Charging</label>
+              <div class="row">
+                <button id="btn-charge" title="CHARGE: lift origin home → drive to the dock tag → /crevis/charging true → wait for the BMS to report current. Preempts a running task.">Dock &amp; charge (tag 500)</button>
+                <button id="btn-undock" title="UNDOCK: /crevis/charging false → drive forward off the dock. No automatic return until the next task.">Undock / stop charging</button>
+                <span class="detail" id="lbl-charge-detail"></span>
+              </div>
+              <label>Raw</label>
+              <div class="row">
+                <input type="text" id="txt-raw" class="grow" placeholder="raw /task_command line, e.g. STATE">
+                <button id="btn-raw">Send</button>
+              </div>
             </div>
           </div>
           <div class="group">
             <div class="group-title">Lift</div>
             <p class="note">Reach a scan height by lift origin homing and then climbing — the drive has backlash, so a height reached by descending is not the same physical position. Absolute moves are refused before origin homing.</p>
-            <div class="row">
-              <input type="number" id="num-lift" min="0" max="343" step="1" value="150"> <span>mm</span>
-              <button id="btn-lift-go">Go</button>
+            <div class="toolbar">
+              <label>height <input type="number" id="num-lift" min="0" max="343" step="1" value="150"> mm</label>
+              <button id="btn-lift-go" class="btn-primary">Go</button>
               <button id="btn-lift-home">Lift origin homing</button>
-              <button id="btn-lift-stop">Stop lift</button>
+              <span class="spacer"></span>
+              <button id="btn-lift-stop" class="btn-warn">Stop lift</button>
             </div>
           </div>
         </div>
@@ -166,23 +195,34 @@
           <div class="group">
             <div class="group-title">Manual move  (odometry-closed, no tag)</div>
             <p class="note">Drives the base a fixed distance or pivots a fixed angle through mobile_node (/mobile/move_cmd) — trapezoid profile, closed on /odom, aborts if odom stalls. Refused while a GOTO/TASK or a calibration session is driving. After STOP ALL the base is emergency-latched: press "Clear stop latch" before the next move.</p>
-            <div class="row">
-              <label>Distance <input type="number" id="num-mob-dist" min="0.005" max="5" step="0.05" value="0.300"> m</label>
-              <label>speed <input type="number" id="num-mob-v" min="0.005" max="0.5" step="0.005" value="0.05" title="Capped by robot.yaml max_linear_speed"> m/s</label>
-              <button id="btn-mob-fwd" class="mob">▲ Forward</button>
-              <button id="btn-mob-rev" class="mob">▼ Reverse</button>
+            <div class="form">
+              <label>Distance</label>
+              <div class="row">
+                <input type="number" id="num-mob-dist" min="0.005" max="5" step="0.05" value="0.300"> <span>m</span>
+                <label>speed <input type="number" id="num-mob-v" min="0.005" max="0.5" step="0.005" value="0.05" title="Capped by robot.yaml max_linear_speed"> m/s</label>
+              </div>
+              <span></span>
+              <div class="btn-pair">
+                <button id="btn-mob-fwd" class="mob">▲ Forward</button>
+                <button id="btn-mob-rev" class="mob">▼ Reverse</button>
+              </div>
+              <label>Angle</label>
+              <div class="row">
+                <input type="number" id="num-mob-angle" min="0.5" max="360" step="5" value="90"> <span>°</span>
+                <label>speed <input type="number" id="num-mob-w" min="0.01" max="1" step="0.01" value="0.20" title="Capped by robot.yaml max_angular_speed"> rad/s</label>
+              </div>
+              <span></span>
+              <div class="btn-pair">
+                <button id="btn-mob-ccw" class="mob">↺ Turn left (CCW)</button>
+                <button id="btn-mob-cw" class="mob">↻ Turn right (CW)</button>
+              </div>
             </div>
-            <div class="row">
-              <label>Angle <input type="number" id="num-mob-angle" min="0.5" max="360" step="5" value="90"> °</label>
-              <label>speed <input type="number" id="num-mob-w" min="0.01" max="1" step="0.01" value="0.20" title="Capped by robot.yaml max_angular_speed"> rad/s</label>
-              <button id="btn-mob-ccw" class="mob">↺ Turn left (CCW)</button>
-              <button id="btn-mob-cw" class="mob">↻ Turn right (CW)</button>
-            </div>
-            <div class="row">
+            <div class="toolbar">
               <button id="btn-mob-stop" class="btn-warn">Stop base</button>
               <button id="btn-mob-clear">Clear stop latch</button>
+              <span class="spacer"></span>
+              <span class="detail" id="lbl-mob-status">base: —</span>
             </div>
-            <div class="detail" id="lbl-mob-status">base: —</div>
           </div>
         </div>
 
@@ -192,72 +232,79 @@
             <div class="group-title">Map calibration session</div>
             <p class="note">Session drives the base via /mobile/goto_tag — send no TASK/GOTO while it runs. Always dry-run a new plan first.</p>
             <div class="row">
-              <label>Plan:</label>
+              <label>Plan</label>
               <select id="sel-calib-plan" class="grow"></select>
               <label><input type="checkbox" id="chk-calib-dry" checked> dry run</label>
             </div>
             <div class="warn" id="lbl-calib-plan-note"></div>
-            <div id="lbl-calib-nodes">nodes: checking…</div>
-            <div class="row">
-              <button id="btn-calib-start">START SESSION</button>
+            <div class="toolbar">
+              <button id="btn-calib-start" class="btn-primary">START SESSION</button>
               <button id="btn-calib-cancel">Cancel (after current tag)</button>
+              <span class="spacer"></span>
+              <span class="detail" id="lbl-calib-nodes">nodes: checking…</span>
             </div>
-            <div class="bold" id="lbl-calib-state">idle</div>
-            <div id="lbl-calib-counts">ok 0   fail 0   degraded 0</div>
-            <div class="detail" id="lbl-calib-last">—</div>
+            <div class="status">
+              <div class="bold" id="lbl-calib-state">idle</div>
+              <div id="lbl-calib-counts">ok 0   fail 0   degraded 0</div>
+              <div class="detail" id="lbl-calib-last">—</div>
+            </div>
           </div>
           <div class="group">
             <div class="group-title">Hand-eye calibration (hand_cam ↔ flange, tag 0)</div>
             <p class="note">Base on tag 102/103, arm driven so hand_cam sees cross tag 0 (Arm tab). Auto-sample squares up on the tag and orbits it (tilts, spins, 3 distances) capturing at every view, then returns; or capture by hand pose by pose. Compute writes config/hand_eye/T_hc2ee.npz — restart the calibration nodes afterwards and regenerate the plans.</p>
-            <div id="lbl-handeye-nodes">hand-eye node: checking…</div>
-            <div class="row">
-              <button id="btn-he-auto" title="/handeye_calib/auto_sample — moves the arm">Auto-sample (sweep)</button>
+            <div class="toolbar">
+              <button id="btn-he-auto" class="btn-primary" title="/handeye_calib/auto_sample — moves the arm">Auto-sample (sweep)</button>
               <button id="btn-he-cancel">Cancel sweep</button>
               <button id="btn-he-capture" title="/handeye_calib/capture — one sample at the current pose">Capture here</button>
             </div>
-            <div class="row">
+            <div class="toolbar">
               <button id="btn-he-compute">Compute &amp; save T_hc2ee</button>
               <button id="btn-he-load" title="/handeye_calib/load_latest — re-feed the previous run's samples">Load latest run</button>
               <button id="btn-he-reset">Reset samples</button>
               <button id="btn-he-status">Status</button>
             </div>
-            <div class="bold" id="lbl-handeye-state">samples: —</div>
-            <div class="detail" id="lbl-handeye-last">—</div>
+            <div class="status">
+              <div class="detail" id="lbl-handeye-nodes">hand-eye node: checking…</div>
+              <div class="bold" id="lbl-handeye-state">samples: —</div>
+              <div class="detail" id="lbl-handeye-last">—</div>
+            </div>
           </div>
           <div class="group">
             <div class="group-title">Basler vision tip (Basler ↔ hand_cam, A4 20 mm tag sheet)</div>
             <p class="note">Sheet flat on the plate, base still for the whole session. ① hand_cam 0.25–0.35 m over the sheet (all 30 tags in view): Capture hand ×4–6 with the wrist spun differently each time. ② Basler over ONE tag: Capture Basler runs the Keyence standoff first (16.5 mm), then one lamp-on frame — ×6–10 over different tags with the wrist spun 30–60°. ③ Solve → vision tip vs robot.yaml (not applied automatically). Same code as `rosrun chain_calib basler_tip_calib.py`.</p>
             <div class="row">
-              <label>session:</label>
+              <label>session</label>
               <input type="text" id="txt-bt-dir" class="grow" title="session directory (default log/chain_calib/basler_tip_&lt;date&gt;)">
-            </div>
-            <div class="row">
               <button id="btn-bt-check" class="bt" title="both cameras see the sheet? Basler field of view, px/mm — nothing saved">Check</button>
+            </div>
+            <div class="toolbar">
               <button id="btn-bt-hand" class="bt" title="20 hand_cam detection frames at the current pose → sheet pose">Capture hand</button>
+              <button id="btn-bt-basler" class="bt" title="Keyence standoff loop (moves the arm a few mm), then one Basler frame">Capture Basler</button>
               <label><input type="checkbox" id="chk-bt-standoff" checked> standoff first</label>
               <label>target [mm] <input type="number" id="num-bt-standoff" min="1" max="30" step="0.5" value="16.5" style="width:5em"></label>
-              <button id="btn-bt-basler" class="bt" title="Keyence standoff loop (moves the arm a few mm), then one Basler frame">Capture Basler</button>
             </div>
-            <div class="row">
+            <div class="toolbar">
+              <button id="btn-bt-solve" class="bt btn-primary" title="least squares over the vision tip + image roll; writes result.yaml">Solve</button>
               <button id="btn-bt-status" class="bt">Status</button>
-              <label>exclude: <input type="text" id="txt-bt-exclude" style="width:8em" placeholder="b3 h2"></label>
-              <button id="btn-bt-solve" class="bt" title="least squares over the vision tip + image roll; writes result.yaml">Solve</button>
+              <label>exclude <input type="text" id="txt-bt-exclude" style="width:8em" placeholder="b3 h2"></label>
             </div>
-            <div class="row">
+            <div class="toolbar">
               <label>verify tag <input type="number" id="num-bt-tag" min="201" max="230" step="1" value="215" style="width:5em"></label>
               <label><input type="checkbox" id="chk-bt-design"> design tip</label>
               <button id="btn-bt-verify" class="bt" title="MOVES THE ARM: one MoveL putting the tip 20 mm above this tag (wrist kept), Keyence standoff, one Basler frame → image centre vs tag centre in mm. Refused if farther than 0.35 m — jog near the tag first">Verify (moves arm)</button>
             </div>
-            <div class="bold" id="lbl-bt-state">hand 0 · basler 0</div>
-            <div class="detail" id="lbl-bt-last">—</div>
+            <div class="status">
+              <div class="bold" id="lbl-bt-state">hand 0 · basler 0</div>
+              <div class="detail" id="lbl-bt-last">—</div>
+            </div>
             <pre id="pre-bt-report" class="report" hidden></pre>
           </div>
           <div class="group">
             <div class="group-title">Single tag locate (debug)</div>
             <p class="note">Base parked on the target floor tag, hand cam already viewing a cross tag (drive the arm from the Arm tab or a plan seed first).</p>
-            <div class="row">
-              <label>tag id: <input type="number" id="num-locate" min="100" max="150" value="105"></label>
-              <button id="btn-locate">Locate</button>
+            <div class="toolbar">
+              <label>tag id <input type="number" id="num-locate" min="100" max="150" value="105"></label>
+              <button id="btn-locate" class="btn-primary">Locate</button>
             </div>
           </div>
         </div>
@@ -271,9 +318,10 @@
               <select id="sel-plugin" class="grow"></select>
               <button id="btn-plugin-refresh">Refresh</button>
             </div>
-            <div class="row">
-              <button id="btn-plugin-run">RUN SCRIPT</button>
-              <button id="btn-plugin-stop">Stop script</button>
+            <div class="toolbar">
+              <button id="btn-plugin-run" class="btn-primary">RUN SCRIPT</button>
+              <span class="spacer"></span>
+              <button id="btn-plugin-stop" class="btn-warn">Stop script</button>
             </div>
             <div class="detail" id="lbl-plugin-dir"></div>
           </div>
@@ -283,8 +331,8 @@
       <!-- ---------- Log ---------- -->
       <div class="group" id="logbox">
         <div class="group-title">Log</div>
+        <button id="btn-clear-log" class="log-clear" title="Clear the log">clear</button>
         <pre id="log"></pre>
-        <div class="row"><button id="btn-clear-log">Clear log</button></div>
       </div>
     </div>
   </div>

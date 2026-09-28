@@ -1,0 +1,64 @@
+command: goto_124
+started_at: '2026-09-22T14:48:38.053'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1790056119.0673885
+  ros_time: 1790056119.0673912
+  stage: aligned
+  tag_id: 123
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 634.6044800930089
+  - 350.2695358697042
+  image_offset_px:
+  - -3.592602426522376
+  - -2.712153583420786
+  tag_pose_m:
+  - -0.0014461581389061335
+  - -0.0010924263359658225
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0014461581389061335
+  - 0.0010924263359658225
+  camera_center_offset_from_tag_mm:
+  - 1.4461581389061335
+  - 1.0924263359658226
+  camera_center_offset_from_tag_norm_mm: 1.8123930760837077
+  tag_edge_yaw_error_deg: -0.013008521816558982
+  traveled_m: null
+  align_passes: 1
+  image_center_offset_mm:
+  - -1.446
+  - -1.092
+  image_center_offset_norm_mm: 1.812
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260922_142112.yaml
+    calibrated_tag_position_m:
+    - 1.7054287719898107
+    - -2.126673942094692
+    - -0.04372298959584625
+    calibrated_tag_rpy_deg:
+    - 179.18906605026075
+    - 1.3829928491846266
+    - -179.78239596748404
+    world_offset_from_calibrated_tag_m:
+    - -0.0014419987856846904
+    - -0.0010979108180175848
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - -1.4419987856846903
+    - -1.0979108180175847
+    - 0.0
+    estimated_camera_center_position_m:
+    - 1.703986773204126
+    - -2.1277718529127094
+    - -0.04372298959584625

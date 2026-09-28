@@ -1,0 +1,65 @@
+command: GOTO 105
+started_at: '2026-09-28T21:15:58.039'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1790597761.6067796
+  ros_time: 1790597761.606783
+  stage: aligned
+  tag_id: 101
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 614.6379093102975
+  - 340.1169252631271
+  image_offset_px:
+  - -23.55917320923379
+  - -12.864764189997913
+  tag_pose_m:
+  - -0.009505581822475427
+  - -0.0051817888533501975
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.009505581822475427
+  - 0.0051817888533501975
+  camera_center_offset_from_tag_mm:
+  - 9.505581822475428
+  - 5.181788853350198
+  camera_center_offset_from_tag_norm_mm: 10.826219169427507
+  tag_edge_yaw_error_deg: 0.11575989628683203
+  traveled_m: null
+  align_passes: 1
+  align_median_frames: 3
+  image_center_offset_mm:
+  - -9.483
+  - -5.182
+  image_center_offset_norm_mm: 10.807
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_161429.yaml
+    calibrated_tag_position_m:
+    - -1.703289788549283
+    - -1.4500747480217444
+    - -0.076636260511282
+    calibrated_tag_rpy_deg:
+    - 178.97251646114776
+    - 0.8420930501486865
+    - -0.34674910732829123
+    world_offset_from_calibrated_tag_m:
+    - 0.00953676729592327
+    - 0.005124167351666802
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 9.53676729592327
+    - 5.124167351666802
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.6937530212533598
+    - -1.4449505806700775
+    - -0.076636260511282

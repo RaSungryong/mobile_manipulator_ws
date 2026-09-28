@@ -28,12 +28,21 @@ datum (arm_base_z is measured from the floor), 0.080 m lower, so
 PLATE_TOP_ABOVE_FLOOR_M is added before the transform; feeding a plate-top
 z in directly puts the tip 80 mm too LOW.
 
+Per-stop targets (2026-09-28, `tip_touch_cross_tags.py`): Settings.targets
+maps a stop tag to its own world target (each drive tag to the cross tag it
+is paired with), Settings.target_info carries labels recorded with the point
+(ref_tag, marker_id), and skip_refused records a stop whose flange would be
+out of bounds and moves on instead of ending the sequence (nothing has moved
+at that point: the GOTO homed the arm). The Basler frames are analysed
+offline by src/robot_ui/tools/analyze_tip_check.py.
+
 Records: log/apriltag_nav/tip_check/<ts>_<name>/summary.csv + one yaml per
 point (commanded target, robot pose, targets in the arm frame, the before /
 after_correction TCP + joints + tip world position, standoff result, image
 file); images in results/tip_check/<ts>_<name>/.
 """
 
+import copy
 import csv
 import math
 import os
@@ -80,7 +89,7 @@ class Settings:
                  standoff=False, standoff_target_mm=None, pre_standoff_wait_s=1.0,
                  standoff_timeout_s=120.0,
                  capture=False, capture_samples=1, capture_use_led=True,
-                 dry_run=False):
+                 dry_run=False, targets=None, target_info=None, skip_refused=False):
         self.name = str(name)
         self.target_world_m = tuple(float(v) for v in target_world_m)
         self.stop_tags = [int(t) for t in stop_tags]
@@ -99,6 +108,22 @@ class Settings:
         self.capture_samples = int(capture_samples)
         self.capture_use_led = bool(capture_use_led)
         self.dry_run = bool(dry_run)
+        # Per-stop world targets {stop_tag: (x, y, z plate-top)}; a stop not
+        # listed uses target_world_m. target_info: {stop_tag: {label: value}}
+        # recorded with the point (e.g. ref_tag, marker_id).
+        self.targets = {int(k): tuple(float(v) for v in t)
+                        for k, t in (targets or {}).items()}
+        self.target_info = {int(k): dict(v) for k, v in (target_info or {}).items()}
+        self.skip_refused = bool(skip_refused)
+
+    def for_tag(self, tag):
+        """This stop's settings: a shallow copy with its own target."""
+        st = copy.copy(self)
+        st.target_world_m = self.targets.get(int(tag), self.target_world_m)
+        return st
+
+    def info(self, tag):
+        return dict(self.target_info.get(int(tag), {}))
 
 
 class _Pose:
@@ -174,13 +199,20 @@ def tip_world_m(s, tip_arm_mm, tip_target_arm_mm, R_AW):
 
 
 def design_stop_pose(tag):
-    """Zone-B design stop for a dry run: 0.55 m south of the tag, heading +90."""
+    """Design stop for a dry run: 0.55 m behind the tag along the lane.
+    Zones B / D face +y (theta +90), C / E face -y (theta -90) — the
+    headings mobile_controller assigns per zone; anything else is treated
+    as B. Checked 2026-09-28: a zone-B and a zone-C tag each land at the
+    same arm-frame point from their own stop."""
     with open(paths.MAP_PATH) as f:
         m = yaml.safe_load(f)
     tags = m.get('tags', m)
     t = tags[int(tag)]
-    sx, sy = float(t['x']), float(t['y']) - 0.55
-    return _Pose(-sy, -sx, 90.0)
+    if str(t.get('zone', 'B')).upper() in ('C', 'E'):
+        sx, sy, th = float(t['x']), float(t['y']) + 0.55, -90.0
+    else:
+        sx, sy, th = float(t['x']), float(t['y']) - 0.55, 90.0
+    return _Pose(-sy, -sx, th)
 
 
 # ---------------------------------------------------------------- ROS-side helpers
@@ -296,7 +328,7 @@ def _tool_frame_at_home(bridge, tip_offset_mm):
 
 # ---------------------------------------------------------------- record
 _SUMMARY_COLS = [
-    'round', 'tag', 'robot_x', 'robot_y', 'theta_deg', 'lift_mm', 'tool_frame',
+    'round', 'tag', 'ref_tag', 'marker_id', 'robot_x', 'robot_y', 'theta_deg', 'lift_mm', 'tool_frame',
     'target_wx', 'target_wy', 'target_wz',
     'before_tip_wx', 'before_tip_wy', 'before_tip_wz',
     'before_j1', 'before_j2', 'before_j3', 'before_j4', 'before_j5', 'before_j6',
@@ -322,6 +354,8 @@ class _Record:
             yaml.safe_dump({
                 'name': s.name, 'started': self.session[:15],
                 'target_world_m_plate_top': list(s.target_world_m),
+                'targets_per_stop': {k: list(v) for k, v in s.targets.items()},
+                'target_info': s.target_info,
                 'plate_top_above_floor_m': PLATE_TOP_ABOVE_FLOOR_M,
                 'stop_tags': s.stop_tags, 'rounds': s.rounds,
                 'tool_rpy_deg_arm_frame': list(s.tool_rpy_deg),
@@ -388,8 +422,10 @@ def _snapshot(s, bridge, tool_is_flange, tip_off, tip_target_arm, R_AW):
 def run_sequence(ctx, s):
     bridge = ctx.bridge
     tip_off = tf_chain.tip_offset_mm()
-    ctx.log(f'{s.name}: tip -> world {s.target_world_m} (plate-top z; transform z '
-            f'{s.target_world_m[2] + PLATE_TOP_ABOVE_FLOOR_M:.3f} floor datum); stops '
+    tgt_txt = (f'per-stop targets ({len(s.targets)})' if s.targets else
+               f'world {s.target_world_m} (plate-top z; transform z '
+               f'{s.target_world_m[2] + PLATE_TOP_ABOVE_FLOOR_M:.3f} floor datum)')
+    ctx.log(f'{s.name}: tip -> {tgt_txt}; stops '
             f'{s.stop_tags} x {s.rounds}; tool rpy {s.tool_rpy_deg}; approach '
             f'{s.approach_above_m:.2f} m; standoff {s.standoff}'
             f'{"" if s.standoff_target_mm is None else f" (target {s.standoff_target_mm} mm)"}; '
@@ -398,10 +434,13 @@ def run_sequence(ctx, s):
     if s.dry_run:
         ctx.log('DRY RUN — design stop poses from map.yaml, nothing moves')
         for tag in s.stop_tags:
+            st = s.for_tag(tag)
             pose = design_stop_pose(tag)
-            tip_arm, flange, cmd, approach, rpy = compute_targets(s, pose, 0.0, True, tip_off)
+            tip_arm, flange, cmd, approach, rpy = compute_targets(st, pose, 0.0, True, tip_off)
             ok, why = check_bounds(flange)
-            ctx.log(f'  tag {tag}: robot_pose ({pose.x:.3f}, {pose.y:.3f}, {pose.theta:.1f}) '
+            info = ' '.join(f'{k} {v}' for k, v in s.info(tag).items())
+            ctx.log(f'  tag {tag}{" (" + info + ")" if info else ""} -> world '
+                    f'{list(st.target_world_m)}: robot_pose ({pose.x:.3f}, {pose.y:.3f}, {pose.theta:.1f}) '
                     f'tip arm {tip_arm.round(1).tolist()} mm -> flange '
                     f'{flange.round(1).tolist()} rpy {rpy.tolist()} | approach z '
                     f'{approach[2]:.1f} | {"OK" if ok else "REFUSED"}: {why}')
@@ -451,11 +490,16 @@ def run_sequence(ctx, s):
                     ctx.log('cancelled')
                     return
                 label = f'round {rnd}/{s.rounds} tag {tag}'
+                st = s.for_tag(tag)         # this stop's own target
+                info = s.info(tag)
                 data = {'round': rnd, 'tag': tag,
-                        'target_world_m_plate_top': list(s.target_world_m),
-                        'summary': {'target_wx': s.target_world_m[0],
-                                    'target_wy': s.target_world_m[1],
-                                    'target_wz': s.target_world_m[2]}}
+                        'target_world_m_plate_top': list(st.target_world_m),
+                        'target_info': info,
+                        'summary': {'target_wx': st.target_world_m[0],
+                                    'target_wy': st.target_world_m[1],
+                                    'target_wz': st.target_world_m[2],
+                                    **{k: v for k, v in info.items()
+                                       if k in ('ref_tag', 'marker_id')}}}
                 ctx.log(f'--- {label}: GOTO {tag}')
                 ok, msg, t_cmd = _goto(ctx, tag)
                 if not ok:
@@ -482,7 +526,7 @@ def run_sequence(ctx, s):
                 lift_m, _ = _lift_m(bridge)
                 lift_m = lift_m or 0.0
                 tip_arm, flange, cmd, approach, rpy = compute_targets(
-                    s, pose, lift_m, is_flange, tip_off)
+                    st, pose, lift_m, is_flange, tip_off)
                 R_AW = world_to_arm_R(pose, lift_m)
                 ok, why = check_bounds(flange)      # always the PHYSICAL flange
                 data.update({
@@ -501,12 +545,19 @@ def run_sequence(ctx, s):
                         f'lift {lift_m * 1000:.1f} mm -> tip {tip_arm.round(1).tolist()} mm, '
                         f'flange {flange.round(1).tolist()} rpy {rpy.tolist()} ({why})')
                 if not ok:
+                    if s.skip_refused:
+                        # Nothing has moved since the GOTO's arm home: record
+                        # the stop and carry on with the next one.
+                        data.setdefault('summary', {}).update(ok=False, message=f'SKIPPED — {why}')
+                        rec.point(rnd, tag, data)
+                        ctx.log(f'{label}: SKIPPED — {why}')
+                        continue
                     fail(rnd, tag, data, f'REFUSED — {why}')
                     return
 
                 # approach: MoveCart (joint-interpolated) to APPROACH above
                 target_hi = list(approach) + list(rpy)
-                ok, msg = bridge.arm_move_cart(target_hi, vel=s.move_vel, linear=False, timeout=90.0)
+                ok, msg = bridge.arm_move_cart(target_hi, vel=s.move_vel, linear=False, timeout=90.0, physical=True)
                 if not ok:
                     fail(rnd, tag, data, f'approach move failed — {msg}. Stopping.')
                     return
@@ -515,12 +566,12 @@ def run_sequence(ctx, s):
                     return
                 # descend: MoveL straight down
                 target = list(cmd) + list(rpy)
-                ok, msg = bridge.arm_move_cart(target, vel=s.line_vel, linear=True, timeout=90.0)
+                ok, msg = bridge.arm_move_cart(target, vel=s.line_vel, linear=True, timeout=90.0, physical=True)
                 if not ok:
                     fail(rnd, tag, data, f'descend failed — {msg}. Stopping (arm left in place).')
                     return
 
-                before = _snapshot(s, bridge, is_flange, tip_off, tip_arm, R_AW)
+                before = _snapshot(st, bridge, is_flange, tip_off, tip_arm, R_AW)
                 data['before'] = before
                 if 'tip_world_m' in before:
                     tw = before['tip_world_m']
@@ -540,7 +591,7 @@ def run_sequence(ctx, s):
                     ctx.log(f'{label}: Keyence before correction: {ks}')
                     conv, msg = bridge.arm_standoff(target_mm=s.standoff_target_mm,
                                                     timeout=s.standoff_timeout_s)
-                    after = _snapshot(s, bridge, is_flange, tip_off, tip_arm, R_AW)
+                    after = _snapshot(st, bridge, is_flange, tip_off, tip_arm, R_AW)
                     after['standoff'] = {'converged': bool(conv), 'message': msg,
                                          'target_mm': s.standoff_target_mm}
                     data['after_correction'] = after
@@ -589,7 +640,7 @@ def run_sequence(ctx, s):
                     ctx.log('cancelled at the target (arm left there)')
                     return
                 # ascend: MoveL straight up to the approach pose
-                ok, msg = bridge.arm_move_cart(target_hi, vel=s.line_vel, linear=True, timeout=90.0)
+                ok, msg = bridge.arm_move_cart(target_hi, vel=s.line_vel, linear=True, timeout=90.0, physical=True)
                 if not ok:
                     ctx.log(f'{label}: ascend failed — {msg}. Stopping.')
                     return

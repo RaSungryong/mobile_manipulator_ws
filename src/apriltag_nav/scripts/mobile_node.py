@@ -28,6 +28,14 @@ Interface
 ---------
   /mobile/goto_tag  (Int32)   start driving to a tag. Returns immediately;
                               watch /mobile/state for the outcome.
+                              REFUSED (result.ok false, message "front_cam
+                              not working: ...") whenever front_cam's
+                              detections are absent or older than
+                              robot.front_cam_alive_timeout_s — user rule
+                              2026-09-22: no front camera, no tag driving.
+                              Applies to every TASK / GOTO / CHARGE hop;
+                              the odom-only /mobile/move_cmd is not tag
+                              driving and stays available.
   /mobile/move_cmd  (String)  JSON manual relative move, odometry-closed,
                               no tag involved (robot_ui's Mobile tab):
                                 {"type": "move",  "distance_m": 0.3,  "speed": 0.05}
@@ -200,6 +208,15 @@ class MobileNode:
     # ==========================================================
     def _cb_goto_tag(self, msg):
         tag_id = int(msg.data)
+        cam_ok, cam_reason, _age = self.mobile.front_cam_status()
+        if not cam_ok:
+            # Refused at the command boundary so the caller gets the reason
+            # at once (MobileClient logs result.message); move_to_tag
+            # re-checks before every hop for a camera that dies mid-route.
+            rospy.logerr(f"[Mobile] goto {tag_id} REFUSED — {cam_reason}")
+            self._finish(tag_id, False, cam_reason)
+            self._publish_state()
+            return
         if self._busy_what is not None:
             rospy.logwarn(f"[Mobile] goto {tag_id} refused — {self._busy_what}")
             self._finish(tag_id, False, f"busy: {self._busy_what}")
@@ -288,9 +305,16 @@ class MobileNode:
                    else f"navigation to tag {tag_id} failed")
             if not ok and self.mobile.stop_requested:
                 msg = f"navigation to tag {tag_id} cancelled"
+            refused = getattr(self.mobile, 'last_refusal_reason', None)
+            if not ok and refused:
+                msg = f"navigation to tag {tag_id} refused: {refused}"
             self._finish(tag_id, ok, msg)
         except Exception as e:
             rospy.logerr(f"[Mobile] goto {tag_id} raised: {e}")
+            try:
+                self.mobile.stop()   # never leave the base rolling on a raise
+            except Exception:
+                pass
             self._finish(tag_id, False, f"exception: {e}")
         finally:
             self._end()
@@ -329,8 +353,15 @@ class MobileNode:
     # ==========================================================
     def _publish_state(self, _event=None):
         m = self.mobile
+        cam_ok, cam_reason, cam_age = m.front_cam_status()
         state = {
             'busy':           self._busy_what,
+            # front_cam liveness — False means every goto_tag is refused
+            # (robot_ui shows BASE NO CAM); age is seconds since the last
+            # detections array, null before the first one.
+            'front_cam_ok':     bool(cam_ok),
+            'front_cam_age_s':  None if cam_age is None else round(float(cam_age), 2),
+            'front_cam_reason': None if cam_ok else cam_reason,
             'seq':            self._seq,
             'result':         self._result,
             'last_known_tag': m.last_known_tag,

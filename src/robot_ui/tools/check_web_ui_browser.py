@@ -144,7 +144,8 @@ async def scenario(cdp, url, bridge, holder):
     # ---- live states ----
     bridge.emit_state('estop_state', False)
     bridge.emit_state('arm_state', {'state': 'idle', 'busy': True, 'pose_valid': True,
-                                    'tcp_pose': [1.234, -2.5, 3, 4, 5, 6.789], 'joints': [],
+                                    'tcp_pose': [1.234, -2.5, 3, 4, 5, 6.789],
+                                    'joints': [-90.123, -85.5, 100, -95.25, -90, 12.3456],
                                     'motion_seq': 1, 'result_message': '', 'result_success': True})
     bridge.emit_state('lift_state', {'height_mm': 149.9, 'homed': False})
     bridge.emit_state('mobile_state', {'busy': None, 'emergency_stop': True, 'visible_tags': [105],
@@ -276,6 +277,19 @@ async def scenario(cdp, url, bridge, holder):
           'Fill from current + MOVE with one axis edited')
     await cdp.js("document.getElementById('btn-arm-home').click(); document.getElementById('btn-arm-cancel').click()")
     check(base.wait_for(lambda: bridge.has('arm_home') and bridge.has('arm_cancel')), 'arm home / cancel')
+    await cdp.js("document.getElementById('btn-arm-reset').click()")
+    check(base.wait_for(lambda: bridge.has('arm_reset_error')), 'Reset arm error button')
+    # ---- joints (2026-09-21) ----
+    check(await wait_js(cdp, "document.getElementById('joint-j1').textContent === '-90.12' && "
+                             "document.getElementById('joint-j6').textContent === '12.35'"),
+          'live joints rendered to 2 decimals')
+    await cdp.js("document.getElementById('num-jstep').value = '2.5'; "
+                 "[...document.querySelectorAll('#jog-joint-grid button')].find(b => b.dataset.joint === 'j3' && b.dataset.sign === '-1').click()")
+    check(base.wait_for(lambda: bridge.has('arm_jog_joint', 'j3', -2.5, 20.0)), 'joint jog J3 − with the joint step')
+    await cdp.js("document.getElementById('btn-joint-fill').click(); document.getElementById('joint-target-j2').value = '-80'; "
+                 "document.getElementById('joint-target-j4').value = ''; document.getElementById('btn-joint-move').click()")
+    check(base.wait_for(lambda: bridge.has('arm_move_joint', (-90.12, -80.0, 100.0, -95.25, -90.0, 12.35), 20.0)),
+          'Fill from current + MOVE J with one joint edited and one blank')
     await cdp.js("document.getElementById('num-standoff').value = '12'; document.getElementById('btn-standoff').click()")
     check(base.wait_for(lambda: bridge.has('arm_standoff', 12.0)), 'Auto standoff with the typed target')
     check(await wait_js(cdp, "!document.getElementById('btn-standoff').disabled", 3.0), 'standoff button re-enabled after')

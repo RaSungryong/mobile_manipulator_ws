@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(PKG, 'src'))
 
+from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QObject, Qt, pyqtSignal      # noqa: E402
 from PyQt5.QtTest import QTest                         # noqa: E402
 from PyQt5.QtWidgets import QApplication, QPushButton  # noqa: E402
@@ -404,6 +405,62 @@ def main():
     bridge.calls.clear()
     check(click(arm_tab, 'Cancel'), 'Cancel button found next to Auto standoff')
     check(('arm_cancel',) in bridge.calls, 'Cancel publishes the arm cancel')
+    bridge.calls.clear()
+    check(click(win, 'Reset arm error'), 'Reset arm error button present (2026-09-28)')
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and ('arm_reset_error',) not in bridge.calls:
+        app.processEvents(); _time.sleep(0.02)
+    check(('arm_reset_error',) in bridge.calls, 'Reset arm error calls bridge.arm_reset_error')
+
+    print('== joints readout + joint control (Arm tab, 2026-09-21)')
+    check(all(win.lbl_joint[n].text() == '—' for n in win.lbl_joint), 'joint labels start at —')
+    bridge.arm_state.emit({'state': 'idle', 'busy': False, 'pose_valid': True,
+                           'tcp_pose': [1, 2, 3, 4, 5, 6],
+                           'joints': [-90.123, -85.5, 100.0, -95.25, -90.0, 12.3456],
+                           'motion_seq': 4, 'result_message': '', 'result_success': True})
+    app.processEvents()
+    check(win.lbl_joint['j1'].text() == '-90.12' and win.lbl_joint['j6'].text() == '12.35',
+          f'live joints rendered to 2 decimals: {[win.lbl_joint[n].text() for n in win.lbl_joint]}')
+    bridge.arm_state.emit({'state': 'idle', 'busy': False, 'pose_valid': False,
+                           'tcp_pose': [0] * 6, 'joints': [0] * 6,
+                           'motion_seq': 4, 'result_message': '', 'result_success': True})
+    app.processEvents()
+    check(win.lbl_joint['j3'].text() == '—', 'pose_valid false blanks the joints too')
+    check(win._arm_joints[2] == 100.0, 'the last VALID joints are kept for fill / blank fields')
+    bridge.calls.clear()
+    win.spin_joint_step.setValue(2.5)
+    win.spin_vel.setValue(20.0)
+    win._on_jog_joint('j3', -1)
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and not any(c[0] == 'arm_jog_joint' for c in bridge.calls):
+        app.processEvents(); _time.sleep(0.02)
+    calls = [c for c in bridge.calls if c[0] == 'arm_jog_joint']
+    check(calls == [('arm_jog_joint', 'j3', -2.5, 20.0)],
+          f'joint jog: bridge.arm_jog_joint(j3, -step, speed): {calls}')
+    win._on_fill_joint_target()
+    check(win.edit_joint_target['j1'].text() == '-90.12' and win.edit_joint_target['j6'].text() == '12.35',
+          'Fill from current copies the live joints')
+    win.edit_joint_target['j4'].setText('')          # blank = keep live
+    win.edit_joint_target['j2'].setText('-80')
+    win._on_move_joint()
+    t0 = _time.monotonic()
+    while _time.monotonic() - t0 < 3.0 and not any(c[0] == 'arm_move_joint' for c in bridge.calls):
+        app.processEvents(); _time.sleep(0.02)
+    calls = [c for c in bridge.calls if c[0] == 'arm_move_joint']
+    check(len(calls) == 1 and calls[0][1] == [-90.12, -80.0, 100.0, -95.25, -90.0, 12.35] and calls[0][2] == 20.0,
+          f'MOVE J sends six angles, blank j4 taken from the live joints: {calls}')
+    win.edit_joint_target['j5'].setText('abc')
+    n_before = len([c for c in bridge.calls if c[0] == 'arm_move_joint'])
+    _orig_warn = QMessageBox.warning
+    QMessageBox.warning = staticmethod(lambda *a, **k: None)
+    try:
+        win._on_move_joint()
+    finally:
+        QMessageBox.warning = _orig_warn
+    app.processEvents()
+    check(len([c for c in bridge.calls if c[0] == 'arm_move_joint']) == n_before,
+          'a non-numeric joint field refuses the move')
+    win.edit_joint_target['j5'].setText('')
 
     print('== VISION lamp hold (Collect tab, 2026-09-15)')
     bridge.calls.clear()

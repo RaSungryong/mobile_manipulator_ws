@@ -1,0 +1,34 @@
+started_at: '2026-09-28T21:25:25.766'
+status: finished
+note: 'One file per attempt under entries/, numbered in execution order; a retry is
+  a new number, nothing is overwritten. Camera-frame errors: see camera_frame_note
+  inside each entry file.'
+plan_yaml: /home/abc/mobile_manipulator_ws/src/path_tag_locator/config/calibration_plan_plate1.yaml
+ref_tags_yaml: /home/abc/mobile_manipulator_ws/src/path_tag_locator/config/reference_tags.yaml
+map_in_path: /home/abc/mobile_manipulator_ws/src/apriltag_nav/config/map.yaml
+map_out_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_212525.yaml
+session_lift_m: 0.0
+num_plan_entries: 26
+dry_run: false
+entries:
+- seq: 1
+  path_tag_id: 100
+  ref_tag_id: 0
+  attempt: 1
+  status: fail
+  position_m: null
+  error: base nav to path_tag_id=100 failed
+  file: entries/001_tag100_attempt1_fail.yaml
+- seq: 2
+  path_tag_id: 100
+  ref_tag_id: 0
+  attempt: 2
+  status: fail
+  position_m: null
+  error: base nav to path_tag_id=100 failed
+  file: entries/002_tag100_attempt2_fail.yaml
+cancelled_before_tag: 101
+finished_at: '2026-09-28T21:25:56.642'
+num_succeeded: 0
+num_failed: 1
+num_attempts: 2

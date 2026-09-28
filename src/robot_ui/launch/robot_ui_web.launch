@@ -13,9 +13,9 @@
   <arg name="plugin_dir" default="$(find robot_ui)/plugins"/>
   <!-- Captures go into the workspace (2026-09-14): <ws>/results/captures. -->
   <arg name="save_dir"   default="$(eval optenv('MM_WS', dirname() + '/../../..') + '/results/captures')"/>
-  <arg name="stream_max_width" default="1400"/>
+  <arg name="stream_max_width" default="800"/>
   <arg name="stream_fps"       default="10"/>
-  <arg name="jpeg_quality"     default="80"/>
+  <arg name="jpeg_quality"     default="60"/>
 
   <node pkg="robot_ui" type="robot_ui_web_node.py" name="robot_ui_web" output="screen">
     <param name="port"             value="$(arg port)"/>

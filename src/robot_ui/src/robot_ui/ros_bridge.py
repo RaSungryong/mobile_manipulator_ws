@@ -69,6 +69,9 @@ STREAM_CAMERAS = {
 OVERLAY_TOPICS = {name: f'/{name}/tag_overlay' for name in STREAM_CAMERAS}
 
 ARM_AXES = ('x', 'y', 'z', 'rx', 'ry', 'rz')
+# Joint names in the Fairino joint-vector order (j1 = base), as arm_node's
+# /arm/jog_joint spells them and as both UI fronts label their columns.
+ARM_JOINTS = ('j1', 'j2', 'j3', 'j4', 'j5', 'j6')
 
 
 class RosBridge:
@@ -161,6 +164,10 @@ class RosBridge:
                                              queue_size=1)
         self._pub_arm_jog = rospy.Publisher('/arm/jog_cmd', String,
                                             queue_size=1)
+        self._pub_arm_move_joint = rospy.Publisher('/arm/move_joint', String,
+                                                   queue_size=1)
+        self._pub_arm_jog_joint = rospy.Publisher('/arm/jog_joint', String,
+                                                  queue_size=1)
         self._pub_arm_cancel = rospy.Publisher('/arm/cancel', Bool,
                                                queue_size=1)
         self._pub_arm_standoff = rospy.Publisher('/arm/standoff', String,
@@ -493,20 +500,22 @@ class RosBridge:
         return False, 'shutting down'
 
     def arm_move_cart(self, pose, vel=30.0, acc=50.0, timeout=60.0,
-                      linear=True):
+                      linear=True, physical=False):
         """Absolute Cartesian move. Blocks until arm_node reports completion.
 
         ``linear=True`` (default, what the UI's MOVE button sends) = MoveL,
         a straight TCP path; ``linear=False`` = MoveCart, joint-interpolated
         to the same endpoint — for a big repositioning move (see
         ArmController.move_cart: MoveL crawls or times out when the path
-        reorients the wrist)."""
+        reorients the wrist). ``physical=True`` = an ABSOLUTE target, the
+        joint zero offsets applied on the command side (2026-09-28); the
+        UI's MOVE sends readings and leaves it False."""
         if len(pose) != 6:
             return False, 'pose needs 6 values [x y z rx ry rz]'
         seq = self.arm_seq()
         self._pub_arm_move.publish(String(json.dumps(
             {'pose': [float(v) for v in pose], 'vel': vel, 'acc': acc,
-             'linear': bool(linear)})))
+             'linear': bool(linear), 'physical': bool(physical)})))
         return self.wait_for_motion(seq, timeout)
 
     def arm_jog(self, axis, delta, vel=30.0, acc=50.0, timeout=30.0):
@@ -518,8 +527,33 @@ class RosBridge:
             {'axis': axis, 'delta': float(delta), 'vel': vel, 'acc': acc})))
         return self.wait_for_motion(seq, timeout)
 
+    def arm_move_joint(self, joints, vel=30.0, acc=50.0, timeout=60.0):
+        """Absolute joint move (MoveJ to [j1..j6] deg). Blocks until arm_node
+        reports completion, motion_seq-based like arm_move_cart."""
+        if len(joints) != 6:
+            return False, 'joints needs 6 values [j1 .. j6]'
+        seq = self.arm_seq()
+        self._pub_arm_move_joint.publish(String(json.dumps(
+            {'joints': [float(v) for v in joints], 'vel': vel, 'acc': acc})))
+        return self.wait_for_motion(seq, timeout)
+
+    def arm_jog_joint(self, joint, delta, vel=30.0, acc=50.0, timeout=30.0):
+        """Incremental move of ONE joint by `delta` deg. Blocks until complete."""
+        if joint not in ARM_JOINTS:
+            return False, f'unknown joint {joint}'
+        seq = self.arm_seq()
+        self._pub_arm_jog_joint.publish(String(json.dumps(
+            {'joint': joint, 'delta': float(delta), 'vel': vel, 'acc': acc})))
+        return self.wait_for_motion(seq, timeout)
+
     def arm_home(self, timeout=60.0):
         return self._call_trigger('/arm/move_home', timeout)
+
+    def arm_reset_error(self, timeout=15.0):
+        """Clear the arm controller's latched error (joint limit, collision
+        stop) without moving — /arm/reset_error. Recovery is then: jog the
+        offending joint back inward, then arm home."""
+        return self._call_trigger('/arm/reset_error', timeout)
 
     def arm_standoff(self, target_mm=None, timeout=120.0):
         """Keyence-closed standoff correction from the current pose: arm_node

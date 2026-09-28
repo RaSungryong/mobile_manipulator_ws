@@ -79,6 +79,8 @@ let ui = {};                 // shared UI state
 const taskInfos = {};
 let taskListSeen = false;
 let armPose = [0, 0, 0, 0, 0, 0];
+const JOINTS = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'];
+let armJoints = [0, 0, 0, 0, 0, 0];
 const tagSeenAt = {};
 let standoffSeenAt = null;
 
@@ -159,6 +161,12 @@ function renderArm(st) {
   AXES.forEach((axis, i) => {
     $('pose-' + axis).textContent = st.pose_valid ? st.tcp_pose[i].toFixed(2) : '—';
   });
+  // Joints ride in the same message with the same validity flag.
+  const jointsOk = st.pose_valid && Array.isArray(st.joints) && st.joints.length === 6;
+  if (jointsOk) armJoints = st.joints.slice();
+  JOINTS.forEach((name, i) => {
+    $('joint-' + name).textContent = jointsOk ? st.joints[i].toFixed(2) : '—';
+  });
   const flag = st.busy ? 'BUSY' : String(st.state || '').toUpperCase();
   $('chip-arm').textContent = 'ARM ' + flag;
   tint($('chip-arm'), st.busy ? '#553311' : '#1b3a1b');
@@ -200,6 +208,9 @@ function renderMobile(st) {
   let text, colour;
   if (st.emergency_stop) { text = 'BASE E-LATCHED'; colour = '#552222'; }
   else if (st.busy) { text = 'BASE ' + st.busy; colour = '#553311'; }
+  // mobile_node refuses every tag-driven command while front_cam's
+  // detections are absent or stale (2026-09-22); manual moves still work.
+  else if (st.front_cam_ok === false) { text = 'BASE NO CAM'; colour = '#552222'; }
   else if (st.stop_requested) { text = 'BASE STOPPED'; colour = '#553311'; }
   else { text = 'BASE idle'; colour = '#1b3a1b'; }
   $('chip-mobile').textContent = text;
@@ -208,6 +219,7 @@ function renderMobile(st) {
   $('lbl-mob-status').textContent = 'base: ' + (st.busy || 'idle') +
     ' | visible tags ' + JSON.stringify(st.visible_tags || []) +
     ' | last tag ' + st.last_known_tag +
+    (st.front_cam_ok === false ? ' | ' + st.front_cam_reason : '') +
     (res ? ' | last result: ' + res.message : '');
 }
 
@@ -799,27 +811,49 @@ function init() {
     });
   }
 
-  // Arm grids.
-  const pg = $('pose-grid'), jg = $('jog-grid'), tg = $('target-grid');
-  AXES.forEach((axis, i) => {
-    const h = document.createElement('div'); h.textContent = axis + ' [' + (i < 3 ? 'mm' : 'deg') + ']'; pg.appendChild(h);
-  });
-  AXES.forEach((axis) => {
-    const v = document.createElement('div'); v.className = 'val'; v.id = 'pose-' + axis; v.textContent = '—'; pg.appendChild(v);
-  });
-  AXES.forEach((axis) => { const h = document.createElement('div'); h.textContent = axis.toUpperCase(); jg.appendChild(h); });
-  for (const sign of [+1, -1]) {
-    AXES.forEach((axis) => {
-      const b = document.createElement('button');
-      b.textContent = sign > 0 ? '+' : '−';
-      b.dataset.axis = axis; b.dataset.sign = String(sign);
-      b.addEventListener('click', () => call('arm_jog', [axis, num('num-step') * sign, num('num-vel')]).catch(() => {}));
-      jg.appendChild(b);
+  // Arm grids (2026-09-21 layout): one 7-column grid per block — a row
+  // label plus six columns — with the header, live values, ± jogs and the
+  // target inputs as ROWS of the same grid. The id'd wrappers are
+  // display:contents, so #jog-grid button / #pose-x etc. still resolve.
+  function buildAxisBlock(names, unitOf, valuePrefix, targetPrefix, ids, jogMethod, stepId) {
+    const pg = $(ids.values), jg = $(ids.jog), tg = $(ids.target);
+    const cell = (parent, cls, text) => {
+      const d = document.createElement('div'); d.className = cls; d.textContent = text; parent.appendChild(d); return d;
+    };
+    cell(pg, 'rl', '');
+    names.forEach((n) => cell(pg, 'hd', n.toUpperCase() + (unitOf(n) ? ' [' + unitOf(n) + ']' : '')));
+    cell(pg, 'rl', 'live');
+    names.forEach((n) => { cell(pg, 'val', '—').id = valuePrefix + n; });
+    for (const sign of [+1, -1]) {
+      cell(jg, 'rl', sign > 0 ? 'jog +' : 'jog −');
+      names.forEach((n) => {
+        const b = document.createElement('button');
+        b.textContent = sign > 0 ? '+' : '−';
+        b.dataset[ids.dataKey] = n; b.dataset.sign = String(sign);
+        b.addEventListener('click', () => call(jogMethod, [n, num(stepId) * sign, num('num-vel')]).catch(() => {}));
+        jg.appendChild(b);
+      });
+    }
+    cell(tg, 'rl', 'target');
+    names.forEach((n) => {
+      const f = document.createElement('input'); f.type = 'text'; f.placeholder = '—'; f.id = targetPrefix + n; tg.appendChild(f);
     });
   }
-  AXES.forEach((axis) => { const h = document.createElement('div'); h.textContent = axis; tg.appendChild(h); });
-  AXES.forEach((axis) => {
-    const f = document.createElement('input'); f.type = 'text'; f.placeholder = '—'; f.id = 'target-' + axis; tg.appendChild(f);
+  buildAxisBlock(AXES, (a) => (AXES.indexOf(a) < 3 ? 'mm' : 'deg'), 'pose-', 'target-',
+                 { values: 'pose-grid', jog: 'jog-grid', target: 'target-grid', dataKey: 'axis' },
+                 'arm_jog', 'num-step');
+  buildAxisBlock(JOINTS, () => 'deg', 'joint-', 'joint-target-',
+                 { values: 'joint-grid', jog: 'jog-joint-grid', target: 'joint-target-grid', dataKey: 'joint' },
+                 'arm_jog_joint', 'num-jstep');
+
+  // ---- hints toggle: show / hide every explanatory note, remembered per browser ----
+  let hints = false;
+  try { hints = localStorage.getItem('robot_ui.hints') === '1'; } catch (e) { /* private window etc. */ }
+  document.body.classList.toggle('hints', hints);
+  $('btn-hints').addEventListener('click', () => {
+    hints = !document.body.classList.contains('hints');
+    document.body.classList.toggle('hints', hints);
+    try { localStorage.setItem('robot_ui.hints', hints ? '1' : '0'); } catch (e) { /* ignore */ }
   });
 
   // ---- system bar ----
@@ -855,7 +889,15 @@ function init() {
       if (r && r.ok === false && r.message) appendLog('[move_cart] ' + r.message);
     }).catch(() => {});
   });
+  $('btn-joint-fill').addEventListener('click', () => JOINTS.forEach((name, i) => { $('joint-target-' + name).value = armJoints[i].toFixed(2); }));
+  $('btn-joint-move').addEventListener('click', () => {
+    const fields = JOINTS.map((name) => $('joint-target-' + name).value.trim());
+    call('arm_move_joint', [fields, num('num-vel')]).then((r) => {
+      if (r && r.ok === false && r.message) appendLog('[move_joint] ' + r.message);
+    }).catch(() => {});
+  });
   $('btn-arm-home').addEventListener('click', () => call('arm_home', []).catch(() => {}));
+  $('btn-arm-reset').addEventListener('click', () => call('arm_reset_error', []).catch(() => {}));
   $('btn-arm-cancel').addEventListener('click', () => call('arm_cancel', []).catch(() => {}));
 
   // ---- Task ----

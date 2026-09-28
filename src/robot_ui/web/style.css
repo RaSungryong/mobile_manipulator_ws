@@ -14,11 +14,16 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font: 13px/1.35 system-ui, "Segoe UI", "Noto Sans", sans-serif; }
 #app { display: flex; flex-direction: column; height: 100vh; padding: 6px; gap: 6px; }
 
-.group { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px 8px;
-  background: var(--panel); position: relative; margin-top: 8px; }
+.group { border: 1px solid var(--border); border-radius: 4px; padding: 10px 10px 8px;
+  background: var(--panel); position: relative; margin-top: 12px; }
+.group + .group { margin-top: 14px; }
 .group-title { position: absolute; top: -9px; left: 10px; background: var(--panel);
   padding: 0 4px; font-size: 12px; color: #bbb; }
-.note { color: var(--muted); margin: 4px 0 6px; font-size: 12px; }
+/* Explanatory notes are hidden by default (2026-09-21 layout pass: they
+   were the bulk of every tab) and shown by the "ⓘ hints" toggle in the tab
+   bar, remembered per browser. Tooltips on the controls stay regardless. */
+.note { display: none; color: var(--muted); margin: 2px 0 8px; font-size: 12px; }
+body.hints .note { display: block; }
 .detail { color: #aaa; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
 
 /* Task tab: the field-by-field detail for the selected task (2026-09-15) —
@@ -42,6 +47,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
    This is our own dropdown instead: click/focus always lists every task,
    typing narrows it, a pick or an outside click closes it. */
 .combo { position: relative; }
+.combo input { width: 100%; }
 .combo-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
   margin-top: 2px; background: #2a2b2e; border: 1px solid var(--border);
   border-radius: 3px; max-height: 260px; overflow-y: auto;
@@ -55,6 +61,18 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .warn { color: #e39a2d; font-weight: bold; white-space: pre-wrap; }
 .bold { font-weight: bold; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+/* toolbar: one line of controls, never wrapped mid-pair; a .spacer pushes
+   the rest to the right (stop / cancel buttons live there) */
+.toolbar { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; flex-wrap: wrap; }
+.toolbar + .toolbar { margin-top: 4px; }
+.form .row, .form .toolbar { margin: 0; }
+.form > label:first-child, .form > label { color: #bbb; }
+.checks { display: flex; flex-direction: column; gap: 3px; }
+.btn-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.btn-pair button { width: 100%; }
+.status { background: #1b1b1b; border-radius: 3px; padding: 4px 8px; margin-top: 6px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.status .bold { color: #ddd; }
 .row .grow, .grow { flex: 1 1 120px; min-width: 80px; }
 .spacer { flex: 1; }
 .form { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; }
@@ -73,6 +91,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 .btn-capture { background: #205020; color: white; font-weight: bold; padding: 10px; }
 .btn-capture:hover { background: #2a6a2a; }
 .btn-warn { background: #8a4a00; color: white; font-weight: bold; }
+.btn-primary { background: #2b5ea8; border-color: #4a7fd0; color: white; font-weight: bold; }
+.btn-primary:hover { background: #3670c2; }
+.btn-capture { margin-top: 8px; width: 100%; }
 
 /* ---- system bar ---- */
 #sysbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; }
@@ -88,15 +109,23 @@ button:disabled { opacity: 0.45; cursor: default; }
 #controlpanel { flex: 0 0 520px; display: flex; flex-direction: column; min-height: 0;
   max-width: 45vw; }
 #controlpanel.hidden { display: none; }
-#ctl-pages { flex: 3 1 0; overflow-y: auto; min-height: 0; padding-right: 2px; }
-#logbox { flex: 2 1 0; display: flex; flex-direction: column; min-height: 120px; }
+/* The pages take only the height their content needs (scrolling once the
+   log would drop under 140 px); the log gets everything left over, so a short
+   tab does not leave a blank band above it (2026-09-21). */
+#ctl-pages { flex: 0 1 auto; overflow-y: auto; min-height: 0; padding: 2px 2px 0 0; }
+#logbox { flex: 1 1 0; display: flex; flex-direction: column; min-height: 140px; }
 #log { flex: 1; overflow: auto; margin: 0; font-family: var(--mono); font-size: 11px;
   white-space: pre-wrap; word-break: break-word; background: #1b1b1b; padding: 4px; }
+.log-clear { position: absolute; top: -10px; right: 10px; padding: 1px 8px; font-size: 11px;
+  color: var(--muted); background: var(--panel); border-color: #444; }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
 .tab { border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0;
   background: #2a2b2e; padding: 4px 10px; }
 .tab.active { background: #3f4046; font-weight: bold; }
+.hints-toggle { align-self: center; margin: 0 2px 2px 0; padding: 2px 8px; font-size: 12px;
+  color: var(--muted); background: transparent; border-color: #444; }
+body.hints .hints-toggle { color: var(--text); background: #3a3b3f; }
 
 /* ---- camera panel ---- */
 .view-page { flex: 7 1 0; min-height: 0; display: flex; flex-direction: column; }
@@ -113,13 +142,17 @@ button:disabled { opacity: 0.45; cursor: default; }
 #ra-label { text-align: center; font-family: var(--mono); font-size: 15px; font-weight: bold;
   padding: 4px; }
 .readout { font-family: var(--mono); border: 1px solid var(--border); padding: 4px; }
-.pose-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
-.pose-grid .val { font-family: var(--mono); font-size: 13px; border: 1px solid var(--border);
-  padding: 4px; }
-.jog-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
-.jog-grid button { width: 100%; font-size: 15px; }
-.target-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center; }
-.target-grid input { width: 100%; }
+.axis-grid { display: grid; grid-template-columns: max-content repeat(6, 1fr); gap: 4px 4px;
+  text-align: center; align-items: center; }
+.axis-grid .contents { display: contents; }
+.axis-grid .hd { color: #bbb; font-size: 12px; padding-bottom: 2px; }
+.axis-grid .rl { color: var(--muted); font-size: 11px; text-align: right; padding-right: 4px;
+  white-space: nowrap; }
+.axis-grid .val { font-family: var(--mono); font-size: 13px; border: 1px solid var(--border);
+  padding: 4px 2px; background: #1b1b1b; }
+.axis-grid button { width: 100%; font-size: 15px; padding: 3px 0; }
+.axis-grid input { width: 100%; min-width: 0; font-family: var(--mono); font-size: 12px;
+  padding: 3px 4px; }
 
 @media (max-width: 1000px) {
   #main { flex-direction: column; }

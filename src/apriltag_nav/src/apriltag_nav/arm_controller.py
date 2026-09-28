@@ -98,7 +98,6 @@ class ArmController:
         # /robot_pose.id.
         self._map_tags = None
 
-
         # ---------- Fairino ----------
         rospy.loginfo("[Arm REAL] Connecting to Fairino robot...")
         self.robot = Robot.RPC(robot_ip)
@@ -117,6 +116,35 @@ class ArmController:
         from apriltag_nav.tf_chain import tip_offset_mm
         self._tip_offset_mm = tip_offset_mm()
         self._pose_tip_to_flange = self._probe_tool_frame()
+
+        # ---------- joint zero offsets on the COMMAND side (2026-09-28) ----------
+        # config/tf/arm_joint_offsets.yaml (physical = reading + dq) acts on
+        # the MEASUREMENT chain (tf_chain.arm_flange_T); the controller places
+        # FK(q) on every target, so the physical flange lands at FK(q + dq).
+        # With ~apply_joint_offsets_cmd true, _exec_pose commands q - dq and
+        # move_cart corrects ABSOLUTE targets when asked (physical=True) —
+        # see joint_offset_cmd.py for which targets must NOT be corrected.
+        # ~joint_offsets_cmd_skip_z (default TRUE): correct xy + rotation and
+        # leave the commanded arm-frame z as it is. The offsets' z term is
+        # NOT trusted: at the touch poses they predict the tip +9..14 mm
+        # above the reading while the Keyence measured +4 / -4 mm, so a
+        # full correction would run the case 5..9 mm into the plate on the
+        # approach. Their xy IS the measured error: the 2026-09-28
+        # tip_touch_cross_tags run (22 stops) landed the tip a constant
+        # 8.8 mm toward body -y in both zones, and FK(q + dq) - FK(q) at the
+        # recorded touch configurations reproduces it (rms 10.8 -> 5.3 mm
+        # residual). The map calibration has these offsets in its chain
+        # (joint_offsets_applied: true), so the command side must too.
+        # The launch sets ~apply_joint_offsets_cmd true since that evening.
+        from apriltag_nav.joint_offset_cmd import load_default as _load_corr
+        self._cmd_corr = None
+        if bool(rospy.get_param('~apply_joint_offsets_cmd', False)):
+            skip_z = bool(rospy.get_param('~joint_offsets_cmd_skip_z', True))
+            self._cmd_corr = _load_corr(warn=lambda m: rospy.logwarn("[Arm REAL] " + m), skip_z=skip_z)
+            rospy.logwarn("[Arm REAL] " + self._cmd_corr.describe() + " — ON: absolute targets are pre-corrected")
+        else:
+            rospy.loginfo("[Arm REAL] command-side joint offsets OFF (~apply_joint_offsets_cmd) — "
+                          "targets go to the controller as given")
 
         # ---------- Home ----------
         # Source of truth is config/robot.yaml `arm_home.joints_rad`.
@@ -442,6 +470,88 @@ class ArmController:
             f"(last: {last_error}). The arm may still be moving — use the "
             "hardware e-stop.")
         return False
+
+    # --------------------------------------------------
+    # ERROR RECOVERY
+    # --------------------------------------------------
+    def read_error_code(self):
+        """The controller's error as GetRobotErrorCode returns it (the SDK
+        gives (ret, [main, sub]) on current builds), or None if unreadable."""
+        fn = getattr(self.robot, 'GetRobotErrorCode', None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            rospy.logwarn(f"[Arm REAL] GetRobotErrorCode failed: {e}")
+            return None
+
+    @staticmethod
+    def error_is_clear(res):
+        """True / False from a GetRobotErrorCode result, None if the shape is
+        not recognised (then nothing can be concluded from it)."""
+        if res is None:
+            return None
+        codes = res
+        if isinstance(res, (tuple, list)) and len(res) == 2 \
+                and isinstance(res[0], int):
+            if res[0] != 0:
+                return None             # the read itself failed
+            codes = res[1]
+        if isinstance(codes, int):
+            return codes == 0
+        if isinstance(codes, (tuple, list)) and codes \
+                and all(isinstance(c, (int, float)) for c in codes):
+            return all(c == 0 for c in codes)
+        return None
+
+    def reset_error(self):
+        """Clear the controller's latched error WITHOUT moving the arm.
+
+        What a joint soft-limit trip, a collision stop or a command-point
+        error leaves behind: the controller refuses every later motion until
+        the error is reset. Before 2026-09-28 the only reset was the one in
+        __init__ (i.e. restart arm_node) plus move_to_home's single retry on
+        error 14. Same sequence as __init__: ResetAllError → RobotEnable(1) →
+        Mode(0). No motion is commanded here — getting the joint back inside
+        its limit is the operator's next step (jog_joint, then home).
+
+        Returns (ok, message). ok is False when ResetAllError is refused or
+        the error code still reads non-zero afterwards — typically because the
+        joint is still beyond its soft limit and the controller re-trips; then
+        jog that joint back inward or use the controller's teach pendant.
+        """
+        if self.busy:
+            return False, "refused: arm busy"
+        self.busy = True
+        try:
+            before = self.read_error_code()
+            try:
+                ret = self.robot.ResetAllError()
+                time.sleep(0.3)
+                en = self.robot.RobotEnable(1)
+                time.sleep(0.5)
+                self.robot.Mode(0)
+                time.sleep(0.3)
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] reset_error exception: {e}")
+                return False, f"reset_error exception: {e}"
+            after = self.read_error_code()
+            clear = self.error_is_clear(after)
+            rospy.logwarn(f"[Arm REAL] reset_error: ResetAllError → {ret}, "
+                          f"RobotEnable(1) → {en}; error {before} → {after}")
+            detail = f"code {before} -> {after}"
+            if isinstance(ret, int) and ret != 0:
+                return False, f"ResetAllError refused (code {ret}); {detail}"
+            if clear is False:
+                return False, (f"error still set after reset ({detail}) — a "
+                               "joint may still be beyond its soft limit: jog "
+                               "it back inward, or use the teach pendant")
+            if clear is None:
+                return True, f"reset sent, error state unconfirmed ({detail})"
+            return True, f"error cleared ({detail})"
+        finally:
+            self.busy = False
 
     # --------------------------------------------------
     # MAIN ENTRY
@@ -1039,6 +1149,28 @@ class ArmController:
                 f"({self.current_pose_msg.x:.3f}, {self.current_pose_msg.y:.3f}, "
                 f"{self.current_pose_msg.theta:.1f} deg)")
         rospy.loginfo(f"[Arm REAL] IK → joints: {joints}")
+        # The IK's q puts the flange on the target under the controller's
+        # nominal zeros; the PHYSICAL joints must be q, so the reading to
+        # command is q - dq (joint_offset_cmd.py). A world point is always an
+        # absolute target, so this is unconditional when offsets are loaded.
+        # With skip_z the correction has no joint-space shortcut: the xy-
+        # corrected POSE is solved again (seeded with the IK's own q).
+        corr = getattr(self, '_cmd_corr', None)
+        if corr is not None and np.any(corr.dq):
+            if getattr(corr, 'skip_z', False) and corr.enabled:
+                def _ik_ref(pose_cmd, _seed=[float(v) for v in joints]):
+                    r, q = self._ik_result(self.robot.GetInverseKinRef(0, list(pose_cmd), _seed))
+                    return None if (r != 0 or q is None) else [float(v) for v in q]
+                try:
+                    joints, info = corr.joints_for_physical_pose(target, _ik_ref)
+                except ValueError as e:
+                    raise RuntimeError(f"joint-offset correction failed: {e}")
+                rospy.loginfo(f"[Arm REAL] joint offsets applied (xy only, z kept; {info['corr_mm']:.1f} mm / "
+                              f"{info['corr_deg']:.2f} deg, dz {info['dz_skipped_mm']:+.1f} mm skipped): "
+                              f"commanding {[round(v, 3) for v in joints]}")
+            else:
+                joints = corr.joints_for_physical(joints)
+                rospy.loginfo(f"[Arm REAL] joint offsets applied: commanding {[round(v, 3) for v in joints]}")
         ret = self.robot.MoveJ(joints, tool=TOOL_ID, user=0)
         if ret != 0:
             raise RuntimeError(f"MoveJ failed (code {ret})")
@@ -1091,10 +1223,21 @@ class ArmController:
             rospy.logwarn_throttle(5.0, f"[Arm REAL] Joint read failed: {e}")
             return None
 
-    def move_cart(self, pose, vel=30.0, acc=50.0, linear=True):
+    def move_cart(self, pose, vel=30.0, acc=50.0, linear=True, physical=False):
         """Absolute Cartesian move to [x,y,z mm, rx,ry,rz deg].
 
         Returns (ok, message). Blocks until the SDK call returns.
+
+        ``physical=True`` (2026-09-28): ``pose`` is where the PHYSICAL flange
+        must land, and the joint zero offsets are applied — the controller
+        is sent the pose whose nominal IK solution q gives FK(q + dq) =
+        pose (joint_offset_cmd.CommandCorrector). Use it for absolute
+        targets (a world point, the sheet, a plan seed). Leave it False
+        for targets built as "current reading + delta" (jog, the align's
+        correction steps, the standoff loop): there the offsets' effect
+        cancels between the reading and the target, and correcting would
+        ADD the error. The UI's MOVE button sends readings, so it stays
+        False.
 
         ``linear=True`` -> MoveL (straight TCP path), the default since
         2026-09-02. ``linear=False`` -> MoveCart (joint-interpolated to the
@@ -1120,6 +1263,25 @@ class ArmController:
         kind = "MoveL" if linear else "MoveCart"
         try:
             target = [float(v) for v in pose]
+            corr = getattr(self, '_cmd_corr', None)
+            if physical and corr is not None and corr.enabled:
+                def _ik(p):
+                    ret, q = self._ik_result(self.robot.GetInverseKin(0, list(p), config=-1))
+                    return None if (ret != 0 or q is None) else [float(v) for v in q]
+                try:
+                    cmd, info = corr.pose_for_physical(target, _ik)
+                except ValueError as e:
+                    rospy.logerr(f"[Arm REAL] move_cart refused: {e}")
+                    return False, f"move_cart failed: joint-offset correction — {e}"
+                rospy.loginfo(f"[Arm REAL] physical target {[round(v, 2) for v in target]} -> commanded "
+                              f"{[round(v, 2) for v in cmd]} (joint offsets: {info['corr_mm']:.1f} mm / "
+                              f"{info['corr_deg']:.2f} deg, {info['iters']} IK"
+                              + (f", z kept — dz {info['dz_skipped_mm']:+.1f} mm skipped" if info.get('skip_z') else '')
+                              + ")")
+                target = cmd
+            elif physical:
+                rospy.logwarn_throttle(30.0, "[Arm REAL] physical target requested but joint offsets are "
+                                             "not loaded — sent uncorrected")
             rospy.loginfo(f"[Arm REAL] {kind} → {[round(v, 2) for v in target]} "
                           f"(vel={vel}, acc={acc})")
             if linear:
@@ -1204,6 +1366,80 @@ class ArmController:
         if not ok:
             return ok, msg
         return True, f"jog {axis} {delta:+g} ok"
+
+    # Joint names as the UI and the JSON commands spell them, in the order
+    # the Fairino joint vector uses. j1 is the base.
+    JOINT_NAMES = ('j1', 'j2', 'j3', 'j4', 'j5', 'j6')
+
+    def move_joint(self, joints_deg, vel=30.0, acc=50.0):
+        """Absolute joint move: MoveJ to [J1..J6] in degrees.
+
+        Returns (ok, message). Blocks until the SDK call returns. The
+        operator's joint-space twin of move_cart (2026-09-21, robot_ui's
+        joint control): no IK, no tool frame involved — the target IS the
+        joint configuration, so this is the same call a scan_joint_* task
+        makes per row and the home pose uses. No reach or collision check
+        below this (none exists for MoveJ anywhere in the stack); the
+        controller refuses a joint limit with its own error code.
+        """
+        if len(joints_deg) != 6:
+            return False, "move_joint needs 6 values [j1 .. j6]"
+        if self.busy:
+            return False, "refused: arm busy"
+
+        self.busy = True
+        self.cancel_requested = False
+        try:
+            target = [float(v) for v in joints_deg]
+            rospy.loginfo(f"[Arm REAL] MoveJ (joint) → {[round(v, 2) for v in target]} "
+                          f"(vel={vel}, acc={acc})")
+            ret = self.robot.MoveJ(target, TOOL_ID, 0,
+                                   vel=float(vel), acc=float(acc))
+            if ret != 0:
+                rospy.logerr(f"[Arm REAL] MoveJ (joint) failed: {ret}")
+                return False, f"move_joint failed: MoveJ error {ret}"
+            if self.cancel_requested:
+                return False, "cancelled"
+            return True, "move_joint ok"
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] MoveJ (joint) exception: {e}")
+            if 'timed out' in str(e).lower():
+                self._wait_motion_done(120.0)      # same reason as move_cart
+            return False, f"move_joint exception: {e}"
+        finally:
+            self.busy = False
+
+    def jog_joint(self, joint, delta_deg, vel=30.0, acc=50.0, max_step=50.0):
+        """Move ONE joint by `delta_deg`; the other five keep their current
+        angle. `joint` is 'j1'..'j6' or 1..6. Same rules as the Cartesian
+        jog: the CURRENT joints are read first (no accumulated target), the
+        step is bounded by max_step, refused while busy.
+        """
+        name = str(joint).lower()
+        if name.isdigit():
+            name = 'j' + name
+        if name not in self.JOINT_NAMES:
+            return False, (f"unknown joint '{joint}' "
+                           f"(expected one of {self.JOINT_NAMES} or 1..6)")
+        try:
+            delta = float(delta_deg)
+        except (TypeError, ValueError):
+            return False, f"jog delta '{delta_deg}' is not a number"
+        if abs(delta) > max_step:
+            return False, (f"jog {delta} deg exceeds max_step {max_step} — "
+                           "raise ~jog_max_step deliberately if this is intended")
+        if self.busy:
+            return False, "refused: arm busy"
+
+        current = self.get_joints_deg()
+        if current is None:
+            return False, "refused: current joint angles unreadable"
+        target = list(current)
+        target[self.JOINT_NAMES.index(name)] += delta
+        ok, msg = self.move_joint(target, vel=vel, acc=acc)
+        if not ok:
+            return ok, msg
+        return True, f"jog {name} {delta:+g} deg ok"
 
     # --------------------------------------------------
     # PUBLISH / STATUS

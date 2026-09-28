@@ -26,12 +26,23 @@ Interface
 Subscribes:
   /arm/scan_command   std_msgs/String   JSON list of scan points
   /arm/cancel         std_msgs/Bool     true = abort current motion/scan
-  /arm/move_cart      std_msgs/String   JSON {"pose":[x,y,z,rx,ry,rz],
+  /arm/move_cart      std_msgs/String   JSON {"pose":[x,y,z,rx,ry,rz], "physical": bool (default false:
+                                         true = absolute target, joint zero offsets applied on the command side),
                                               "vel":30, "acc":50}
   /arm/jog_cmd        std_msgs/String   JSON {"axis":"z", "delta":1.0,
                                               "vel":30, "acc":50}
+  /arm/move_joint     std_msgs/String   JSON {"joints":[j1..j6 deg],
+                                              "vel":30, "acc":50}  — MoveJ
+  /arm/jog_joint      std_msgs/String   JSON {"joint":"j3"|3, "delta":1.0,
+                                              "vel":30, "acc":50}  — one joint
+                                        (robot_ui's joint control, 2026-09-21;
+                                         same rules as move_cart / jog_cmd)
 Services:
   /arm/move_home      std_srvs/Trigger  synchronous; refused while busy
+  /arm/reset_error    std_srvs/Trigger  clear a latched controller error
+                                        (joint limit, collision stop) —
+                                        ResetAllError + RobotEnable + Mode(0),
+                                        no motion; refused while busy
 Publishes:
   /arm/state          robot_msgs/ArmState  ~10 Hz — live pose, joints,
                                            busy, motion_seq + result
@@ -141,6 +152,10 @@ class ArmControllerNode:
         rospy.Subscriber('/arm/move_cart', String, self._cb_move_cart,
                          queue_size=1)
         rospy.Subscriber('/arm/jog_cmd', String, self._cb_jog, queue_size=1)
+        rospy.Subscriber('/arm/move_joint', String, self._cb_move_joint,
+                         queue_size=1)
+        rospy.Subscriber('/arm/jog_joint', String, self._cb_jog_joint,
+                         queue_size=1)
         # On-demand Keyence standoff from the current pose (robot_ui's
         # distance-sensor assist, 2026-09-15). JSON {"target_mm": 10.0}
         # (optional). Completion through motion_seq like move_cart / jog;
@@ -148,13 +163,15 @@ class ArmControllerNode:
         rospy.Subscriber('/arm/standoff', String, self._cb_standoff,
                          queue_size=1)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
+        rospy.Service('/arm/reset_error', Trigger, self._srv_reset_error)
 
         self._publish_status('idle')
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self._state_rate)),
                     self._tick_state)
 
         rospy.loginfo("[ArmNode] Ready — /arm/scan_command, /arm/cancel, "
-                      "/arm/move_cart, /arm/jog_cmd, /arm/move_home; "
+                      "/arm/move_cart, /arm/jog_cmd, /arm/move_joint, /arm/jog_joint, /arm/move_home, "
+                      "/arm/reset_error; "
                       "state on /arm/state")
 
     # ==========================================================
@@ -298,15 +315,19 @@ class ArmControllerNode:
         # "linear": true (default) = MoveL straight TCP path; false = MoveCart
         # joint-interpolated — see ArmController.move_cart for when each.
         linear = bool(req.get('linear', True))
-        self._start_worker(self._run_move_cart, (pose, vel, acc, linear),
+        # "physical": true = an ABSOLUTE target; the joint zero offsets are
+        # applied on the command side (2026-09-28). Default false: a target
+        # built from the current reading (UI MOVE, align steps) must not be.
+        physical = bool(req.get('physical', False))
+        self._start_worker(self._run_move_cart, (pose, vel, acc, linear, physical),
                            'move_cart')
 
-    def _run_move_cart(self, pose, vel, acc, linear=True):
+    def _run_move_cart(self, pose, vel, acc, linear=True, physical=False):
         with self._exec_lock:
             self._publish_status('busy')
             try:
                 ok, message = self.arm.move_cart(pose, vel=vel, acc=acc,
-                                                 linear=linear)
+                                                 linear=linear, physical=physical)
                 self._bump(ok, message)
             except Exception as e:
                 rospy.logerr(f"[ArmNode] move_cart failed: {e}")
@@ -336,6 +357,57 @@ class ArmControllerNode:
             except Exception as e:
                 rospy.logerr(f"[ArmNode] jog failed: {e}")
                 self._bump(False, f"jog exception: {e}")
+            finally:
+                self._publish_status('idle')
+
+    def _cb_move_joint(self, msg):
+        try:
+            req = json.loads(msg.data)
+            joints = req['joints']
+        except Exception as e:
+            self._bump(False, f"bad /arm/move_joint JSON: {e}")
+            return
+        vel = float(req.get('vel', self._default_vel))
+        acc = float(req.get('acc', self._default_acc))
+        self._start_worker(self._run_move_joint, (joints, vel, acc),
+                           'move_joint')
+
+    def _run_move_joint(self, joints, vel, acc):
+        with self._exec_lock:
+            self._publish_status('busy')
+            try:
+                ok, message = self.arm.move_joint(joints, vel=vel, acc=acc)
+                self._bump(ok, message)
+            except Exception as e:
+                rospy.logerr(f"[ArmNode] move_joint failed: {e}")
+                self._bump(False, f"move_joint exception: {e}")
+            finally:
+                self._publish_status('idle')
+
+    def _cb_jog_joint(self, msg):
+        try:
+            req = json.loads(msg.data)
+            joint = req['joint']
+            delta = req['delta']
+        except Exception as e:
+            self._bump(False, f"bad /arm/jog_joint JSON: {e}")
+            return
+        vel = float(req.get('vel', self._default_vel))
+        acc = float(req.get('acc', self._default_acc))
+        self._start_worker(self._run_jog_joint, (joint, delta, vel, acc),
+                           'jog_joint')
+
+    def _run_jog_joint(self, joint, delta, vel, acc):
+        with self._exec_lock:
+            self._publish_status('busy')
+            try:
+                ok, message = self.arm.jog_joint(
+                    joint, delta, vel=vel, acc=acc,
+                    max_step=self._jog_max_step)
+                self._bump(ok, message)
+            except Exception as e:
+                rospy.logerr(f"[ArmNode] jog_joint failed: {e}")
+                self._bump(False, f"jog_joint exception: {e}")
             finally:
                 self._publish_status('idle')
 
@@ -393,6 +465,27 @@ class ArmControllerNode:
                 return TriggerResponse(success=False, message=str(e))
             finally:
                 self._publish_status('idle')
+
+    # ==========================================================
+    # ERROR RESET — recovery after a joint-limit / collision stop
+    # ==========================================================
+    def _srv_reset_error(self, _req):
+        """Clear the controller's latched error without moving (2026-09-28).
+        Before this the only way was restarting arm_node. Synchronous (about
+        1 s), under the executor lock so it cannot interleave with a pose
+        read on the single RPC socket; refused while a motion runs."""
+        if self._busy():
+            return TriggerResponse(
+                success=False,
+                message="arm busy — cancel the motion first")
+        with self._exec_lock:
+            try:
+                ok, message = self.arm.reset_error()
+            except Exception as e:
+                rospy.logerr(f"[ArmNode] reset_error failed: {e}")
+                ok, message = False, f"reset_error exception: {e}"
+            self._bump(ok, f"reset_error: {message}")
+            return TriggerResponse(success=ok, message=message)
 
     # ==========================================================
     # SHUTDOWN

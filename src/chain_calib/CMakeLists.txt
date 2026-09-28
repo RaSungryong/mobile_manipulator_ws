@@ -13,6 +13,8 @@ install(PROGRAMS
   scripts/check_chain_calib.py
   scripts/verify_chain.py
   scripts/sheet_path.py
+  scripts/sheet_sweep.py
+  scripts/check_sheet_sweep.py
   scripts/arm_offsets.py
   scripts/basler_tip_calib.py
   scripts/check_basler_tip.py

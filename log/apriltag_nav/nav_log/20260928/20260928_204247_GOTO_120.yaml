@@ -1,0 +1,197 @@
+command: GOTO 120
+started_at: '2026-09-28T20:42:47.220'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1790595777.2839272
+  ros_time: 1790595777.2839315
+  stage: aligned
+  tag_id: 119
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 638.552973682355
+  - 351.9217902085659
+  image_offset_px:
+  - 0.3558911628236956
+  - -1.0598992445591193
+  tag_pose_m:
+  - 0.00013765009865350497
+  - -0.0004309357386039302
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.00013765009865350497
+  - 0.0004309357386039302
+  camera_center_offset_from_tag_mm:
+  - -0.13765009865350497
+  - 0.4309357386039302
+  camera_center_offset_from_tag_norm_mm: 0.45238607457064206
+  tag_edge_yaw_error_deg: 0.023489687985545515
+  traveled_m: null
+  align_passes: 1
+  align_median_frames: 3
+  image_center_offset_mm:
+  - 0.143
+  - -0.427
+  image_center_offset_norm_mm: 0.45
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_161429.yaml
+    calibrated_tag_position_m:
+    - 1.692940794070422
+    - -0.5496252518365469
+    - -0.07404832276822619
+    calibrated_tag_rpy_deg:
+    - 179.64001347366948
+    - 1.2494016979349922
+    - -179.92968669856035
+    world_offset_from_calibrated_tag_m:
+    - 0.00013817883861201184
+    - -0.0004307664901373714
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 0.13817883861201183
+    - -0.4307664901373714
+    - 0.0
+    estimated_camera_center_position_m:
+    - 1.693078972909034
+    - -0.5500560183266843
+    - -0.07404832276822619
+- seq: 2
+  stamp: 1790595798.362963
+  ros_time: 1790595798.362968
+  stage: arrival
+  tag_id: 120
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 639.2124877390627
+  - 379.18513722824156
+  image_offset_px:
+  - 1.0154052195314307
+  - 26.203447775116558
+  tag_pose_m:
+  - 0.000408738944134891
+  - 0.010554467349351757
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - -0.000408738944134891
+  - -0.010554467349351757
+  camera_center_offset_from_tag_mm:
+  - -0.408738944134891
+  - -10.554467349351757
+  camera_center_offset_from_tag_norm_mm: 10.562378924891155
+  tag_edge_yaw_error_deg: 1.1773859296699243
+  traveled_m: 0.4010357782658568
+  commanded_speed_at_stop_mps: 0.01
+  direction: forward
+  stop_offset_px: -0.3
+  stop_target_x_px: 637.9
+  tag_offset_from_target_px: 1.31
+  stop_lead_px: 1.99
+  stop_lead_mm: 0.8
+  stop_latency_s: 0.55
+  stop_latency_linear_s: 0.08
+  launch_peak_yaw_err_deg: 0.439
+  tag_age_s: 0.131
+  latency_comp_px: -3.7
+  tag_age_raw_s: 0.131
+  steer_mode: aim_and_drive
+  reseat: false
+  aim:
+    target_deg: 1.197
+    dist_m: 0.205
+    stop_offset_px: -0.298
+    dpsi_deg: 0.999
+    limited: false
+    b_mm: 4.291
+  launch_ff_applied: true
+  last_align_turn_sign: 1
+  image_center_offset_mm:
+  - 0.409
+  - 10.554
+  image_center_offset_norm_mm: 10.562
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_161429.yaml
+    calibrated_tag_position_m:
+    - 1.6960182714364986
+    - -0.9517206592446518
+    - -0.07001104400768893
+    calibrated_tag_rpy_deg:
+    - 179.75322719863098
+    - 0.964444286121368
+    - 179.69804700389653
+    world_offset_from_calibrated_tag_m:
+    - 0.00046435583420780506
+    - 0.010552166706995393
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 0.4643558342078051
+    - 10.552166706995393
+    - 0.0
+    estimated_camera_center_position_m:
+    - 1.6964826272707065
+    - -0.9411684925376563
+    - -0.07001104400768893
+- seq: 3
+  stamp: 1790595801.3594902
+  ros_time: 1790595801.359495
+  stage: aligned
+  tag_id: 120
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 637.1610277304245
+  - 356.8257943996268
+  image_offset_px:
+  - -1.0360547891067426
+  - 3.8441049465017727
+  tag_pose_m:
+  - -0.0004329211069103458
+  - 0.001549544847153276
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0004329211069103458
+  - -0.001549544847153276
+  camera_center_offset_from_tag_mm:
+  - 0.4329211069103458
+  - -1.549544847153276
+  camera_center_offset_from_tag_norm_mm: 1.6088846814323732
+  tag_edge_yaw_error_deg: 0.16843974781004079
+  traveled_m: null
+  align_passes: 1
+  align_median_frames: 3
+  image_center_offset_mm:
+  - -0.417
+  - 1.548
+  image_center_offset_norm_mm: 1.604
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_161429.yaml
+    calibrated_tag_position_m:
+    - 1.6960182714364986
+    - -0.9517206592446518
+    - -0.07001104400768893
+    calibrated_tag_rpy_deg:
+    - 179.75322719863098
+    - 0.964444286121368
+    - 179.69804700389653
+    world_offset_from_calibrated_tag_m:
+    - -0.0004247489168574761
+    - 0.0015518048446167933
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - -0.42474891685747607
+    - 1.5518048446167934
+    - 0.0
+    estimated_camera_center_position_m:
+    - 1.6955935225196412
+    - -0.950168854400035
+    - -0.07001104400768893

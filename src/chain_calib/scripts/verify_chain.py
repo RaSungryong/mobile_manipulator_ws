@@ -216,7 +216,7 @@ def cmd_run(args):
         if ans == "s":
             continue
         try:
-            S.arm.move_j_to_pose(pose, linear=True)
+            S.arm.move_j_to_pose(pose, linear=True, physical=True)   # absolute sheet target: joint offsets on the command side
         except Exception as e:
             print("   move failed: %s" % e); continue
         rospy.sleep(args.settle)

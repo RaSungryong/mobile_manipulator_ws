@@ -36,9 +36,12 @@ src/apriltag_nav/task/csv/*_ra_map_*.csv
 # comments — keep each pattern on its own line):
 #   results/scan_images/  wrist-camera frames, ~10 MB each (ra_maps/ holds the numbers)
 #   results/captures/     robot_ui Collect-tab captures
+#   results/tip_check/    tip-tour Basler frames (6-9 MB each; the records are in log/apriltag_nav/tip_check)
 #   log/ros/              roslaunch / node logs (ROS_LOG_DIR, set by the env hook)
 results/scan_images/
 results/captures/
+results/tip_check/**/*.png
+results/tip_check/**/*.jpg
 log/ros/
 *.bak
 

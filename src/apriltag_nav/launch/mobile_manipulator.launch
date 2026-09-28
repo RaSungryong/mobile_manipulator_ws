@@ -108,6 +108,18 @@
         <param name="lift_height_topic"     value="/lifter/height"/>
         <param name="require_lift_height"   value="false"/>
 
+        <!-- Joint zero offsets on the COMMAND side (2026-09-28 evening, ON).
+             config/tf/arm_joint_offsets.yaml is in the map calibration's
+             chain, so a world target sent without it lands the tip where
+             the offsets say the arm is NOT: a constant ~9 mm toward body -y
+             in both zones on the 22-stop tip_touch_cross_tags run, reproduced
+             by FK(q+dq)-FK(q) at the touch poses. skip_z true = correct xy
+             (+ the ~1 deg rotation) only and keep the commanded arm-frame z:
+             the offsets' z term (+9..14 mm) disagrees with the Keyence
+             (+4 / -4 mm) and would run the case into the plate. -->
+        <param name="apply_joint_offsets_cmd"   value="true"/>
+        <param name="joint_offsets_cmd_skip_z"  value="true"/>
+
         <param name="keyence_tol"           value="0.2"/>
         <!-- MEASURED 2026-08-05 (tools/measure_keyence_angle.py): the reading
              GROWS as the tool moves +Z, i.e. toward the surface, so a positive

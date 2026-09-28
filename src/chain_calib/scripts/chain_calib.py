@@ -7,9 +7,10 @@ The sheet (sheet/A0_landscape_tag200_300-309_5x2_FINAL2.pdf + its layout
 JSON) lies on the floor; front_cam sees some of its tags, hand_cam sees
 others. The operator jogs the arm (robot_ui Arm tab) so hand_cam looks at
 the sheet from a view, runs `capture`, jogs to the next view, captures
-again. No automatic arm motion — the automatic sweep that existed on
-2026-09-15 collided the arm with the base and is gone. The base does not
-move for the whole session.
+again. No automatic arm motion HERE — the 2026-09-15 sweep collided the
+arm with the base; the rebuilt, rule-checked automatic collection is
+`sheet_sweep.py` (2026-09-28) and writes the same session format. The
+base does not move for the whole session.
 
     rosrun chain_calib chain_calib.py check
     rosrun chain_calib chain_calib.py --sx 1.0012 --sy 0.9991 --tag-size 0.0899 capture log/chain_calib/<date>
@@ -20,6 +21,13 @@ move for the whole session.
 --sx / --sy / --tag-size are the PRINT'S MEASURED scale (README §2). 20
 frames per camera per capture by default; session directories under
 log/chain_calib/. README.md in this package is the operator guide.
+
+--hand-tags 301 303 305 307 309 (2026-09-28) restricts hand_cam's PnP to
+those sheet tags; the whitelist is stored in the session's meta and
+`solve` / `status` / arm_offsets.py apply it to the stored corners too.
+`scripts/sheet_sweep.py` is the AUTOMATIC collection over such a whitelist
+(planned views, safety rules, bounded rotations) — this file stays the
+operator-jogged path and the solver.
 """
 import math
 import argparse
@@ -156,13 +164,48 @@ def hand_intrinsics(meta, source="meta"):
     return o.K.copy(), o.D.copy()
 
 
-def resolve_samples(samples, meta, sheet, front_rotation="level", hand_intrinsics_source="meta"):
+def hand_tags_for(args, meta):
+    """The hand_cam tag WHITELIST of a session (2026-09-28): the sheet tags
+    hand_cam's PnP may use — the user's "301 303 305 307 309 only". The
+    session's meta wins once set (a session is one whitelist); the
+    command line sets it for a new session or narrows a re-solve. None =
+    every sheet tag, the behaviour before the option existed."""
+    cli = getattr(args, "hand_tags", None)
+    stored = meta.get("hand_tags") if meta else None
+    if stored:
+        stored = sorted(int(k) for k in stored)
+        if cli and sorted(int(k) for k in cli) != stored:
+            print("! --hand-tags %s differs from the session's %s: the session's stays" % (sorted(cli), stored))
+        return stored
+    return sorted(int(k) for k in cli) if cli else None
+
+
+def filter_corners(corners, hand_tags):
+    """Keep only the whitelisted tags of a {tag id: corners} dict (None = all)."""
+    if corners is None or not hand_tags:
+        return corners
+    allowed = set(int(k) for k in hand_tags)
+    return {k: v for k, v in corners.items() if int(k) in allowed}
+
+
+def resolve_samples(samples, meta, sheet, front_rotation="level", hand_intrinsics_source="meta", hand_tags=None):
     """Re-solve every sample's T_hc2W / T_fc2W from its stored corners
     with THIS sheet (scale may differ from capture time). K / D from meta,
-    or the robot.yaml override for hand_cam (``hand_intrinsics``)."""
+    or the robot.yaml override for hand_cam (``hand_intrinsics``).
+    ``hand_tags``: whitelist applied to the stored hand_cam corners (a
+    sample left with fewer than one allowed tag is dropped, named)."""
     K_hand, D_hand = hand_intrinsics(meta, hand_intrinsics_source)
     K_front = np.asarray(meta["K_front"], float).reshape(3, 3)
     D_front = None if meta.get("front_cam_frame", "level") == "level" else np.asarray(meta.get("D_front") or [], float)
+    if hand_tags:
+        dropped = []
+        for s in samples:
+            s.hand_corners = filter_corners(s.hand_corners, hand_tags)
+            if not s.hand_corners:
+                dropped.append(s.label)
+        if dropped:
+            print("! hand_cam whitelist %s leaves no tag in %s — dropped" % (sorted(hand_tags), ", ".join(dropped)))
+            samples[:] = [s for s in samples if s.hand_corners]
     for s in samples:
         h = SH.multi_tag_pnp(s.hand_corners, sheet, K_hand, D_hand)
         f = SH.multi_tag_pnp(s.front_corners, sheet, K_front, D_front)
@@ -209,12 +252,15 @@ def apply_arm_offsets(samples, dq_deg, warn=print):
 # ROS side: read the arm and the two detectors, nothing else
 # ----------------------------------------------------------------------
 class Session:
-    def __init__(self, cfg, sheet, front_frame, frames):
+    def __init__(self, cfg, sheet, front_frame, frames, hand_tags=None):
         import rospy
         from path_tag_locator.arm_interface import ArmInterface
         from path_tag_locator.lift_listener import LiftHeightListener
         self.rospy = rospy
         self.cfg, self.sheet, self.front_frame, self.frames = cfg, sheet, front_frame, int(frames)
+        # hand_cam tag whitelist (None = every sheet tag): other tags in the
+        # frame are dropped BEFORE the PnP, so they never enter a sample
+        self.hand_tags = sorted(int(k) for k in hand_tags) if hand_tags else None
         self.arm = ArmInterface(state_topic=cfg.arm.state_topic, move_cart_topic=cfg.arm.move_cart_topic,
                                 home_service=cfg.arm.home_service, motion_timeout_s=cfg.arm.motion_timeout_s)
         self.lift = LiftHeightListener()
@@ -259,14 +305,20 @@ class Session:
         with lock:
             return list(frames)
 
-    def camera_T(self, topic, K, D, what):
-        """(PnPResult, {id: TagCorners}, n frames) for one camera over the sheet."""
+    def camera_T(self, topic, K, D, what, only=None):
+        """(PnPResult, {id: TagCorners}, n frames) for one camera over the sheet.
+        ``only``: tag whitelist — tags outside it are dropped before the PnP."""
         frames = self.collect_frames(topic, self.frames)
         if not frames:
             raise RuntimeError("%s: no detection frames on %s" % (what, topic))
         tags = SH.accumulate_frames(frames)
         if not tags:
             raise RuntimeError("%s does not see any tag (%d frames)" % (what, len(frames)))
+        if only:
+            seen = sorted(tags)
+            tags = {k: t for k, t in tags.items() if int(k) in set(only)}
+            if not tags:
+                raise RuntimeError("%s sees %s but none of the allowed tags %s" % (what, seen, sorted(only)))
         res = SH.multi_tag_pnp({k: t.corners_px for k, t in tags.items()}, self.sheet, K, D)
         return res, tags, len(frames)
 
@@ -278,7 +330,8 @@ class Session:
         tcp = self.arm.get_tcp_pose()
         joints = self.arm.get_joints()                 # same /arm/state poll as the pose
         lift = self.lift.height_m() or 0.0
-        h, htags, nh = self.camera_T(self.cfg.topics.hand_cam_detections, self.K_hand, self.D_hand, "hand_cam")
+        h, htags, nh = self.camera_T(self.cfg.topics.hand_cam_detections, self.K_hand, self.D_hand, "hand_cam",
+                                     only=self.hand_tags)
         # front_cam: ground-plane-corrected corners are a distortion-free
         # virtual camera's pixels (D = 0); raw corners need the real D
         Df = None if self.front_frame == "level" else self.D_front
@@ -355,7 +408,9 @@ def cmd_check(args):
     sheet = sheet_from_args(args)
     print("extrinsics: %s" % ext.note)
     print(sheet.describe())
-    S = Session(cfg, sheet, ext.front_cam_frame, args.frames)
+    S = Session(cfg, sheet, ext.front_cam_frame, args.frames, hand_tags=hand_tags_for(args, {}))
+    if S.hand_tags:
+        print("hand_cam tag whitelist: %s" % S.hand_tags)
     try:
         s, info = S.one_sample("check")
     except Exception as e:
@@ -386,11 +441,15 @@ def cmd_capture(args):
         if meta.get("front_cam_frame") != ext.front_cam_frame:
             sys.exit("%s: this session's front_cam detections were %s, now %s (ground_plane toggled?)"
                      % (args.dir, meta.get("front_cam_frame"), ext.front_cam_frame))
-    S = Session(cfg, sheet, ext.front_cam_frame, args.frames)
+    tags = hand_tags_for(args, meta)
+    S = Session(cfg, sheet, ext.front_cam_frame, args.frames, hand_tags=tags)
     if not meta:
         meta = new_meta(sheet, args.frames, _resolve(cfg.hand_eye_npz), ext.note, ext.front_cam_frame,
                         S.K_front, S.D_front, S.K_hand, S.D_hand)
         meta["hand_cam_intrinsics"] = S.hand_intrinsics_source
+    if tags and not meta.get("hand_tags"):
+        meta["hand_tags"] = list(tags)               # from now on this session's PnP uses only these
+        print("hand_cam tag whitelist for this session: %s" % tags)
     label = args.label or next_label(samples)
     rospy.sleep(0.3)                                     # let the jog settle
     try:
@@ -423,15 +482,21 @@ def _offsets_line(samples, args):
 ARGS = argparse.Namespace(arm_offsets="config")
 
 
+def int_list(text):
+    """'301,303,305' -> [301, 303, 305] (a global option cannot take nargs: it would eat the subcommand)."""
+    return [int(v) for v in str(text).replace(";", ",").split(",") if v.strip()]
+
+
 def cmd_status(args):
     samples, meta = load_samples(args.dir)
     if not samples:
         sys.exit("no samples in %s" % args.dir)
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
-    resolve_samples(samples, meta, sheet, args.front_rotation)
+    tags = hand_tags_for(args, meta)
+    resolve_samples(samples, meta, sheet, args.front_rotation, hand_tags=tags)
     _offsets_line(samples, args)
-    print("%d samples; %s" % (len(samples), sheet.describe()))
+    print("%d samples; %s%s" % (len(samples), sheet.describe(), ("; hand_cam tags %s" % tags) if tags else ""))
     errs = CC.pair_errors(samples, sheet, H, ext.T_ab2mb, ext.T_mb2fc_chain, lift_compensate=compensate_T_ab2mb)
     for s, (lab, a, b, dp, dr, e) in zip(samples, errs):
         v = sample_view(s, sheet)
@@ -457,9 +522,11 @@ def cmd_solve(args):
         sys.exit("no samples in %s" % args.dir)
     cfg, ext, H = platform(hand_eye=args.hand_eye or meta.get("hand_eye_npz"))
     sheet = sheet_from_args(args, meta)
-    n = resolve_samples(samples, meta, sheet, args.front_rotation, getattr(args, "hand_intrinsics", "meta"))
-    print("%d samples from %s (%d frames/sample); %d re-solved from stored corners"
-          % (len(samples), meta.get("date"), meta.get("frames_per_sample", 0), n))
+    tags = hand_tags_for(args, meta)
+    n = resolve_samples(samples, meta, sheet, args.front_rotation, getattr(args, "hand_intrinsics", "meta"), hand_tags=tags)
+    print("%d samples from %s (%d frames/sample); %d re-solved from stored corners%s"
+          % (len(samples), meta.get("date"), meta.get("frames_per_sample", 0), n,
+             ("; hand_cam tags restricted to %s" % tags) if tags else ""))
     print(sheet.describe())
     print("hand-eye: %s\nextrinsics: %s" % (_resolve(args.hand_eye or meta.get("hand_eye_npz")), ext.note))
     _offsets_line(samples, args)
@@ -627,6 +694,11 @@ def main():
     ap.add_argument("--tag-size", type=float, default=None, help="tag black edge as measured on the print (m)")
     ap.add_argument("--frames", type=int, default=20, help="frames averaged per camera per capture")
     ap.add_argument("--hand-eye", default=None, help="hand-eye npz to evaluate (default: locator.yaml's)")
+    ap.add_argument("--hand-tags", type=int_list, default=None, metavar="ID,ID,..",
+                    help="sheet tags hand_cam's PnP may use (e.g. 301,303,305,307,309 — comma-separated, it is a global "
+                         "option before the subcommand); others in the frame are "
+                         "ignored. Stored in the session's meta at the first capture; on status / solve it also "
+                         "narrows a stored session. Default: every sheet tag")
     ap.add_argument("--arm-offsets", default="config", metavar="config|none|NPZ",
                     help="arm joint zero offsets folded into the flange pose (FK(q+dq) from the recorded joints): "
                          "'config' = config/tf/arm_joint_offsets.yaml as the locator chain applies it (default), "

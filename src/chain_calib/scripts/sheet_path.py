@@ -177,7 +177,7 @@ def main():
                 print("   REFUSED (body clearance): %s" % why_b)
                 w.writerow([i + 1, *p, *pose] + [""] * 14 + ["refused: " + why_b]); fh.flush(); continue
             try:
-                S.arm.move_j_to_pose(pose, linear=True)
+                S.arm.move_j_to_pose(pose, linear=True, physical=True)   # absolute sheet target
             except Exception as e:
                 print("   move failed: %s — skipping" % e)
                 w.writerow([i + 1, *p, *pose] + [""] * 14 + ["move failed: %s" % e]); fh.flush(); continue

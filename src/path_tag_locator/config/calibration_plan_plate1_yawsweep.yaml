@@ -2,8 +2,8 @@
 # scripts/generate_calibration_artifacts.py (lift 0 mm, view 0.50 m)
 # — do not hand-edit; re-run the generator.
 #
-# THIS IS NOT A CALIBRATION. One path tag (103), one ref tag
-# (0), 6 different CAMERA YAWS spanning 355°. The base never
+# THIS IS NOT A CALIBRATION. One path tag (116), one ref tag
+# (3), 6 different CAMERA YAWS spanning 355°. The base never
 # moves, so front_cam's view of the tag is identical every time
 # and cancels; only the ARM side varies.
 #
@@ -12,7 +12,7 @@
 #   radius ~0 but the normal session shows a large absolute
 #   error                        -> FRONT_CAM (T_mb2fc) is wrong
 #
-# ⚠️ Park the base ON tag 103 and leave it there. Do NOT reorder
+# ⚠️ Park the base ON tag 116 and leave it there. Do NOT reorder
 # the entries and do NOT let a TASK/GOTO move the base midway —
 # a moved base breaks the common factor the whole method rests
 # on. Run with ref_tags_path = config/reference_tags.yaml.
@@ -22,28 +22,28 @@ defaults:
   align_required: true
 
 plan:
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 1/6 | cam yaw 0° | flange 1.229 m
-    ref_tag_id: 0
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 1/6 | cam yaw 0° | flange 1.152 m
+    ref_tag_id: 3
     yaw_sweep_deg: 0   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [-323.8, 1044.9, 85.1, 180.0, 0.4, -91.5]
+    arm_view_tcp_mm_deg: [342.6, 946.5, 85.1, 180.0, 0.4, 88.5]
     # START HERE — park the base on this tag and do not move it
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 2/6 | cam yaw 185° | flange 1.119 m
-    ref_tag_id: 0
-    yaw_sweep_deg: 185   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [333.8, 933.9, 85.1, 180.0, 0.4, 83.5]
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 3/6 | cam yaw 225° | flange 0.746 m
-    ref_tag_id: 0
-    yaw_sweep_deg: 225   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [212.5, 740.5, 85.1, 180.0, 0.4, 43.5]
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 4/6 | cam yaw 270° | flange 0.523 m
-    ref_tag_id: 0
-    yaw_sweep_deg: 270   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [-33.7, 672.5, 85.1, 180.0, 0.4, -1.5]
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 5/6 | cam yaw 310° | flange 0.772 m
-    ref_tag_id: 0
-    yaw_sweep_deg: 310   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [-237.0, 776.5, 85.1, 180.0, 0.4, -41.5]
-  - path_tag_id: 103    # B y -0.650 | YAW SWEEP 6/6 | cam yaw 355° | flange 1.187 m
-    ref_tag_id: 0
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 2/6 | cam yaw 45° | flange 0.736 m
+    ref_tag_id: 3
+    yaw_sweep_deg: 45   # analysis marker; the orchestrator ignores it
+    arm_view_tcp_mm_deg: [216.5, 724.3, 85.1, 180.0, 0.4, 43.5]
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 3/6 | cam yaw 90° | flange 0.510 m
+    ref_tag_id: 3
+    yaw_sweep_deg: 90   # analysis marker; the orchestrator ignores it
+    arm_view_tcp_mm_deg: [-29.8, 656.4, 85.1, 180.0, 0.4, -1.5]
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 4/6 | cam yaw 130° | flange 0.757 m
+    ref_tag_id: 3
+    yaw_sweep_deg: 130   # analysis marker; the orchestrator ignores it
+    arm_view_tcp_mm_deg: [-233.0, 760.3, 85.1, 180.0, 0.4, -41.5]
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 5/6 | cam yaw 175° | flange 1.172 m
+    ref_tag_id: 3
+    yaw_sweep_deg: 175   # analysis marker; the orchestrator ignores it
+    arm_view_tcp_mm_deg: [-322.2, 999.7, 85.1, 180.0, 0.4, -86.5]
+  - path_tag_id: 116    # C y +0.645 | YAW SWEEP 6/6 | cam yaw 355° | flange 1.194 m
+    ref_tag_id: 3
     yaw_sweep_deg: 355   # analysis marker; the orchestrator ignores it
-    arm_view_tcp_mm_deg: [-326.2, 1015.9, 85.1, 180.0, 0.4, -86.5]
+    arm_view_tcp_mm_deg: [344.9, 975.5, 85.1, 180.0, 0.4, 93.5]

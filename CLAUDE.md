@@ -298,7 +298,17 @@ Two facts from the previous warning that are still load-bearing:
   plus `camera_offset` **plus, since 2026-09-04, the tag's fore-aft
   distance ahead of the lens** (`mobile_controller.calculate_robot_pose`,
   `robot_pose_use_fore_aft`) — needed because the base now stops with the
-  tag 12–16 cm ahead of the lens. There is still **no body-width term
+  tag 12–16 cm ahead of the lens. **Since 2026-09-28 (night) all three
+  body-frame vectors — fore, lateral and the 0.55 m lever — are rotated by
+  the BODY HEADING (zone + align residual + calibrated laying angle),
+  not the bare zone axis** (`robot_pose_offset_along_heading`): the align
+  squares the body to the tag edges, so a tag laid δ off its lane leaves
+  the base centre 0.55·sin δ beside the zone-axis estimate (9.6 mm/deg —
+  the tip tour's +9.7 mm at tag 116, δ −0.77°). **And the published
+  arrival pose is the align's at-rest MEDIAN view** (`align_record_frames`
+  3; an out-of-passes residual is re-settled and re-measured first), not
+  the newest single frame, which at tag 104 disagreed by 1.44°.
+  `tools/check_robot_pose_heading.py` (20). There is still **no body-width term
   anywhere in the pipeline**, so changing the chassis does not move where
   the robot stops. `wall_dist_*` is documentation.
 - **`/robot_pose` is a LIVE stream since 2026-09-28** (user: "실시간으로
@@ -361,7 +371,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -488,6 +498,23 @@ which `navigate.py` does not.
 `mobile_node` subscribes to `/safety/estop` itself rather than having
 `task_executor` forward one. The base is the most dangerous device here, and a
 stop that only works while the orchestrator is healthy is not a stop.
+
+**No front camera, no tag driving (user rule, 2026-09-22).** `mobile_node`
+refuses every `/mobile/goto_tag` — i.e. every TASK / GOTO / CHARGE hop —
+while front_cam's detections are absent or older than
+`robot.front_cam_alive_timeout_s` (1.0 s; `robot_camera_node` publishes an
+array for EVERY frame, empty or not, so the message age is the liveness of
+driver + node + detector: node down, camera switched off with
+`set_enabled false`, stalled stream all count). The result message says
+`front_cam not working: …`, `/mobile/state` carries `front_cam_ok` /
+`front_cam_age_s` / `front_cam_reason`, robot_ui's BASE chip reads
+`NO CAM`. `MobileController.move_to_tag` re-checks before every hop (a
+camera that dies mid-route stops the base before the next hop), and
+`detected_tags` is a property that serves `{}` once the frame is stale —
+before this the last frame stayed in front of the control loops forever
+and `get_current_tag_id` would have launched a blind drive from it. The
+odom-only manual moves (`/mobile/move_cmd`) are not tag driving and are
+not gated. `tools/check_front_cam_guard.py` (31).
 
 **Completion is `seq`-based, not position-based.** The lift has a measurable
 end state (an absolute height); navigation does not — arrival is decided inside
@@ -1522,7 +1549,8 @@ CSV quat is reliable.
 the world target — see the lift section below.
 
 **The map calibration is applied through `map.yaml`: x, y and yaw since
-2026-09-22 (user: "x, y 말고 모든 값 사용"), z NOT used and not in the
+2026-09-22 (tags 100–117 / 121–125 re-measured 2026-09-28 on the shifted
+T_ab2mb, 118–120 still the 09-22 values — Work Log 2026-09-28 evening) (user: "x, y 말고 모든 값 사용"), z NOT used and not in the
 file (user's decision the same evening: "z는 사용 안하기로", "지워주").**
 Tags 100–125 carry the calibrated `x` / `y` (design + delta in a trailing
 comment) and **`yaw`** (world heading of the tag's x axis, CCW +); the
@@ -1648,6 +1676,13 @@ and saves `T_ab2mb_planar` in `corrections.npz`; `solver.fit_planar_
 T_ab2mb` / `--planar-tz`. `arm_transform`'s tilt_x / tilt_y are 0 again
 and the lift is purely along arm z. The URDF `mobile_to_base` follows
 (xyz 0.006706 0.106230 0.652000, rpy 0 0 0.014030243).
+
+**And on 2026-09-28 (evening) the applied `T_ab2mb` x, y moved once more
+by (−1, +7) mm → t (−9.20, −99.13, −652.00) mm, yaw / tz unchanged:** the
+automatic sheet session of that day showed a constant xy bias of
+(−7.1, +1.0) mm in the sheet frame that the planar least squares (which
+also weighs the parking tilt's z) did not remove; shifted directly, on the
+user's decision that only x, y matter. Work Log 2026-09-28 (evening).
 
 **And `T_ee2tip` was re-solved into the same set (2026-09-22, evening):**
 the 09-21 Basler-tip session re-solved with the re-solved hand-eye and
@@ -1898,6 +1933,30 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-28 (night) — Base stop pose per map tag, for path generation: `tools/map_stop_poses.py` → `docs/robot_base_stop_poses.csv`
+
+User: from the current map.yaml, compute where the mobile base CENTRE is
+(world frame = 정반 1 centre; x, y, yaw) when front_cam has aligned on
+each drive tag and stopped, taking T_mb2fc's non-ideal tilt / yaw into
+account — reference data for the path generator, not a code change.
+Arithmetic = `calculate_robot_pose` at an at-rest arrival with fore =
+lateral = align residual = 0: heading = zone axis + the tag's calibrated
+laying angle δ (map.yaml `yaw`, tags without one δ = 0), base = tag −
+0.55·(cos, sin heading). **Why T_mb2fc's tilt and yaw are not extra
+terms:** the script asserts, from tf_chain.yaml's physical matrix and
+`ground_plane.T_tilted_to_level`, that the level virtual camera the
+detections are published in is exactly diag(1, −1, −1) at the lens
+(4.7e-10), so "on the crosshair" = under the lens NADIR (0.55, 0) and
+"edge 0" = body parallel to the tag edge; the physical optical axis
+meets the floor 7.6 mm from the nadir but nothing uses that point. What
+the calibration leaves: ±0.22° of yaw (±2 mm lateral at the base) and
+the 0.2° align band (1.9 mm). **WORK tags 100–150 only (51 rows), the
+FWD-column pose** — user, same night: the 400 / 500-series are not
+wanted (`--ids all` restores them); checks: dock 500 → x −1.9123 (the
+design record), 116 (δ −0.77°) → +7.4 mm world x = the 9.6 mm/deg lever
+of the tip tour. Re-run the script after any map.yaml / camera_offset
+change.
+
 ### 2026-09-28 (night) — "주행이 너무 느리다": the last 15 cm crawl shortened; accuracy comes from the at-rest measurements, which are untouched
 
 User: the driving is too slow — can it be faster with the same accuracy?
@@ -1934,6 +1993,178 @@ yaml comment records the arithmetic. Verified offline:
 Not driven: `mobile_node` restart required (`sudo systemctl restart
 mobile-manipulator`); first check a 112→109→112 round trip's `aligned`
 records — fore-aft within ±2 mm, lateral / yaw unchanged, hop time.
+
+### 2026-09-28 (night) — Tip tour over 22 stops analysed: the error is the joint offsets missing from the COMMAND side; correction turned ON, xy only
+
+User ran `tip_touch_cross_tags` (session `tip_check/20260928_170357_cross_tags`,
+22 stops, frames in `results/tip_check/…`) and asked why the markers were
+not centred and "the errors vary randomly". `analyze_tip_check.py` over
+the frames: 19 measured, **118 / 119 / 120 (cross tag 4, marker 223) show
+no tag36h11 at all** — re-detected at full resolution, decimate 1.0: none.
+Either marker 223 is not on cross tag 4 or the tip is off by more than the
+62 × 41 mm field; the neighbours' 10 mm errors make the first the likelier
+— check the marker before the next run.
+
+**Not random.** World x error +9.3 mm mean in zone B, −8.1 in zone C —
+sign flips with the robot's heading; rotated into the BODY frame it is a
+constant **−8.8 mm along body y (the arm / plate side) in both zones**,
+sd (5.0, 3.8), no correlation with the reported base lateral (zone B
+r = 0.01). A robot-frame constant plus an along-lane pattern within each
+cross-tag group.
+
+**Cause, reproduced by calculation:** the map calibration runs with the
+joint offsets IN its chain (every entry `joint_offsets_applied: true`),
+the tip command ran WITHOUT them (`~apply_joint_offsets_cmd` false, the
+afternoon's decision). FK(q + dq) − FK(q) carried to the tip at every
+recorded touch configuration, rotated to world through the point's own
+R_AW: mean (+1.87, −0.09) vs measured (+1.95, −0.31) mm, same zone sign
+flip, same along-lane trend (101→104 pred +9.2 / +5.4 / −1.3 / −6.6 vs
+meas +4.3 / +3.6 / −6.6 / −2.7 in y); **rms 10.8 → residual 5.3 mm**,
+residual sd (4.4, 3.0), the 7–9 mm outliers 104 / 116 / 122 (two of them
+registered, not detected, frames). The sign matching means the offsets'
+xy is physically right and the command side is what is missing. z is the
+opposite, as the afternoon found: the offsets predict the tip +9…14 mm
+above the reading, the Keyence measured +4.4 (cross tags 0 / 1 / 5) and
+−3.7 mm (cross tag 2) — a full correction would run the case 5–9 mm into
+the plate on the approach. Also seen: 12 of 22 standoff loops ended
+"reading does not follow the motion" (still moved 3–8 mm, frame taken);
+not an xy matter, separate.
+
+**Applied (user: use the offsets in the Cartesian command like the map
+calibration does, x/y only):** `CommandCorrector(skip_z=True)` computes
+the full 6-DOF correction (translation AND the ~1.05° rotation — the
+rotation is part of the in-plane fix: 0.32 m tip lever × 1° = 5.6 mm of
+tip xy, 0.05 mm of z), then puts the commanded ARM-FRAME z back to the
+target's z, re-evaluating D at the pose actually commanded (arm z is
+vertical with the planar T_ab2mb). `joints_for_physical_pose` is the
+joint-target form (IK of the xy-corrected pose; with skip_z off it equals
+q − dq to 1e-4°), used by `_exec_pose`; `move_cart(physical=True)` takes
+the pose form. Plausibility is judged on the full correction, dropped z
+included. `arm_node` params: `~apply_joint_offsets_cmd` **true** and
+`~joint_offsets_cmd_skip_z` **true**, both set in the launch now
+(`roslaunch --dump-params` shows them). At the 22 touch poses the full
+correction is 10.7–13.6 mm (bound 30), the xy applied 9.0–9.7 mm, the z
+skipped −4.7…−10.2 mm at the flange. Verified offline:
+`check_joint_offset_cmd.py` 21 → **37** (skip_z: commanded z == target z
+bit for bit, FK(IK(cmd)+dq) on the target xy to 0.002 mm with the target
+orientation, physical z misses by exactly the dropped term, the joint
+form on target to 0.001 mm, `_exec_pose` against a URDF-IK fake sending
+MoveJ joints whose FK(q+dq) is on the IK target xy while the controller's
+own FK(q) is 6.8 mm off it, move_cart keeping z), `check_scan_progress`
+73, `check_tip_tour` 20. **Not run on the robot: `arm_node` restart
+required** (`sudo systemctl restart mobile-manipulator`; watch for
+`joint offsets on the command side … xy only … ON` at start, then per
+point `joint offsets applied (xy only, z kept; 9.x mm / 1.05 deg, dz
+−x mm skipped)`). Expected on the re-run: rms 10.8 → ~5 mm; what remains
+is the arm's position-dependent error (09-21's ±9 mm) and the stop pose.
+
+**Re-run by the operator (18:50, `20260928_185021_cross_tags`, arm_node
+restarted with the correction ON): rms 10.8 → 4.2 mm (3.6 without 116),
+mean (−0.8, −0.5) mm, 17 of 22 measured.** Per stop, run 2 equals run 1's
+post-prediction residual to sd (1.6, 2.3) mm — the remaining error is
+REPEATABLE per stop, not noise. Two things it is: (1) **`calculate_robot_
+pose` projects `camera_offset` along the ZONE axis, not the body heading**
+— the align squares the body to the tag edges, so the body sits at zone +
+align residual + laying angle δ (map yaw), the heading field carries all
+three, but the 0.55 m lever is applied along the bare zone axis; the base
+centre is then 9.6 mm/deg of body yaw off in world x, sign per zone.
+Measured: err_wx vs (theta − zone) r = 0.87, sd 3.35 → 1.74 mm when
+removed; 116 (δ −0.77°) +9.7 mm of which 6.0 predicted, 122 (δ −0.73°)
+was run 1's +7.5. Fix = project along `heading` (not done — user asked
+for the analysis). (2) **104 in run 2 was a one-off bad stop:** the stop
+align overshot every pass (pass 1 settled −0.55° after predicting 0,
+pass 2 lost the tag twice and settled −0.99°), was ACCEPTED at +0.59°
+with the lens 8 mm off, and `publish_robot_pose` 3 ms later read the
+newest single frame at θ 89.58 — 1.44° from the record's at-rest median
+— i.e. the base was still turning; 1.44° × the 1.1 m lever = 27 mm along
+the lane, marker outside the 62 × 41 mm field (registration 0.35). The
+other three 104 arrivals today aligned in one pass. Improvements: re-
+settle and re-measure before publishing an accepted residual, publish
+from the align's at-rest median rather than the newest frame, and have
+tip_check redo a GOTO whose aligned record says `align_residual_accepted`
+or lateral > 5 mm. Also seen: the rotation part of the xy correction
+moved the physical TIP ~3.5 mm lower (245 mm tip lever × 1°; the flange
+z was kept, the tip's was not — run-to-run standoff corrections +3.49 ±
+0.82 mm), absorbed by the Keyence loop; keeping the TIP z instead would
+remove it. Cross tag 5's frames (121–124) show no marker this run (224
+was there in run 1; 223 on cross tag 4 was missing in run 1 and present
+now — a marker was moved). Standoff "reading does not follow the motion"
+on 19 of 22 stops (12 in run 1), ending 0.5–0.9 mm from target — separate.
+
+**Then (user: "1번과 2번 구현해줘") — both built.** (1) `calculate_robot_pose`
+rotates fore, lateral and the camera lever by the full heading
+(`robot.robot_pose_offset_along_heading`, default true; false = the old
+zone-axis arithmetic, bit for bit when the body is on the axis). (2) The
+continuous align's settled measurement is `_measure_tag_view_at_rest`
+(median of `align_record_frames` = 3 frames, x / y / z / edge_deg); when
+the passes run out it waits another `stop_latency_s + align_settle_s`
+with zero command and re-measures before recording (`align_resettled`,
+`align_median_frames` in the record); the view is kept
+(`_aligned_view`) and `publish_robot_pose` publishes THAT view while it
+is fresh (`align_view_max_age_s` 10 s, same tag; log says `from the
+align's at-rest median (3 frames)` vs `from the newest frame`).
+`calculate_robot_pose(tag_id, tag=)` takes the view and prefers its
+`edge_deg` over the corners. Verified offline: new
+`tools/check_robot_pose_heading.py` (**20** — on-axis identity in A / B /
+C / DOCK with fore + lateral; tag 116's numbers give +5.8 mm world x,
+104's +4.1, 101's −3.4 — the measured signs; a plant with the tag laid
+0.8° off the lane: after the align the published base centre is within
+0.00 mm of the plant where the zone-axis projection is 7.6 mm off, from
+the 3-frame median; a 2.0 s-late plant runs out of passes, re-settles,
+records the plant's true at-rest yaw and publishes it; stale / absent
+view → newest frame), `check_nav_sequencing` 14, `check_robot_pose_live`
+30, `check_front_cam_guard` 31, `check_calibrated_tag_z_yaw` 42. **Not
+run on the robot: `mobile_node` restart required** (the same
+`systemctl restart`). Cost: ~0.3 s per align (3 frames), plus one settle
+(~0.85 s) only when a residual is accepted. Expected on the next tour:
+x-error sd 3.4 → ~1.7 mm, rms 4.2 → ~3.0.
+
+**Third tour (20:18, `20260928_201821_cross_tags`, both fixes live —
+every align logs `median of 3 frames`, every pose `from the align's at-rest
+median`): 22 / 22 measured (all six markers laid), rms 4.15 mm, 3.17
+without 104; mean (+0.6, +0.3); x-error vs body yaw r 0.87 → −0.10 (the
+heading projection did its job: 116 went +9.7 → +1.5 mm); per-stop sd
+(2.1, 2.4) mm.** The one outlier is **104 again: (+8.9, +9.4) mm** — run 1
+(+16.9, −2.7), run 2 out of frame, i.e. NOT repeatable like the other
+stops, and its align misbehaves only there (runs 2 and 3: pass 1 settles
+0.5° past a 0-predicted stop, the base arrives 22 mm off the lane). What
+is NOT the cause, checked: the map's yaw — the tag edge front_cam reads
+at rest before each aim pivot (`[Aim] at rest … edge`) equals the map's
+laying-angle difference δ_prev − δ_target with **r 0.93, slope 0.93, rms
+0.17° over 97 hops** in four runs, 103→104 included (−1.02…−1.14 vs
+−0.90), so map.yaml's yaw column is real and δ_104 = +0.43 is roughly
+right. Left standing: the x part (+7…+9 in runs 1 and 3) matches 104's
+calibrated x sitting 5–6 mm off its neighbours (−1.7066 vs −1.7010 /
+−1.7015; the same in both sessions — a repeatable single-entry chain
+error, the plan reaches 104 at a different wrist spin, rz ≈ 71–76° vs
+95 / 115), and the y part (0 … +9) together with the align overshoot
+points at tag 104 itself (a skewed / damaged print reads a biased edge
+angle — the 09-08 tag-15 effect) or the floor under it. Corners are not
+in the nav records, so the squareness test needs a live read. A full map
+re-calibration is NOT indicated: it reproduces the same 104 entry. Next:
+inspect / replace tag 104, then a subset plan for 104 alone. Also
+repeatable across all three tours: the standoff correction at cross tag 2
+(108–111) is +5…+7.7 mm where the others are −1…+3 — that cross tag's
+top sits ~7 mm lower than the model says (z, not used).
+
+**Then (21:33, user re-laid tag 104 and calibrated 100–105: session
+`calibrate/20260928_212842`, 6/6 ok; "104만 업데이트") — map.yaml tag 104
+only: x −1.7066 → −1.7031, y −0.2531 → −0.2530, yaw 0.43 → 0.16.** The
+other five entries of that session repeat the 16:14 values to 0.3–1.5 mm
+(105 y 3.5 mm), so the session is sound and 104's move is the re-lay: it
+now sits 2.4 mm from 103's x instead of 5.6, and its laying angle is
++0.16° instead of the +0.43° that stood out against the neighbours' −0.3.
+Not applied from that session: 100–103 / 105 (the user asked for 104
+alone; the differences are inside the session noise anyway). Verified:
+72 tags / 142 edges, `MapManager` 500→105 / 500→125 unchanged,
+`check_calibrated_tag_z_yaw` 42, `check_nav_sequencing` 14,
+`check_front_cam_guard` 31, `check_robot_pose_heading` 20; CRLF endings
+kept. `predictive_centering.map_world_path: latest` now resolves to the
+6-tag `map_world_20260928_212842.yaml` — the other tags fall back to
+map.yaml, which carries the same calibrated values. **`mobile_node`
+restart required** (map.yaml is read at start); then a `GOTO 104` +
+`tip_touch_cross_tags` shows whether 104 joins the other 21 stops at
+~3 mm.
 
 ### 2026-09-28 (night) — `/robot_pose` streams the live position: tag-based at 10 Hz, odom-carried between tags
 
@@ -1976,6 +2207,354 @@ restart mobile-manipulator` (sudo needs a password; the base was idle on
 tag 104, not charging). Then `rostopic echo /robot_pose` should print at
 10 Hz with `flag: False`, `id: 104`, and keep printing when the tag
 leaves the frame.
+
+### 2026-09-28 (evening) — T_ab2mb x, y shifted by (−1, +7) mm: the sheet session's constant xy bias, applied as a robot constant
+
+User: "z축 오차는 중요하지 않아. x,y 축 오프셋만 중요해" — with the
+sheet as GT, is the chain's xy error a constant, and if so is the right
+place a terminal correction (tag-position output / Cartesian command)
+or `T_ab2mb`? Measured on today's session (body-side views v02 v04 v05
+v18 v28 excluded, joint offsets applied): the raw `T_A2B` xy bias in the
+sheet frame is **(−7.1, +1.0) mm, sd (1.5, 2.0)**, and it is the same
+across spin (~60 / 105 / 135°: x −7.9 / −7.1 / −6.3), range (< / ≥ 0.47 m:
+−6.8 / −7.6) and tilted / down views (−7.4 / −6.7) — a constant. The
+planar least squares had left it at (−4.8, +1.3) because its residual
+also carries the parking tilt's z and rotation, which trade against the
+in-plane translation; a pure x, y shift of `T_ab2mb` removes it.
+
+**Decision (recommended, user: "진행해줘"): into `T_ab2mb`, not a
+terminal constant.** The constant lives in the mb frame — a sheet /
+world-frame constant flips sign between zone B (+90°) and zone C (−90°),
+while `T_ab2mb` is rotated by the robot heading automatically — and
+`T_ab2mb` is read by BOTH consumers (the locator chain for map
+calibration and `transform_world_to_arm` for pose-mode commands), so
+one edit corrects the tag-position output and the Cartesian target
+together; a terminal constant would be a second copy in two places.
+The x, y, yaw-only rule stands (yaw 179.196° and tz −0.652 untouched).
+Applied with `tf_chain_tool.py set T_ab2mb --matrix …`: **t (−9.20,
+−99.13, −652.00) mm** (was −8.20 / −106.13); the yaml comment records
+the provenance. Re-solve of the same session with the new file: **raw
+bias (−0.1, −0.0, +0.8) mm** — the xy term is gone (the raw pose rms
+7.8 → 8.9 mm is the z / rotation part the metric also weighs; z is
+deliberately not corrected). `corrections.npz` of the session was
+restored after each solve. Planner URDF `mobile_to_base` → xyz
+(0.007804, 0.099245, 0.652000), rpy unchanged; both plates' plans +
+yaw sweeps + `docs/all_tags_position.csv` regenerated (seeds moved
+~3.7 mm, flange reach 0.51–1.05 m, 0/51 over 1.40). Checks:
+`tf_chain_tool check` 13/13, `check_pose_vs_joint` 27,
+`check_lift_compensation` 11, `check_joint_offsets` 22,
+`check_joint_offset_cmd` 21, `check_front_cam_extrinsics` 24,
+`check_chain_calib` 48, `check_sheet_sweep` 36, `check_scan_progress` 73.
+
+**Not done here:** `arm_node` restart (`sudo systemctl restart
+mobile-manipulator` — sudo needs a password; the charge relay drops) and
+the calibration launch (not running; the next `path_tag_locator.launch`
+reads the new file). What the constant does NOT fix, stated to the
+user: the arm's position-dependent ±9 mm (off_x slope over the column),
+the 09-22 tip tour's stop-dependent 8–23 mm (tracks the reported base
+lateral, i.e. navigation / map, not this transform), and a print-scale
+error along W x (−7 mm at x ≈ 1.0 m ≈ 0.7 %; excluded because the print
+is the 09-21 one, rule-measured sx 1.0010). Next on the robot: plate-1
+map calibration on the shifted chain, then compare 307 / 309 against
+tag 200.
+
+**Then (15:45, user: "오늘 캘리브레이션한 map파일을 map.yaml에 최신화") —
+the plate-1 session of 14:04 APPLIED to `map.yaml`.** Session
+`calibrate/20260928_140412` (`map_world_20260928_140412.yaml`, copy
+`config/map_world_plate1_20260928.yaml`) ran on the SHIFTED T_ab2mb —
+verified, not assumed: every `locate/` `result.npz` carries t (−9.20,
+−99.13, −652.00), and recomputing all 23 entries through
+`chain.compute_T_A2B` with that matrix reproduces the file to 0.0 mm.
+Recomputing them with the OLD matrix isolates what the shift did: every
+tag moves (+7.0, +1.1) mm in zone B and (−7.0, −1.1) in zone C, exactly
+the mb-frame constant rotated by the lane heading. Against the 09-22
+values the net move is B (+3.6, +1.5) mm sd 1.0 / 1.8, C (−3.2, −1.2) sd
+0.4 / 1.0, yaw −0.1 ± 0.1° — i.e. on the old chain today's session would
+have read ~3.5 mm on the OTHER side of the 09-22 map in both zones (a
+zone-flipping mb-frame term that moved between 09-22 and today; the
+sheet's 7 mm and the map's 3.5 mm do not agree on the size of the
+constant, and this is not settled). 23 tags updated (100–117, 121–125:
+x, y, yaw; the comment keeps the design and the 09-22 value); **118 /
+119 / 120 FAILED — `tag A (id=4) not detected at iteration 1`, twice
+each** (cross tag 4; the 09-22 sessions saw it — check whether the
+20 mm marker 226 from the tip tour still covers it, or the 118–120 seeds
+after today's plan regeneration) and keep their 09-22 values, marked in
+the comment. Plans regenerated once more from the new stop poses (seed
+moves ≤ a few mm). Verified: 72 tags / 142 edges, `MapManager` 500→105 /
+118 / 125 unchanged, `check_calibrated_tag_z_yaw` 42,
+`check_nav_sequencing` 14, `check_front_cam_guard` 31.
+`predictive_centering.map_world_path: latest` already resolves to the
+14:04 file by name (118–120 fall back to map.yaml). **`mobile_node`
+restart required** (`sudo systemctl restart mobile-manipulator`).
+
+**Then (16:14 session, user: "map.yaml에 업데이트") — the plate-1 re-run
+APPLIED, all 26 tags this time.** Session `calibrate/20260928_161430`
+(`map_world_20260928_161429.yaml`, 26/26 ok — 118 / 119 / 120 measured
+now) replaces the 14:04 values in `map.yaml` tags 100–125 (x, y, yaw; the
+config copy `map_world_plate1_20260928.yaml` is the 16:14 file). 14:04 →
+16:14 on the 23 tags both sessions hold: |dx| ≤ 3.8 mm, |dy| ≤ 3.6 mm
+(zone B within ±2 mm except 105 / 106 y +2.1 / +3.1; zone C 121–125 all
+−2…−4 mm in both axes, 113–117 within 1 mm), yaw ≤ 0.2°, z up to 24 mm
+(not used). 118–120 vs their 09-22 values: (−3.3, +0.6) / (−3.0, +0.5) /
+(−2.8, −0.6) mm — the same zone C move the T_ab2mb shift gave every
+other tag, so the zone C middle is consistent with its neighbours now.
+Verified: 72 tags / 142 edges, `MapManager` 500→105 / 118 / 125
+unchanged, `check_calibrated_tag_z_yaw` 42, `check_nav_sequencing` 14,
+`check_front_cam_guard` 31; `map_world_path: latest` resolves to the
+16:14 file by name. **`mobile_node` restart required.**
+
+### 2026-09-28 — Tip-error tour over all plate-1 cross tags: per-stop targets in `tip_check`, `tip_touch_cross_tags` plugin, `analyze_tip_check.py`
+
+User: find how far the vision TIP really lands from its target, stop by
+stop — a 20 mm tag36h11 marker is laid on the centre of each plate-1
+cross tag (0→219, 1→220, 2→221, 3→222, 4→223, 5→224 — first specified
+as 230…225, changed by the user the same day) and every drive
+tag touches ITS paired cross tag (the calibration plan's pairing:
+100-104→0, 105-107→1, 108-112→2, 113-117→3, 118-120→4, 121-125→5).
+
+**Why (the analysis that led here, same day):** the 09-22 touch run's
+Basler frames, measured against tag 230 on cross tag 0 (itself located
+from the etched tag-0 cells to 0.3 mm), put the tip **8–23 mm** off in
+xy — far outside T_ee2tip's ±3 mm — and stop-dependent (102 +8.7 /
+103 +7.6 / 104 **+20.2** mm world x, rounds repeat to 0.3–2.7 mm sd).
+The world-x error tracks the REPORTED base lateral (`/robot_pose` y)
+with slope 1.19, r 0.96; the implied true lateral is the same ±3 mm at
+all three stops while the report moves 14 mm. At 104 the calibrated map
+x (−1.7106 vs −1.705 at 102/103) plus the 0.55 m lever × its +0.58°
+yaw sum to ~11 mm — the extra error. Not settled which of the two is
+wrong. The tour measures this for every stop.
+
+- **`robot_ui.tip_check`:** `Settings(targets={stop: (x,y,z)},
+  target_info={stop: {ref_tag, marker_id}}, skip_refused=)`,
+  `for_tag()` gives a stop its own target; `target_info` goes into the
+  yaml / summary.csv (`ref_tag`, `marker_id`) and session.yaml;
+  `skip_refused` records an out-of-bounds stop and continues (nothing
+  has moved since the GOTO's arm home). `design_stop_pose` handles zone
+  C / E (heading −90, stop 0.55 m north). Old plugins unchanged
+  (defaults; `tip_touch_ref_tag` dry run identical).
+- **`plugins/tip_touch_cross_tags.py`:** 22 stops (101–111, 114–124;
+  100 / 112 / 113 / 125 are 1.2 m along the lane from their cross tag,
+  flange 1.31–1.42 m > the 1.25 m bound, left out), target = the cross
+  tag's `reference_tags.yaml` position + 1 mm, rz 0 everywhere, touch +
+  Keyence standoff + LED capture, 1 round (`ROUNDS`). It reloads
+  `robot_ui.tip_check` itself — the plugin runner reloads only the
+  plugin file, so a web node that already ran a tip plugin would keep
+  the old module.
+- **`tools/analyze_tip_check.py <record_dir>`:** marker centre in each
+  frame (detected, or registered against a same-cross-tag frame when
+  the marker is cut off), image offset → flange (ψ from the tip
+  result, −179.212°) → arm (recorded TCP rpy) → world (R_AW of the
+  point's pose). Writes `tip_image_error.csv`, prints per-stop and
+  per-cross-tag means relative to the overall mean (= the chain
+  constant). `marker_axis_dev_deg` (the marker's edge vs the nearest
+  world axis) checks the rotation chain: 0.0–0.2° on 09-22. Sessions
+  without `target_info` take the marker id from `--markers` (default the
+  219…224 layout; the 09-22 session needs `--markers 0:230`).
+
+Verified: `analyze_tip_check` on `20260922_184115_touch` reproduces
+the hand analysis to 0.1–0.4 mm (the ψ digits and the 0.26 mm tag-230
+offset); new `src/robot_ui/tools/check_tip_tour.py` **20** (per-stop
+targets / labels / skip, zone-C stop pose landing the tag where zone B
+does, the plugin's 22 stops all in bounds, a fake-bridge run that
+descends to each stop's own cross tag and skips the refused one, the
+image → world rotation flipping between zones). Plugin dry run: 22 OK,
+flange reach 0.74–1.10 m. Not run on the robot. The analysis wrote
+`tip_image_error.csv` into the 09-22 record dir.
+
+### 2026-09-28 (afternoon) — Joint offsets on the COMMAND side: built, wired, tested — and shipped OFF, because the constants are not position-consistent
+
+User: "오프셋이 명령 쪽에 없는 문제를 해결. 오프셋 적용." Built:
+`apriltag_nav/joint_offset_cmd.py` (`CommandCorrector`: joint targets →
+`q − dq`; Cartesian targets → the pose whose nominal IK solution q gives
+FK(q + dq) = target, two IK evaluations, 30 mm / 3° plausibility bound,
+refuse on IK failure), `ArmController` (`_exec_pose` commands `q − dq`;
+`move_cart(physical=True)` pre-corrects; `~apply_joint_offsets_cmd`),
+`arm_node` JSON key `physical`, `ArmInterface.move_j_to_pose(physical=)`,
+`RosBridge.arm_move_cart(physical=)`; opted in at the ABSOLUTE-target
+callers — pose-mode scans, `verify_chain`, `sheet_path`, `sheet_sweep`,
+`basler_tip verify`, `tip_check`, the calibration seed approach — and
+deliberately NOT at reading-relative ones (jog, the align's correction
+steps, the standoff loop, the UI MOVE), where the offsets' effect cancels
+between the reading and the target. `check_joint_offset_cmd.py` (21 —
+against the real URDF FK with a numerical IK: FK(IK(cmd) + dq) lands on
+the target to 0.002 mm over the session's 12 views, correction 9.2 mm /
+1.06° = the measured effect, refusals, the controller hooks against a
+fake Fairino), `check_scan_progress` 71 → 73, align / sheet_sweep /
+handeye_sweep / web_ui / task_list_ui unchanged.
+
+**Then the numbers said not to turn it on.** Two independent
+measurements of where the arm PHYSICALLY is, against what the offsets
+predict: (1) the sheet session — camera height above the sheet by the
+hand_cam PnP vs the model through T_ab2W: from the reading −6.5 ± 2.1 mm,
+from FK(q + dq) **−16.9 ± 1.7 mm** (the offsets predict +10 higher, the
+sheet measured 6.5 lower); (2) the 09-22 touch poses (real joints from
+the yaml records) — the offsets predict the tip **+9…+11 mm higher** and
++10…13 mm in y, the Keyence measured **+4.8 mm**. So the applied set
+(offsets, hand-eye, planar T_ab2mb) is consistent in the locator's
+T_A2B metric (5–7 mm rms — a ~1° camera tilt trades against height at
+the 1 m lever to tag 200, which is also why `arm_offsets.py` reports "the
+sheet in the arm base: chain vs fitted 9.2 mm / 0.88°") but NOT in the
+arm's absolute position; correcting the command side alone would move the
+executed camera height from −6.5 to about −17 mm at the sheet and put the
+tip **4–6 mm into the plate** at a touch target (the Keyence loop only
+runs after arrival). Default `~apply_joint_offsets_cmd: false`; the flag
+and the callers stay in place. What has to come first: the absolute-z
+term — the parking's ~0.9° tilt the planar rule leaves out (the 6-DOF
+base fit's roll −0.94°), or the hand-eye z that the sweep could not
+observe; the sheet measures both directly per session. Not driven.
+
+### 2026-09-28 — Arm error reset without restarting arm_node: `/arm/reset_error` + "Reset arm error" in robot_ui
+
+User: "로봇암 리미트 걸리고 나서 복구하려면 우리 코드에서 어떻게?", then
+"해주". A joint soft-limit trip (or a collision stop) latches an error in
+the Fairino controller and every later MoveJ / MoveL / jog is refused.
+Until now the only `ResetAllError()` in the stack ran in
+`ArmController.__init__` (so: restart `arm_node` — with the service, the
+whole stack, charge relay included) plus `move_to_home`'s one retry on
+error 14; `jog_joint` / `move_joint` / `move_cart` never reset, so the UI's
+joint jog could not be used to walk the joint back.
+
+`ArmController.reset_error()` = the `__init__` sequence on demand:
+`GetRobotErrorCode` → `ResetAllError` → `RobotEnable(1)` → `Mode(0)` →
+`GetRobotErrorCode`, **no motion**, refused while busy; returns
+`(ok, "error cleared (code before -> after)")`, fails when ResetAllError
+returns non-zero or the code still reads non-zero afterwards — the
+message then says a joint may still be beyond its soft limit (the
+controller re-trips at once) and names the next step. An unreadable code
+is reported as "reset sent, error state unconfirmed" rather than guessed.
+`arm_node`: `/arm/reset_error` (`std_srvs/Trigger`, synchronous, under the
+executor lock like `move_home`, bumps `motion_seq` with the result).
+robot_ui: `RosBridge.arm_reset_error`, a **Reset arm error** button next
+to Arm home pose in both fronts (web: `api_arm_reset_error`).
+
+Recovery procedure: **Reset arm error → Joints group: jog the tripped
+joint 2–5° back inward → Arm home pose.** ⚠️ Not verified on hardware:
+whether the controller accepts an inward MoveJ from a pose that is still
+past the soft limit. If it re-trips, use the Fairino web pendant
+(192.168.58.2) in manual mode or drag teach; widening the limits with
+`SetLimitPositive/Negative` exists in the SDK but was deliberately not
+wired in. The exact `GetRobotErrorCode` return shape on this SDK build was
+not read off the robot (assumed `(ret, [main, sub])`, handled defensively).
+
+Verified offline: `check_scan_progress.py` 62 → **71** (fake Fairino with
+a latched error: order ResetAllError → RobotEnable(1) → Mode(0), no MoveJ,
+busy released; sticky error → failure with the soft-limit hint; refused
+ResetAllError; unreadable code; busy refusal; `error_is_clear` shapes),
+`check_web_ui.py` 128 → **130**, `check_task_list_ui.py` 102 → **104**,
+`check_web_ui_browser.py` +1 (button → bridge call, no console errors; its
+two pre-existing failures unchanged). Needs `arm_node` and
+`robot_ui_web_node` restarted (`sudo systemctl restart mobile-manipulator`).
+
+### 2026-09-28 — A0 sheet calibration, automatic: `chain_calib/sheet_sweep.py` over tags 301/303/305/307/309, rotations ≤ 60°
+
+User: redo the A0-sheet calibration; hand_cam uses ONLY 301 303 305 307
+309 of the grid; collect automatically; "r p y 를 너무 크게 돌리지마 —
+최대 60도까지는 ok"; where do the records go. Three pieces, all offline-
+verified plus one read-only dry run against the live stack:
+
+- **`chain_calib.py --hand-tags 301,303,305,307,309`** (global, comma-
+  separated — a `nargs` global option ate the subcommand name): the
+  whitelist is applied BEFORE hand_cam's PnP (`Session.camera_T(only=)`),
+  stored as `meta.hand_tags`, and `status` / `solve` / `arm_offsets.py`
+  filter the stored corners with it, dropping (named) samples left with
+  no allowed tag. On the real 09-21 arm session 54 of 65 samples survive
+  the filter.
+- **`scripts/sheet_sweep.py`**: plans 7 views per tag (down + 4 tilts of
+  15° toward sheet ±x/±y at 0.45 m; down + 1 tilt at 0.55 m; spins 0 /
+  +40 / −40° RELATIVE to the current camera spin, round-robin), turns
+  them into flange targets through the live front_cam view of tag 200
+  (`T_ab2ee = T_ab2W · T_W2hc · T_hc2ee`, level prior, lift-compensated),
+  and checks EVERY target and EVERY MoveL chunk end (≤ 0.20 m / 30°):
+  flange + vision tip ≥ 0.12 m above the sheet plane, `verify_chain`'s
+  body-clearance line, reach 0.25–1.25 m, flange xy ≤ 0.70 m from the
+  start, **orientation ≤ 60° from the START orientation** (`--max-rot`;
+  tilt ≤ 20°, |spin| ≤ 60° as separate caps), and ≥ 2 whitelisted tags
+  predicted whole in the image (`sheet.visible_tags`, 640×480, K_hand).
+  A refused view is retried 5 / 10 / 15 cm higher, then skipped with the
+  reason; a straight path that fails a rule between views goes up 0.10 m,
+  across, down (`safe_path`); a failed MoveL skips that view; Ctrl-C
+  stops after the current step and LEAVES the arm; the end returns to
+  the start pose. Session = an ordinary chain_calib session
+  (`log/chain_calib/<YYYYMMDD>_sheet_auto/`, saved after every view) +
+  `sweep_plan.csv` / `sweep_log.csv`; `meta.sweep` records the settings.
+  Refuses to start with `/map_calibrator` / `/path_tag_locator` /
+  `/handeye_calib` registered (second arm commander).
+- **The spin sign trap, caught by the check:** `session.describe_view`'s
+  `spin` is the rotation of `T_hc2W` (sheet in camera), so the camera in
+  W carries `Rz(−spin)`; the first draft used `Rz(+spin)` and every
+  planned view came out 140–180° from the start (all 35 rejected by the
+  new rotation rule — which is what the rule is for).
+
+Verified: new `check_sheet_sweep.py` (**33** — geometry round-trips
+through `describe_view`; plan on the REAL tf chain + the 09-21 session's
+front_cam view / flange pose: 29 of 35 feasible, max rotation 42.8°,
+lowest tool point 0.357 m above the sheet, all five tags, ≥ 2 whitelisted
+tags each, 90° spin / `--max-rot 30` refused; chunks bounded; the runner
+against a fake arm + rendered detections captures every view with only
+whitelisted corners, one detour used, arm back at the start, coverage
+READY (4 of 4 tilt directions, rotation diversity 85°); a refused MoveL
+skips one view; Ctrl-C leaves the arm; 1-tag views are capture failures;
+a rule-failing target moves nothing), `check_chain_calib.py` 48, and
+`chain_calib.py --hand-tags … status/solve` on the real 09-21 session.
+**Live, read-only:** `sheet_sweep.py --dry-run` against the running stack
+(sheet still on the floor, front_cam on 200): 33 / 35 views planned, the
+two rejections the body-clearance line at 303 / 309 tilted toward −x;
+first target 0.75 m from the parked arm, so a real run starts with
+parking hand_cam over 305 at ~0.45 m. **Then the user's own dry run
+(arm parked over the column, first target 0.13 m)** showed the three
+views tilted TOWARD the arm base (307 / 305 / 303 at sheet −x) landing
+at reach 0.48–0.56 m only 11–13 mm above the base plane — legal by the
+step rule, no margin: the planner now reduces a tilt whose displacement
+points at the arm base to `--body-tilt` 8° (README §3-2's "5–10° on the
+body side"), and the sweep's own rule applies the 0.65 m line up to
+20 mm ABOVE the plane (`low_z_margin_m`). Re-run: 35 / 35 planned, the
+body-side views at z +50–62 mm, max rotation 43.8°; check 36. **Not
+driven.** README §3-0.
+
+**Driven the same day (12:27, `log/chain_calib/20260928_sheet_auto`): 34
+of 35 views captured** (one saw a single whitelisted tag and was not
+stored; the return move failed the body rule and the arm stayed at the
+last view). What the data said, in order of importance:
+- **Every body-side (`a180`) view is an outlier** — 22–68 mm raw, and
+  the sheet normal read 2.8–5.0° off the arm's z there vs 1.1° from a
+  normal pose at the SAME foot (v18 vs v06): the arm's orientation at a
+  folded, short-reach configuration, the 09-21 finding again. Not the
+  paper (no trend along the column, r = +0.16) and not the chain.
+  `solve` auto-excluded four; with all five out: raw 6.98 mm / 1.09°,
+  joint floor 5.1 mm, the rest mostly the collinear 2-tag `[307, 309]`
+  views (10–34 mm) — the price of a one-column whitelist.
+- **The applied set is confirmed:** planar T_ab2mb (−8.4, −103.2,
+  yaw 179.247°) vs applied (−8.2, −106.1, 179.196°) — 3 mm / 0.05°;
+  joint offsets refit (body views out) J2 −0.53±0.38 / J3 −0.67±0.30 /
+  J4 +0.12±0.21 / J5 −0.04 / J6 −0.52 — all within 1σ of the applied
+  set, reprojection 7.5 → 1.5 px (hold-out 1.7). Nothing changed.
+- **The sheet fit's hand-eye candidate (HAND verdict, D roll +0.85°,
+  z −7.8 mm, jackknife 0.08° / 0.9 mm) FAILED the executed test** and
+  was not applied: `verify_chain run` over 301–309 at 0.50 m, `--fit
+  none` → centre offset mean (−1.9, −9.1) mm, rms 11.4, range −6.0 mm;
+  `--fit hand` → (−2.4, −14.7), rms 16.4, range +7.6 — worse by about
+  the size of D. The reprojection fit had also rejected it (offsets
+  refit with the candidate: 1.54 → 2.06 px, hold-out 3.34).
+- **Where the executed error comes from — two deliberate omissions,
+  not a calibration error.** (1) The applied joint offsets act on the
+  MEASUREMENT chain only; at these views FK(q+dq) puts the camera
+  **+9…12 mm in arm z, +7…11 mm in y and 1.06° tilted** from where the
+  controller's TCP says it is, and `verify` / every Cartesian command
+  sends the flange through the controller unchanged, so the executed
+  camera carries that whole offset. (2) The planar T_ab2mb rule leaves
+  this parking's ~0.9° tilt in the residual (the 6-DOF base fit wanted
+  roll −0.94° / tz −654.5), which at the column's 1.0 m lever from tag
+  200 is ~16 mm of z. +10 − 16 ≈ the measured −6 mm range. The
+  constant −9 mm off_y is the offsets' y term by size. What remains
+  after both is the **off_x slope of +18.5 mm over the 0.6 m column
+  (1.8°) with camera rx drifting +0.64 → −0.27°** — the arm's
+  position-dependent error of 09-21, ±9 mm at the column ends, which
+  no constant corrects; the 2 mm goal at 307 AND 309 is not reachable
+  through the chain as it stands. Decisions pending (user): command-
+  side offset application (`MoveJ(IK − δq)` / target pre-correction —
+  affects every arm move), whether the tilt stays a per-parking
+  residual, and a per-position correction or the one-frame method for
+  the last ±9 mm.
 
 ### 2026-09-22 (18:00) — Tip over cross tag 0 from the 102 / 103 / 104 stops: `robot_ui.tip_check` + two Scripts-tab plugins (hover 30 mm; touch + Keyence standoff + LED capture), 3 rounds
 
@@ -2072,98 +2651,6 @@ frames are). A first touch attempt at 18:40 stopped before moving:
 "task_executor did not start goto_102 within 20 s" — the GOTO right
 after the operator's STOP was not picked up within the ack window;
 the retry a minute later ran.
-
-### 2026-09-22 — Map-calibration hand-cam align: orientation FIXED at the design view pose, translation-only correction to 0.50 m; plans regenerated (seeds were 190 mm off)
-
-User: "map 갤리브레이션 진행할 때 핸드카메라 어라인은 x,y 평면에서
-어라인하고 z 수직이동만, 각도는 태그하고 평행, 즉 handcam 각도보정은
-정한 값으로 유지"; then "0.50 m 사용, 회전은 rz 자유, 나머지는 어라인
-중에는 tag하고 일치". Until now `run_auto_align` built a 6-DOF target
-every step (tag centred + optical axis squared to the tag, spin kept)
-and required tilt ≤ 0.5° to converge — so it chased the arm's own
-orientation error (0.6–2.7° on 09-21) and the paper's slope with
-rotations, and the final camera orientation differed per entry.
-
-- **`align.orientation: fixed`** (`locator.yaml`, `AlignCfg`; `correct`
-  = the old loop, still what the hand-eye sweep's square-up does through
-  `handeye_calib.yaml`). `compute_target_ee_pose(fix_orientation=True)`
-  keeps the current rotation BIT FOR BIT and moves the tool by
-  `R_ab2hc · (t_cam2tag − (0, 0, d))`: x/y in the image plane (parallel
-  to the tag), z along the optical axis (vertical) to `target_distance_m`
-  **0.50** (= `auto_view_distance_m`; was 0 = keep depth, which left the
-  09-04 entries measuring from 0.63 m after a clamped seed).
-  `clamp_step` snaps a zero-rotation delta to the exact identity (acos
-  near 1 reads a 1e-14 trace error as 2e-7 rad), so the commanded rx ry
-  rz ARE the seed's. Convergence: xy ≤ `position_tol_m` and range within
-  `depth_tol_m` (5 mm); the tilt is recorded per iteration and in the
-  report (`orientation` key added) and warned about above
-  `tilt_warn_deg` (3°), never corrected — with the orientation fixed it
-  is the arm's orientation error plus the tag's slope, a chain
-  diagnostic, and the 6-DOF chain observation does not need it removed.
-  The seed orientation is the plan's design view TCP
-  (`compute_view_tcp`: optical axis parallel to the tag normal through
-  the calibrated `T_ab2mb` / `T_hc2ee`, rz the planner's free reach
-  choice). The locate service shares the cfg, so `auto_align` there
-  behaves the same.
-- **Plans regenerated** (`generate_calibration_artifacts.py`, both
-  plates + yaw sweeps + `docs/all_tags_position.csv`): the tracked seeds
-  dated from the 09-14 hand-eye, before the 09-18 remount (camera
-  0.37 m from the flange, 180° spun) and the 09-21 `T_ab2mb` — every
-  seed moved **175–197 mm** (mean 190) and the design rx/ry from a
-  single (−179.5, −0.7) to (−179.9…+179.3, −0.4…+0.3) varying with the
-  spin (the calibrated mount tilt rotates with rz). The old loop would
-  have iterated the 19 cm away; with the orientation fixed the seed IS
-  the final orientation, so the plans must be current — regenerate
-  after any tf_chain change from now on.
-
-- **rx / ry held at −180 / 0, rz free (user, later the same day: "어라인
-  중에 RX −180 RY 0 유지, 태그 접근 중에는 안 해도 됨").** `align.fixed_rx_deg`
-  / `fixed_ry_deg` (`null` / `null` = the seed's own design rx/ry). The
-  align target's rotation is `Rz(rz_now)·Ry(0)·Rx(−180)` — the tool
-  straight down the arm's z with the planner's spin kept — and the
-  camera is placed at `d` along that axis through the tag centre
-  (`p_hc = p_tag − d·z_hc`), so the first step turns the seed's design
-  rx/ry (≤ 1°) onto the fixed value together with the translation and
-  every later step is a pure translation. The approach to the seed is
-  not held to it. Consequence for the recorded tilt: the hand-eye's
-  optical axis is 0.47° off the flange z (`T_hc2ee`) and the base sits
-  0.85° off vertical (`T_ab2mb`), so a flat tag reads ~0.5–1.3° of
-  tilt routinely — the 3° warning is set above that. Report key
-  `fixed_rx_ry_deg`.
-- **`fixed_rpy_frame: camera` (user, right after: "핸드아이 광축이 플랜지
-  이러한 보정은 적용").** The fixed rx/ry now describe the hand-cam
-  OPTICAL frame in the arm frame: `R_ab2hc = Rz(spin_now)·Ry(0)·Rx(−180)`
-  (optical axis exactly along −arm z, the camera's own spin kept) and
-  the flange follows through the hand-eye, `R_ab2ee = R_ab2hc·R_hc2ee`
-  — so the flange reads (−179.86, +0.45, rz − 0.00) with the applied
-  `T_hc2ee`, and a flat tag's recorded tilt is the tag's slope vs the
-  arm vertical alone (the 0.47° hand-eye offset is gone from it; the
-  base's 0.85° `T_ab2mb` tilt is NOT applied — the reference is the
-  arm's z, not the floor normal — so ~0.9° stays on a level floor).
-  `flange` restores the TCP-frame reading. Report key `fixed_rpy_frame`.
-
-Verified offline: new `scripts/check_align_fixed_orientation.py` (76 —
-real `T_hc2ee.npz`, real runner against a fake arm + detector: from a
-seed 1.5° off the normal, 50 mm off-centre, 0.63 m up, the final rx ry
-rz equal the seed to 1e-16°, every commanded move carries the seed
-orientation, tag centred to 0.00 mm at 0.500 m in 3 MoveLs, tilt still
-1.50° in every history entry and the report; a 40° spin seed kept; a
-4° tilt warns and still converges; square camera + 130 mm range error
-moves straight down along arm z; `correct` still squares to 0.000°;
-bad orientation value refused; locator.yaml loads fixed / 0.50 ==
-auto_view_distance_m; with fixed −180 / 0 a plan-like seed (−179.5,
-−0.3, 25) ends at |rx| 180 / ry 0 / rz 25 to 1e-9°, the first step
-turning 0.5°, later steps 0 rotation, a planted 0.7° tag slope read
-as tilt and constant over the iterations; rx without ry refused; with
-`fixed_rpy_frame: camera` the final CAMERA rotation equals
-Rz(spin)·Rx(−180) to 1e-12 with its axis exactly −arm z, the flange
-reading −179.86 / +0.45, a flat tag's tilt 0.000 and a 0.7° slope
-0.700 exactly; `flange` keeps the TCP-frame result; unknown frame
-refused), `check_handeye_sweep.py` 74 unchanged, both
-plans load (26 / 25). Not run on the robot: restart the calibration
-launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
-deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
-staying at the seed's, and convergence in 2–3 iterations.
 
 ### 2026-09-22 (16:00) — Map calibration froze at tag 123: the VS Code launch terminal again; 26/26 finished with a subset plan and merged
 
@@ -2482,6 +2969,264 @@ T_ee2tip row and §3.7 updated. Consequence for pose mode: the RRT CSVs
 (design tip) are now |Δ| ≈ 13 mm from the flange the joint rows put —
 `check_pose_vs_joint` carries the figure; still `scan_joint_*` until the
 planner re-exports.
+
+### 2026-09-22 — front_cam liveness gate: no front camera, every tag-driving command refused
+
+User: "정면 카메라 작동이 안되면 tag로 주행하는 모든 명령 거절". Until now a
+dead front_cam was invisible to navigation: `mobile_controller` kept the
+LAST detections frame in `detected_tags` forever (nothing ever expired
+it), so `get_current_tag_id()` still answered from it, `move_to_tag` fell
+through to `last_known_tag` when it did not, and a GOTO / TASK set off
+blind on odom with no stop line and no align — the failure only showed
+up as `align_timeout_s` twenty seconds later. Now `MobileController`
+stamps the wall time of every detections array in `_store_detections`
+(the array is published per FRAME, empty or not, so its age is the
+liveness of the whole front_cam pipeline), `front_cam_status()` returns
+`(ok, reason, age)`, `detected_tags` became a property that serves `{}`
+once the age passes `robot.front_cam_alive_timeout_s` (1.0 s — measured
+live: 30.0 Hz, worst gap 92 ms), `move_to_tag` refuses at the start and
+before every hop (stopping the base on a mid-route death), and
+`mobile_node` refuses `/mobile/goto_tag` at the command boundary with
+the reason in `result.message`, publishes `front_cam_ok / _age_s /
+_reason` in `/mobile/state`, and — found on the way — now calls
+`stop()` when a goto RAISES (`_do_manual` did, `_do_goto` did not). Both
+robot_ui fronts show `BASE NO CAM` and the reason. Manual odom moves are
+deliberately not gated (not tag driving). `<= 0` disables the gate for
+offline plants. Promoted to the *Mobile base split* section.
+
+Verified offline: new `tools/check_front_cam_guard.py` (31 — property
+empty at 1.1 s but not 0.9 s, logged once, resumes; refused before the
+`last_known_tag` fallback with nothing moved; "no detections yet"
+before the first frame; camera dying after hop 1 of a 2-hop route
+aborts before hop 2 with `stop()`; a live camera still arrives within
+5 mm; timeout 0 disables; the real `mobile_node` against a fake ROS:
+state fields, refusal with seq / ok / message, manual move_cmd still
+runs, a raising goto stops the base); `check_nav_sequencing.py` 14,
+`check_ground_plane.py` 15, `check_task_list_ui.py` 102,
+`check_web_ui.py` 128 unchanged. Not run on the robot: `mobile_node`
+restart required (the service, or the hand launch); then
+`rosservice call /robot_camera/front_cam/set_enabled "data: false"` and
+a `GOTO` should come back refused within a second with the BASE chip
+red, and `data: true` should clear it.
+
+### 2026-09-22 — hand_cam intrinsics RE-CALIBRATED on a checkerboard and APPLIED: fx 601.87 / fy 601.93 / cx 321.35 / cy 238.51, k1 +0.1771 k2 −0.3483
+
+The operator shot `log/chain_calib/hand_cam_intr_20260922` with the tool
+from the entry below: an 11×8-inner-corner board (12×9 squares of
+14.99 mm measured; 11×8 confirmed on the saved frames — 12×8 detects 1 of
+12), driver-raw `/hand_cam/color/image_raw`, 67 stills. First pass (42
+views) was refused by `solve`: everything at 0.19–0.43 m and 41/42
+central (corners reaching r = 332 px of 400, 3.4 % beyond r = 250), so
+k1 disagreed 0.016–0.022 between halves — the exact degeneracy the
+re-shoot was for. Second pass added 0.45 / 0.55 m and corner views (52 /
+7 / 5 by range bin, tilts to 52°, 10 corner views).
+
+**Result (k1 k2, all 67):** rms 0.412 px (per-view 0.16–0.65; the
+newest far views 0.16–0.27, the early close high-tilt ones 0.5–0.65 —
+residual correlates with tilt +0.69, with range only −0.37), formal sd
+fx ±0.56 / k1 ±0.0026. Radial residual flat to ±0.12 px out to r = 250,
+k1k2k3 / full models change rms 0.434 → 0.425 / 0.415 while k3 runs to
+−2.6: the model is right, the floor is the board / sensor. **Why it was
+applied although `solve` said NOT yet** (rms > 0.35, near/far halves
+fx 4.4 px apart): (1) odd/even halves — identical coverage — agree to
+fx 0.9 px / k1 0.0006; (2) the far half alone has fx sd 1.57 px (3× the
+near half's) because a half with no range spread sits on the fx–k1
+valley, so 4.4 px is 2.6 σ of a test that removes the very diversity it
+is meant to check; (3) **3-fold hold-out, pose-only on the unseen fold:
+new 0.412 px vs the 09-21 override 0.441 vs the driver 0.676**, fx
+across folds 601.72 / 601.97 / 601.92; (4) on the INDEPENDENT 09-21 arm
+session the radial residual trend (centre → r 300) goes driver −4.00 →
+override −1.69 → **new −1.05 px**; (5) fx agrees with the 09-21 A0-sheet
+fit to 0.15 px (0.025 %) from a different target and method. What
+changed physically: **fy = fx now** (601.93 / 601.87; the 09-21 value's
+fy/fx = 1.0036 was the A0 print's y-scale error aliased into the camera
+— the checkerboard has one measured square size, so it cannot alias),
+k1 +0.160 → +0.177 (the old one had no corner data behind it). Applied
+by hand into `robot.yaml intrinsics_override.hand_cam` (the tool's
+`--apply --force` was blocked by the session's permission classifier;
+the K / D / note lines were edited, the Korean comments kept and
+updated), `check_camera_intrinsics_override.py` 20/20. **Restart
+`robot_camera_node` (`sudo systemctl restart mobile-manipulator`; the
+charge relay drops) and the calibration launch.** Still open: a ~1 px
+radial trend remains in the arm session with any K — the AprilTag
+corner detector's own bias at large radius, or the A0 print, are the
+candidates; and the far-range / corner coverage is at the minimum
+(0.50–0.60 m: 5 views, BR corner: 1).
+
+### 2026-09-22 — hand_cam intrinsics: a proper calibration tool (`tools/hand_cam_intrinsics.py`) and procedure
+
+User: "hand_cam 내부 파라미터 캘리브레이션 진행하자" with the shooting rules
+(three ranges 0.25–0.6 m incl. 0.35 / 0.45 / 0.55, tilts ±30–45° four ways,
+the board in every corner, 30–50 stills, MEASURED square size, flat board,
+rms ≤ 0.3 px, halves agreeing to 1–2 px of fx / 0.005 of k1, raw frames).
+The 09-21 override came from A0-sheet corners at one range, mostly
+central — which is why the offset fit still showed a −0.7 → −2.4 px radial
+residual. Built: `capture` (subscribes the DRIVER's
+`/hand_cam/color/image_raw` — raw regardless of the override, which only
+remaps the node's own detection copy — detects a checkerboard with
+`findChessboardCornersSB` or the chain_calib A4 / A0 tag sheets with
+dt_apriltags, live line with range / tilt / position / corner motion,
+saves on Enter only when the corners were still for 6 frames, `--auto`,
+a coverage table per save that names what is missing), `solve`
+(`calibrateCamera` k1 k2, per-view rms with 3×-median outliers dropped,
+odd/even AND near/far half-splits against `--fx-tol` 2 px / `--k1-tol`
+0.005 / `--rms-max` 0.35, the robot.yaml block, `--apply` rewriting only
+the K / D / note / image_size lines of the existing hand_cam block so the
+user's comments in it survive, refused unless ACCEPT), and `board` (A4
+10×7 / 25 mm checkerboard PDF, `log/chain_calib/checkerboard_A4_10x7_25mm.pdf`
+— print at 100 %, measure, glue flat). Procedure: `docs/HAND_CAM_INTRINSICS_kr.md`.
+
+Verified: `check_hand_cam_intrinsics.py` (18 — a rendered board detected
+with the object-grid order (or its 180° twin), 60 synthetic views at
+three ranges / tilts / corners with a known K, D recovered to 0.1 px of
+fx / cx and 0.0001 of k1 at the 0.2 px floor, a 2.5 px "moved" view
+dropped, both splits inside tolerance, `--apply` on a commented yaml copy
+changing only the numbers, the printed PDF re-detected as 9×6); live
+`capture` against the running stack read the driver's K (609.3 / 608.6,
+D = 0) and the 640×480 stream, reported "target NOT seen" and exited
+cleanly on q. Not yet shot — needs the board printed and measured.
+
+### 2026-09-22 — Joint offsets fitted (hand-eye fixed, new K): NOT applied — they move the lens ≤ 2 mm, and the ±15 mm of `sheet_path` is the 2–3-tag PnP, not the arm
+
+User: "관절 offset 피팅하자" — step 1 of the status doc's §6. Run on scratch
+copies of `log/chain_calib/20260921_arm` (61 views after the four
+exclusions, `--hand-intrinsics config`, hold-out every 4th); the full
+report is `arm_offsets_20260922_handeye_fixed_newK.txt` beside the session,
+the subset / diagnostic scripts stayed in the session scratchpad.
+
+**The fit itself.** Rigid 7.63 px rms (hold-out 7.90) → offsets 3.55
+(3.59): J2 −0.11 ± 0.54, J3 −0.66 ± 0.44, J4 −0.16 ± 0.35, J5 −0.15 ± 0.08,
+J6 −0.52 ± 0.09° (jackknife). Subsets do NOT agree: near (≤ 0.42 m, 15
+views) J2 −3.48 / J3 +1.13, far (46) J2 +0.53 / J3 −1.07, spin 30 vs 90 vs
+150 and tilted vs flat likewise ±2° on J2/J3 — far outside the 0.2°
+acceptance rule. Yet the geometry is identifiable: planted offsets are
+recovered to 0.03° on EVERY subset, and offsets fitted on any subset cut
+the other's residual 7.6 → 4.3–4.8 px. So the values are a weakly
+constrained J2/J3/sheet-pose trade-off riding on a MODEL error, and no
+extra term makes them agree — hand-eye xy (z fixed), hand-eye tz, focal
+scale, k1, per-tag in-plane sheet corrections were each freed in the
+scratch model: rms 3.5 → 2.6–3.1 px, near still J2 −1.3…−2.0 vs far
++0.7…+1.0. The residual's radial component grows −0.7 → −2.4 px from the
+principal point to r = 350 (hand_cam K still ~0.7 % off at the edge) and
+the per-tag corrections are a y-only −0.7…−1 % print scale (−5.8 mm at
+tag 309 — the rule said 0.35 %; re-measure 300↔308 with the steel rule).
+
+**The decisive test — the deliverable metric.** IK'd every `sheet_path`
+target (runs 16:35 spin 92 / 17:00 spin 60 / 17:05 h 0.40) through the
+URDF and predicted the lens error the fitted offsets imply: **1.2–1.6 mm
+rms of per-point variation against the 12.7–13.2 mm measured, correlation
+−0.35…+0.16.** The offsets do not explain the on-robot pattern, and
+applying them (with the `MoveJ(IK − δq)` change) would move the lens by
+~1.5 mm across the sheet plus a constant the chain already absorbs. Not
+applied; the command-side change is not built.
+
+**What the ±15–20 mm is.** In the same session, PnP lens position vs the
+model by hand_cam tag count: 2 tags 9.8 mm xy rms (rigid) / 7.2 (offsets),
+3 tags 15.4 / 13.8, 4 tags 8.3 / 5.5, 5 tags 6.8 / 3.9, 6 tags 9.4 / 1.8.
+A 0.5 px corner-noise Monte-Carlo on the real views gives 5.2 mm (2 tags)
+vs 2.2–3.1 (4–6) — random noise is a third of it; the rest is the
+systematic 3 px residual amplified by the two-tag planar ambiguity into a
+lateral shift. `sheet_path` measures the lens by that same PnP, mostly on
+2–4 tags, and its 17:00 run alternates +8…+19 / −6…−19 mm in x BY COLUMN
+(x = 850 vs 1000): a sheet/print-frame signature, not a joint. So the
+09-21 "configuration-dependent arm error" is largely the measurement; the
+arm + rigid chain is good to ~8 mm xy on ≥ 4-tag views (2–5 with offsets,
+in-sample). **Next:** fix the measurement before fitting the arm again —
+verify at 0.55 m (4–6 tags in view) or require ≥ 4 tags, a proper hand_cam
+intrinsics set (edge coverage, 0.25–0.6 m), measure the print's y scale,
+tape the sheet. Status doc §6 rewritten; HANDOVER §2-0c pointer updated.
+
+### 2026-09-22 — Map-calibration hand-cam align: orientation FIXED at the design view pose, translation-only correction to 0.50 m; plans regenerated (seeds were 190 mm off)
+
+User: "map 갤리브레이션 진행할 때 핸드카메라 어라인은 x,y 평면에서
+어라인하고 z 수직이동만, 각도는 태그하고 평행, 즉 handcam 각도보정은
+정한 값으로 유지"; then "0.50 m 사용, 회전은 rz 자유, 나머지는 어라인
+중에는 tag하고 일치". Until now `run_auto_align` built a 6-DOF target
+every step (tag centred + optical axis squared to the tag, spin kept)
+and required tilt ≤ 0.5° to converge — so it chased the arm's own
+orientation error (0.6–2.7° on 09-21) and the paper's slope with
+rotations, and the final camera orientation differed per entry.
+
+- **`align.orientation: fixed`** (`locator.yaml`, `AlignCfg`; `correct`
+  = the old loop, still what the hand-eye sweep's square-up does through
+  `handeye_calib.yaml`). `compute_target_ee_pose(fix_orientation=True)`
+  keeps the current rotation BIT FOR BIT and moves the tool by
+  `R_ab2hc · (t_cam2tag − (0, 0, d))`: x/y in the image plane (parallel
+  to the tag), z along the optical axis (vertical) to `target_distance_m`
+  **0.50** (= `auto_view_distance_m`; was 0 = keep depth, which left the
+  09-04 entries measuring from 0.63 m after a clamped seed).
+  `clamp_step` snaps a zero-rotation delta to the exact identity (acos
+  near 1 reads a 1e-14 trace error as 2e-7 rad), so the commanded rx ry
+  rz ARE the seed's. Convergence: xy ≤ `position_tol_m` and range within
+  `depth_tol_m` (5 mm); the tilt is recorded per iteration and in the
+  report (`orientation` key added) and warned about above
+  `tilt_warn_deg` (3°), never corrected — with the orientation fixed it
+  is the arm's orientation error plus the tag's slope, a chain
+  diagnostic, and the 6-DOF chain observation does not need it removed.
+  The seed orientation is the plan's design view TCP
+  (`compute_view_tcp`: optical axis parallel to the tag normal through
+  the calibrated `T_ab2mb` / `T_hc2ee`, rz the planner's free reach
+  choice). The locate service shares the cfg, so `auto_align` there
+  behaves the same.
+- **Plans regenerated** (`generate_calibration_artifacts.py`, both
+  plates + yaw sweeps + `docs/all_tags_position.csv`): the tracked seeds
+  dated from the 09-14 hand-eye, before the 09-18 remount (camera
+  0.37 m from the flange, 180° spun) and the 09-21 `T_ab2mb` — every
+  seed moved **175–197 mm** (mean 190) and the design rx/ry from a
+  single (−179.5, −0.7) to (−179.9…+179.3, −0.4…+0.3) varying with the
+  spin (the calibrated mount tilt rotates with rz). The old loop would
+  have iterated the 19 cm away; with the orientation fixed the seed IS
+  the final orientation, so the plans must be current — regenerate
+  after any tf_chain change from now on.
+
+- **rx / ry held at −180 / 0, rz free (user, later the same day: "어라인
+  중에 RX −180 RY 0 유지, 태그 접근 중에는 안 해도 됨").** `align.fixed_rx_deg`
+  / `fixed_ry_deg` (`null` / `null` = the seed's own design rx/ry). The
+  align target's rotation is `Rz(rz_now)·Ry(0)·Rx(−180)` — the tool
+  straight down the arm's z with the planner's spin kept — and the
+  camera is placed at `d` along that axis through the tag centre
+  (`p_hc = p_tag − d·z_hc`), so the first step turns the seed's design
+  rx/ry (≤ 1°) onto the fixed value together with the translation and
+  every later step is a pure translation. The approach to the seed is
+  not held to it. Consequence for the recorded tilt: the hand-eye's
+  optical axis is 0.47° off the flange z (`T_hc2ee`) and the base sits
+  0.85° off vertical (`T_ab2mb`), so a flat tag reads ~0.5–1.3° of
+  tilt routinely — the 3° warning is set above that. Report key
+  `fixed_rx_ry_deg`.
+- **`fixed_rpy_frame: camera` (user, right after: "핸드아이 광축이 플랜지
+  이러한 보정은 적용").** The fixed rx/ry now describe the hand-cam
+  OPTICAL frame in the arm frame: `R_ab2hc = Rz(spin_now)·Ry(0)·Rx(−180)`
+  (optical axis exactly along −arm z, the camera's own spin kept) and
+  the flange follows through the hand-eye, `R_ab2ee = R_ab2hc·R_hc2ee`
+  — so the flange reads (−179.86, +0.45, rz − 0.00) with the applied
+  `T_hc2ee`, and a flat tag's recorded tilt is the tag's slope vs the
+  arm vertical alone (the 0.47° hand-eye offset is gone from it; the
+  base's 0.85° `T_ab2mb` tilt is NOT applied — the reference is the
+  arm's z, not the floor normal — so ~0.9° stays on a level floor).
+  `flange` restores the TCP-frame reading. Report key `fixed_rpy_frame`.
+
+Verified offline: new `scripts/check_align_fixed_orientation.py` (76 —
+real `T_hc2ee.npz`, real runner against a fake arm + detector: from a
+seed 1.5° off the normal, 50 mm off-centre, 0.63 m up, the final rx ry
+rz equal the seed to 1e-16°, every commanded move carries the seed
+orientation, tag centred to 0.00 mm at 0.500 m in 3 MoveLs, tilt still
+1.50° in every history entry and the report; a 40° spin seed kept; a
+4° tilt warns and still converges; square camera + 130 mm range error
+moves straight down along arm z; `correct` still squares to 0.000°;
+bad orientation value refused; locator.yaml loads fixed / 0.50 ==
+auto_view_distance_m; with fixed −180 / 0 a plan-like seed (−179.5,
+−0.3, 25) ends at |rx| 180 / ry 0 / rz 25 to 1e-9°, the first step
+turning 0.5°, later steps 0 rotation, a planted 0.7° tag slope read
+as tilt and constant over the iterations; rx without ry refused; with
+`fixed_rpy_frame: camera` the final CAMERA rotation equals
+Rz(spin)·Rx(−180) to 1e-12 with its axis exactly −arm z, the flange
+reading −179.86 / +0.45, a flat tag's tilt 0.000 and a 0.7° slope
+0.700 exactly; `flange` keeps the TCP-frame result; unknown frame
+refused), `check_handeye_sweep.py` 74 unchanged, both
+plans load (26 / 25). Not run on the robot: restart the calibration
+launch (`path_tag_locator.launch`); watch `auto_align iter n: … tilt=x
+deg (recorded, not corrected)`, the rx ry rz in the `MoveJ`/MoveL lines
+staying at the seed's, and convergence in 2–3 iterations.
 
 ### 2026-09-22 — First boot with the `mobile-manipulator` service: a restart loop on `ROS_DISTRO: unbound variable`, fixed
 
@@ -2834,6 +3579,45 @@ sheet and add range / tilt diversity, accept only when subsets agree).
 `log/chain_calib/20260921/corrections.npz` was restored after the
 `--hand-eye` re-solve overwrote it; the re-solve outputs live under
 `20260921_arm/`.
+
+### 2026-09-21 — Web UI layout pass: the control column, camera pane untouched
+
+User (pinyin): the camera-pane layout is fine, the rest is a bit messy.
+Rendered every tab headless before touching anything; four causes, all in
+`robot_ui/web/` (index.html / style.css / app.js), no Python, no node
+restart — browsers pick it up on reload (served `no-store`):
+
+- **Explanatory paragraphs** (3–5 grey lines at the top of nearly every
+  group) were most of every tab. They are hidden by default now and
+  toggled by an **ⓘ hints** button at the right of the tab bar
+  (`body.hints`, remembered in localStorage); tooltips on the controls
+  are unchanged. Text kept verbatim.
+- **Arm tab:** each block was three separate 6-column grids with their
+  own header rows (X.. / X.. / x..). One 7-column grid per block now —
+  row label + six columns; header, `live`, `jog +`, `jog −`, `target`
+  as ROWS — with step / speed / Fill / MOVE in a toolbar underneath.
+  `#pose-grid` / `#jog-grid` / `#target-grid` and the joint trio are
+  `display: contents` wrappers inside it, so every id, the
+  `#jog-grid button[data-axis]` selectors and `check_web_ui_browser.py`
+  are untouched. Arm home / Cancel arm motion moved to a toolbar at the
+  top of the tab.
+- **Task / Mobile / Lift:** label-column forms (`.form`) and `.toolbar`
+  rows instead of wrapping `.row`s — Forward/Reverse and CCW/CW are
+  equal-width pairs under their inputs, stop / cancel buttons sit at the
+  right of their row (`.btn-warn`), the one main action per group is
+  `.btn-primary` (Send TASK, MOVE, START SESSION, RUN SCRIPT…).
+  Calibration status lines sit in a `.status` box per group.
+- **Page / log split:** the pages took a fixed 3/5 of the column, so a
+  short tab (Task, Mobile, Scripts) left a blank band above the log.
+  `#ctl-pages` is `flex: 0 1 auto` now and the log fills the rest
+  (min 140 px); a tall tab scrolls its pages instead. The log's Clear
+  button is a small `clear` in its title bar.
+
+Verified by rendering all six tabs (and hints on) in headless Chrome at
+1920×1080: no wrapped button pairs, no blank band, every pre-existing
+element id present (checked against HEAD's index.html). The Qt window
+(`robot_ui.launch`) was not touched — its Arm tab still has the three
+separate grids from the joint-control entry below.
 
 ### 2026-09-21 — robot_ui: live joint angles + joint control (Arm tab, web and Qt)
 

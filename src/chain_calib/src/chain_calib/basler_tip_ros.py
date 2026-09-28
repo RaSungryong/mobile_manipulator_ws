@@ -434,7 +434,7 @@ class BaslerTipSession:
                          % (dist, max_move_m, tag_id))
             return False, "\n".join(lines), self.counts()
         try:
-            R.arm.move_j_to_pose(target, linear=True)
+            R.arm.move_j_to_pose(target, linear=True, physical=True)   # absolute sheet target
         except Exception as e:
             lines.append("move failed: %s" % e)
             return False, "\n".join(lines), self.counts()

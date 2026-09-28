@@ -182,7 +182,7 @@ class FakeArm:
     def get_tcp_pose(self):
         return matrix_m_to_pose_fr5(self.T)
 
-    def move_j_to_pose(self, pose, settle_s=0.0, linear=True):
+    def move_j_to_pose(self, pose, settle_s=0.0, linear=True, physical=False):
         self.moves.append((list(pose), linear))
         self.T = pose_fr5_to_matrix_m(pose)
 

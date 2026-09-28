@@ -1,0 +1,72 @@
+date: '2026-09-28 12:27:28'
+mode: sheet
+sheet_json: /home/abc/mobile_manipulator_ws/src/chain_calib/sheet/A0_landscape_tag200_300-309_5x2_FINAL2_layout.json
+sheet_world_tag: 200
+sheet_sx: 1.0
+sheet_sy: 1.0
+sheet_tag_size_m: 0.09
+frames_per_sample: 20
+hand_eye_npz: /home/abc/mobile_manipulator_ws/src/apriltag_nav/config/tf/T_hc2ee.npz
+extrinsics_note: front_cam detections taken as level (ground_plane ON, roll +1.406
+  pitch -0.323 yaw -0.380 deg, lens 0.303 m)
+front_cam_frame: level
+K_front:
+- 750.2401733398438
+- 0.0
+- 638.1970825195312
+- 0.0
+- 749.771728515625
+- 352.981689453125
+- 0.0
+- 0.0
+- 1.0
+D_front:
+- 0.08307457715272903
+- -0.1101505309343338
+- 5.2812414651270956e-05
+- -0.0003344604920130223
+- 0.045477673411369324
+- 0.0
+- 0.0
+- 0.0
+K_hand:
+- 601.87
+- 0.0
+- 321.35
+- 0.0
+- 601.93
+- 238.51
+- 0.0
+- 0.0
+- 1.0
+D_hand:
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+hand_cam_intrinsics: override (rectified detections)
+hand_tags:
+- 301
+- 303
+- 305
+- 307
+- 309
+sweep:
+  script: sheet_sweep.py
+  date: '2026-09-28 12:27:28'
+  tags:
+  - 301
+  - 303
+  - 305
+  - 307
+  - 309
+  heights_m:
+  - 0.45
+  - 0.55
+  tilt_deg: 15.0
+  spins_rel_deg:
+  - 0.0
+  - 40.0
+  - -40.0
+  max_rot_from_start_deg: 60.0

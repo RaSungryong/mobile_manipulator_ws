@@ -132,9 +132,21 @@ class FakeBridge:
         self.record('arm_move_cart', tuple(pose), vel)
         return True, 'move_cart ok'
 
+    def arm_jog_joint(self, joint, delta, vel=30.0, acc=50.0, timeout=30.0):
+        self.record('arm_jog_joint', joint, delta, vel)
+        return True, 'jog joint ok'
+
+    def arm_move_joint(self, joints, vel=30.0, acc=50.0, timeout=60.0):
+        self.record('arm_move_joint', tuple(joints), vel)
+        return True, 'move_joint ok'
+
     def arm_home(self, timeout=60.0):
         self.record('arm_home')
         return True, 'home ok'
+
+    def arm_reset_error(self, timeout=15.0):
+        self.record('arm_reset_error')
+        return True, 'error cleared (code (0, [5, 3]) -> (0, [0, 0]))'
 
     def arm_cancel(self):
         self.record('arm_cancel')
@@ -319,7 +331,7 @@ def part_a():
 
         # ---- state / events forwarded ----
         bridge.emit_state('arm_state', {'state': 'idle', 'busy': False, 'pose_valid': True,
-                                        'tcp_pose': [1, 2, 3, 4, 5, 6], 'joints': [], 'motion_seq': 3,
+                                        'tcp_pose': [1, 2, 3, 4, 5, 6], 'joints': [10, 20, 30, 40, 50, 60], 'motion_seq': 3,
                                         'result_message': '', 'result_success': True})
         check(sink.of('state', 'arm_state') and c.api_arm_pose()['pose'] == [1, 2, 3, 4, 5, 6],
               'arm_state forwarded and the live pose kept for MOVE')
@@ -430,10 +442,28 @@ def part_a():
               'MOVE fills blank axes from the live pose')
         r = c.api_arm_move_cart(['a', 1, 1, 1, 1, 1])
         check(r['ok'] is False and 'not a number' in r['message'], 'bad target refused')
+        # ---- joints (2026-09-21) ----
+        check(c.api_arm_joints()['joints'] == [10, 20, 30, 40, 50, 60], 'live joints cached from /arm/state')
+        r = c.api_arm_jog_joint('j3', 2.5, 20.0)
+        check(r['ok'] and bridge.has('arm_jog_joint', 'j3', 2.5, 20.0), 'joint jog → bridge.arm_jog_joint')
+        check(any('[jog j3 +2.5 deg] ok: jog joint ok' in l for l in sink.logs()), 'joint jog result logged')
+        r = c.api_arm_jog_joint('j7', 1.0)
+        check(r['ok'] is False and 'unknown joint' in r['message'], 'unknown joint refused')
+        r = c.api_arm_move_joint(['', None, '-45', '', '', '61.5'], 25.0)
+        check(r['ok'] and bridge.has('arm_move_joint', (10.0, 20.0, -45.0, 40.0, 50.0, 61.5), 25.0),
+              'MOVE J fills blank joints from the live angles')
+        r = c.api_arm_move_joint(['a', 1, 1, 1, 1, 1])
+        check(r['ok'] is False and 'not a number' in r['message'], 'bad joint target refused')
+        r = c.api_arm_move_joint([1, 2, 3])
+        check(r['ok'] is False and 'need 6' in r['message'], 'wrong field count refused')
         c.api_arm_home()
         check(bridge.has('arm_home'), 'arm home')
         c.api_arm_cancel()
         check(bridge.has('arm_cancel'), 'arm cancel')
+        r = c.api_arm_reset_error()
+        check(r['ok'] and bridge.has('arm_reset_error'), 'arm reset error')
+        check(any('[arm reset error] ok: error cleared' in l for l in sink.logs()),
+              'reset result logged')
         r = c.api_arm_standoff(12.0)
         check(r['ok'] and bridge.has('arm_standoff', 12.0), 'auto standoff with the typed target')
         flags = [p['standoff_inflight'] for p in sink.ui_patches('standoff_inflight')]

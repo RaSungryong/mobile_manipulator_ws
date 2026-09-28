@@ -1,0 +1,65 @@
+command: GOTO 104
+started_at: '2026-09-28T21:04:11.039'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1790597052.9471164
+  ros_time: 1790597052.94712
+  stage: aligned
+  tag_id: 103
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 637.2353593668266
+  - 351.8174349900327
+  image_offset_px:
+  - -0.9617231527046215
+  - -1.164254463092277
+  tag_pose_m:
+  - -0.0004211852631194239
+  - -0.0004906645716923265
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0004211852631194239
+  - 0.0004906645716923265
+  camera_center_offset_from_tag_mm:
+  - 0.4211852631194239
+  - 0.4906645716923265
+  camera_center_offset_from_tag_norm_mm: 0.6466442204048471
+  tag_edge_yaw_error_deg: 0.1243132887514804
+  traveled_m: null
+  align_passes: 1
+  align_median_frames: 3
+  image_center_offset_mm:
+  - -0.387
+  - -0.469
+  image_center_offset_norm_mm: 0.608
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_161429.yaml
+    calibrated_tag_position_m:
+    - -1.700963101018889
+    - -0.6513474104811623
+    - -0.06422794756371576
+    calibrated_tag_rpy_deg:
+    - 179.8666206384696
+    - 1.0395712995521822
+    - -0.46676947664076
+    world_offset_from_calibrated_tag_m:
+    - 0.00042516852184860786
+    - 0.0004872170725786018
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 0.42516852184860787
+    - 0.4872170725786018
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.7005379324970404
+    - -0.6508601934085837
+    - -0.06422794756371576

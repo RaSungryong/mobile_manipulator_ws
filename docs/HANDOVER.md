@@ -39,14 +39,55 @@ on `real` and pushed; nothing in it is APPLIED to the robot's config.
 > (`~/mobile_manipulator_ws`), the candidate table, and the revised order.
 > The "(d)" inconsistency is resolved: the tf files equal HEAD (the 09-18
 > hand-eye; chain raw 6.62 mm), the 20:09 sweep value lives only in
-> `run_20260921_195136/result.npz`.
+> `run_20260921_195136/result.npz` (deleted 2026-09-22 evening, never applied).
+>
+> **2026-09-22 evening: the whole chain is summarised in ONE place —
+> `docs/TF_CHAIN_CALIBRATION_STATUS_kr.md`** (frames, the T_A2B formula, every
+> applied value with its provenance and uncertainty, each error source and
+> how it was calibrated, chain accuracy, the dependency order, open items).
+> Read that before the lines below, which are older.
+>
+> **2026-09-22 afternoon: the joint-offset fit was DONE and is NOT applied**
+> — the offsets move the lens ≤ 2 mm across the sheet and predict none of
+> `sheet_path`'s ±13 mm, which is the hand_cam 2–3-tag PnP (status doc §6,
+> CLAUDE.md Work Log 2026-09-22). The "Revised order" below is superseded:
+> fix the measurement first (≥ 4-tag views, hand_cam intrinsics, print y
+> scale), do not build `MoveJ(IK − δq)`.
+>
+> **2026-09-22 evening: APPLIED after all, on the user's decision** ("better
+> than nothing"), to the MEASUREMENT chain only: hand-eye re-solved for the
+> checkerboard K (5.4 mm), joint offsets J2..J6 = −0.34 / −0.53 / −0.05 /
+> −0.13 / −0.50° in `config/tf/arm_joint_offsets.yaml` (locator flange =
+> FK(q + dq)), T_ab2mb refit on the arm session with both in the chain
+> (12.9 mm / 0.9° from the design; session hold-out 12.7 → 7.7 mm). The four
+> files are one set; `tf_chain_tool.py check` 13/13. `MoveJ(IK − δq)` (built
+> 2026-09-28 as `joint_offset_cmd.py`, DEFAULT OFF — see that Work Log entry) still
+> not built. Restart the calibration launch and `arm_node`. CLAUDE.md Work
+> Log 2026-09-22 "C and E re-solved".
+>
+> **2026-09-28 evening: `T_ab2mb` x, y shifted by (−1, +7) mm → t (−9.20,
+> −99.13, −652.00) mm, yaw / tz kept.** The automatic sheet session of the
+> day (`log/chain_calib/20260928_sheet_auto`) showed a CONSTANT xy bias of
+> (−7.1, +1.0) mm in the sheet frame, the same across spin / range / tilt,
+> that the planar least squares left half in; shifted directly on the
+> user's decision (only x, y matter; z not corrected). Re-solve: bias
+> (−0.1, 0.0) mm. URDF `mobile_to_base` and the plans regenerated. Still
+> needs `arm_node` (service restart) and a fresh calibration launch; the
+> plate-1 map calibration must be re-run on this chain before its
+> map.yaml values are trusted against the new constant. CLAUDE.md Work Log
+> 2026-09-28 (evening).
+> **Done 15:45:** the 14:04 plate-1 session (23/26, on the shifted chain —
+> verified from its result.npz) is in map.yaml; 118 / 119 / 120 failed
+> (cross tag 4 not detected) and keep their 09-22 values. Net move vs
+> 09-22: B (+3.6, +1.5) / C (−3.2, −1.2) mm. `mobile_node` restart still
+> pending.
 
 **Where we are.** The front_cam ↔ hand_cam chain was calibrated on
-2026-09-21 (`log/chain_calib/20260921`, 63 views, level-floor prior, ruler
+2026-09-21 (`log/chain_calib/20260921` — DELETED 2026-09-22 evening, no joint angles; the applied value is now the 09-22 refit on the arm session — 63 views, level-floor prior, ruler
 scale 1.0 / 1.0 / 90 mm) and APPLIED: `T_ab2mb` in
 `src/apriltag_nav/config/tf/tf_chain.yaml` (+ `T_ab2mb.npz`; robot.yaml /
 the planner URDF derive from it since commit `56ef9fb`). Record:
-`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`. Verified with
+`src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md` (deleted with the session; CLAUDE.md Work Log 2026-09-21 keeps the reasoning). Verified with
 `sheet_path.py` (hand_cam LENS driven to the 10 grid tags): constant error
 ~1 mm, but a per-point error of ±15–20 mm that CHANGES with the wrist spin
 (60° vs 92°) — configuration-dependent ⇒ the ARM (FK) side, not a rigid
@@ -67,9 +108,9 @@ after it):
 spins 30 / 90 / 150°, hand_cam range 0.25–0.56 m (mostly 0.45), tilts to
 41° (mostly ≤ 5°). Exclude `v13` (24 px corner scatter — arm moving),
 `v11`, `v20` (moving), `v45` (one tag). Outputs there:
-`arm_offsets_handeye_free.txt` (the full fit with jackknife),
-`T_hc2ee_fit_20260921_arm.npz` (the fitted hand-eye — a CANDIDATE),
-`chain_solve_*_with_fitted_handeye.txt` (the chain re-solved with it).
+`arm_offsets_handeye_free.txt`, `T_hc2ee_fit_20260921_arm.npz` and
+`chain_solve_*_with_fitted_handeye.txt` — all DELETED 2026-09-22 evening
+(the candidate was not adopted; the numbers are in the Work Log).
 
 **Results, and why nothing is applied yet:**
 

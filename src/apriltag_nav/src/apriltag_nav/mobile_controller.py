@@ -79,7 +79,23 @@ class MobileController:
         self.vision_stop_tolerance_px = float(vision_cfg.get('center_tolerance_px', 40.0))
 
         # Internal State
-        self.detected_tags = {}  # {id: {x, y, z, yaw, ...}}
+        # front_cam liveness (2026-09-22, user rule: if the front camera is
+        # not working, REFUSE every command that drives by tag). robot_camera_
+        # node publishes a detections array for EVERY front_cam frame, empty
+        # or not, so the age of the newest message is the liveness of the
+        # whole pipeline (driver -> node -> detector): no message yet, the
+        # node down, the camera switched off (set_enabled false) or a stalled
+        # stream all read as "not working". `_detected_tags_raw` is the last
+        # frame's tags; the `detected_tags` property hands back {} once the
+        # message is older than front_cam_alive_timeout_s, so a dead camera
+        # can never leave a stale frame in front of the control loops
+        # (before this the last frame stayed in place forever).
+        self.front_cam_alive_timeout_s = float(
+            self.cfg['robot'].get('front_cam_alive_timeout_s', 1.0))
+        self._front_cam_last_msg_s = None   # rospy wall time of the last array
+        self._front_cam_dead_logged = False
+        self.last_refusal_reason = None     # why the last move_to_tag was refused
+        self._detected_tags_raw = {}  # {id: {x, y, z, yaw, ...}}
         self.current_theta = 0.0
         self.odom_x = 0.0
         self.odom_y = 0.0
@@ -345,6 +361,26 @@ class MobileController:
         # laying angle (map.yaml `yaw`), see _tag_yaw_error_deg.
         self.robot_pose_use_tag_yaw = bool(
             self.cfg['robot'].get('robot_pose_use_tag_yaw', True))
+        # 2026-09-28 (night): the camera -> base-centre lever (camera_offset)
+        # is projected along the BODY HEADING (zone + align residual + laying
+        # angle), not along the bare zone axis. The align squares the body to
+        # the tag's edges, so a tag laid delta off its lane leaves the body
+        # delta off the zone heading and the base centre 0.55 sin(delta)
+        # beside where the zone-axis projection put it — 9.6 mm per degree,
+        # measured on the 22-stop tip tour (err vs body yaw r = 0.87). False
+        # restores the zone-axis projection (bit for bit).
+        self.robot_pose_offset_along_heading = bool(
+            self.cfg['robot'].get('robot_pose_offset_along_heading', True))
+        # The align's at-rest measurement (median of align_record_frames
+        # frames) is kept so publish_robot_pose can publish the SAME view the
+        # align certified instead of the newest single frame (2026-09-28: at
+        # tag 104 the two disagreed by 1.44 deg — 27 mm of arm target at the
+        # 1.1 m lever). Used only while fresh (align_view_max_age_s).
+        self._aligned_view = None
+        self.align_record_frames = max(1, int(
+            self.cfg['robot'].get('align_record_frames', 3)))
+        self.align_view_max_age_s = float(
+            self.cfg['robot'].get('align_view_max_age_s', 10.0))
         # Live /robot_pose stream (2026-09-28, user: "실시간으로 로봇 현재
         # 위치 계속 보내고 싶어"). Until then /robot_pose went out ONCE per
         # arrival (flag True: the at-rest pose the arm's pose-mode IK uses,
@@ -959,10 +995,59 @@ class MobileController:
             rospy.logerr(f"Detection processing error: {e}")
 
 
+    # ------------------------------------------------------------------
+    # front_cam liveness
+    # ------------------------------------------------------------------
+    def front_cam_age_s(self):
+        """Seconds since the last front_cam detections message (any, even
+        an empty one), or None if none has arrived since start."""
+        if self._front_cam_last_msg_s is None:
+            return None
+        return max(0.0, rospy.Time.now().to_sec() - self._front_cam_last_msg_s)
+
+    def front_cam_status(self):
+        """(ok, reason, age_s). ok is False when no front_cam detections
+        have arrived yet or the newest one is older than
+        front_cam_alive_timeout_s (<= 0 disables the check). `reason` is
+        the operator-facing text a refused command carries."""
+        age = self.front_cam_age_s()
+        if self.front_cam_alive_timeout_s <= 0:
+            return True, "front_cam check disabled", age
+        if age is None:
+            return (False, "front_cam not working: no detections received "
+                    "yet (robot_camera_node / front_cam driver down?)", None)
+        if age > self.front_cam_alive_timeout_s:
+            return (False, "front_cam not working: last detections %.1f s ago "
+                    "(limit %.1f s)" % (age, self.front_cam_alive_timeout_s), age)
+        return True, "front_cam ok", age
+
+    @property
+    def detected_tags(self):
+        """Tags of the newest front_cam frame — {} once that frame is older
+        than front_cam_alive_timeout_s (see __init__)."""
+        if self._detected_tags_raw and self.front_cam_alive_timeout_s > 0:
+            age = self.front_cam_age_s()
+            if age is None or age > self.front_cam_alive_timeout_s:
+                if not self._front_cam_dead_logged:
+                    self._front_cam_dead_logged = True
+                    rospy.logerr("[Vision] front_cam detections stopped "
+                                 "(%.1f s) — tags treated as not visible",
+                                 age if age is not None else -1.0)
+                return {}
+        return self._detected_tags_raw
+
+    @detected_tags.setter
+    def detected_tags(self, value):
+        self._detected_tags_raw = value
+
     def _store_detections(self, new_tags, stamp):
         """Publish `new_tags` as the current detections and append each
         to a short per-tag history (for the median filter). `stamp` is the
         source IMAGE time, kept per tag for latency compensation."""
+        self._front_cam_last_msg_s = rospy.Time.now().to_sec()
+        if self._front_cam_dead_logged:
+            self._front_cam_dead_logged = False
+            rospy.logwarn("[Vision] front_cam detections resumed")
         for tid, t in new_tags.items():
             t['stamp'] = float(stamp)
             t['edge_deg'] = tag_edge_angle_deg(t['corners'])
@@ -1269,6 +1354,39 @@ class MobileController:
                     return None
             rate.sleep()
         return {k: float(np.median([r[k] for r in rows])) for k in rows[0]}
+
+    def _measure_tag_view_at_rest(self, tag_id, frames, rate):
+        """The newest detection dict of `tag_id` with x / y / z / edge_deg
+        replaced by their MEDIAN over `frames` consecutive frames (base at
+        rest) — what the align records and publish_robot_pose publishes.
+        None if the tag is not seen for frames * 3 ticks or a stop is
+        requested."""
+        rows, last, misses = [], None, 0
+        while len(rows) < frames and not rospy.is_shutdown():
+            if self.stop_requested:
+                return None
+            t = self.detected_tags.get(tag_id)
+            if t is not None:
+                last = dict(t)
+                rows.append((float(t['x']), float(t['y']), float(t['z']),
+                             float(t.get('edge_deg', tag_edge_angle_deg(t['corners'])))))
+                misses = 0
+            else:
+                misses += 1
+                if misses > frames * 3:
+                    return None
+            if len(rows) < frames:
+                rate.sleep()
+        a = np.asarray(rows, dtype=float)
+        view = dict(last)
+        view['x'], view['y'], view['z'], view['edge_deg'] = [float(v) for v in np.median(a, axis=0)]
+        view['median_frames'] = len(rows)
+        return view
+
+    def _remember_aligned_view(self, tag_id, view, angle_deg):
+        self._aligned_view = {'tag': int(tag_id), 'view': dict(view),
+                              'angle_deg': float(angle_deg),
+                              't': rospy.Time.now().to_sec()}
 
     def _aim_wall_cap_rad(self, base_toward_wall_m):
         """Largest |yaw| the body may take about its centre without its
@@ -1587,35 +1705,63 @@ class MobileController:
                     rate.sleep()
                     continue
                 settle_until = None
+                # The settled measurement is the MEDIAN of align_record_frames
+                # frames at rest, not one frame (2026-09-28: a single frame
+                # and the one 3 ms later disagreed by 1.44 deg at tag 104).
+                tag = self._measure_tag_view_at_rest(tag_id, self.align_record_frames, rate)
+                if tag is None:
+                    continue            # tag lost / stop requested: the loop top handles it
+                angle_deg = tag['edge_deg'] - target_deg
                 if abs(angle_deg) < align_threshold:
-                    tag = dict(self.detected_tags[tag_id])
                     if record:
                         # Base at rest now — the best estimate of where the
                         # lens sits relative to this tag for the next hop.
                         self._arrival_fore_m = float(tag.get('x', 0.0))
                         self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                        self._remember_aligned_view(tag_id, tag, angle_deg)
                     rospy.loginfo(f"Alignment Complete. Final Angle: "
                                   f"{angle_deg:.2f} (pass {passes}"
-                                  + (f", target {target_deg:+.2f}" if target_deg else "") + ")")
-                    if record:
-                        self._record_tag_offset(tag_id, tag, 'aligned',
-                                                yaw_error_deg=angle_deg,
-                                                extra={'align_passes': passes})
-                    return True
-                if passes >= max_passes:
-                    tag = dict(self.detected_tags[tag_id])
-                    if record:
-                        self._arrival_fore_m = float(tag.get('x', 0.0))
-                        self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
-                    rospy.logwarn(
-                        f"[Robot] align_to_tag({tag_id}): {angle_deg:+.2f} deg "
-                        f"left after {passes} passes (band {align_threshold}) "
-                        "— accepting; check stop_latency_s / align_settle_s")
+                                  + (f", target {target_deg:+.2f}" if target_deg else "")
+                                  + f", median of {tag.get('median_frames', 1)} frames)")
                     if record:
                         self._record_tag_offset(tag_id, tag, 'aligned',
                                                 yaw_error_deg=angle_deg,
                                                 extra={'align_passes': passes,
-                                                       'align_residual_accepted': True})
+                                                       'align_median_frames': tag.get('median_frames', 1)})
+                    return True
+                if passes >= max_passes:
+                    # Out of passes. The base may STILL be moving (the last
+                    # pass overshot, so the delay model is off here): settle
+                    # once more with zero command and re-measure before
+                    # anything is recorded or published (2026-09-28, tag 104).
+                    rospy.logwarn(
+                        f"[Robot] align_to_tag({tag_id}): {angle_deg:+.2f} deg "
+                        f"left after {passes} passes (band {align_threshold}) "
+                        f"— re-settling {settle_s:.2f}s and re-measuring before accepting")
+                    resettle_until = rospy.Time.now() + rospy.Duration(settle_s)
+                    while rospy.Time.now() < resettle_until and not rospy.is_shutdown():
+                        if self.stop_requested:
+                            self.stop()
+                            return False
+                        rate.sleep()
+                    again = self._measure_tag_view_at_rest(tag_id, self.align_record_frames, rate)
+                    if again is not None:
+                        tag = again
+                        angle_deg = tag['edge_deg'] - target_deg
+                    if record:
+                        self._arrival_fore_m = float(tag.get('x', 0.0))
+                        self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
+                        self._remember_aligned_view(tag_id, tag, angle_deg)
+                    rospy.logwarn(
+                        f"[Robot] align_to_tag({tag_id}): {angle_deg:+.2f} deg at rest "
+                        f"after the re-settle — accepting; check stop_latency_s / align_settle_s")
+                    if record:
+                        self._record_tag_offset(tag_id, tag, 'aligned',
+                                                yaw_error_deg=angle_deg,
+                                                extra={'align_passes': passes,
+                                                       'align_residual_accepted': True,
+                                                       'align_resettled': again is not None,
+                                                       'align_median_frames': tag.get('median_frames', 1)})
                     return True
                 rospy.loginfo(f"[Robot] align pass {passes} settled at "
                               f"{angle_deg:+.2f} deg, correcting again")
@@ -1676,15 +1822,21 @@ class MobileController:
             return 0.0
         return err
 
-    def calculate_robot_pose(self, tag_id):
+    def calculate_robot_pose(self, tag_id, tag=None):
         """
-        Calculates the robot center's pose relative to the tag, 
+        Calculates the robot center's pose relative to the tag,
         mirroring the original V9 logic.
+
+        `tag`: the detection dict to use (default: the newest frame in
+        detected_tags). publish_robot_pose passes the align's at-rest
+        median view so the published pose is the one the align certified.
+        A dict carrying 'edge_deg' (a median) is used as is; otherwise the
+        edge angle is read off its corners.
         """
-        if tag_id not in self.detected_tags:
-            return None
-            
-        tag = self.detected_tags[tag_id]
+        if tag is None:
+            if tag_id not in self.detected_tags:
+                return None
+            tag = self.detected_tags[tag_id]
         # pose_y is the lateral offset since front_cam's 2026-08-13 rotation:
         # image row + (down) = the robot's right, so the sign is unchanged.
         lateral = tag['y']
@@ -1692,7 +1844,9 @@ class MobileController:
         # Original V9 uses corners to get a precise alignment angle
         corners = tag.get('corners')
         align_angle_deg = 0.0
-        if corners is not None:
+        if tag.get('edge_deg') is not None:
+            align_angle_deg = float(tag['edge_deg'])
+        elif corners is not None:
             align_angle_deg = tag_edge_angle_deg(corners)
 
         tag_info = self.map_mgr.get_tag_info(tag_id)
@@ -1726,13 +1880,35 @@ class MobileController:
         else:
             robot_x, robot_y, heading = tag_x, tag_y, 0.0
 
+        cam_offset = self.cfg['robot'].get('camera_offset', 0.45)
+
+        if self.robot_pose_offset_along_heading and zone in ('A', 'DOCK', 'B', 'C', 'D', 'E'):
+            # 2026-09-28: the body sits at `heading` (zone + align residual +
+            # laying angle), so the tag's fore / lateral offsets AND the
+            # camera -> base-centre lever are all body-frame vectors and
+            # have to be rotated by the whole heading, not the zone axis.
+            # World: forward u = (cos h, sin h), the robot's right
+            # r = (sin h, -cos h); the tag sits `fore` ahead and `lateral`
+            # to the right of the lens, the base centre cam_offset behind
+            # the lens. With heading == zone axis this equals the branch
+            # arithmetic above / below bit for bit.
+            h = math.radians(heading)
+            ux, uy = math.cos(h), math.sin(h)
+            rx, ry = math.sin(h), -math.cos(h)
+            cam_x = tag_x - fore * ux - lateral * rx
+            cam_y = tag_y - fore * uy - lateral * ry
+            base_x = cam_x - cam_offset * ux
+            base_y = cam_y - cam_offset * uy
+            # world -> manipulator frame (world_to_manipulator)
+            return -base_y, -base_x, heading
+
         # 2. Convert to Manipulator Coordinates (world_to_manipulator)
         manip_cam_x = -robot_y
         manip_cam_y = -robot_x
-        
+
         # 3. Apply Camera-to-Robot-Center Offset (apply_robot_center_offset)
-        cam_offset = self.cfg['robot'].get('camera_offset', 0.45)
-        
+        # along the ZONE axis — the pre-2026-09-28 rule, kept for
+        # robot_pose_offset_along_heading: false.
         if zone == 'A' or zone == 'DOCK':
             final_x, final_y = manip_cam_x, manip_cam_y + cam_offset
         elif zone in ['B', 'D']:
@@ -1983,6 +2159,18 @@ class MobileController:
 
         rospy.loginfo(f"[Robot] move_to_tag (path-based) → {target_id}")
 
+        # Every tag-driven command needs a working front camera: without it
+        # there is no start tag, no stop line and no align, and the odom
+        # fallback would drive blind from last_known_tag (user rule
+        # 2026-09-22). Refused before anything else happens; the reason is
+        # kept for the caller (mobile_node puts it in the result message).
+        ok, reason, _age = self.front_cam_status()
+        if not ok:
+            self.last_refusal_reason = reason
+            rospy.logerr(f"[Robot] move_to_tag {target_id} REFUSED — {reason}")
+            return False
+        self.last_refusal_reason = None
+
         # ★ NEW: clear stop flag for new command
         self.clear_stop_flag()
 
@@ -2022,6 +2210,18 @@ class MobileController:
             # ★ NEW: interrupt check
             if self.stop_requested:
                 rospy.logwarn("[Robot] move_to_tag interrupted")
+                return False
+
+            # A camera that died during the previous hop must not start
+            # the next one (the hop itself already sees {} for every tag
+            # through the detected_tags property and fails on its own
+            # visibility timeouts).
+            ok, reason, _age = self.front_cam_status()
+            if not ok:
+                self.last_refusal_reason = reason
+                rospy.logerr(f"[Robot] move_to_tag aborted before hop "
+                             f"{current_id} → {next_id} — {reason}")
+                self.stop()
                 return False
 
             rospy.loginfo(f"[Robot] Step {current_id} → {next_id}")
@@ -3251,7 +3451,15 @@ class MobileController:
         Publish robot pose for manipulator coordinate transform.
         This replaces perform_scan_procedure's pose publishing role.
         """
-        pose = self.calculate_robot_pose(tag_id)
+        # Publish the view the align certified at rest (median of several
+        # frames) when it is fresh and for this tag; else the newest frame.
+        view, source = None, 'newest frame'
+        av = self._aligned_view
+        if av is not None and av['tag'] == int(tag_id) and \
+                rospy.Time.now().to_sec() - av['t'] <= self.align_view_max_age_s:
+            view = av['view']
+            source = f"align's at-rest median ({view.get('median_frames', 1)} frames)"
+        pose = self.calculate_robot_pose(tag_id, tag=view)
 
         msg = Pose2DWithFlag()
         msg.header.stamp = rospy.Time.now()
@@ -3266,7 +3474,7 @@ class MobileController:
                 f"[RobotPose] tag {tag_id} "
                 f"x={msg.x:.3f}, y={msg.y:.3f}, theta={msg.theta:.2f}"
                 f" (tag yaw err {self._tag_yaw_error_deg(info):+.2f} deg, "
-                f"tag z {info.get('z', 'design')})"
+                f"tag z {info.get('z', 'design')}, from the {source})"
             )
         else:
             rospy.logwarn(
