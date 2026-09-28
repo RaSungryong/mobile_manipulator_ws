@@ -65,8 +65,12 @@ robot:
   # — it applies only inside final_approach_dist below, and nothing else is
   # clamped to it. 0.010 m/s is ~10.4 rpm at the motor (0.010 / 0.0825 m wheel
   # radius, x9 gear), which is the floor the 2026-08-12 hardware drive ran at
-  # with the base moving normally.
-  final_approach_speed: 0.010
+  # with the base moving normally. 0.010 -> 0.015 on 2026-09-28 (user:
+  # "너무 느리다"): the stop lead (stop_latency_linear_s 0.08 s x this) is
+  # 1.2 mm instead of 0.7, still inside the measured latency model; the
+  # lateral / yaw accuracy comes from the at-rest aim and align, not from
+  # this speed, and the fore-aft stop is measured into /robot_pose anyway.
+  final_approach_speed: 0.015
   # Speed multiplier applied to the profile speed from the moment the target
   # tag is detected until the stop (the visual Pure Pursuit phase). User
   # request 2026-09-02 ("태그가 발견된 후 퓨어퍼슛할 때 1/3로"): at
@@ -88,8 +92,13 @@ robot:
   # the 1 m pivot-exit hop. Cost: ~8 s per hop at 0.015 m/s. Forward is
   # already this slow by then (final approach entries were 0.010-0.015).
   # 0 disables.
-  blind_approach_dist: 0.15      # 0.12 -> 0.15 on 2026-09-04 (user: 감속 구간 살짝 더 길게)
-  blind_approach_speed: 0.015
+  # 2026-09-28 (user: 주행이 너무 느리다): 0.15 / 0.015 -> 0.10 / 0.020.
+  # The last 15 cm at 0.010-0.015 m/s was ~10 s of a 22 s hop (nav_log
+  # 20260928, 184 hops). 0.10 still covers the ~6 cm odom error of the 1 m
+  # pivot-exit hop AND the 3 cm at which a reverse hop into a 500-series
+  # tag first sees it; 0.020 is what the final approach then brakes from.
+  blind_approach_dist: 0.10      # 0.12 -> 0.15 (2026-09-04) -> 0.10 (2026-09-28)
+  blind_approach_speed: 0.020
 
   # FINAL APPROACH (mobile_controller.execute_pure_pursuit).
   # Distance before the tag reaches the stop point at which the robot drops to
@@ -117,7 +126,7 @@ robot:
   # 0.05 m/s needs only 0.020 and the normal ramp is used instead. Shortening
   # this distance raises the required deceleration quadratically in the entry
   # speed — 0.03 m at 0.1 m/s would demand 0.165 m/s^2.
-  final_approach_dist: 0.08      # 0.06 -> 0.08 on 2026-09-04 (user: 감속 구간 살짝 더 길게)
+  final_approach_dist: 0.05      # 0.06 -> 0.08 (2026-09-04) -> 0.05 (2026-09-28: entry is 0.020 now, a = 0.0018 m/s^2 over 5 cm)
   # Launch yaw hold (2026-09-04, user: "제자리 얼라인 후 직진하면 한쪽
   # 바퀴가 살짝 늦게 도는지 요가 기울면서 출발"). Pure Pursuit's omega is
   # |speed| x curvature x gain — ~0 at launch and blind to yaw — so a wheel
@@ -322,6 +331,12 @@ robot:
   # inside the last plan_prepare_dist of odom distance the speed is capped
   # at plan_approach_speed, braking at plan_prepare_decel (the general
   # linear_accel 0.05 would carry 0.09 m/s eight cm into the visible zone).
+  # 0.28 is NOT conservative (checked 2026-09-28 when shortening the crawl
+  # zone): the tag appears at ~0.19-0.21 m remaining, the cap is EXECUTED
+  # 0.55 s (stop_latency_s) after it is commanded = 3.3 cm at 0.06 m/s, and
+  # braking 0.06 -> 0.03 at plan_prepare_decel takes 1.4 cm more, so 0.26 is
+  # the minimum. 0.18 was tried and failed check_robot_pose_live G4 (the
+  # base still at 0.06 m/s when the tag came into view).
   plan_prepare_dist: 0.28
   plan_prepare_decel: 0.1
   plan_approach_speed: 0.02

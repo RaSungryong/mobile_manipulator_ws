@@ -1898,6 +1898,43 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-09-28 (night) — "주행이 너무 느리다": the last 15 cm crawl shortened; accuracy comes from the at-rest measurements, which are untouched
+
+User: the driving is too slow — can it be faster with the same accuracy?
+Measured first, from today's nav_log (184 hops): a 0.40 m hop takes
+**21.8 s median forward / 22.4 reverse** (0.018 m/s average) plus a 3.0 s
+arrival align (2+ passes on 33 %). One hop (123→124, 19:20) laid out:
+launch align 1.0 s, accelerate + cruise 4.3 s (only reaches 0.062 m/s
+before `plan_prepare_dist` pre-slows it), aim stop + measure + pivot
+4.2 s, aim drive 3.1 s, **the last 15 cm at 0.010–0.015 m/s ~10 s**,
+arrival align 4.3 s. So the driving proper is 7 s, the crawl 10, the
+at-rest measurements 9.5. What defines the accuracy is the at-rest part
+(aim pivot, align band 0.2°, 0.85 s settle, 5-frame medians) and the
+crawl only sets the fore-aft stop scatter (±0.5–1 mm at 0.010 m/s) —
+which is measured into `/robot_pose` since 09-04 and does not reach the
+arm's world coordinates.
+
+Applied (`robot.yaml robot:`): `blind_approach_dist` 0.15 → **0.10**,
+`blind_approach_speed` 0.015 → **0.020**, `final_approach_dist` 0.08 →
+**0.05**, `final_approach_speed` 0.010 → **0.015**. Expected: ~5–6 s
+less per hop (the crawl 10 → ~4 s), fore-aft stop scatter ~±1.5 mm
+(stop lead 1.2 mm instead of 0.7 from the measured 0.08 s latency).
+0.10 still covers the ~6 cm odom error of the 1 m pivot-exit hop and the
+3 cm at which a reverse hop into a 500-series tag first sees it. NOT
+changed: `aim_min_deg` (skipping sub-3 mm aims would cost lateral
+accuracy — the user's call), the first-hop align rule, and every settle /
+band / median constant. **`plan_prepare_dist` 0.28 → 0.18 was tried and
+reverted**: the tag appears at 0.19–0.21 m remaining, the cap executes
+0.55 s later (3.3 cm at 0.06 m/s) plus 1.4 cm of braking, so 0.26 is the
+minimum; at 0.18 the plant still had the base at 0.06 m/s when the tag
+came into view (`check_robot_pose_live` G4 failed, 15 mm live lag). The
+yaml comment records the arithmetic. Verified offline:
+`check_nav_sequencing` 14, `check_front_cam_guard` 31,
+`check_robot_pose_live` 30 (the plant's 106→107 hop 384 → 327 ticks).
+Not driven: `mobile_node` restart required (`sudo systemctl restart
+mobile-manipulator`); first check a 112→109→112 round trip's `aligned`
+records — fore-aft within ±2 mm, lateral / yaw unchanged, hop time.
+
 ### 2026-09-28 (night) — `/robot_pose` streams the live position: tag-based at 10 Hz, odom-carried between tags
 
 User: `rostopic echo /robot_pose` "왜 안 되요", then "실시간으로 로봇
