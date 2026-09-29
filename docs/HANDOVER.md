@@ -616,8 +616,10 @@ pull + `catkin_make` before anything below.
   (loop rewritten 2026-09-08, `keyence_standoff.py`: whole-range
   engagement, gap-proportional steps, fresh median readings, outcome in
   the CSV row; not yet run on the robot). Read `docs/keyence_scan_chain.md`
-  before raising it. `keyence.seek_enabled` stays false until the ±99999
-  sentinel's sign is confirmed on the real sensor.
+  before raising it. `keyence.seek_enabled` is **false** (2026-09-29, user): the
+  sentinel's sign was confirmed 2026-09-21 and the seek ran until 09-29,
+  when a TASK scan with the surface out of range walked the tool 40 mm
+  down at every point — the key is shared by the scan and Auto standoff.
 - `grid_path_line{1,2}_-5.csv` use `group_id` 4/5, valid in no map.
 
 ### 2-6. Documentation debt

@@ -1379,7 +1379,12 @@ reading that does not follow the motion aborts, the gain adapts DOWN to the
 measured sensitivity on sloped material, `keyence.target_distance_mm` is
 live (default 10 = the sensor zero), and the outcome is written into the
 CSV row's `execution_message` (`require_converged` makes a failed standoff
-fail the point). **`seek_enabled` is ON since 2026-09-21**: an out-of-range
+fail the point). **`seek_enabled` is OFF since 2026-09-29** (user; it was ON
+2026-09-21..29): the key is shared by the TASK scan and robot_ui's Auto
+standoff, and a scan whose surface was out of range walked the tool down the
+whole 40 mm at EVERY point and captured there — Work Log 2026-09-29. With it
+off an out-of-range reading moves nothing and the row says `out of range on
+the far side (seek disabled)`. What the seek does when on: an out-of-range
 first reading steps `seek_step_mm` (5) toward the side the sentinel names
 until a reading appears, on its OWN budget (`seek_max_mm` 40 — the
 user's "start from 4 cm": Auto standoff works from ≤ ~67 mm of case
@@ -1932,6 +1937,46 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-29 — Keyence seek OFF: the scan walked 40 mm down at every point on no measurement
+
+User, after `TASK scan_pose_…_020mm` / `scan_joint_…_020mm`: why does the
+arm try to go down at every point_id although the displacement sensor is
+out of its range. It was the seek of 2026-09-21, which was turned on for
+robot_ui's Auto standoff ("start from 4 cm") but is the SAME key the
+TASK scan's standoff loop reads. From `arm_node`'s log (12:23–12:31):
+every point read the −100000 sentinel (`side: far`), ran `[Seek 1..8]`
+× 5 mm, ended `still out of range on the far side after seeking 40.0 mm`
+and — `require_converged: false`, and the loop does not return to the
+start height after a failed seek — **captured 40 mm BELOW the CSV pose**,
+~9 s per point (467 points ≈ 70 min). The next row's move goes back up to
+the CSV height, hence "down at every point". 22 of the 23 rows written
+into the two Ra maps of the day carry that message (the 23rd was the
+cancel); their Ra values are not measurements at the planned standoff.
+
+`robot.yaml keyence.seek_enabled: false` on the user's choice (the
+alternative offered and not taken: a scan-only switch that keeps the seek
+for Auto standoff). Consequences: a scan point with the surface out of
+range is captured at the CSV pose, untouched, with `standoff NOT
+corrected: out of range on the far side (seek disabled)` in its row;
+Auto standoff needs the surface inside the sensor window (~6.5–27 mm of
+case standoff) before it will move, as before 09-21. `seek_step_mm` /
+`seek_max_mm` and the code are unchanged.
+
+Not explained by this, and open: the seek found NOTHING after 40 mm at
+any point, so at the CSV pose the case was more than ~67 mm from whatever
+is under the beam (sensor window ends ~27 mm), or the oblique beam (37°)
+was off the surface. For a `standoff_020mm` file the case should start
+near 36.5 mm. Either no workpiece was under the points, or the CSV z
+(world 0.648 m) / the world → arm z chain is tens of mm from the real
+surface — check with the tool over the workpiece and the live standoff
+line in robot_ui before trusting a scan's height. Also worth a separate
+look: a failed seek leaves the tool at the bottom of its walk.
+
+Verified offline: `check_standoff_seek.py` 23, `check_scan_progress.py`
+73; the yaml loads with `seek_enabled` False. `arm_node` restart
+required (`sudo systemctl restart mobile-manipulator`); the startup
+warning `keyence seek is ENABLED` should be gone.
 
 ### 2026-09-28 (night) — Base stop pose per map tag, for path generation: `tools/map_stop_poses.py` → `docs/robot_base_stop_poses.csv`
 

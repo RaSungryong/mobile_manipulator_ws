@@ -1419,7 +1419,15 @@ keyence:
   #     so keep the surface flat under and beside the tool. The sensor
   #     itself cannot see farther than its 55 mm span, wherever the head is
   #     mounted; 30 cm is not an IL-100 number.
-  seek_enabled:        true   # ~keyence_seek_enabled
+  # OFF since 2026-09-29 (user): the same key drives the TASK scan, and with
+  # the surface out of range the scan walked the tool down the whole 40 mm
+  # at EVERY point, found nothing, and captured 40 mm below the CSV pose
+  # (~9 s per point; rows "still out of range on the far side after seeking
+  # 40.0 mm"). With it off an out-of-range reading moves nothing: the point
+  # is captured at the CSV pose and the row says "out of range on the far
+  # side (seek disabled)". robot_ui's Auto standoff therefore needs the
+  # surface inside the sensor window (~6.5-27 mm case standoff) again.
+  seek_enabled:        false  # ~keyence_seek_enabled
   seek_step_mm:        5.0
   seek_max_mm:         40.0
   # When the loop did not converge: false (default) scans anyway and writes
