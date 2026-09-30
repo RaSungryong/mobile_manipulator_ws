@@ -167,10 +167,44 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            #       scanned; world x y z from the paired file
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # Today's keys: errorY_p000mm_standoff_{010,030,
-                           # 050}mm_height_652mm — SEPARATE tasks because the
-                           # standoff changes which tag each work point is
-                           # assigned to, not just the offset.
+                           # Today's keys (2026-09-29, 18:10; plus the 2026-09-30
+                           # rrt_final_path_260930_standoff20mm_offset{0cm,1.5cm,
+                           # 3cm}_height{652,667,682}mm joint-only set — new work
+                           # points, new tag assignment, NO pose twin, see the
+                           # Work Log): 260610_standoff
+                           # 20mm_offset{0,1.5,3}cm_height{652,667,682}mm — the
+                           # planner's "260610_rot" export (task/260610_rot_
+                           # standoff20mm_offset0_15_30.zip): the SAME 1266
+                           # work points on 정반 1 tags 104–108 / 119–121 at
+                           # three LIFT heights (lift_mm 0 / 15 / 30 — the
+                           # "offset" is the arm base height, the joint rows
+                           # are solved at it), standoff 20 mm, speeds 10–30.
+                           # Planner ORIGINALS, NOT retargeted (user, 18:20:
+                           # "retarget 안 해도 됨") — see the Work Log.
+                           # Plus upper_mold_errorX_p000mm_standoff_{001,010,
+                           # 020}mm_height_652mm_plate2: the 정반 2 set of the
+                           # evening (tags 131–133 / 143–145, retargeted,
+                           # 20 mm tip-down), restored from the 18:06 backup
+                           # on the user's word that it is the 상형 (18:35;
+                           # the planner zip's folder called it 하형 — the
+                           # name follows the user). Plus the 2026-09-14 set
+                           # brought back from git (commit 68bac0d, user
+                           # 18:45): errorX_p000mm_standoff_{010,030,050}mm_
+                           # height_652mm (정반 1, tags 106–108 / 118–121, z
+                           # 0.34–0.44 m, planner originals of that day) and
+                           # errorX_…_standoff_{010,030,050}mm_…_plate2 (19:00
+                           # / 19:10, user: these for 정반 2 as well — the same
+                           # make_plate2_paths.py conversion, tags 106/107/108/
+                           # 119/120/121 → 132/133/134/144/145/146, 20 mm
+                           # tip-down; 2 / 3 work points per file sit 4–9 mm
+                           # beyond the arm's reach there, see the Work Log;
+                           # the 010_plate2 JOINT file is at 16.1 mm of
+                           # tip-down since 20:30 = what the Keyence measured
+                           # on group 132, its pose twin at 20;
+                           # the 09-14 "+26" 050_plate2 files are replaced,
+                           # git 68bac0d has them).
+                           # Keys are SEPARATE tasks because the standoff /
+                           # lift changes the solution, not just the offset.
                            # 🛑 target_line 2 (groups 118/119/120) is not
                            #    trustworthy yet — see the scan-CSV section.
                            # ⚠️ scan_joint_* replays a planned trajectory with
@@ -250,6 +284,44 @@ Three columns differ from the original dialect, all handled in
 joint mode, for the IK seed in pose mode. Pairing on `point_id` instead
 matches only 797 of 1035 rows and silently drops the rest. Note the pose file
 has no `source_point_id` at all: there, `point_id` IS the work-point id.
+
+### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
+
+A planner export is solved for the planner's model, settled by FK against
+its own pose rows (0.010 mm over 2828 work points, one combination only):
+**base stop pose = tag of `config/map_idle.yaml` − 0.55 m at exactly ±90°**
+(`docs/robot_base_stop_poses_plate1_idle.csv`), **the DESIGN `T_ab2mb`** and
+**the DESIGN tip** (`tf_chain.yaml` `design` blocks). The robot stops on the
+calibrated `map.yaml` (`docs/robot_base_stop_poses_plate1_0928.csv`) and
+carries the calibrated mount and the measured tip. A joint row is an absolute
+configuration, so replayed as exported the tip lands 9 mm (zone B) / 17 mm
+(zone C) beside the planned point and 10 mm above it.
+
+**`tools/retarget_joint_paths.py [task_dir] [--apply]`** re-solves the
+`rrt_final_path_*` rows so the REAL tip is on the PLANNED world pose: work
+points and the transitions between them exactly (IK seeded with the planned
+row, same arm configuration), transitions next to a `home` row by fading the
+work point's correction to 0 at home, `home` rows untouched. Only q1..q6
+cells change. It classifies each file first (ORIGINAL / RETARGETED /
+neither) and rewrites only an ORIGINAL, so a second run is a no-op.
+
+- **`assigned_workpoints_*` is NOT retargeted and must not be**: its x y z
+  rx ry rz are WORLD coordinates and `_exec_pose` applies the live
+  `/robot_pose`, the calibrated mount and the measured tip at run time.
+  Adding the stop-pose difference to it moves the target off the workpiece.
+- **After dropping a new planner export into task/csv:** run the tool with
+  `--apply` (dry run first). `tools/check_retarget_joint_paths.py` fails on
+  a joint file that is not retargeted for the current map.
+- **After `map.yaml` or `tf_chain.yaml` changes:** restore the planner
+  ORIGINALS from `log/apriltag_nav/task_csv_backup/<date>_before_stop_pose_
+  retarget/` (the 001 / 020 files are not in git), regenerate the actual
+  stop poses (`tools/map_stop_poses.py`), then run the tool again. A file
+  retargeted for the old map is "neither" and is refused.
+- The metadata columns (`base_x_actual_mm` ±1610 = the planner's arm base x)
+  still describe the planner's model; nothing reads them.
+- Not covered: the joint zero offsets (joint mode never applies them; pose
+  mode applies their xy part — ~9 mm between the two modes remains) and the
+  per-arrival stop error (±2 mm / ±0.2°), which only pose mode sees.
 
 ### 🛑 The group → tag assignment does not survive checking
 
@@ -1394,6 +1466,30 @@ raw −100000) was confirmed with the tool at the home pose; a "near"
 sentinel retreats. The step must stay under the sensor window (~6.5–27 mm
 case standoff) and the budget is how far a beam that sees nothing walks
 the tool down. Run on the robot through robot_ui's Auto standoff.
+
+**Since 2026-09-29 the loop moves the MEASURED gap in one move
+(`keyence.move_mode: direct`; `stepped` = the halving law above, which a
+direct adjustment falls back to).** One computed move, a fresh median at
+rest, one trim if the residual is outside `tolerance_mm` — 1–2 moves per
+point instead of the 3–4 measured that day. Safeguards: a clean-reading
+gate (`direct_max_spread_mm`), per-move caps, the travel budget, no
+amplified approach; a **live guard** (`guard_*`: `arm_controller` watches
+`/keyence/value` while the approach MoveL runs and calls `StopMotion`
+when the reading has passed the target by 1 mm or the sensor says "too
+close", 2 messages in a row — not a cancel, the loop re-measures and
+goes on stepped, a second stop ends it); a long move the reading did not
+follow ends the adjustment after ONE move. ⚠️ **Standoff moves chain from
+the previous COMMAND, not from the pose readback**: a MoveL ends a small
+constant offset from its target (0.1–0.5 mm, 0.06°, pose-dependent), and
+"readback + dz" carried it on every move — a 0.3 mm retreat moved the
+tool closer, 47 of 64 tip-tour adjustments of 2026-09-28 ended "reading
+does not follow the motion", and the tool drifted ~0.3 mm sideways per
+move. Do not go back to readback-relative targets there; `jog` still
+has the same property (2026-09-18 note). The offset measured after each
+move pre-compensates the first move of the next adjustment nearby
+(`cmd_bias_*`). `tools/check_standoff_direct.py` (50); detail in
+`docs/keyence_scan_chain.md`.
+
 Three things about it are not guessable from the code — full
 record in `docs/keyence_scan_chain.md`:
 
@@ -1937,6 +2033,492 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-09-30 — Three new planner joint paths installed as `rrt_final_path_260930_standoff20mm_offset{0cm,1.5cm,3cm}_height{652,667,682}mm.csv`
+
+User dropped `joint_path_offset{0cm,1.5cm,3cm}_h{652,667,682}.csv` into
+task/csv and asked whether RELOAD + run was enough. It was not: the prefix
+is not one `TaskManager` discovers, and the speed-10 rule was not applied.
+Done on the user's instruction ("오늘 날짜가 들어가는 이름으로 변경, speed
+10 적용"): renamed to the `rrt_final_path_260930_…` keys above (same
+naming as the 260610 set; originals + SHA256SUMS in
+`log/apriltag_nav/task_csv_backup/20260930_joint_path_offset_originals/`)
+and `slow_task_entry.py --apply` (258 / 261 / 266 boundaries, only the
+speed column differs from the originals, 0 violations, BOM / CRLF kept).
+Real `TaskManager` registers `scan_joint_260930_…` ×3 (lift 0 / 15 / 30
+mm, tags 104 105 106 107 118 119 120) with no error. `RELOAD_TASKS` from
+the UI picks them up; no node restart needed (the stack was restarted
+09:33 today, so the 09-29 standoff code is live).
+
+**What these files are, measured before installing — and what they lack.**
+Same RRT dialect, standoff 20, z 0.589–0.667 (하형 heights), 1267 work
+rows each, `lift_mm` 0 / 15 / 30, planner metadata identical to 260610's
+(`base_x_actual_mm` ±1610). But the group → tag assignment is NEW (106:
+501 pts, 119: 557, 107: 8, 118 added, 108 / 121 gone) and the work points
+are a DIFFERENT set: FK under the planner model (idle stops, design mount
+and tip) puts the tips at x −0.56…0.56 like 260610 but y −0.567…0.434
+(260610: −0.777…0.224), and no new tip lands within 2 mm of any 260610
+point (median 19 mm, p95 180). **No `assigned_workpoints_` twin was
+delivered**, so: the tasks register alone with `points_with_world_xyz 0`
+(Ra map rows without x y z), the retarget tool cannot classify or correct
+them (they replay as planner originals: tip ~9 mm beside / ~10 mm above
+the planned point, as for 260610), and ⚠️ **the 260610 pose files must
+NOT be given these keys** — pairing by (group, source_point_id) would
+attach wrong coordinates to 395 points (median 330 mm off) and none to
+872. Reach: flange 814–1412 mm (FR10 nominal 1400 — on the limit at the
+far corners); joint-limit margin ≥ 43.5°, row step 5.73°. The standing
+joint-replay hazard applies unchanged. Asked the user for the planner's
+pose twins; pending.
+
+### 2026-09-29 (20:30) — The measured standoff error put into the path data: `rrt_final_path_errorX_…_010mm_…_plate2.csv` re-made at 16.1 mm of tip-down
+
+User, on being told the scan points were "about 5 mm too far": "이거는
+경로데이터에 추가". Split by task first, because the 5 was a reading of
+the last log lines, not a mean. Only ONE task of the day has readings at
+all — `scan_joint_errorX_p000mm_standoff_010mm_height_652mm_plate2`, group
+132 — every other scan of 2026-09-29 (errorX 001 / 020, 260610, 030_plate2,
+upper_mold_plate2: 600+ points) read "out of range on the far side", i.e.
+more than ~10 mm too far by an unknown amount, so nothing can be added to
+those files from the data. The one task ran twice: **19:23 with the 20 mm
+file, 40 points, first error +3.96 mm (too close, sd 0.85); 19:29 with
+the 12 mm file, 85 points, −4.10 mm (too far, sd 1.01)** — the two agree
+on the surface being at 16.0–16.1 mm of tip-down. Applied **4.1, not 5**:
+the file was re-made with `make_plate2_paths.py --tip-down-mm 16.1` from
+the same 09-14 source (the 19:20 procedure: scratch output, only the rrt
+file installed, the pose twin left at 20 mm — it is now 3.9 mm BELOW the
+joint file, was 8). Only q1..q6 changed; FK new vs old: tip +4.100 mm
+along the tool z on 941 work points, sideways 0.000 mm, largest joint
+change 1.05°; the two unreachable corner points miss by 11.3 / 4.9 mm
+(were 10.8 / 4.6), row-to-row step 5.7 → 12.1°. Record + the replaced
+file: `task_csv_backup/20260929_plate2_from_0914_standoff010_tipdown16p1/`.
+`check_task_discovery` 58; `check_retarget_joint_paths` fails the same
+nine files as before (this one because joint ≠ pose by design).
+
+What the constant does not remove: within the 19:29 run the error drifts
+−2.6 mm (points 17–31) → −5.0 mm (points 84–155), so after the shift the
+first reading should be within about ±2 mm and the standoff loop takes
+the rest (one direct move). Groups 133 / 134 / 143 / 144 of the file were
+never measured; they got the same 4.1. Not run on the robot;
+`RELOAD_TASKS` (or the `arm_node` restart the standoff change needs
+anyway).
+
+### 2026-09-29 (20:00) — Keyence standoff: the measured gap in ONE move, guarded; and why the tip tour's loop "did not follow the motion"
+
+User: "거리센서 보정 진행할 때 실제로 이동해야 할 거리를 계산해서 이동, 안전장치도
+필요, 여러 번 이동하는 것을 최소화". Measured first, from the day's
+`arm_node` log: 116 scan adjustments, first error 3–6 mm off at almost
+every point (too close in the 19:23 run, too far in the 19:29 run),
+**3 moves on 60 / 4 on 37 / 5–6 on 10**, median 2.2 s — the
+2026-09-08 law approaches by halves although the first reading has the
+whole distance. Sensitivity of the big moves (reading change / commanded):
+median 0.93, p5 0.83, p95 1.00, so a one-shot move ends 0.2–0.5 mm short
+on about half the points and inside the 0.2 mm tolerance on the rest.
+
+**Built** (`keyence_standoff.py` docstring 10, `arm_controller.py`,
+`robot.yaml keyence:`; standing text in *Keyence Distance Loop*):
+`move_mode: direct` — whole gap in one move, verify at rest, trim with the
+measured sensitivity; `move()` may return a `MoveReport` (executed
+distance from the pose readback, guard stop). Safeguards before / during /
+after the move as listed there; the one that is new in kind is the **live
+guard**: the sensor is watched on the `/keyence/value` callback thread
+while the MoveL blocks the worker, and `StopMotion` (retry, no cancel
+flag) ends the move when the reading passes the target by 1 mm.
+`stepped` is the old law bit for bit and the dataclass default.
+
+**Found on the way — the loop's targets were readback-relative.** The
+2026-09-28 tip-tour log had 47 of 64 adjustments ending "reading does not
+follow the motion", and their steps show a constant ~0.4–0.5 mm toward the
+surface on EVERY move whatever was commanded (retreat 3.0 → 2.25, 0.81 →
+0.24, 0.61 → 0.08; approach 0.6 → 1.16). `tip_check/…/r1_tag101.yaml`
+has the poses: three retreats totalling 1.3 mm moved the readback z
++0.23 mm, x +0.68, y −0.91 mm, rx 179.13 → 178.94. A MoveL ends a small
+offset from its target and "readback + dz" re-applied it per move (the
+2026-09-18 jog finding, larger at 1.1 m reach). Today's scans show no
+such bias (small-move ratio 0.99) — it is pose-dependent. Moves now chain
+from the previous command with the first pose's orientation; the offset
+is measured after each move and carried to the next adjustment nearby.
+The HEAD code against the new check's fake robot reproduces the tour's
+signature (0.5 mm from target, x / y drift), the new code converges in 2
+moves there and in 1 at the next point.
+
+Verified offline only: `check_standoff_direct.py` 50 (300 random starts:
+1.66 moves per point vs 4.17 stepped; frozen sensor = one move; guard
+stops a move onto a 5 mm raised edge at 15.3 mm, 11.5 without),
+`check_standoff_seek.py` 23, `check_scan_progress.py` 73. **Not run on the
+robot; `arm_node` restart required** (`sudo systemctl restart
+mobile-manipulator`). Watch for `[Standoff 1/5] err −5.3 mm … -> approach
+5.3 mm (direct x1, gain/1.00)` followed by `on target` or one short trim.
+Not verified on hardware: the controller accepting the next MoveL after a
+guard `StopMotion` without a reset, and the real stop distance. If a
+guard stop ever leaves the arm in error, `guard_enabled: false` keeps the
+rest. The constant part of the day's error went into the path file
+instead — next entry.
+
+### 2026-09-29 (19:00) — 정반 2 twins of the 09-14 standoff 030 / 050 pairs; the plate-2 tool learnt to keep unreachable rows
+
+User: "이 두개의 정반 2의 파일도 만들어주" (the 09-14 `errorX_…_standoff_030mm`
+and `_050mm` pairs). `make_plate2_paths.py` on them, same treatment as the
+evening's set (x +3.900, twins 106/107/108/119/120/121 → 132/133/134/144/
+145/146, 20 mm along the tool z, joint rows re-solved on the robot model,
+speed-10 rule). Output `assigned_workpoints_ / rrt_final_path_errorX_p000mm_
+standoff_{030,050}mm_height_652mm_plate2.csv` — the 050 name REPLACES the
+09-14 "+26" pair restored fifteen minutes earlier (that one kept 정반 1
+coordinates; git `68bac0d` still has it). Record + sources in
+`task_csv_backup/20260929_plate2_from_0914_standoff030_050/`.
+
+Two tool changes it needed. (1) Twin matching is by grid ROW (nearest
+zone D / E tag within 50 mm), not ±5 mm: tag 121's calibrated y is
+−1.3557 and its twin 146 sits at the design −1.35. (2) **Rows the arm
+cannot reach on 정반 2 are kept, not refused:** this set (z 0.34–0.44 m,
+the far corners at 1391–1395 mm of planned flange reach) needs 1402–
+1416 mm on 정반 2 — the base stands 10 mm further from the plate, the
+measured tip is 13.5 mm shorter, the tip-down adds reach on a tilted tool
+— and the damped IK ends 4–9 mm short with the elbow straight. Such a row
+(work point or transition) keeps the planned row + the correction
+interpolated from its solved neighbours, so the path stays smooth, and
+the tool lists it: **030: 2 work points (group 106 pt 1: 8.9 mm, 107 pt
+32: 4.2 mm) + 1 transition; 050: 3 work points (106 pt 1: 6.6, pt 414:
+9.0, pt 452: 8.3 mm) + 3 transitions** (`--max-unreachable` 5 / `--max-
+unreachable-mm` 10; this run with 6). The reachable rows next to them
+straighten the elbow 13–15° → 2°, so the row-to-row step grows 5.7 →
+10.1 / 10.8° there (`--max-step-growth-deg` 6 for this run; the default
+0.5 is the divergence guard). Every other work point is on its pose row
+to 0.010 mm; pose mode refuses those 2–3 points with an IK error at run
+time, so the miss is visible there too. `check_task_discovery` 56, real
+`TaskManager` 10 + 10 tasks, no errors, every task routes from 500;
+`check_retarget_joint_paths.py` part 2 reports the two new joint files
+as 8.9 / 9.0 mm worst — exactly the 2 / 3 unreachable work points (its
+message now says "N of M work points off … unreachable rows kept" for a
+handful and "NOT retargeted" for a whole file; the 260610 originals are
+the latter, by the 18:20 decision). Not run on the robot.
+
+**Then (19:10, "이거도 해주") the 09-14 `errorX_010` pair too**, same tool
+and settings: tags 106/107/108/118/119 → 132/133/134/143/144, 943 work
+points on their pose rows to 0.010 mm except **2 unreachable work points
+(group 106 pt 1: 11.8 mm, 107 pt 32: 5.1 mm) + 2 transitions** (flange
+target 1403–1412 mm), row-to-row step 5.7 → 13.1° next to them
+(`--max-unreachable-mm 12 --max-step-growth-deg 8` for this run). Record
+in `task_csv_backup/20260929_plate2_from_0914_standoff010/`. task/csv:
+12 + 12 tasks, `check_task_discovery` 58, real `TaskManager` no errors,
+routes from 500 ok.
+
+**Then (19:20, user: "rrt_final_path_errorX_…_010mm_…_plate2.csv vision_tip
+방향 기준으로 8mm 위쪽으로") — that JOINT file alone re-made at 12 mm of
+tip-down (20 − 8), its pose twin left at 20 mm on purpose.** Same tool,
+`--tip-down-mm 12`, output to a scratch dir and only the rrt file copied
+in; record in `task_csv_backup/20260929_plate2_from_0914_standoff010_
+tipdown12/`. Verified on the installed pair: the joint rows' real tip
+sits exactly 8.000 mm ABOVE the pose rows along the tool z at all 941
+reachable work points (perpendicular 0.010 mm); the two unreachable
+corner points miss by 10.8 / 4.6 mm now, step 5.7 → 11.4°. So for this
+key the joint task scans 8 mm higher than the pose task, and the Ra map's
+world x y z (taken from the pose file) is 8 mm below where the joint
+task actually measured — say the word and the pose file follows.
+
+### 2026-09-29 (18:45) — The 2026-09-14 task set brought back from git (commit 68bac0d)
+
+User: "9.14일 task git에서 가져오기". The last commit of that day touching
+task/csv is `68bac0d` (09-14 17:18): four pairs — `errorX_p000mm_standoff_
+{010,030,050}mm_height_652mm` (정반 1, 943 work points each, tags 106–108 /
+118–121, z 0.34–0.44 m, speeds already halved to 10 / 30) and
+`errorX_p000mm_standoff_050mm_height_652mm_plate2` (tags 132 / 133, 472
+points: the 09-14 tag-id +26 shift with 정반 1 world coordinates, i.e. NOT
+a frame conversion — its pose twin puts the tip on 정반 1's workpiece
+position while the base stands on 정반 2; run only its joint twin, if at
+all). Written into task/csv with `git show` (none of the names existed
+there any more), verified cell by cell against the commit, then the
+standing speed-10 rule applied (only speed cells changed: 361 / 408 /
+361 / 176 per pair). Not retargeted (the user's rule of 18:20 stands for
+everything in task/csv; these are the 09-14 planner originals, made for
+the DESIGN mount / tip and the idle stop pose — the 09-21 tip finding
+says pose mode's flange target sits 17 mm from the joint row's here).
+task/csv now holds 10 + 10 tasks; `check_task_discovery` 56, real
+`TaskManager` no errors, every task routes from 500. `RELOAD_TASKS`.
+
+### 2026-09-29 (18:35) — The 정반 2 set restored from the backup as `upper_mold_…_plate2`
+
+User: "백업한 정반2 상형 데이터 추가해주". The only 정반 2 data in any backup
+is the evening's `_plate2` conversion (18:06 zip, six files, sha256
+verified against the zip's SHA256SUMS) — the set the planner zip's folder
+called 하형 and which was therefore installed as `lower_mold_…_plate2`. It
+is back in task/csv unchanged except the key: **`upper_mold_…_plate2`, on
+the user's word** (the user is the authority on which mold sits on 정반
+2; if the planner's folder name was right after all, the rename is a
+`sed` — the contents are the same either way). The 상형 folder of the
+planner zip (z 0.33–0.41 m, reach-limit rows, refused by the retarget)
+is still NOT installed anywhere. task/csv now holds 6 + 6 tasks:
+`260610_…` (정반 1, three lifts, originals) and `upper_mold_…_plate2`
+(정반 2, retargeted, 20 mm tip-down); `check_task_discovery` 52, real
+`TaskManager` no errors, every task routes from 500. `RELOAD_TASKS`.
+
+### 2026-09-29 (18:10–18:30) — The "260610_rot" export replaces task/csv: three lift heights, planner originals, NOT retargeted (user's call); the retarget tool learnt `lift_mm`
+
+User: "현재 task 압축하고 백업" → `log/apriltag_nav/task_csv_backup/
+20260929_180646_task_csv.zip` (the 12 lower_mold / _plate2 files +
+SHA256SUMS). Then `task/csv/260610_rot_standoff20mm_offset0_15_30.zip`
+"이것이 최신 경로파일이다 정리해주". What it is: three pairs named
+`260610_standoff20mm_offset{0cm,1.5cm,3cm}_height{652,667,682}mm_
+{assigned_workpoints,rrt_final_path}.csv` — SUFFIX naming, so they were
+renamed to the `assigned_workpoints_<key>` / `rrt_final_path_<key>`
+prefix `TaskManager` discovers. Same 1266 work points in all three (정반 1
+frame, tags 104–108 + 119–121, both target lines, z 0.589–0.667 = the
+하형 heights, standoff 20 mm, tool up to 27.8° off vertical, rz over
+±180° — the "rot"); what differs is **`lift_mm` 0 / 15 / 30** (base
+height 652 / 667 / 682): the joint rows are solved at that base height,
+FK under the planner model lands on the pose rows to 0.010 mm only once
+the arm base is raised by exactly 15.000 / 30.000 mm. The planner's own
+speeds are graded 10 / 15 / 20 / 25 / 30; the standing transition → task
+speed-10 rule was applied (292 / 289 / 288 boundaries per file, backup of
+the renamed originals in `task_csv_backup/20260929_260610_rot_before_
+transition_task_speed10/`). Old files removed (`git rm` for the tracked
+pair), the zip moved to `task/`. Real `TaskManager`: 3 + 3 tasks +
+go_home, lift 0 / 15 / 30 mm read from `lift_mm`, every task routes
+from 500 (38 hops); `check_task_discovery` 49 (it no longer assumes
+`standoff_010mm` keys or the {10, 30} speed set — counts, lift and
+speeds come from the files).
+
+**Not retargeted — user: "retarget 안 해도 됨".** The dry run had shown
+what the retarget would do: work points 0.010 mm after, 27.06 mm /
+1.01° before (replayed as planned the tip lands mean (+1.9, +8.4,
++10.5) mm off in zone B, (−3.9, −8.0, +10.4) in zone C, |xy| up to
+20.8 / 25.3 mm; flange 7–11 mm lower than the plan). So **the joint
+tasks of this set put the tip ~9 mm beside and ~10 mm above the
+planned point; the pose tasks are right** (pose mode applies the
+calibrated map / mount / tip at run time). `check_retarget_joint_paths.py`
+part 2 reports the three joint files as NOT retargeted — expected, by
+this decision, not a regression. Two tool changes stay: (1)
+`retarget_joint_paths.py` / its check / `make_plate2_paths.py` read
+`lift_mm` and raise the arm base by it in BOTH models (the lift is
+vertical in mb, so the correction itself is lift-independent — but the
+classification is not: the 15 / 30 files read as "neither" before);
+(2) a TRANSITION row the robot's model cannot reach keeps the planned
+row + the neighbours' interpolated correction and reports the deviation
+(`--max-transition-dev-mm` 15), instead of failing the file — the
+lift-30 file routes group 106's transitions through the fully straight
+arm (flange 1491–1518 mm, J3 0.6°; work points ≤ 1414), 8 rows the
+target sits 3–6 mm beyond. That file still refuses on one diverged row
+(J1 / J6 22.7°, step 34.6°) — not chased, since nothing is retargeted.
+
+### 2026-09-29 (evening, later) — The mold is in the task name now (`lower_mold_` / `upper_mold_`); the 상형 export refuses the retarget at the reach limit
+
+User: "현재 task 중 상형 하형이 구분이 안 돼". Everything in task/csv was 하형
+(the 정반 1 originals and the `_plate2` twins) and the key carried no mold
+name. Renamed all twelve files `*_errorX_…` → `*_lower_mold_errorX_…`
+(`git mv` for the tracked ones; contents untouched — the retarget check
+still holds all six joint files at 0.010 mm, `check_task_discovery` 52),
+so the tasks read `scan_pose_lower_mold_…` / `scan_joint_lower_mold_…
+[_plate2]`; the record yaml of the plate-2 conversion notes the rename.
+ASCII on purpose (`robot_cmd.py` on the Windows PC types the task name).
+
+**The 상형 set was then staged as `upper_mold_…` for 정반 1 (speed-10 applied)
+and `retarget_joint_paths.py --apply` REFUSED it — nothing written, the
+files removed from task/csv again.** Not a tool defect: the export plans
+zone B work points with the arm STRAIGHT — flange reach 1400–1407 mm, J3
+0.0–2.8° (하형: ≤ 1426 mm but J3 ≥ 0.9° and re-solvable; 상형 z is
+0.33–0.41 m vs 하형's 0.57–0.65, so the same lane reaches further). Under
+the robot's model the flange has to go ~10 mm further for the same tip
+(the measured tip is 13.5 mm shorter than the design one) and the IK has
+nowhere to go: 10 / 10 / 16 rows fail per file (groups 105 / 106 / 107,
+lines 124–126, 377–384, 564–566, 638, 705–706, 746–748), J3 → 0.00, a
+row-to-row step of 16.7 / 34.0°. The 001 file is also 0.051 mm off its
+pose rows at one point (tolerance 0.05 — rounding, not the problem). What
+it needs is the planner: those points assigned to a nearer stop, or
+planned with the calibrated mount / measured tip (`tf_chain_tool.py urdf`)
+and a reach margin. Installing the originals unretargeted would run the
+tip 10–14 mm (zone B) / 13–26 mm (zone C) beside the planned points and
+fail `check_retarget_joint_paths.py`, so they stay out. Pose mode would
+have refused the same points with an IK error at run time.
+
+### 2026-09-29 (evening) — 하형 export re-expressed for 정반 2, every point 20 mm further down the tool z: `tools/make_plate2_paths.py` → the `*_plate2` task pairs
+
+User, with `task/20260929.zip` (planner delivery of 11:36 / 12:10: 하형 and
+상형 folders, standoff 001 / 010 / 020, one pose + one joint file each):
+"여기에 있는 하형데이터는 정반 1기준인데 정반2 기준으로 간단하게 바꾸고
+그리고 경로데이터 point를 vision_tip 방향 2cm 더 내려가게 한다". The zip's
+하형 files are byte-identical to the planner ORIGINALS of the set in
+task/csv (the `20260929_before_transition_task_speed10` backups; the 001
+joint file differs only by the user's hand-set speeds) — i.e. today's
+plate-1 scans ran the 하형 paths on the plate the workpiece is NOT on, which
+also explains the Keyence seeing nothing after 40 mm (entry below). The
+상형 set was not asked about and is not installed.
+
+**Built `tools/make_plate2_paths.py SRC_DIR [--apply]`** (dry run by
+default) on the retarget tool's kinematics: for each planner-original pair
+it writes `assigned_workpoints_<key>_plate2.csv` + `rrt_final_path_<key>_
+plate2.csv`, which `TaskManager` discovers as `scan_pose_<key>_plate2` /
+`scan_joint_<key>_plate2`. (1) World x += 3.900 (정반 2's centre per
+`reference_tags_plate2.yaml`, the user's 390 cm; the D / E lanes sit at
++3.89, so the base stands 10 mm further from the workpiece than on 정반 1 —
+absorbed by the joint re-solve, and by `/robot_pose` in pose mode). (2)
+Group tags → their twins by design y, B → D / C → E: 105 → 131, 106 → 132,
+107 → 133, 118 → 143, 119 → 144, 120 → 145. (3) Every point 20 mm further
+along the TOOL z axis (the tip's approach direction; the tool is up to
+27.8° off vertical in these files, so world dz is −20.0 … −17.7 mm with up
+to 9.3 mm of xy — not the same as world −z). Pose rows: `p += d·R[:,2]`
+with R the ZYX flange orientation. Joint rows are RE-SOLVED, not copied:
+planned tip pose under the planner model (idle 정반 1 stop pose, design
+mount, design tip) → shifted → flange target under the robot model (map
+.yaml stop pose of the 정반 2 tag — DESIGN values, plate 2 has never been
+map-calibrated — calibrated `T_ab2mb`, measured tip) → IK seeded with the
+planned row; transitions between work points exact, transitions next to
+`home` blended to 0 at home, `home` rows untouched — the retarget tool's
+rules. Then the standing speed-10 rule (`slow_task_entry.py`, run on the
+output). Sources + `make_plate2_record.yaml` (sha256, tag map, per-file
+stats) in `log/apriltag_nav/task_csv_backup/20260929_plate2_from_hahyeong_
+20260929/`. Refuses to overwrite (`--force`), refuses a pair that is not a
+planner original, a tag without a twin, an IK failure, > 20° of joint
+change, < 5° of limit margin, > 0.5° of row-step growth.
+
+**Numbers (38 checks in the tool, all three pairs):** IK converged on all
+1613 / 1629 / 1668 rows in ≤ 5 iterations; largest joint change 4.4 / 5.2
+/ 7.0° (J3), median work-point row 2.7–2.8°; row-to-row step 5.73 →
+5.86–5.98°; J3 closest to straight 0.9–2.4 → 4.4–5.1° (the plate-1
+retarget gave 8.3–8.5); flange reach 532–1423 mm (plate-1 files 507–1426);
+flange 23.5–31.6 mm LOWER than the 정반 1 plan at the work points (20 of
+it the tip-down, the rest the measured tip being shorter than the design).
+As written, the real tip at the 정반 2 stop pose is on the new pose rows to
+0.010 mm / 0.0000° (the planner URDF's −252.99 vs −253, as on plate 1).
+
+**Tools taught to take plate-2 pairs:** `retarget_joint_paths.py` fills a
+tag missing from `--actual` from map.yaml and treats a tag missing from
+`--planned` as "cannot be a plate-1 original" (the six joint files now all
+classify RETARGETED — nothing to do, 7 ok); `check_retarget_joint_paths.py`
+part 2 the same (**25**, the three `_plate2` files at 0.010 mm against pose
+mode's own `transform_world_to_arm` + tip → flange); `check_task_discovery.
+py` no longer assumes three pairs named 010 / 030 / 050 (counts from the
+directory — its pre-existing failure is gone: **52 ok, 0 failed**);
+`check_pose_vs_joint` 27. Real `TaskManager`: 6 + 6 tasks + go_home, no
+logerr, every plate-2 task routes from 500 (41 hops via 400-lane + 503 →
+507 / 504 → 508, vs 35 for plate 1).
+
+**Not run on the robot.** `RELOAD_TASKS` (or a `task_executor` restart)
+lists the six `_plate2` tasks. The plate-1 하형 files were left in task/csv
+(the user did not say to delete them). Before the first plate-2 run: tags
+126–150 are design positions with no calibration and no `yaw`, so the
+stop-pose error there is whatever the tags' laying is (plate 1 showed up
+to 20 mm before its calibration); the `scan_pose_*_plate2` twin fails IK
+rather than colliding, so run it first; and the 20 mm is the user's number
+for the surface the seek could not find, not a measurement — watch the
+live standoff line at the first point.
+
+### 2026-09-29 — Joint paths retargeted from the idle map to the calibrated one (stop pose + mount + tip)
+
+User: the six files in task/csv were generated for `map_idle.yaml` (base
+550 mm behind each tag); compute the difference between the idle stop poses
+and `docs/robot_base_stop_poses_plate1_0928.csv` and correct the files,
+Cartesian and joint, so they run on the current `map.yaml`. Plan shown
+first; the user chose **option B for the joint files**.
+
+**What the files turned out to be (FK, before planning anything).** The
+joint rows reproduce their pose twins to 0.010 mm with exactly one model:
+idle stop pose, DESIGN mount, DESIGN tip (the 0.010 is the planner URDF's
+−252.99 vs −253). So the planner differs from the robot in three things,
+not one: stop pose (2.5–20 mm, ≤ 0.30° on the six tags used — 105 / 106 /
+107 / 118 / 119 / 120; every one of them nearer the plate than planned),
+mount (9 mm, 0.80°), tip (13.5 mm, 10.8 of it z).
+
+**Two departures from the request, both agreed.** (1) The Cartesian files
+are NOT modified: they are world coordinates and pose mode already applies
+the calibrated map through `/robot_pose`; adding the difference would move
+the targets off the workpiece. (2) Correcting the stop pose alone (option
+A) makes zone B WORSE — predicted tip xy error 8.7 → 17.0 mm — because
+today the stop-pose difference partly cancels the mount / tip difference;
+B (all three) takes both zones to 0 and makes joint mode land where pose
+mode does. Promoted to *The joint files in task/csv are RETARGETED*.
+
+**Done.** `tools/retarget_joint_paths.py` (dry run by default),
+`tools/check_retarget_joint_paths.py`, `docs/robot_base_stop_poses_plate1_
+idle.csv` (from `map_stop_poses.py --map config/map_idle.yaml`; that tool's
+`--out` with a bare file name crashed on `makedirs('')`, fixed),
+`docs/robot_base_stop_poses_plate1_diff_idle_vs_0928.csv` (26 tags, world
+and body frame), originals + `retarget_record.yaml` in
+`log/apriltag_nav/task_csv_backup/20260929_before_stop_pose_retarget/`.
+Three joint files rewritten: 1613 / 1629 / 1668 rows, IK converged on all
+(≤ 5 iterations), median row 0.94° of largest joint change, max 13.3 / 13.4
+/ 15.1° on J3 at the nearly-straight-arm rows (J3 0.9–2.4° → 8.3–8.5°, i.e.
+AWAY from the elbow singularity, since the base is nearer), 24–25 work
+points per file move a joint > 5°, row-to-row step 5.72–5.73 → 5.72–5.79°,
+limits ≥ 11°.
+
+**Verified offline.** `check_retarget_joint_paths.py` 22: the tool end to
+end on a synthetic pair (dry run writes nothing; only q cells of non-home
+rows change; BOM / CRLF kept; backup byte-identical; transitions between
+work points on the planned world path; home-side runs end on the home
+joints; second apply a no-op; a file that is neither, stale stop poses and
+a different existing backup all refused with nothing written), and on the
+real files the written rows against **pose mode's own code** —
+`transform_world_to_arm` + tip → flange at the nominal stop pose: 0.010 mm
+/ 0.0000° over 2828 work points (23.9 mm before). Pose files md5-identical.
+Real `TaskManager`: the same 6 tasks + go_home, same steps / counts / lift,
+no logerr; joints changed on every non-home point, the pose tasks' IK
+seeds (q0) follow. `check_pose_vs_joint` 27. `check_task_discovery` output
+identical before and after — it still stops at its pre-existing
+`standoff_050mm` lookup (the file set is 001 / 010 / 020 now), not fixed.
+
+**Not run on the robot.** The stack was up and IDLE; `RELOAD_TASKS` (or a
+`task_executor` restart) is needed before a TASK uses the new rows. First
+run with a hand on the e-stop: the flange is 5.8–13 mm LOWER than the
+planner drew it at the work points (the measured tip is 10.8 mm shorter
+than the design one; pose mode has been sending the same flange height),
+and the 09-21 tip's honest uncertainty is ±1.5 / 3 / 2 mm. No collision
+model was run: the tool end follows the planned world path, the arm base
+is where the robot really stands (up to ~3 cm from the planner's), and the
+links in between sit somewhere between the two.
+
+### 2026-09-29 — Path CSVs: speed 10 on both rows of every transition → task boundary
+
+User rule: "waypoint_kind 인자가 transition에서 task로 넘어갈때는 둘 다 speed가
+10이어야 해", for every CSV in task/csv (today's set: errorX standoff 001 /
+010 / 020, one pose + one joint file each). Applied literally — EVERY
+boundary, not only the approach from home: in each `rrt_final_path_*` the
+last `transition` row and the `task` row after it are 10. Before, of the
+363–369 boundaries per file 319–334 were (30, 30) (the single transition
+row between two work points), 12–15 were (10, 30) and 20–38 already
+(10, 10); the user had hand-set the first work point of each group in the
+001 file, which is the same rule. `assigned_workpoints_*` has no
+`waypoint_kind`, so the work point paired with each of those task rows
+(`group_id`, `source_point_id` == `point_id`) got the same 10 — the two
+files of a pair agreed on every work point's speed before (010 / 020) and
+do again (0 mismatches of 940 / 943 / 945).
+
+Size of the change: joint files 650–680 rows 30 → 10 each (now ~1080–1130
+rows at 10, ~550 at 30), pose files 331–351. `speed` is `SetSpeed(percent)`
+per row, so a scan is noticeably slower — roughly two thirds of all moves
+run at 10 %. Task → transition (leaving a work point) is untouched.
+
+`tools/slow_task_entry.py <task/csv> [--apply]` is the edit (text level:
+only the speed cell changes, BOM / CRLF / scientific-notation cells kept;
+idempotent — a re-run changes 0 rows); re-run it on a new planner export.
+Originals: `log/apriltag_nav/task_csv_backup/20260929_before_transition_
+task_speed10/` (the 001 / 020 files are untracked, so git cannot restore
+them). Verified: byte diff vs the backup = speed cells 30 → 10 only, 0 rule
+violations, the real `TaskManager` registers the 6 tasks + go_home with no
+error. Not run on the robot; `RELOAD_TASKS` (or a `task_executor` restart)
+to pick the files up.
+
+### 2026-09-29 — Web UI: STOP ALL pinned top-right; a long task name no longer moves it
+
+User (screenshot of the system bar during `scan_joint_errorX_…_001mm`):
+with the long task name in the TASK chip, STOP ALL had dropped to a
+second row at the far LEFT — "stop all 위치 바뀌면 안 돼". `#sysbar` was
+one wrapping flex row (chips, spacer, conn chip, button), so whichever
+chip overflowed pushed the button onto a new line. Now two blocks that
+never wrap against each other: `#sysbar-chips` (flex 1, the chips wrap
+among themselves) and `#sysbar-fixed` (conn chip + STOP ALL, flex
+0 0 auto, top-aligned). A long name adds a chip ROW; the button does not
+move. A chip wider than the whole row is cut with an ellipsis, and the
+TASK chip's tooltip carries the full text. `web/` only (index.html,
+style.css, app.js) — browsers pick it up on reload, no node restart. The
+Qt window was not touched (its bar is one non-wrapping row with the
+button last).
+
+Verified in headless Chrome with the screenshot's chip texts, task name
+short / the real 52-character one / 4x that, at 1920 / 1400 / 1100 /
+800 / 500 px: the button's x, y and width are identical across the three
+names at every width (11 px from the bar's right edge, y 29), no
+horizontal scroll. `check_web_ui.py` 130; `check_web_ui_browser.py`
+91 ok / 2 failed — the same two ("TASK + CHARGE chips", "standoff
+line") fail against HEAD's web files, pre-existing.
 
 ### 2026-09-29 — Keyence seek OFF: the scan walked 40 mm down at every point on no measurement
 

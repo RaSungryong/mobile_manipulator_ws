@@ -39,7 +39,8 @@ from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.scan_results import ScanResultWriter
 from apriltag_nav import paths as _paths
-from apriltag_nav.keyence_standoff import StandoffConfig, StandoffController
+from apriltag_nav.keyence_standoff import (StandoffConfig, StandoffController,
+                                            MoveReport)
 
 # ================= Fairino SDK =================
 if not paths.add_fairino_sdk_to_path():
@@ -217,6 +218,32 @@ class ArmController:
         self.keyence_seek_step_mm       = float(_kp('seek_step_mm', 'seek_step_mm', 2.0))
         self.keyence_seek_max_mm        = float(_kp('seek_max_mm', 'seek_max_mm', 10.0))
         self.keyence_require_converged  = bool(_kp('require_converged', 'require_converged', False))
+        # Direct move (2026-09-29): the whole measured gap in ONE move, then
+        # verify — keyence_standoff docstring 10. 'stepped' = the old law.
+        self.keyence_move_mode              = str(_kp('move_mode', 'move_mode', 'direct'))
+        self.keyence_direct_gain            = float(_kp('direct_gain', 'direct_gain', 1.0))
+        self.keyence_direct_max_approach_mm = float(_kp('direct_max_approach_mm', 'direct_max_approach_mm', 12.0))
+        self.keyence_direct_max_retreat_mm  = float(_kp('direct_max_retreat_mm', 'direct_max_retreat_mm', 15.0))
+        self.keyence_direct_max_spread_mm   = float(_kp('direct_max_spread_mm', 'direct_max_spread_mm', 0.3))
+        self.keyence_direct_max_moves       = int(_kp('direct_max_moves', 'direct_max_moves', 5))
+        self.keyence_exec_mismatch_mm       = float(_kp('exec_mismatch_mm', 'exec_mismatch_mm', 1.0))
+        # Live guard: while an APPROACH move of the standoff loop is in
+        # flight, keyence_cb watches every reading and stops the arm when
+        # the reading has passed the target by guard_overshoot_mm (or the
+        # sensor reports "too close") on guard_frames consecutive messages.
+        self.keyence_guard_enabled      = bool(_kp('guard_enabled', 'guard_enabled', True))
+        self.keyence_guard_overshoot_mm = float(_kp('guard_overshoot_mm', 'guard_overshoot_mm', 1.0))
+        self.keyence_guard_frames       = int(_kp('guard_frames', 'guard_frames', 2))
+        self.keyence_max_guard_stops    = int(_kp('max_guard_stops', 'max_guard_stops', 1))
+        # Command -> actual offset of a MoveL (see _keyence_move_approach).
+        self.keyence_cmd_bias_enabled   = bool(_kp('cmd_bias_enabled', 'cmd_bias_enabled', True))
+        self.keyence_cmd_bias_max_mm    = float(_kp('cmd_bias_max_mm', 'cmd_bias_max_mm', 1.5))
+        self.keyence_cmd_bias_max_deg   = float(_kp('cmd_bias_max_deg', 'cmd_bias_max_deg', 0.3))
+        self.keyence_cmd_bias_carry_mm  = float(_kp('cmd_bias_carry_mm', 'cmd_bias_carry_mm', 100.0))
+        self.keyence_cmd_bias_carry_s   = float(_kp('cmd_bias_carry_s', 'cmd_bias_carry_s', 120.0))
+        self._standoff_guard = None      # armed only while an approach MoveL runs
+        self._standoff_chain = None      # per-adjustment command chain
+        self._standoff_bias = None       # last learned command->actual offset
         # Target standoff. The DL-EN1 reads 0 at sensor_zero_mm; the loop holds
         # the reading at (sensor_zero - target), so target == zero (the
         # default, 10 mm) reproduces the old "drive the reading to 0".
@@ -333,12 +360,68 @@ class ArmController:
         with self._keyence_lock:
             self.current_keyence_val = msg.data
             self._keyence_seq += 1
+        self._standoff_guard_check(msg.data)
         pub = getattr(self, 'standoff_pub', None)
         if pub is not None:
             try:
                 pub.publish(String(json.dumps(self.standoff_state(msg.data))))
             except Exception:
                 pass
+
+    def _standoff_guard_check(self, raw):
+        """Live guard of the standoff loop's approach moves (runs on the
+        /keyence/value callback thread, so it sees the sensor WHILE MoveL
+        blocks the worker). Armed by _keyence_move_approach with the
+        perpendicular reading that must not be passed; `frames` consecutive
+        readings beyond it — or the positive "too close" sentinel — stop the
+        arm. The far sentinel is not a violation: approaching from out of
+        range is the seek's business and the surface is then further away,
+        not nearer. Does not touch cancel_requested: the scan goes on, the
+        loop re-measures at rest and decides."""
+        g = getattr(self, '_standoff_guard', None)
+        if g is None or g.get('tripped'):
+            return
+        try:
+            raw = float(raw)
+        except (TypeError, ValueError):
+            return
+        if abs(raw) >= self.keyence_invalid_abs_mm:
+            bad = raw > 0
+            shown = 'too-close sentinel'
+        else:
+            perp = raw * self._keyence_cos
+            bad = perp > g['limit']
+            shown = f"reading {perp:+.2f} mm > limit {g['limit']:+.2f} mm"
+        g['count'] = g['count'] + 1 if bad else 0
+        if g['count'] < g['frames']:
+            return
+        g['tripped'] = True
+        g['why'] = shown
+        rospy.logwarn(f"[Arm REAL] standoff live guard: {shown} on "
+                      f"{g['frames']} readings in a row — stopping the move")
+        g['stopped'] = self._stop_motion_retry()
+
+    def _stop_motion_retry(self):
+        """StopMotion with cancel()'s retry (the RPC socket is held by the
+        blocking move, so the first attempt is often rejected) but WITHOUT
+        the cancel flag. True once one attempt was accepted."""
+        attempts = int(getattr(self, 'cancel_attempts', 10))
+        wait_s = float(getattr(self, 'cancel_retry_s', 0.02))
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                ret = self.robot.StopMotion()
+            except Exception as e:
+                last_error = e
+            else:
+                if not isinstance(ret, int) or ret == 0:
+                    return True
+                last_error = f"error code {ret}"
+            if attempt < attempts:
+                time.sleep(wait_s)
+        rospy.logerr(f"[Arm REAL] standoff live guard: StopMotion rejected "
+                     f"{attempts} times (last: {last_error})")
+        return False
 
     def standoff_state(self, raw):
         """Interpret one raw Keyence reading in scan terms.
@@ -897,44 +980,142 @@ class ArmController:
             time.sleep(0.002)
         return out
 
+    @staticmethod
+    def _wrap_deg(a):
+        return (float(a) + 180.0) % 360.0 - 180.0
+
+    def _standoff_carried_bias(self, pos):
+        """The command->actual offset learned by the last standoff move, if
+        it was learned near here and recently; else zeros. [x y z rx ry rz]."""
+        b = getattr(self, '_standoff_bias', None)
+        if not self.keyence_cmd_bias_enabled or b is None:
+            return np.zeros(6)
+        if time.time() - b['stamp'] > self.keyence_cmd_bias_carry_s:
+            return np.zeros(6)
+        if np.linalg.norm(np.asarray(pos) - b['pos']) > self.keyence_cmd_bias_carry_mm:
+            return np.zeros(6)
+        return b['delta'].copy()
+
     def _keyence_move_approach(self, approach_mm):
         """Translate the tool along its own Z axis by approach_mm of
         PERPENDICULAR standoff (positive = toward the surface), orientation
         unchanged, then settle so the next reading is taken at rest.
         keyence_dir carries the tool-Z sign: it is -sign(k) with
-        k = d(reading)/d(toolZ), so approach = -dir along tool Z."""
-        dz = float(approach_mm) * (-self.keyence_dir)
+        k = d(reading)/d(toolZ), so approach = -dir along tool Z.
+
+        Returns a keyence_standoff.MoveReport with the distance the arm
+        EXECUTED (pose readback before / after, along the tool Z of the
+        adjustment's first pose).
+
+        COMMAND CHAIN (2026-09-29). A MoveL does not end on its target:
+        the readback afterwards is a constant small offset from it (2026-09-18:
+        (0, -0.09, -0.135) mm; tip tour 2026-09-28 at 1.1 m reach:
+        ~(0.2, -0.3, -0.4) mm and 0.06 deg per move). The loop used to build
+        every target as "readback + dz", so EVERY move carried that offset
+        once more: a 0.3 mm retreat moved the tool 0.2 mm CLOSER and 47 of
+        64 adjustments of the tip tours ended "reading does not follow the
+        motion". Now the first move of an adjustment starts from the
+        readback (minus the offset the last adjustment measured, when that
+        was nearby and recent — keyence_cmd_bias_*), and every later move
+        is the PREVIOUS COMMAND + dz with the orientation of the first
+        pose, so the offset is common to both ends and cancels.
+
+        LIVE GUARD: an approach move arms _standoff_guard_check with the
+        reading that must not be passed (target + keyence_guard_overshoot_mm);
+        a stop in flight is reported as guard_stop, not as a failure."""
+        direction = -float(self.keyence_dir)
+        dz = float(approach_mm) * direction
 
         ret, pose = self.robot.GetActualTCPPose()
         if ret != 0:
             rospy.logerr(f"[Arm REAL] GetActualTCPPose failed: {ret}")
-            return False
-        x, y, z, rx, ry, rz = pose
+            return MoveReport(False, note=f'GetActualTCPPose {ret}')
+        p0 = np.array(pose[:3], dtype=float)
 
-        # Tool Z-axis direction in the robot base frame (Fairino: degrees).
-        r = R.from_euler('xyz', [rx, ry, rz], degrees=True)
-        # scipy compat: >=1.4 as_matrix(), 1.3 as_dcm()
-        r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
-        z_vec = r_mat[:, 2]
-        new_pose = [x + z_vec[0] * dz, y + z_vec[1] * dz, z + z_vec[2] * dz,
-                    rx, ry, rz]
+        chain = getattr(self, '_standoff_chain', None)
+        if chain is None:
+            rpy = [float(v) for v in pose[3:6]]
+            # Tool Z-axis direction in the robot base frame (Fairino: degrees).
+            r = R.from_euler('xyz', rpy, degrees=True)
+            # scipy compat: >=1.4 as_matrix(), 1.3 as_dcm()
+            r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
+            chain = {'z': np.array(r_mat[:, 2], dtype=float), 'rpy': rpy,
+                     'cmd': None, 'cmd_rpy': None}
+            self._standoff_chain = chain
+        z_vec = chain['z']
 
-        # Low speed for the fine correction; MoveL keeps the orientation and
+        if chain['cmd'] is None:
+            # First move (or the move after a guard stop): from where the
+            # arm IS, pre-compensated with the carried offset.
+            bias = self._standoff_carried_bias(p0)
+            cmd_pos = p0 - bias[:3] + z_vec * dz
+            cmd_rpy = [self._wrap_deg(a - b) for a, b in zip(chain['rpy'], bias[3:])]
+        else:
+            cmd_pos = chain['cmd'] + z_vec * dz
+            cmd_rpy = list(chain['cmd_rpy'])
+        new_pose = [float(cmd_pos[0]), float(cmd_pos[1]), float(cmd_pos[2])] + cmd_rpy
+
+        guard = None
+        if approach_mm > 0 and self.keyence_guard_enabled:
+            guard = {'limit': float(self.keyence_setpoint_mm)
+                              + float(self.keyence_guard_overshoot_mm),
+                     'frames': max(1, int(self.keyence_guard_frames)),
+                     'count': 0, 'tripped': False, 'why': '', 'stopped': None}
+        # Low speed for the correction; MoveL keeps the orientation and
         # blocks until the motion is done.
         self.robot.SetSpeed(5)
-        ret = self.robot.MoveL(new_pose, tool=TOOL_ID, user=0)
-        if ret != 0:
+        self._standoff_guard = guard
+        try:
+            ret = self.robot.MoveL(new_pose, tool=TOOL_ID, user=0)
+        finally:
+            self._standoff_guard = None
+        tripped = bool(guard and guard['tripped'])
+        if ret != 0 and not tripped:
             rospy.logerr(f"[Arm REAL] MoveL failed during standoff adjustment: {ret}")
-            return False
+            chain['cmd'] = None
+            return MoveReport(False, note=f'MoveL {ret}')
         self._refresh_live_pose()
         time.sleep(self.keyence_settle_s)
-        return True
+
+        executed = None
+        ret1, pose1 = self.robot.GetActualTCPPose()
+        if ret1 == 0:
+            p1 = np.array(pose1[:3], dtype=float)
+            executed = float(np.dot(p1 - p0, z_vec)) / direction
+        if tripped:
+            # Interrupted: the chain restarts from the readback.
+            chain['cmd'] = None
+            return MoveReport(True, executed_mm=executed, guard_stop=True,
+                              note=guard['why'] + ('' if guard['stopped']
+                                                   else '; StopMotion REJECTED'))
+        chain['cmd'] = np.array(cmd_pos, dtype=float)
+        chain['cmd_rpy'] = cmd_rpy
+        if ret1 == 0 and self.keyence_cmd_bias_enabled:
+            d_pos = p1 - chain['cmd']
+            d_rpy = np.array([self._wrap_deg(a - b)
+                              for a, b in zip(pose1[3:6], cmd_rpy)])
+            if (np.linalg.norm(d_pos) <= self.keyence_cmd_bias_max_mm
+                    and np.max(np.abs(d_rpy)) <= self.keyence_cmd_bias_max_deg):
+                self._standoff_bias = {
+                    'delta': np.concatenate([d_pos, d_rpy]),
+                    'pos': p1, 'stamp': time.time()}
+            else:
+                # Not a settle offset any more — do not learn it, and do
+                # not keep applying an older one here.
+                self._standoff_bias = None
+                rospy.logwarn(
+                    "[Arm REAL] standoff MoveL ended "
+                    f"{np.linalg.norm(d_pos):.2f} mm / "
+                    f"{np.max(np.abs(d_rpy)):.2f} deg from its target — "
+                    "offset not learned")
+        return MoveReport(True, executed_mm=executed)
 
     def _adjust_distance_to_surface(self):
         """
         Close the standoff loop before a capture: read the Keyence, move the
-        tool along its Z axis, repeat until the perpendicular error is inside
-        keyence_tol. Returns a keyence_standoff.StandoffResult; the algorithm
+        tool along its Z axis by the distance the reading asks for (one
+        computed move in keyence.move_mode direct), verify at rest, repeat
+        until the perpendicular error is inside keyence_tol. Returns a keyence_standoff.StandoffResult; the algorithm
         and every parameter are documented in that module.
         """
         rospy.loginfo("[Arm REAL] Adjusting tool distance using Keyence sensor...")
@@ -957,7 +1138,16 @@ class ArmController:
             seek_enabled=self.keyence_seek_enabled,
             seek_step_mm=self.keyence_seek_step_mm,
             seek_max_mm=self.keyence_seek_max_mm,
+            move_mode=self.keyence_move_mode,
+            direct_gain=self.keyence_direct_gain,
+            direct_max_approach_mm=self.keyence_direct_max_approach_mm,
+            direct_max_retreat_mm=self.keyence_direct_max_retreat_mm,
+            direct_max_spread_mm=self.keyence_direct_max_spread_mm,
+            direct_max_moves=self.keyence_direct_max_moves,
+            max_guard_stops=self.keyence_max_guard_stops,
+            exec_mismatch_mm=self.keyence_exec_mismatch_mm,
         )
+        self._standoff_chain = None      # a new adjustment, a new command chain
         ctl = StandoffController(
             cfg,
             read=self._keyence_read_fresh,
@@ -966,7 +1156,11 @@ class ArmController:
             log_info=lambda s: rospy.loginfo(f"[Arm REAL] {s}"),
             log_warn=lambda s: rospy.logwarn(f"[Arm REAL] {s}"),
         )
-        result = ctl.run()
+        try:
+            result = ctl.run()
+        finally:
+            self._standoff_chain = None
+            self._standoff_guard = None
         if result.converged:
             rospy.loginfo(f"[Arm REAL] {result.summary()}")
         else:

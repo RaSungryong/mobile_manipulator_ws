@@ -1430,6 +1430,61 @@ keyence:
   seek_enabled:        false  # ~keyence_seek_enabled
   seek_step_mm:        5.0
   seek_max_mm:         40.0
+  # --- Direct move (2026-09-29, user: compute the distance that actually has
+  # to be moved and move it, with safeguards, as few moves as possible) ------
+  # The stepped law above approaches by halves: the 116 scan adjustments of
+  # 2026-09-29 started 3-6 mm off target and took 3-4 moves each (median 2.2 s)
+  # to cover a distance the first reading had already measured. `direct`
+  # sends the whole measured gap as ONE move, re-measures at rest, and trims
+  # once if the residual is outside tolerance_mm (the measured sensitivity
+  # of big moves was 0.93, p5 0.83 / p95 1.00, so a 5 mm move typically ends
+  # 0.2-0.5 mm SHORT — 1 move for about half the points, 2 for the rest).
+  # `stepped` restores the old law exactly. keyence_standoff.py docstring 10.
+  move_mode:              direct   # ~keyence_move_mode: direct | stepped
+  direct_gain:            1.0      # fraction of the measured gap per move
+  direct_max_approach_mm: 12.0     # cap of ONE approach move (the sensor's
+                                   #   far side ends ~10.4 mm from the zero)
+  direct_max_retreat_mm:  15.0     # cap of ONE retreat move
+  direct_max_spread_mm:   0.3      # the decision's valid samples may differ
+                                   #   by this much (max - min); noisier =
+                                   #   that one move uses the stepped law
+  direct_max_moves:       5        # moves allowed while in direct mode
+  exec_mismatch_mm:       1.0      # the arm's pose readback says it moved
+                                   #   more than max(this, half the command)
+                                   #   away from the command -> stop, recorded
+  # Safeguards of a long single move, in the order they act:
+  #  1. before: clean reading (spread), trust gate (activate_threshold), the
+  #     caps above, the travel budget (max_travel_mm); an approach is never
+  #     amplified (divisor >= 1).
+  #  2. DURING the move — the live guard: arm_controller watches every
+  #     /keyence/value message while the MoveL runs and calls StopMotion when
+  #     the reading has PASSED the target by guard_overshoot_mm (or the
+  #     sensor says "too close") on guard_frames messages in a row. At the
+  #     loop's SetSpeed(5) (~10 mm/s) and 30 Hz that is ~0.7 mm of travel.
+  #     The loop then re-measures at rest, continues stepped, and gives up
+  #     on a second stop (max_guard_stops 1).
+  #  3. after: re-measure at rest (fresh median); a reading that did not
+  #     follow the move drops to the stepped law, the second time aborts.
+  guard_enabled:          true     # ~keyence_guard_enabled
+  guard_overshoot_mm:     1.0
+  guard_frames:           2
+  max_guard_stops:        1
+  # Command -> actual offset. A MoveL ends a constant small offset from its
+  # target (readback 2026-09-18: (0, -0.09, -0.135) mm; tip tour 2026-09-28
+  # at 1.1 m reach: ~0.4 mm and 0.06 deg), and the loop used to add every
+  # move to the READBACK, so each move carried the offset again — a 0.3 mm
+  # retreat moved the tool 0.2 mm closer, and 47 of 64 tip-tour adjustments
+  # ended "reading does not follow the motion". Now a move is the previous
+  # COMMAND + dz (the offset cancels); the offset measured after each move
+  # pre-compensates the FIRST move of the next adjustment when that starts
+  # within cmd_bias_carry_mm / cmd_bias_carry_s of it. An offset beyond the
+  # two maxima is not a settle offset and is neither learned nor applied.
+  cmd_bias_enabled:       true     # ~keyence_cmd_bias_enabled
+  cmd_bias_max_mm:        1.5
+  cmd_bias_max_deg:       0.3
+  cmd_bias_carry_mm:      100.0
+  cmd_bias_carry_s:       120.0
+
   # When the loop did not converge: false (default) scans anyway and writes
   # "Success (standoff NOT corrected: <reason>)" into execution_message; true
   # marks the point failed and skips the capture.

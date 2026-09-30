@@ -76,6 +76,39 @@ What changed against the inline loop, and why
    negative = "far". A "near" sentinel makes the seek RETREAT, always safe.
 9. THE OUTCOME IS RETURNED, not logged and forgotten: converged / reason /
    final error / steps / travel, so the scan CSV can carry it.
+10. DIRECT MOVE (`move_mode: direct`, 2026-09-29; robot.yaml's default,
+   the dataclass default stays `stepped`). The stepped law above approaches
+   by halves: the 116 scan adjustments of 2026-09-29 started 3-6 mm off
+   the target and took 3-4 moves each (median 2.2 s) to cover a distance the first
+   reading had already measured. In direct mode the loop COMPUTES the move
+   the reading asks for — the whole measured gap, `direct_gain` x |err| —
+   and sends it as ONE move, then verifies at rest; a residual outside the
+   tolerance gets one trim move computed the same way with the sensitivity
+   the first move measured. What makes a single long move acceptable:
+     a. the reading must be CLEAN: the valid samples of the decision may
+        not spread more than `direct_max_spread_mm`, otherwise that one
+        decision falls back to the stepped law;
+     b. one approach move is capped at `direct_max_approach_mm` (a retreat
+        at `direct_max_retreat_mm`), and the trust gate
+        (`activate_threshold_mm`) and the travel budget still apply;
+     c. an approach is never amplified: the divisor from the measured
+        sensitivity stays >= 1, so a surface that reads "less than moved"
+        leaves a remainder for the trim instead of an overshoot;
+     d. the caller's move() may watch the sensor WHILE the arm moves and
+        stop it (ArmController's live guard: reading past the target by
+        more than a margin, or the "too close" sentinel). It reports that
+        as MoveReport.guard_stop; the loop then re-measures at rest,
+        continues with the stepped law, and gives up on the second stop;
+     e. a direct move of >= max_step_mm that the reading did not follow
+        (response check) ends the adjustment at once — a frozen sensor
+        gets ONE move, not two; a short trim that was not followed drops
+        to the stepped law, where the second miss aborts as before; an
+        executed distance far from the commanded one (exec_mismatch_mm)
+        ends the adjustment too;
+     f. at most `direct_max_moves` moves while in direct mode.
+   move() may return a MoveReport carrying the distance the arm actually
+   executed (from its own pose readback); the sensitivity and the travel
+   are then computed from that instead of the commanded distance.
 """
 
 from dataclasses import dataclass, field
@@ -108,6 +141,25 @@ class StandoffConfig:
     seek_enabled: bool = False
     seek_step_mm: float = 2.0          # < the sensor window, so it cannot be jumped
     seek_max_mm: float = 10.0          # seek travel budget, separate from max_travel_mm
+    # --- direct move (docstring 10) ---
+    move_mode: str = 'stepped'         # 'direct' = one computed move + verify
+    direct_gain: float = 1.0           # fraction of the measured gap per direct move
+    direct_max_approach_mm: float = 12.0   # cap of ONE direct approach move
+    direct_max_retreat_mm: float = 15.0    # cap of ONE direct retreat move
+    direct_max_spread_mm: float = 0.3  # valid samples may spread this much (max-min)
+    direct_max_moves: int = 5          # moves allowed while in direct mode
+    max_guard_stops: int = 1           # live-guard stops tolerated; the next aborts
+    exec_mismatch_mm: float = 1.0      # |executed - commanded| above
+                                       #   max(this, 0.5*|cmd|) = arm did not do the move
+
+
+@dataclass
+class MoveReport:
+    """What move() may return instead of a bare bool."""
+    ok: bool
+    executed_mm: Optional[float] = None   # approach-positive, from the arm's readback
+    guard_stop: bool = False              # stopped in flight by the caller's live guard
+    note: str = ''
 
 
 @dataclass
@@ -133,13 +185,14 @@ class StandoffResult:
 class _Reading:
     """One decision's measurement: median of the valid samples, or the
     sentinel side when there was no valid sample."""
-    __slots__ = ('perp', 'n_valid', 'n_total', 'sentinel_sign')
+    __slots__ = ('perp', 'n_valid', 'n_total', 'sentinel_sign', 'spread')
 
-    def __init__(self, perp, n_valid, n_total, sentinel_sign):
+    def __init__(self, perp, n_valid, n_total, sentinel_sign, spread=0.0):
         self.perp = perp                  # float or None
         self.n_valid = n_valid
         self.n_total = n_total
         self.sentinel_sign = sentinel_sign  # +1 / -1 when ALL invalid agree, else 0
+        self.spread = spread              # max - min of the valid samples
 
 
 def _median(vals: List[float]) -> float:
@@ -154,8 +207,10 @@ class StandoffController:
     read(n, timeout_s) -> list of FRESH perpendicular readings (already
         projected by the caller); may be shorter than n on timeout, empty
         when the sensor is silent.
-    move(approach_mm) -> bool; positive moves toward the surface. The
-        caller settles and returns only once the arm is at rest.
+    move(approach_mm) -> bool or MoveReport; positive moves toward the
+        surface. The caller settles and returns only once the arm is at
+        rest. A MoveReport may carry the executed distance and whether the
+        caller's live guard stopped the move in flight.
     cancelled() -> bool
     log_info / log_warn: optional text sinks.
     """
@@ -183,7 +238,8 @@ class StandoffController:
         # frame is a dropout / out-of-range decision, not a measurement.
         need = (n + 1) // 2
         if len(valid) >= need:
-            return _Reading(_median(valid), len(valid), len(vals), 0)
+            return _Reading(_median(valid), len(valid), len(vals), 0,
+                            spread=max(valid) - min(valid))
         sign = 0
         if invalid and not valid:
             if all(v > 0 for v in invalid):
@@ -196,6 +252,13 @@ class StandoffController:
         return max(float(self.cfg.max_step_mm),
                    float(self.cfg.approach_fraction) * err_abs)
 
+    def _do_move(self, cmd: float) -> MoveReport:
+        """Run move() and normalise its return to a MoveReport."""
+        out = self._move(cmd)
+        if isinstance(out, MoveReport):
+            return out
+        return MoveReport(ok=bool(out))
+
     # ------------------------------------------------------------------
     def run(self) -> StandoffResult:
         cfg = self.cfg
@@ -207,6 +270,9 @@ class StandoffController:
         loop_travel = 0.0           # closed-loop travel against max_travel_mm
         prev_err = None             # error before the last motion
         prev_cmd = None             # last commanded approach (mm)
+        prev_exec = None            # what the arm executed of it (mm), if reported
+        direct = str(cfg.move_mode).strip().lower() == 'direct'
+        guard_stops = 0
 
         step = 0                    # closed-loop decisions; seek steps do not count
         # A non-positive seek step is "seek off" (a 0 mm step would spin
@@ -216,7 +282,11 @@ class StandoffController:
         seek_steps_max = (int(cfg.seek_max_mm / float(cfg.seek_step_mm)) + 2
                           if seek_on else 0)
         seek_steps = 0
-        while step < int(cfg.max_steps):
+
+        def step_limit():
+            return int(cfg.direct_max_moves) if direct else int(cfg.max_steps)
+
+        while step < step_limit():
             if self._cancelled():
                 res.reason = 'cancelled'
                 return res
@@ -249,7 +319,8 @@ class StandoffController:
                                f"{'retreat' if cmd < 0 else 'approach'} "
                                f"{abs(cmd):.2f} mm ({seek_travel:.1f}/"
                                f"{cfg.seek_max_mm} mm used)")
-                    if not self._move(cmd):
+                    rep = self._do_move(cmd)
+                    if not rep.ok:
                         res.reason = 'move failed while seeking'
                         return res
                     res.steps += 1
@@ -257,7 +328,7 @@ class StandoffController:
                     seek_travel += abs(cmd)
                     seek_steps += 1
                     invalid_run = 0     # a seek step is progress, not a retry
-                    prev_err, prev_cmd = None, None
+                    prev_err, prev_cmd, prev_exec = None, None, None
                     res.history.append(dict(step=res.steps, kind='seek',
                                             cmd_mm=cmd, sentinel=m.sentinel_sign))
                     continue
@@ -279,18 +350,21 @@ class StandoffController:
             err = float(m.perp) - float(cfg.setpoint_mm)
             res.final_err_mm = err
             res.history.append(dict(step=step + 1, kind='measure', err_mm=err,
-                                    n_valid=m.n_valid))
+                                    n_valid=m.n_valid, spread_mm=m.spread))
 
             # ---------- response check / adaptive gain ----------
-            if prev_cmd is not None and prev_err is not None \
-                    and abs(prev_cmd) >= cfg.response_min_step_mm:
+            # Against what the arm EXECUTED when move() reported it (its own
+            # pose readback), else against the commanded distance.
+            moved = prev_exec if prev_exec is not None else prev_cmd
+            if moved is not None and prev_err is not None \
+                    and abs(moved) >= cfg.response_min_step_mm:
                 observed = err - prev_err           # approach raises err
-                r = observed / prev_cmd
+                r = observed / moved
                 res.history[-1]['response_ratio'] = r
                 if r < cfg.min_response_ratio:
                     nonresp += 1
                     self._warn(f"[Standoff] reading moved {observed:+.2f} mm for a "
-                               f"{prev_cmd:+.2f} mm step (ratio {r:.2f}) — "
+                               f"{moved:+.2f} mm step (ratio {r:.2f}) — "
                                f"no response {nonresp}/{cfg.max_nonresponse}")
                     if nonresp >= int(cfg.max_nonresponse):
                         res.reason = ('reading does not follow the motion '
@@ -298,6 +372,22 @@ class StandoffController:
                                       'beam off the surface)')
                         self._warn(f"[Standoff] {res.reason}")
                         return res
+                    if direct:
+                        # A LONG move the reading did not follow is not a
+                        # surface effect: stop here instead of spending a
+                        # second move on a reading that means nothing.
+                        if abs(moved) >= max(float(cfg.max_step_mm),
+                                             float(cfg.response_min_step_mm)):
+                            res.reason = ('reading does not follow the motion '
+                                          f'({observed:+.2f} mm for a '
+                                          f'{moved:+.2f} mm direct move: frozen '
+                                          'sensor / arm not moving / beam off '
+                                          'the surface)')
+                            self._warn(f"[Standoff] {res.reason}")
+                            return res
+                        direct = False
+                        self._warn("[Standoff] direct mode off for this "
+                                   "adjustment: continuing with stepped moves")
                 else:
                     nonresp = 0
                     if cfg.adaptive_gain:
@@ -319,31 +409,76 @@ class StandoffController:
                 return res
 
             # ---------- step ----------
-            cmd = -err * float(cfg.kp) / ratio        # approach-positive
-            if cmd > 0:
-                cap = self._approach_cap(abs(err))
-                cmd = min(cmd, cap)
+            # Direct: the whole measured gap in one move, when the reading
+            # is clean. Otherwise (mode, noisy decision, after a guard stop
+            # or a non-response) the stepped law.
+            use_direct = direct
+            if use_direct and m.spread > float(cfg.direct_max_spread_mm):
+                use_direct = False
+                self._warn(f"[Standoff] samples spread {m.spread:.2f} mm > "
+                           f"{cfg.direct_max_spread_mm} mm: this move is stepped")
+            if use_direct:
+                cmd = -err * float(cfg.direct_gain) / ratio
+                if cmd > 0:
+                    cmd = min(cmd, float(cfg.direct_max_approach_mm))
+                else:
+                    cmd = max(cmd, -float(cfg.direct_max_retreat_mm))
+                law = f"direct x{cfg.direct_gain:g}"
             else:
-                cmd = max(cmd, -float(cfg.retreat_step_mm))
+                cmd = -err * float(cfg.kp) / ratio        # approach-positive
+                if cmd > 0:
+                    cap = self._approach_cap(abs(err))
+                    cmd = min(cmd, cap)
+                else:
+                    cmd = max(cmd, -float(cfg.retreat_step_mm))
+                law = f"kp {cfg.kp}"
             if loop_travel + abs(cmd) > cfg.max_travel_mm:
                 res.reason = f"travel budget {cfg.max_travel_mm} mm exhausted"
                 self._warn(f"[Standoff] {res.reason} (err {err:+.2f} mm)")
                 return res
 
-            self._info(f"  -> [Standoff {step+1}/{cfg.max_steps}] err {err:+.3f} mm "
+            self._info(f"  -> [Standoff {step+1}/{step_limit()}] err {err:+.3f} mm "
                        f"({m.n_valid}/{m.n_total} samples) -> "
                        f"{'approach' if cmd > 0 else 'retreat'} {abs(cmd):.3f} mm "
-                       f"(kp {cfg.kp}, gain/{ratio:.2f})")
-            if not self._move(cmd):
-                res.reason = 'move failed'
+                       f"({law}, gain/{ratio:.2f})")
+            rep = self._do_move(cmd)
+            if not rep.ok:
+                res.reason = 'move failed' + (f" ({rep.note})" if rep.note else '')
                 self._warn(f"[Standoff] {res.reason}")
                 return res
+            done = abs(rep.executed_mm) if rep.executed_mm is not None else abs(cmd)
             res.steps += 1
-            res.travel_mm += abs(cmd)
-            loop_travel += abs(cmd)
-            res.history[-1]['cmd_mm'] = cmd
-            prev_err, prev_cmd = err, cmd
+            res.travel_mm += done
+            loop_travel += done
+            res.history[-1].update(cmd_mm=cmd, mode='direct' if use_direct else 'stepped',
+                                   executed_mm=rep.executed_mm,
+                                   guard_stop=bool(rep.guard_stop))
+            prev_err, prev_cmd, prev_exec = err, cmd, rep.executed_mm
             step += 1
+
+            if rep.guard_stop:
+                guard_stops += 1
+                self._warn(f"[Standoff] live guard stopped the move"
+                           f"{' (' + rep.note + ')' if rep.note else ''} — "
+                           f"stop {guard_stops}/{int(cfg.max_guard_stops) + 1}")
+                if guard_stops > int(cfg.max_guard_stops):
+                    res.reason = ('live guard stopped the approach '
+                                  f'{guard_stops} times (reading passed the '
+                                  'target while moving)')
+                    self._warn(f"[Standoff] {res.reason}")
+                    return res
+                direct = False
+                # An interrupted move says nothing about the sensitivity.
+                prev_err, prev_cmd, prev_exec = None, None, None
+            elif rep.executed_mm is not None and abs(rep.executed_mm - cmd) > max(
+                    float(cfg.exec_mismatch_mm), 0.5 * abs(cmd)):
+                res.reason = (f"arm executed {rep.executed_mm:+.2f} mm of a "
+                              f"{cmd:+.2f} mm move")
+                self._warn(f"[Standoff] {res.reason}")
+                m2 = self._measure()
+                if m2.perp is not None:
+                    res.final_err_mm = float(m2.perp) - float(cfg.setpoint_mm)
+                return res
 
         # Budget of steps used up: take one last measurement so the record
         # says where it ended, then report.
@@ -354,7 +489,7 @@ class StandoffController:
                 res.converged = True
                 res.reason = 'converged'
                 return res
-        res.reason = f"not converged within {cfg.max_steps} steps"
+        res.reason = f"not converged within {step_limit()} moves"
         self._warn(f"[Standoff] {res.reason} (err "
                    f"{res.final_err_mm if res.final_err_mm is not None else float('nan'):+.2f} mm)")
         return res

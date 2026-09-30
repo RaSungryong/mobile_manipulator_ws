@@ -176,6 +176,7 @@ function renderTask(st) {
   const name = st.task || '—';
   const idx = st.group_index || 0, total = st.group_total || 0;
   $('chip-task').textContent = 'TASK ' + (st.state || '?') + ' ' + name + (total ? ' ' + idx + '/' + total : '');
+  $('chip-task').title = $('chip-task').textContent;   // full text if the chip is cut
   if ('charge_phase' in st) {
     const phase = st.charge_phase || '?';
     // The percentage comes from the LIVE /bms/state (BAT chip), not from the

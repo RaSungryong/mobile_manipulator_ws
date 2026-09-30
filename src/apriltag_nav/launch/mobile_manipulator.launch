@@ -149,6 +149,10 @@
              retreat_step_mm, activate_threshold 20, max_travel_mm, samples,
              settle_s, seek, require_converged, target_distance_mm) lives in
              robot.yaml keyence: and is not overridden here.
+             Since 2026-09-29 robot.yaml keyence.move_mode is `direct`: the
+             whole measured gap goes out as ONE move (then verify / trim),
+             and kp / max_steps / max_step_mm here are the STEPPED law it
+             falls back to (noisy reading, after a live-guard stop).
              NOTE keyence_tol / _max_step_mm / _activate_threshold are
              PERPENDICULAR standoff mm, not raw along-the-beam reading. -->
         <param name="keyence_max_step_mm"   value="1.0"/>

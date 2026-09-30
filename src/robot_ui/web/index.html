@@ -13,6 +13,10 @@
   <!-- ===================== System bar ===================== -->
   <div id="sysbar" class="group">
     <span class="group-title">System</span>
+    <!-- STOP ALL is pinned top-right in its own non-wrapping block: the
+         chips wrap inside #sysbar-chips, so a long task name can add a
+         chip row but never moves the button (2026-09-29). -->
+    <div id="sysbar-chips">
     <span class="chip" id="chip-estop">E-STOP —</span>
     <span class="chip" id="chip-battery">BAT —</span>
     <span class="chip" id="chip-charge">CHARGE —</span>
@@ -22,9 +26,11 @@
     <span class="chip" id="chip-task">TASK —</span>
     <span class="chip" id="chip-scan">SCAN —</span>
     <span class="chip" id="chip-camera">CAM —</span>
-    <span class="spacer"></span>
+    </div>
+    <div id="sysbar-fixed">
     <span class="chip conn" id="chip-conn">connecting…</span>
     <button id="btn-stop-all" class="btn-stop" title="Soft stop of arm, task, base, lift and any running script. The hardware e-stop is a PILZ relay independent of ROS and is not reachable from here.">STOP ALL (soft)</button>
+    </div>
   </div>
 
   <div id="main">

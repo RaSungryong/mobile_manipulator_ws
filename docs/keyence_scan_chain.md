@@ -18,6 +18,81 @@ changed, and what is still open.
 - All of it is fixed and verified on hardware; the loop now converges. Two
   issues remain open — see [Open issues](#open-issues).
 
+## 2026-09-29 — direct move: the measured gap in one move, verified, guarded
+
+User request: compute the distance that actually has to be moved and move
+it, with safeguards, and as few moves as possible. From the day's
+`arm_node` log (116 scan adjustments, all on one task's group 132: ~4 mm
+too close in the 19:23 run, ~4 mm too far in the 19:29 run): the first
+reading was 3–6 mm off at almost every point and the stepped law took **3 moves on 60, 4 on
+37, 5–6 on 10** of them (median 2.2 s) — it approaches by halves
+(−5.27 → 2.63 → 1.45 → 1.00 → 0.27). The reading had measured the whole
+distance at the first step.
+
+`keyence.move_mode: direct` (robot.yaml; `stepped` = the law below,
+unchanged):
+
+| | stepped | direct |
+|---|---|---|
+| move | ≤ max(1.0, 0.5 × gap), kp 0.8 | the whole measured gap × `direct_gain` 1.0, ÷ measured sensitivity (never < 1) |
+| cap of one move | approach as left, retreat 3 mm | approach `direct_max_approach_mm` 12, retreat `direct_max_retreat_mm` 15 |
+| moves per point | 3–4 measured | 1 when the first move lands inside 0.2 mm, else main + one trim; limit `direct_max_moves` 5 |
+| target built from | pose READBACK + dz, every move | first move: readback (− the carried offset) + dz; later moves: previous COMMAND + dz, orientation of the first pose |
+| distance used for the sensitivity / travel | commanded | EXECUTED (pose readback before / after, along tool Z) |
+
+Safeguards, in the order they act:
+
+1. **Before the move.** The decision's samples must be clean (max − min ≤
+   `direct_max_spread_mm` 0.3, else that one move is stepped); trust gate
+   (`activate_threshold`), per-move caps, travel budget (`max_travel_mm`);
+   an approach is never amplified.
+2. **During the move — live guard** (`guard_*`). `arm_controller` checks
+   every `/keyence/value` message while the approach MoveL is in flight
+   and calls `StopMotion` (with `cancel()`'s retry, without the cancel
+   flag) when the reading has passed the target by `guard_overshoot_mm`
+   1.0 — or the sensor says "too close" — on `guard_frames` 2 messages in
+   a row. The far sentinel is not a violation. After a stop the loop
+   re-measures at rest, continues stepped, and ends on a second stop.
+   Retreats are not guarded.
+3. **After the move.** Fresh median at rest. A direct move of ≥ 1 mm that
+   the reading did not follow ends the adjustment at once (a frozen sensor
+   gets ONE move); a short trim that was not followed drops to the stepped
+   law (second miss aborts, as before); an executed distance more than
+   max(1 mm, half the command) from the command ends it too.
+
+**The command → actual offset, found on the way.** A MoveL ends a constant
+small offset from its target (2026-09-18 readback (0, −0.09, −0.135) mm;
+the 2026-09-28 tip tour at 1.1 m reach ~(0.2, −0.3, −0.4) mm and 0.06° —
+`r1_tag101.yaml`: three retreats totalling 1.3 mm moved the readback z
++0.23 mm, x +0.68, y −0.91, rx 179.13 → 178.94, and the reading went
+0.34 → 0.71 mm CLOSER). The loop built every target as "readback + dz",
+so every move carried the offset again. That is the "reading does not
+follow the motion" of **47 of 64** tip-tour adjustments, and the drift of
+the tool across the surface during a correction. The HEAD code against
+the check's fake robot with that offset reproduces it (ends 0.5 mm from
+the target, x +0.6…1.0 / y −0.9…1.5 mm of drift). Chaining commands
+cancels it; the offset measured after each move (`cmd_bias_*`, refused
+beyond 1.5 mm / 0.3°) pre-compensates the first move of the next
+adjustment when that starts within 100 mm / 120 s.
+
+Expected from the logged sensitivities (big moves: median 0.93, p5 0.83,
+p95 1.00 — a 5 mm move typically ends 0.2–0.5 mm short): one move on
+about half the points, two on the rest — `check_standoff_direct.py`:
+1.66 moves per point against 4.17 stepped over 300 random starts.
+
+Offline verification: `tools/check_standoff_direct.py` (50 — part A the
+pure loop against a surface plant, part B the real `ArmController`
+methods against a fake Fairino whose MoveL moves in timed increments and
+ends off its target, a feeder thread publishing the sensor from the live
+pose: command chain, offset learned / carried / refused, the guard
+stopping a move when a 5 mm raised edge comes under the beam — closest
+15.3 mm with the guard, 11.5 without), `check_standoff_seek.py` 23,
+`check_scan_progress.py` 73. **Not run on the robot**; `arm_node` restart
+required. Not verified on hardware: that a MoveL interrupted by the
+guard's `StopMotion` leaves the controller ready for the next MoveL
+without a reset (the 2026-08-12 cancel did), and the real stop distance
+(estimated ~1 mm past the 1 mm margin at the loop's ~10 mm/s).
+
 ## 2026-09-08 — loop rewritten: whole-range engagement, gap-proportional approach, fresh median readings
 
 User request: the loop's working range was too short (it refused anything
@@ -60,6 +135,8 @@ threshold — caught by the plant). **Not run on the robot**; `arm_node`
 restart required. First live run to watch: the per-step
 `[Standoff n/15] err … -> approach/retreat …` lines and the
 `standoff ok (…)` summary in the CSV's `execution_message`.
+(Since 2026-09-29 the default is the direct move above; this law is
+`move_mode: stepped` and what a direct adjustment falls back to.)
 
 ## Sensor facts (measured, not from a datasheet)
 

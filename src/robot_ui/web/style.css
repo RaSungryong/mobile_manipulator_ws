@@ -96,7 +96,15 @@ button:disabled { opacity: 0.45; cursor: default; }
 .btn-capture { margin-top: 8px; width: 100%; }
 
 /* ---- system bar ---- */
-#sysbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; }
+/* Two blocks that never wrap against each other: the chips (which wrap
+   among themselves) and the fixed right block with STOP ALL. The button
+   therefore stays top-right whatever the chips say; a chip longer than
+   the whole row is cut with an ellipsis (full text in its tooltip). */
+#sysbar { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 6px; padding-top: 10px; }
+#sysbar-chips { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap;
+  align-items: center; gap: 6px; min-height: 29px; }
+#sysbar-chips .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+#sysbar-fixed { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .chip { font-family: var(--mono); font-size: 11px; padding: 3px 7px;
   border: 1px solid var(--border); border-radius: 3px; white-space: nowrap; }
 .chip.conn { color: var(--muted); }

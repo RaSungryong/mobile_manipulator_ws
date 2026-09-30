@@ -1,0 +1,65 @@
+command: TASK scan_joint_errorX_p000mm_standoff_020mm_height_652mm
+started_at: '2026-09-29T12:29:12.249'
+camera_frame_note: 'front_cam optical frame after the 2026-08-13 -90 deg rotation:
+  tag_pose_m = [fore_aft (+ ahead of the lens), lateral (+ robot''s right / wall side),
+  depth (~camera height)] of the tag centre relative to the camera centre; image_offset_px
+  = tag centre minus image centre [column, row] (+col = ahead, +row = right); camera_center_offset_from_tag
+  = where the camera centre sits relative to the tag, i.e. the negated tag_pose xy.
+  Stage ''arrival'' = the pure-pursuit stop fired, ''aligned'' = after align_to_tag
+  trimmed the yaw.'
+records:
+- seq: 1
+  stamp: 1790652688.4913692
+  ros_time: 1790652688.4913723
+  stage: aligned
+  tag_id: 105
+  image_center_px:
+  - 638.1970825195312
+  - 352.981689453125
+  tag_center_px:
+  - 636.2217657690194
+  - 348.52616879698394
+  image_offset_px:
+  - -1.9753167505118654
+  - -4.455520656141061
+  tag_pose_m:
+  - -0.0007661070205299566
+  - -0.0017908007669607917
+  - 0.302
+  camera_center_offset_from_tag_m:
+  - 0.0007661070205299566
+  - 0.0017908007669607917
+  camera_center_offset_from_tag_mm:
+  - 0.7661070205299566
+  - 1.7908007669607917
+  camera_center_offset_from_tag_norm_mm: 1.947790377287209
+  tag_edge_yaw_error_deg: -0.08731614918534092
+  traveled_m: null
+  align_passes: 1
+  align_median_frames: 3
+  image_center_offset_mm:
+  - -0.795
+  - -1.795
+  image_center_offset_norm_mm: 1.963
+  calibrated_reference:
+    source_map_world_path: /home/abc/mobile_manipulator_ws/log/path_tag_locator/map_world_20260928_212842.yaml
+    calibrated_tag_position_m:
+    - -1.7029663903690877
+    - 0.14538367526061463
+    - -0.06099777226352567
+    calibrated_tag_rpy_deg:
+    - -178.308159400824
+    - 3.511523923926583
+    - 0.05100723450006442
+    world_offset_from_calibrated_tag_m:
+    - 0.0007645124671892183
+    - 0.0017914820795544959
+    - 0.0
+    world_offset_from_calibrated_tag_mm:
+    - 0.7645124671892183
+    - 1.791482079554496
+    - 0.0
+    estimated_camera_center_position_m:
+    - -1.7022018779018986
+    - 0.14717515734016912
+    - -0.06099777226352567

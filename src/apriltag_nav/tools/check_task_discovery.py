@@ -68,16 +68,24 @@ pose_tasks = [n for n in names if n.startswith(TaskManager.POSE_TASK_PREFIX)]
 joint_tasks = [n for n in names if n.startswith(TaskManager.JOINT_TASK_PREFIX)]
 print('  registered:', names)
 check(not LOG['err'], f'no logerr during load ({LOG["err"][:2]})')
-check(len(pose_tasks) == 3 and len(joint_tasks) == 3,
-      f'3 pose + 3 joint tasks discovered ({len(pose_tasks)}/{len(joint_tasks)})')
+# expected counts come from the directory itself, not a fixed number: the
+# user replaces / adds pairs (three standoffs on 2026-09-11, errorX on 09-14,
+# the *_plate2 twins on 09-29)
+n_pose_files = len([f for f in os.listdir(REAL_TASK_DIR)
+                    if f.startswith(TaskManager.POSE_FILE_PREFIX) and f.endswith('.csv')
+                    and not any(m in f for m in TaskManager._RESULT_STEM_MARKERS)])
+n_joint_files = len([f for f in os.listdir(REAL_TASK_DIR)
+                     if f.startswith(TaskManager.JOINT_FILE_PREFIX) and f.endswith('.csv')
+                     and not any(m in f for m in TaskManager._RESULT_STEM_MARKERS)])
+check(len(pose_tasks) == n_pose_files and len(joint_tasks) == n_joint_files and n_pose_files > 0,
+      f'{n_pose_files} pose + {n_joint_files} joint tasks discovered ({len(pose_tasks)}/{len(joint_tasks)})')
 check('go_home' in names and names[-1] == 'go_home', 'go_home is last (system)')
 keys = sorted(n[len(TaskManager.POSE_TASK_PREFIX):] for n in pose_tasks)
 check(keys == sorted(n[len(TaskManager.JOINT_TASK_PREFIX):] for n in joint_tasks),
       'pose and joint tasks share the same run keys')
-check(all('standoff_010mm' in k or 'standoff_030mm' in k or 'standoff_050mm' in k
-          for k in keys), f'keys are the three standoffs: {keys}')
+check(len(keys) > 0, f'at least one pair: {keys}')
 
-k010 = [k for k in keys if 'standoff_010mm' in k][0]
+k010 = keys[0]      # the first pair in name order stands in for "the" pair below
 pose010 = TaskManager.POSE_TASK_PREFIX + k010
 joint010 = TaskManager.JOINT_TASK_PREFIX + k010
 
@@ -92,10 +100,12 @@ def expect(key):
     joint_df = pd.read_csv(os.path.join(REAL_TASK_DIR, TaskManager.JOINT_FILE_PREFIX + key + '.csv'))
     tags = sorted(int(g) for g in pose_df['group_id'].unique())
     n_work = len(joint_df[joint_df['is_task_waypoint'].astype(float) == 1])
+    lift = sorted(float(v) for v in pose_df['lift_mm'].unique()) if 'lift_mm' in pose_df else [None]
     return {'tags': tags, 'n_pose': len(pose_df), 'n_rows': len(joint_df),
             'n_work': n_work, 'n_trav': len(joint_df) - n_work,
             'n_first_group_pose': int((pose_df['group_id'] == tags[0]).sum()),
-            'speeds': {int(v) for v in joint_df['speed'].unique()}}
+            'speeds': {int(v) for v in joint_df['speed'].unique()},
+            'lift': lift[0] if len(lift) == 1 else 'DISAGREE'}
 
 
 E010 = expect(k010)
@@ -112,7 +122,7 @@ check(all('q0' in p and len(p['q0']) == 6 for p in pts),
 check(all(k in p for p in pts for k in ('x', 'y', 'z', 'rx', 'ry', 'rz')),
       'pose points carry x y z rx ry rz')
 check(all(p.get('scan', True) for p in pts), 'pose points are all scan points')
-check(tm.get_lift_height(pose010) == 0.0, 'pose task lift height 0.0 (lift_mm)')
+check(tm.get_lift_height(pose010) == E010['lift'], f'pose task lift height {E010["lift"]} (the file\'s lift_mm)')
 info = tm.task_info[pose010]
 check(info['scan_mode'] == 'pose' and info['source'] == 'discovered'
       and info['points'] == E010['n_pose'] and info['ik_seeded_points'] == E010['n_pose']
@@ -143,8 +153,8 @@ check(all(not any(k in p for k in ('x', 'y', 'z')) for p in trav_pts),
 first = tm.get_scan_points(joint010, tags[0])[0]
 check(first['scan'] is False and first['point_id'] == 1,
       f'group {tags[0]} starts with its home waypoint (scan False)')
-check({int(p['speed']) for p in jpts} == E010['speeds'] == {10, 30},
-      f'per-row speed passes through and is the halved 10 / 30 set ({E010["speeds"]})')
+check({int(p['speed']) for p in jpts} == E010['speeds'],
+      f'per-row speed passes through unchanged ({sorted(E010["speeds"])})')
 info = tm.task_info[joint010]
 check(info['scan_mode'] == 'joint' and info['points'] == E010['n_work']
       and info['traverse_points'] == E010['n_trav'] and info['points_with_world_xyz'] == E010['n_work']
@@ -153,11 +163,12 @@ check(info['scan_mode'] == 'joint' and info['points'] == E010['n_work']
 check(any(joint010 in m and 'JOINT path replay' in m for m in LOG['warn']),
       'joint task registration warns about the bare-MoveJ replay')
 
-# ---- the other standoffs differ in assignment
-k050 = [k for k in keys if 'standoff_050mm' in k][0]
-t050 = [s['tag'] for s in tm.get_task(TaskManager.POSE_TASK_PREFIX + k050)]
-check(t050 == expect(k050)['tags'] and t050 != tags,
-      f'standoff 050 tags {t050} come from its own file and differ from 010')
+# ---- every other key's tags come from its own file (a *_plate2 twin runs on
+# the 정반 2 lanes, a different standoff may be assigned to different tags)
+for k_other in [k for k in keys if k != k010]:
+    t_other = [s['tag'] for s in tm.get_task(TaskManager.POSE_TASK_PREFIX + k_other)]
+    check(t_other == expect(k_other)['tags'],
+          f'{k_other} tags {t_other} come from its own file' + (' (differ from 010)' if t_other != tags else ''))
 
 # ---- describe_tasks
 desc = tm.describe_tasks()
