@@ -179,6 +179,8 @@ class RosBridge:
                                                      queue_size=1)
         self._pub_arm_scan_continue = rospy.Publisher('/arm/scan_continue', String,
                                                       queue_size=4)
+        self._pub_arm_collect_config = rospy.Publisher('/arm/collect_config', String,
+                                                       queue_size=1)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
                                                queue_size=1)
         self._pub_cam_lamp = rospy.Publisher('/camera/set_lamp', Bool,
@@ -594,20 +596,30 @@ class RosBridge:
         self._pub_arm_collect_mode.publish(Bool(bool(on)))
         self.log.emit(f'[UI] collect mode <- {"on" if on else "off"}')
 
-    def scan_continue(self, ra=None, readings=None, note='', skip=False):
-        """Release the scanned point the collect mode is waiting on, with
-        the hand-measured Ra (or several readings — arm_node records their
-        mean), or skip it. Fire-and-forget like arm_cancel: arm_node logs a
-        refusal when nothing is waiting, /arm/collect_state shows the
-        result (n_recorded / last)."""
+    def set_collect_config(self, cfg):
+        """mode ('pause' | 'mark'), batch_size, retreat_mm, mark_retreat_mm,
+        mark_dwell_s — any subset; arm_node validates and reports the
+        result on /arm/collect_state."""
+        self._pub_arm_collect_config.publish(String(json.dumps(dict(cfg or {}))))
+        self.log.emit(f'[UI] collect config <- {json.dumps(dict(cfg or {}))}')
+
+    def scan_continue(self, ra=None, readings=None, note='', skip=False, points=None):
+        """Release the stop the collect mode is waiting on. pause mode:
+        `points` = [{group_id, point_id, readings | ra, note, skip}, ...]
+        (one row per waiting point; a one-point batch also takes the flat
+        ra / readings / skip); mark mode: anything releases it. Fire-and-
+        forget like arm_cancel: arm_node logs a refusal when nothing is
+        waiting, /arm/collect_state shows the result (n_recorded / last)."""
         req = {'note': str(note or ''), 'skip': bool(skip)}
+        if points is not None:
+            req['points'] = [dict(p) for p in points]
         if ra is not None:
             req['ra'] = float(ra)
         if readings:
             req['readings'] = [float(v) for v in readings]
         self._pub_arm_scan_continue.publish(String(json.dumps(req)))
         self.log.emit('[UI] scan_continue <- ' + ('skip' if skip else json.dumps(
-            {k: v for k, v in req.items() if k in ('ra', 'readings')})))
+            {k: v for k, v in req.items() if k in ('ra', 'readings', 'points')})))
 
     # ==========================================================
     # CAMERA + INFERENCE

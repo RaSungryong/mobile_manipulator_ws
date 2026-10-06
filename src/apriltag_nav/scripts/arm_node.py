@@ -170,6 +170,8 @@ class ArmControllerNode:
                          queue_size=1)
         rospy.Subscriber('/arm/scan_continue', String, self._cb_scan_continue,
                          queue_size=4)
+        rospy.Subscriber('/arm/collect_config', String, self._cb_collect_config,
+                         queue_size=1)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
         rospy.Service('/arm/reset_error', Trigger, self._srv_reset_error)
 
@@ -179,7 +181,7 @@ class ArmControllerNode:
 
         rospy.loginfo("[ArmNode] Ready — /arm/scan_command, /arm/cancel, "
                       "/arm/move_cart, /arm/jog_cmd, /arm/move_joint, /arm/jog_joint, /arm/move_home, "
-                      "/arm/reset_error, /arm/collect_mode, /arm/scan_continue; "
+                      "/arm/reset_error, /arm/collect_mode, /arm/collect_config, /arm/scan_continue; "
                       "state on /arm/state")
 
     # ==========================================================
@@ -452,10 +454,22 @@ class ArmControllerNode:
         except Exception as e:
             rospy.logerr(f"[ArmNode] collect_mode failed: {e}")
 
+    def _cb_collect_config(self, msg):
+        """JSON {mode: 'pause'|'mark', batch_size, retreat_mm,
+        mark_retreat_mm, mark_dwell_s} — any subset."""
+        try:
+            cfg = json.loads(msg.data) if msg.data.strip() else {}
+            ok, message = self.arm.set_collect_config(cfg)
+            (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] collect_config failed: {e}")
+
     def _cb_scan_continue(self, msg):
-        """JSON {"ra": 0.41} | {"readings": [0.40, 0.42]} | {"skip": true},
-        optional "note". Releases the scanned point the collect mode is
-        waiting on; refused (logged) when nothing is waiting."""
+        """pause mode: {"points": [{"group_id", "point_id", "ra" | "readings",
+        "note", "skip"}, ...]} (one-point batches also take the flat
+        {"ra"} / {"readings"} / {"skip"} form); mark mode: anything.
+        Releases the stop the collect mode is waiting on; refused (logged)
+        when nothing is waiting."""
         try:
             payload = json.loads(msg.data) if msg.data.strip() else {}
         except Exception as e:

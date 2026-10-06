@@ -340,6 +340,15 @@ class ArmController:
         def _cp(name, key, default):
             return rospy.get_param('~collect_' + name, _collect_cfg.get(key, default))
         self.collect_enabled = bool(_cp('enabled', 'enabled', False))
+        # 'pause': N scanned points, then one stop for the Ra entry (method
+        # A, two testers measure in parallel); 'mark': no capture at all —
+        # every scanned point stops for the operator to write its number
+        # beside the spot, and a template CSV is written for the later hand
+        # measurement (method B). 2026-10-06 (evening).
+        self.collect_mode = str(_cp('mode', 'mode', 'pause'))
+        self.collect_batch_size = max(1, int(_cp('batch_size', 'batch_size', 1)))
+        self.collect_mark_retreat_mm = float(_cp('mark_retreat_mm', 'mark_retreat_mm', 30.0))
+        self.collect_mark_dwell_s = float(_cp('mark_dwell_s', 'mark_dwell_s', 0.0))
         self.collect_retreat_mm = float(_cp('retreat_mm', 'retreat_mm', 80.0))
         self.collect_retreat_speed = int(_cp('retreat_speed', 'retreat_speed', 10))
         self.collect_wait_timeout_s = float(_cp('wait_timeout_s', 'wait_timeout_s', 0.0))
@@ -352,6 +361,9 @@ class ArmController:
         self._collect_lock = threading.Lock()
         self._collect = {'waiting': False, 'n_recorded': 0, 'n_skipped': 0,
                          'record_csv': ''}
+        self._collect_batch = []
+        self._collect_mark_no = 0
+        self._collect_run_stem = ''
         if self.collect_enabled:
             rospy.logwarn("[Arm REAL] Ra COLLECT mode is ON: every scanned point "
                           "pauses for a hand measurement (/arm/scan_continue)")
@@ -706,9 +718,17 @@ class ArmController:
         if base_dir is None:
             base_dir = self._image_dir_base = getattr(
                 self.pipeline, 'output_dir', None)
+        run_csv = next((p.get("csv_path") for p in scan_points
+                        if p.get("csv_path")), "")
+        self._collect_run_stem = (os.path.splitext(os.path.basename(run_csv))[0]
+                                  if run_csv else time.strftime('collect_%Y%m%d_%H%M%S'))
+        self._collect_batch = []
+        mark_pass = bool(self.collect_enabled and self.collect_mode == 'mark')
+        if mark_pass:
+            self._collect_mark_no = 0
+            rospy.logwarn("[Arm REAL] MARK pass: no capture, no Ra map — every scanned "
+                          "point stops for its number to be written beside the spot")
         if base_dir:
-            run_csv = next((p.get("csv_path") for p in scan_points
-                            if p.get("csv_path")), "")
             self.pipeline.output_dir = (
                 os.path.join(base_dir,
                              os.path.splitext(os.path.basename(run_csv))[0])
@@ -768,7 +788,7 @@ class ArmController:
                 # device-open latency runs in parallel with motion + Keyence
                 # adjustment instead of serially at capture time. Pointless on
                 # a traverse point — nothing is captured there.
-                if do_scan:
+                if do_scan and not mark_pass:
                     self.pipeline.preopen()
 
                 entry = {
@@ -851,6 +871,19 @@ class ArmController:
                         continue
                     entry["execution_message"] = f"Success ({standoff.summary()})"
 
+                # MARK pass (collect mode 'mark'): the tool is at the
+                # standoff over the spot; stop for the operator to write the
+                # point's number beside it, no capture, no Ra-map row.
+                if mark_pass:
+                    entry["execution_message"] = "Mark pass (no capture)"
+                    n_ok += 1
+                    self._refresh_live_pose()
+                    self._progress('done', index=i + 1, total=n_total, point_id=pid,
+                                   group_id=gid, scan=True, message='mark',
+                                   n_ok=n_ok, n_fail=n_fail)
+                    self._collect_mark_point(i + 1, n_total, p, pid, gid, entry)
+                    continue
+
                 # Capture while the arm is at rest; inference and the PNG
                 # save go to the worker. `done` is published as soon as the
                 # frames are in hand (the point is measured); the Ra follows
@@ -878,13 +911,24 @@ class ArmController:
                 if frames:
                     infer_q.put((i + 1, pid, gid, entry, frames, current_csv_path,
                                  image_prefix))
-                # Ra data collection: pause here, tool retreated, until the
-                # operator has measured the spot and sent /arm/scan_continue.
-                # A cancel during the wait ends the scan at the loop top
-                # with the tool left retreated.
-                if frames and self.collect_enabled:
-                    self._collect_pause(i + 1, n_total, p, pid, gid, entry,
-                                        image_prefix, len(frames))
+                # Ra data collection (mode 'pause'): after every batch_size
+                # scanned points — or after the LAST one, while the tool is
+                # still over it — retreat and wait until the operator has
+                # measured the spots and sent /arm/scan_continue. A cancel
+                # during the wait ends the scan at the loop top with the
+                # tool left retreated.
+                if frames and self.collect_enabled and not mark_pass:
+                    self._collect_batch.append({
+                        'index': i + 1, 'group_id': gid, 'point_id': pid,
+                        'images': [image_file_name(pid, k + 1, None, image_prefix)
+                                   for k in range(len(frames))],
+                        'standoff': entry["execution_message"],
+                        'x': p.get('x'), 'y': p.get('y'), 'z': p.get('z'),
+                        'csv_path': current_csv_path})
+                    more = any(q.get("scan", True) for q in scan_points[i + 1:])
+                    if len(self._collect_batch) >= self.collect_batch_size or not more:
+                        batch, self._collect_batch = self._collect_batch, []
+                        self._collect_pause(batch, n_total)
 
             if not self.cancel_requested:
                 rospy.loginfo("[Arm REAL] Scan finished → Home")
@@ -962,39 +1006,103 @@ class ArmController:
     # --------------------------------------------------
     # RA DATA COLLECTION MODE (2026-10-06)
     # --------------------------------------------------
+    COLLECT_MODES = ('pause', 'mark')
+
     def set_collect_mode(self, on):
-        """Switch the per-point pause on / off. Takes effect at the next
+        """Switch the collection behaviour on / off. Takes effect at the next
         scanned point; a point already waiting is not released by this."""
         self.collect_enabled = bool(on)
-        rospy.loginfo(f"[Arm REAL] Ra collect mode {'ON' if on else 'OFF'}")
+        rospy.loginfo(f"[Arm REAL] Ra collect mode {'ON' if on else 'OFF'} "
+                      f"({self.collect_mode}, batch {self.collect_batch_size})")
         self._publish_collect_state()
         return True, f"collect mode {'on' if on else 'off'}"
 
+    def set_collect_config(self, cfg=None):
+        """mode ('pause' | 'mark'), batch_size (>= 1), retreat_mm,
+        mark_retreat_mm, mark_dwell_s — any subset. Applies from the next
+        scanned point (the mode from the next SCAN: a running pass keeps
+        the one it started with)."""
+        cfg = dict(cfg or {})
+        changed = []
+        if 'mode' in cfg:
+            mode = str(cfg['mode'])
+            if mode not in self.COLLECT_MODES:
+                return False, f"unknown collect mode {mode!r} (pause | mark)"
+            self.collect_mode = mode; changed.append(f"mode {mode}")
+        if 'batch_size' in cfg:
+            n = int(cfg['batch_size'])
+            if n < 1 or n > 50:
+                return False, f"batch_size {n} out of range 1..50"
+            self.collect_batch_size = n; changed.append(f"batch {n}")
+        for key, lo, hi in (('retreat_mm', 0.0, 300.0), ('mark_retreat_mm', 0.0, 300.0),
+                            ('mark_dwell_s', 0.0, 600.0)):
+            if key in cfg:
+                v = float(cfg[key])
+                if not lo <= v <= hi:
+                    return False, f"{key} {v} out of range {lo}..{hi}"
+                setattr(self, 'collect_' + key, v); changed.append(f"{key} {v:g}")
+        rospy.loginfo(f"[Arm REAL] collect config: {', '.join(changed) or 'unchanged'}")
+        self._publish_collect_state()
+        return True, "collect config: " + (', '.join(changed) or 'unchanged')
+
     def collect_continue(self, payload=None):
-        """Release the point the scan is waiting on. payload (dict):
-        ra (float) and/or readings (list of floats — ra = their mean when ra
-        is absent), note (str), skip (bool: record the point as not
-        measured). Called from the ROS callback thread, like cancel()."""
+        """Release the stop the scan is waiting on. Called from the ROS
+        callback thread, like cancel().
+
+        pause mode — payload (dict): `points`: list of {group_id, point_id,
+        ra | readings (list, ra = mean), note, skip}; a batch point not in
+        the list is recorded as skipped ("not entered"). The legacy
+        top-level `ra` / `readings` / `skip` / `note` form is accepted when
+        the batch holds ONE point.
+        mark mode — any payload (the operator has written the number)."""
         payload = dict(payload or {})
         with self._collect_lock:
-            if not self._collect.get('waiting'):
-                return False, "no point is waiting for a measurement"
-        readings = payload.get('readings')
-        if isinstance(readings, str):
-            readings = [float(v) for v in readings.replace(',', ' ').split()]
-        readings = [float(v) for v in (readings or [])]
-        ra = payload.get('ra')
-        if ra is None and readings:
-            ra = float(np.mean(readings))
-        skip = bool(payload.get('skip', False))
-        if ra is None and not skip:
-            return False, "no Ra value — give ra / readings, or skip"
-        self._collect_payload = {'ra': None if ra is None else float(ra),
-                                 'readings': readings,
-                                 'note': str(payload.get('note', '') or ''),
-                                 'skip': skip}
+            waiting = bool(self._collect.get('waiting'))
+            kind = self._collect.get('kind')
+            batch = [dict(b) for b in self._collect.get('points') or []]
+        if not waiting:
+            return False, "no point is waiting for a measurement"
+        if kind == 'mark':
+            self._collect_payload = {'mark': True, 'note': str(payload.get('note', '') or '')}
+            self._collect_event.set()
+            return True, "marked — continuing"
+
+        entries = payload.get('points')
+        if entries is None:
+            if len(batch) != 1:
+                return False, (f"{len(batch)} points are waiting — send `points` "
+                               "with one entry per point")
+            entries = [{'group_id': batch[0]['group_id'], 'point_id': batch[0]['point_id'],
+                        'ra': payload.get('ra'), 'readings': payload.get('readings'),
+                        'note': payload.get('note', ''), 'skip': payload.get('skip', False)}]
+        parsed = {}
+        for e in entries:
+            try:
+                key = (int(e['group_id']), int(e['point_id']))
+            except (KeyError, TypeError, ValueError):
+                return False, f"point entry without group_id / point_id: {e}"
+            if key not in {(b['group_id'], b['point_id']) for b in batch}:
+                return False, f"point g{key[0]} p{key[1]} is not in the waiting batch"
+            readings = e.get('readings')
+            if isinstance(readings, str):
+                readings = readings.replace(',', ' ').split()
+            try:
+                readings = [float(v) for v in (readings or [])]
+                ra = e.get('ra')
+                ra = None if ra is None else float(ra)
+            except (TypeError, ValueError):
+                return False, f"point g{key[0]} p{key[1]}: not a number"
+            if ra is None and readings:
+                ra = float(np.mean(readings))
+            skip = bool(e.get('skip', False))
+            if ra is None and not skip:
+                return False, f"point g{key[0]} p{key[1]}: no Ra value — give ra / readings, or skip"
+            parsed[key] = {'ra': ra, 'readings': readings,
+                           'note': str(e.get('note', '') or ''), 'skip': skip}
+        self._collect_payload = {'points': parsed}
         self._collect_event.set()
-        return True, ("skipped" if skip else f"Ra {float(ra):.4f} recorded")
+        n_ra = sum(1 for v in parsed.values() if not v['skip'])
+        return True, f"{n_ra} Ra recorded, {len(batch) - n_ra} skipped"
 
     def _publish_collect_state(self, **extra):
         try:
@@ -1002,27 +1110,28 @@ class ArmController:
                 st = dict(self._collect)
             st.update(extra)
             st['enabled'] = bool(self.collect_enabled)
+            st['mode'] = self.collect_mode
+            st['batch_size'] = int(self.collect_batch_size)
             st['retreat_mm'] = float(self.collect_retreat_mm)
+            st['mark_retreat_mm'] = float(self.collect_mark_retreat_mm)
+            st['mark_dwell_s'] = float(self.collect_mark_dwell_s)
             st['stamp'] = rospy.get_time()
             self.collect_state_pub.publish(String(json.dumps(st, default=str)))
         except Exception as e:
             rospy.logwarn_throttle(10.0, f"[Arm REAL] collect state publish failed: {e}")
 
-    def _collect_csv_path(self, csv_path):
-        """<record_dir>/<ra_map stem>_ra_measured.csv — the stem the run's
-        Ra map and image folder carry, so the three pair by name."""
-        stem = (os.path.splitext(os.path.basename(csv_path))[0] if csv_path
-                else time.strftime('collect_%Y%m%d_%H%M%S'))
-        return os.path.join(self.collect_record_dir, f"{stem}_ra_measured.csv")
+    def _collect_csv_path(self, suffix='_ra_measured.csv'):
+        """<record_dir>/<ra_map stem><suffix> — the stem the run's Ra map and
+        image folder carry, so the three pair by name."""
+        return os.path.join(self.collect_record_dir, self._collect_run_stem + suffix)
 
-    COLLECT_COLUMNS = ['run', 'index', 'group_id', 'point_id', 'images',
+    COLLECT_COLUMNS = ['run', 'mark_no', 'index', 'group_id', 'point_id', 'images',
                        'ra_measured', 'ra_readings', 'note', 'skipped',
                        'standoff', 'x', 'y', 'z', 'image_dir', 'measured_at']
 
-    def _collect_record(self, row):
-        """Append one row (dict over COLLECT_COLUMNS) to the run's measured
-        CSV; the header is written when the file is new."""
-        path = row['_path']
+    def _collect_record(self, path, row):
+        """Append one row (dict over COLLECT_COLUMNS) to a measured /
+        template CSV; the header is written when the file is new."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         new = not os.path.exists(path)
         import csv
@@ -1033,21 +1142,24 @@ class ArmController:
                 w.writeheader()
             w.writerow(row)
 
-    def _collect_retreat(self):
-        """MoveL the tool collect_retreat_mm along its own Z AWAY from the
-        surface (the standoff loop's sign convention: approach = -keyence_dir
+    def _collect_retreat(self, retreat_mm):
+        """MoveL the tool retreat_mm along its own Z AWAY from the surface
+        (the standoff loop's sign convention: approach = -keyence_dir
         along tool Z, so retreat = +keyence_dir). Returns the pose read
-        before the move — the pose to return to — or None if it failed."""
+        before the move — the pose to return to — or None if it failed.
+        retreat_mm 0 reads the pose and moves nothing."""
         ret, pose = self.robot.GetActualTCPPose()
         if ret != 0:
             rospy.logerr(f"[Arm REAL] collect: GetActualTCPPose failed: {ret}")
             return None
+        if float(retreat_mm) <= 0.0:
+            return [float(v) for v in pose]
         p0 = np.array(pose[:3], dtype=float)
         rpy = [float(v) for v in pose[3:6]]
         r = R.from_euler('xyz', rpy, degrees=True)
         r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
         z_vec = np.array(r_mat[:, 2], dtype=float)
-        dz = float(self.collect_retreat_mm) * float(self.keyence_dir)
+        dz = float(retreat_mm) * float(self.keyence_dir)
         target = [float(v) for v in (p0 + z_vec * dz)] + rpy
         self.robot.SetSpeed(int(self.collect_retreat_speed))
         ret = self.robot.MoveL(target, TOOL_ID, 0)
@@ -1057,7 +1169,9 @@ class ArmController:
         self._refresh_live_pose()
         return [float(v) for v in pose]
 
-    def _collect_return(self, pose):
+    def _collect_return(self, pose, moved):
+        if not moved:
+            return True
         self.robot.SetSpeed(int(self.collect_retreat_speed))
         ret = self.robot.MoveL(list(pose), TOOL_ID, 0)
         if ret != 0:
@@ -1066,89 +1180,210 @@ class ArmController:
         self._refresh_live_pose()
         return True
 
-    def _collect_pause(self, index, total, point, pid, gid, entry,
-                       image_prefix, n_frames):
-        """One collection stop: retreat, publish `wait`, block until
-        collect_continue() or cancel, record, return to the captured pose.
-        Never raises into the scan loop."""
-        csv_path = point.get("csv_path", "")
-        record_csv = self._collect_csv_path(csv_path)
-        images = [image_file_name(pid, k + 1, None, image_prefix)
-                  for k in range(int(n_frames))]
-        image_dir = getattr(self.pipeline, 'output_dir', '') or ''
-        standoff = entry.get("execution_message", "")
+    def _collect_arm_xy(self, point):
+        """Arm-frame (x, y) mm of a world point through pose mode's own
+        transform (position only), or None without x y z / a robot pose."""
         try:
-            back_pose = self._collect_retreat()
-            info = {'index': index, 'total': total, 'group_id': gid,
-                    'point_id': pid, 'images': images, 'image_dir': image_dir,
-                    'standoff': standoff, 'retreated': back_pose is not None}
+            if point.get('x') is None or point.get('y') is None or point.get('z') is None:
+                return None
+            msg = getattr(self, 'current_pose_msg', None)
+            if msg is None:
+                return None
+            g = {'x': float(point['x']), 'y': float(point['y']), 'z': float(point['z']),
+                 'rx': 0.0, 'ry': 0.0, 'rz': 0.0}
+            lift_m = 0.0
+            try:
+                lift_m = float(self.lift_listener.height_m() or 0.0)
+            except Exception:
+                pass
+            pos, _ = transform_world_to_arm(g, msg, lift_m)
+            return (float(pos[0]), float(pos[1]))
+        except Exception:
+            return None
+
+    def _collect_batch_points(self, batch):
+        """The batch as published in the waiting state: every point with its
+        offset from the LAST one (the one under the tip) in world mm and in
+        arm-base mm, so the operators can find the earlier spots."""
+        last = batch[-1]
+        last_arm = self._collect_arm_xy(last)
+        out = []
+        for b in batch:
+            pt = {k: b[k] for k in ('index', 'group_id', 'point_id', 'images', 'standoff')}
+            pt['is_tip'] = b is last
+            pt['x'], pt['y'], pt['z'] = b.get('x'), b.get('y'), b.get('z')
+            pt['dx_world_mm'] = pt['dy_world_mm'] = None
+            pt['dx_arm_mm'] = pt['dy_arm_mm'] = None
+            if None not in (b.get('x'), b.get('y'), last.get('x'), last.get('y')):
+                pt['dx_world_mm'] = round((float(b['x']) - float(last['x'])) * 1000.0, 1)
+                pt['dy_world_mm'] = round((float(b['y']) - float(last['y'])) * 1000.0, 1)
+            arm = self._collect_arm_xy(b)
+            if arm is not None and last_arm is not None:
+                pt['dx_arm_mm'] = round(arm[0] - last_arm[0], 1)
+                pt['dy_arm_mm'] = round(arm[1] - last_arm[1], 1)
+            out.append(pt)
+        return out
+
+    def _collect_wait(self):
+        """Block until collect_continue() or cancel (or the wait timeout).
+        Returns (payload or None, timed_out)."""
+        t0 = time.time()
+        while not self.cancel_requested:
+            if self._collect_event.wait(0.1):
+                return self._collect_payload, False
+            if (self.collect_wait_timeout_s > 0
+                    and time.time() - t0 > self.collect_wait_timeout_s):
+                return self._collect_payload, True
+        return self._collect_payload, False
+
+    def _collect_row(self, b, measured, mark_no=''):
+        measured = measured or {}
+        ra = measured.get('ra')
+        return {'run': self._collect_run_stem, 'mark_no': mark_no,
+                'index': b['index'], 'group_id': b['group_id'], 'point_id': b['point_id'],
+                'images': ';'.join(b.get('images') or []),
+                'ra_measured': '' if ra is None else f"{float(ra):.4f}",
+                'ra_readings': ' '.join(f"{v:.4f}" for v in measured.get('readings', [])),
+                'note': measured.get('note', ''),
+                'skipped': bool(measured.get('skip', False)),
+                'standoff': b.get('standoff', ''),
+                'x': '' if b.get('x') is None else b['x'],
+                'y': '' if b.get('y') is None else b['y'],
+                'z': '' if b.get('z') is None else b['z'],
+                'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
+                'measured_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+
+    def _collect_pause(self, batch, total):
+        """Method A, one stop: the tool is over batch[-1]. Retreat, publish
+        `wait` with every point of the batch and its offset from the tip,
+        block until collect_continue() / cancel / timeout, record one row
+        per point, return to the captured pose. Never raises into the scan
+        loop."""
+        record_csv = self._collect_csv_path('_ra_measured.csv')
+        last = batch[-1]
+        moved = False
+        try:
+            back_pose = self._collect_retreat(self.collect_retreat_mm)
+            moved = back_pose is not None and self.collect_retreat_mm > 0
+            points = self._collect_batch_points(batch)
             with self._collect_lock:
-                self._collect.update(info)
-                self._collect['waiting'] = True
-                self._collect['record_csv'] = record_csv
+                self._collect.update({
+                    'waiting': True, 'kind': 'pause', 'index': last['index'],
+                    'total': total, 'group_id': last['group_id'],
+                    'point_id': last['point_id'], 'images': last['images'],
+                    'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
+                    'standoff': last['standoff'], 'points': points,
+                    'retreated': back_pose is not None, 'record_csv': record_csv})
+            self._collect_event.clear()
+            self._collect_payload = None
+            self._publish_collect_state()
+            self._progress('wait', index=last['index'], total=total,
+                           point_id=last['point_id'], group_id=last['group_id'],
+                           scan=True, kind='pause', images=last['images'],
+                           points=[(p['group_id'], p['point_id']) for p in points],
+                           message=f"waiting for the hand measurement of {len(batch)} point(s)")
+            rospy.loginfo(f"[Arm REAL] collect: {len(batch)} point(s) waiting for Ra "
+                          f"(tip over g{last['group_id']} p{last['point_id']}, "
+                          f"{last['index']}/{total})")
+
+            payload, timed_out = self._collect_wait()
+            if self.cancel_requested and not payload:
+                rospy.logwarn("[Arm REAL] collect: cancelled while waiting; tool left retreated")
+                return
+            measured = (payload or {}).get('points', {})
+            n_ra = n_skip = 0
+            for b in batch:
+                key = (b['group_id'], b['point_id'])
+                m = measured.get(key)
+                if m is None:
+                    m = {'ra': None, 'readings': [], 'skip': True,
+                         'note': (f'timeout after {self.collect_wait_timeout_s:.0f} s'
+                                  if timed_out else 'not entered')}
+                row = self._collect_row(b, m)
+                try:
+                    self._collect_record(record_csv, row)
+                except Exception as e:
+                    rospy.logerr(f"[Arm REAL] collect: record failed: {e}")
+                if row['skipped']:
+                    n_skip += 1
+                else:
+                    n_ra += 1
+                rospy.loginfo(f"[Arm REAL] collect: g{key[0]} p{key[1]} -> "
+                              f"{'skipped' if row['skipped'] else 'Ra ' + row['ra_measured']}")
+            with self._collect_lock:
+                self._collect['n_recorded'] += n_ra
+                self._collect['n_skipped'] += n_skip
+                self._collect['last'] = {'group_id': last['group_id'],
+                                         'point_id': last['point_id'],
+                                         'n_ra': n_ra, 'n_skip': n_skip}
+            self._progress('resume', index=last['index'], total=total,
+                           point_id=last['point_id'], group_id=last['group_id'],
+                           scan=True, kind='pause', n_ra=n_ra, n_skip=n_skip,
+                           ra_measured=(measured.get((last['group_id'], last['point_id'])) or {}).get('ra'),
+                           skipped=bool((measured.get((last['group_id'], last['point_id'])) or {'skip': True}).get('skip')))
+            if back_pose is not None and not self.cancel_requested:
+                self._collect_return(back_pose, moved)
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] collect: pause failed: {e}")
+        finally:
+            with self._collect_lock:
+                self._collect['waiting'] = False
+                self._collect['points'] = []
+            self._publish_collect_state()
+
+    def _collect_mark_point(self, index, total, point, pid, gid, entry):
+        """Method B, one stop: the tool is at the standoff over the spot.
+        Retreat mark_retreat_mm, publish `wait` (kind mark) with the running
+        number, block until collect_continue() / cancel (or mark_dwell_s),
+        append the template row, return. Never raises into the scan loop."""
+        template = self._collect_csv_path('_mark_template.csv')
+        self._collect_mark_no += 1
+        mark_no = self._collect_mark_no
+        b = {'index': index, 'group_id': gid, 'point_id': pid, 'images': [],
+             'standoff': entry.get("execution_message", ""),
+             'x': point.get('x'), 'y': point.get('y'), 'z': point.get('z')}
+        moved = False
+        try:
+            back_pose = self._collect_retreat(self.collect_mark_retreat_mm)
+            moved = back_pose is not None and self.collect_mark_retreat_mm > 0
+            with self._collect_lock:
+                self._collect.update({
+                    'waiting': True, 'kind': 'mark', 'mark_no': mark_no,
+                    'index': index, 'total': total, 'group_id': gid,
+                    'point_id': pid, 'images': [], 'image_dir': '',
+                    'standoff': b['standoff'], 'points': [],
+                    'retreated': back_pose is not None, 'record_csv': template})
             self._collect_event.clear()
             self._collect_payload = None
             self._publish_collect_state()
             self._progress('wait', index=index, total=total, point_id=pid,
-                           group_id=gid, scan=True, images=images,
-                           message='waiting for the hand measurement')
-            rospy.loginfo(f"[Arm REAL] collect: point {pid} g{gid} ({index}/{total}) "
-                          f"waiting for Ra — images {images}")
-
-            t0 = time.time()
-            timed_out = False
-            while not self.cancel_requested:
-                if self._collect_event.wait(0.1):
-                    break
-                if (self.collect_wait_timeout_s > 0
-                        and time.time() - t0 > self.collect_wait_timeout_s):
-                    timed_out = True
-                    break
-            payload = self._collect_payload or {}
+                           group_id=gid, scan=True, kind='mark', mark_no=mark_no,
+                           message=f"write #{mark_no} beside the spot")
+            rospy.loginfo(f"[Arm REAL] mark: #{mark_no} = g{gid} p{pid} ({index}/{total}) "
+                          f"— waiting for the operator")
+            if self.collect_mark_dwell_s > 0:
+                self._collect_event.wait(self.collect_mark_dwell_s)
+                payload = self._collect_payload or {'mark': True}
+            else:
+                payload, _ = self._collect_wait()
             if self.cancel_requested and not payload:
-                rospy.logwarn(f"[Arm REAL] collect: cancelled while waiting at point {pid}; "
-                              "tool left retreated")
+                rospy.logwarn("[Arm REAL] mark: cancelled while waiting; tool left retreated")
                 return
-            if timed_out and not payload:
-                payload = {'ra': None, 'readings': [], 'skip': True,
-                           'note': f'timeout after {self.collect_wait_timeout_s:.0f} s'}
-                rospy.logwarn(f"[Arm REAL] collect: no measurement for point {pid} "
-                              f"within {self.collect_wait_timeout_s:.0f} s — skipped")
-
-            row = {'_path': record_csv,
-                   'run': os.path.splitext(os.path.basename(csv_path))[0] if csv_path else '',
-                   'index': index, 'group_id': gid, 'point_id': pid,
-                   'images': ';'.join(images),
-                   'ra_measured': '' if payload.get('ra') is None else f"{payload['ra']:.4f}",
-                   'ra_readings': ' '.join(f"{v:.4f}" for v in payload.get('readings', [])),
-                   'note': payload.get('note', ''),
-                   'skipped': bool(payload.get('skip', False)),
-                   'standoff': standoff,
-                   'x': point.get('x', ''), 'y': point.get('y', ''), 'z': point.get('z', ''),
-                   'image_dir': image_dir,
-                   'measured_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+            row = self._collect_row(b, {'ra': None, 'readings': [], 'skip': False,
+                                        'note': (payload or {}).get('note', '')}, mark_no)
             try:
-                self._collect_record(row)
+                self._collect_record(template, row)
             except Exception as e:
-                rospy.logerr(f"[Arm REAL] collect: record failed: {e}")
+                rospy.logerr(f"[Arm REAL] mark: template write failed: {e}")
             with self._collect_lock:
-                if row['skipped']:
-                    self._collect['n_skipped'] += 1
-                else:
-                    self._collect['n_recorded'] += 1
-                self._collect['last'] = {'group_id': gid, 'point_id': pid,
-                                         'ra_measured': row['ra_measured'],
-                                         'skipped': row['skipped']}
-            rospy.loginfo(f"[Arm REAL] collect: point {pid} g{gid} -> "
-                          f"{'skipped' if row['skipped'] else 'Ra ' + row['ra_measured']}"
-                          f" (recorded in {os.path.basename(record_csv)})")
+                self._collect['n_recorded'] += 1
+                self._collect['last'] = {'group_id': gid, 'point_id': pid, 'mark_no': mark_no}
             self._progress('resume', index=index, total=total, point_id=pid,
-                           group_id=gid, scan=True,
-                           ra_measured=payload.get('ra'), skipped=row['skipped'])
+                           group_id=gid, scan=True, kind='mark', mark_no=mark_no)
             if back_pose is not None and not self.cancel_requested:
-                self._collect_return(back_pose)
+                self._collect_return(back_pose, moved)
         except Exception as e:
-            rospy.logerr(f"[Arm REAL] collect: pause failed at point {pid}: {e}")
+            rospy.logerr(f"[Arm REAL] mark: stop failed at point {pid}: {e}")
         finally:
             with self._collect_lock:
                 self._collect['waiting'] = False

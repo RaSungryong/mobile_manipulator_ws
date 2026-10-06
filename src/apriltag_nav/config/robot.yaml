@@ -1510,9 +1510,27 @@ keyence:
 # frames do not pause. /arm/cancel during a wait ends the scan with the
 # tool left retreated. tools/merge_ra_dataset.py joins the measured CSV
 # with the Ra map and the frames (g<group>_p<point>_i<index>_s<n>.png).
+# Two methods, chosen by `mode` (robot_ui Task tab, /arm/collect_config):
+#   pause — method A: after every `batch_size` scanned points (and after the
+#           last one) the tool retreats and waits; the UI lists the batch
+#           with each earlier point's offset from the tip (world mm and
+#           arm-base mm) so two testers can measure in parallel; one row per
+#           point goes to <run>_ra_measured.csv.
+#   mark  — method B: NO capture and no Ra map. Every scanned point stops at
+#           the standoff (retreated mark_retreat_mm) for the operator to
+#           write its running number beside the spot (outside the Basler's
+#           few-mm field); <run>_mark_template.csv maps number -> group /
+#           point / x y z with a blank ra_measured column to fill in later
+#           (any order, as many testers as you like). Then run the same TASK
+#           normally for the frames and merge with
+#           `merge_ra_dataset.py <scan run> --measured <filled template>`.
 collect:
   enabled:         false      # ~collect_enabled — live switch: /arm/collect_mode
-  retreat_mm:      80.0       # ~collect_retreat_mm: tool-z retreat during the pause
+  mode:            pause      # ~collect_mode: pause | mark (above)
+  batch_size:      1          # ~collect_batch_size: scanned points per stop (pause mode)
+  retreat_mm:      80.0       # ~collect_retreat_mm: tool-z retreat during a pause stop
+  mark_retreat_mm: 30.0       # ~collect_mark_retreat_mm: retreat during a mark stop (0 = none)
+  mark_dwell_s:    0          # ~collect_mark_dwell_s: 0 = wait for Next; >0 = auto-continue after this many s
   retreat_speed:   10         # ~collect_retreat_speed: SetSpeed % for retreat / return
   wait_timeout_s:  0          # ~collect_wait_timeout_s: 0 = wait until released
   record_dir:      "${MM_WS}/log/apriltag_nav/ra_measured"   # ~collect_record_dir

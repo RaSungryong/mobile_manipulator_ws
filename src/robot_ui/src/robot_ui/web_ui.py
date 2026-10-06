@@ -370,16 +370,31 @@ class UiController:
                 f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
                 f"g{ev.get('group_id', '?')}: FAIL — {ev.get('message', '')}")
         elif phase == 'wait':
-            self.append_log(
-                f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
-                f"g{ev.get('group_id', '?')}: WAITING for the hand measurement — "
-                f"images {', '.join(ev.get('images') or [])}")
+            if ev.get('kind') == 'mark':
+                self.append_log(
+                    f"[mark] #{ev.get('mark_no', '?')} = pt {ev.get('point_id', '?')} "
+                    f"g{ev.get('group_id', '?')} ({idx}/{total}): write the number beside "
+                    "the spot, then Next")
+            else:
+                pts = ev.get('points') or [(ev.get('group_id'), ev.get('point_id'))]
+                self.append_log(
+                    f"[collect] {idx}/{total}: WAITING for the hand measurement of "
+                    f"{len(pts)} point(s) — "
+                    + ', '.join(f"g{g} p{p}" for g, p in pts)
+                    + f" — images {', '.join(ev.get('images') or [])}")
         elif phase == 'resume':
-            ra = ev.get('ra_measured')
-            what = 'skipped' if ev.get('skipped') else f"Ra {float(ra):.4f} recorded"
-            self.append_log(
-                f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
-                f"g{ev.get('group_id', '?')}: {what}")
+            if ev.get('kind') == 'mark':
+                self.append_log(f"[mark] #{ev.get('mark_no', '?')} done")
+            elif 'n_ra' in ev:
+                self.append_log(
+                    f"[collect] {idx}/{total}: {ev.get('n_ra', 0)} Ra recorded, "
+                    f"{ev.get('n_skip', 0)} skipped")
+            else:
+                ra = ev.get('ra_measured')
+                what = 'skipped' if ev.get('skipped') else f"Ra {float(ra):.4f} recorded"
+                self.append_log(
+                    f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
+                    f"g{ev.get('group_id', '?')}: {what}")
         elif phase == 'finished':
             tail = ' (cancelled)' if ev.get('cancelled') else ''
             self.append_log(
@@ -876,17 +891,62 @@ class UiController:
         self.bridge.set_collect_mode(bool(on))
         return {'ok': True, 'message': f'collect mode {"on" if on else "off"}'}
 
-    def api_scan_continue(self, readings='', note='', skip=False):
-        """Record the measured Ra for the waiting point and resume.
-        readings: one or more numbers (space / comma separated — the mean
-        is the Ra); skip: record the point as not measured."""
+    def api_set_collect_config(self, cfg):
+        """mode / batch_size / retreat_mm / mark_retreat_mm / mark_dwell_s
+        (any subset) -> /arm/collect_config; arm_node validates."""
+        cfg = dict(cfg or {})
+        if 'mode' in cfg and cfg['mode'] not in ('pause', 'mark'):
+            return {'ok': False, 'message': f"unknown mode {cfg['mode']!r}"}
+        try:
+            if 'batch_size' in cfg:
+                cfg['batch_size'] = int(cfg['batch_size'])
+            for k in ('retreat_mm', 'mark_retreat_mm', 'mark_dwell_s'):
+                if k in cfg:
+                    cfg[k] = float(cfg[k])
+        except (TypeError, ValueError) as e:
+            return {'ok': False, 'message': f'bad value: {e}'}
+        self.bridge.set_collect_config(cfg)
+        return {'ok': True, 'message': 'collect config sent'}
+
+    @staticmethod
+    def _parse_readings(text):
         vals = []
-        text = str(readings or '').replace(',', ' ')
-        for tok in text.split():
+        for tok in str(text or '').replace(',', ' ').split():
             try:
                 vals.append(float(tok))
             except ValueError:
-                return {'ok': False, 'message': f'not a number: {tok!r}'}
+                raise ValueError(f'not a number: {tok!r}')
+        return vals
+
+    def api_scan_continue(self, readings='', note='', skip=False, points=None, mark=False):
+        """Release the waiting stop. pause mode: `points` = [{group_id,
+        point_id, readings, note, skip}] one per waiting point (readings =
+        one or more numbers, space / comma separated, the mean is the Ra),
+        or the flat readings / note / skip for a one-point batch; mark
+        mode: mark=True (nothing to type)."""
+        if mark:
+            self.bridge.scan_continue(note=note)
+            return {'ok': True, 'message': 'next'}
+        if points is not None:
+            out = []
+            for i, p in enumerate(points):
+                try:
+                    vals = self._parse_readings(p.get('readings', ''))
+                except ValueError as e:
+                    return {'ok': False, 'message': f'point {i + 1}: {e}'}
+                sk = bool(p.get('skip', False))
+                if not vals and not sk:
+                    return {'ok': False, 'message': f"point {i + 1} (g{p.get('group_id')} "
+                                                    f"p{p.get('point_id')}): type the Ra or tick skip"}
+                out.append({'group_id': p.get('group_id'), 'point_id': p.get('point_id'),
+                            'readings': vals, 'note': str(p.get('note', '') or ''), 'skip': sk})
+            self.bridge.scan_continue(points=out, note=note)
+            n = sum(1 for p in out if not p['skip'])
+            return {'ok': True, 'message': f'{n} Ra + {len(out) - n} skip sent'}
+        try:
+            vals = self._parse_readings(readings)
+        except ValueError as e:
+            return {'ok': False, 'message': str(e)}
         if not vals and not skip:
             return {'ok': False, 'message': 'type the measured Ra first (or Skip)'}
         self.bridge.scan_continue(readings=vals, note=note, skip=bool(skip))

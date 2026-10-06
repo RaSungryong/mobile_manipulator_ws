@@ -183,6 +183,13 @@ def make_controller(robot):
     ac.collect_retreat_speed = 10
     ac.collect_wait_timeout_s = 0.0
     ac.collect_record_dir = COLLECT_DIR
+    ac.collect_mode = 'pause'
+    ac.collect_batch_size = 1
+    ac.collect_mark_retreat_mm = 30.0
+    ac.collect_mark_dwell_s = 0.0
+    ac._collect_batch = []
+    ac._collect_mark_no = 0
+    ac._collect_run_stem = ''
     ac.keyence_dir = -1.0
     ac.collect_state_pub = _Pub('/arm/collect_state')
     ac._collect_event = threading.Event()
@@ -564,7 +571,8 @@ def collect_states():
     return [json.loads(d) for t, d in PUBLISHED if t == '/arm/collect_state']
 
 
-def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map_20261006_120000.csv'):
+def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map_20261006_120000.csv',
+                mode='pause', batch=1, mark_dwell=0.0):
     """Run execute_scan_points with collect mode ON; `release(ac, state)` is
     called on a helper thread for every `waiting` state it sees."""
     PUBLISHED.clear(); LOG['err'].clear(); LOG['warn'].clear()
@@ -572,6 +580,9 @@ def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map
     ac.pipeline.output_dir = '/img/scan_pose_demo_ra_map_20261006_120000'
     ac.collect_enabled = True
     ac.collect_wait_timeout_s = timeout
+    ac.collect_mode = mode
+    ac.collect_batch_size = batch
+    ac.collect_mark_dwell_s = mark_dwell
     for p in points:
         p['csv_path'] = csv_path
     seen = []
@@ -636,7 +647,8 @@ check(st['waiting'] is False and st['n_recorded'] == 2 and st['n_skipped'] == 0 
       f'final collect state: {st}')
 check(ac.homed == [1] and [e['phase'] for e in ev][-1] == 'finished', 'scan ends normally (home, finished)')
 resume = [e for e in ev if e['phase'] == 'resume']
-check(abs(resume[0]['ra_measured'] - 0.41) < 1e-9 and resume[0]['skipped'] is False, 'resume event carries the Ra')
+check(abs(resume[0]['ra_measured'] - 0.41) < 1e-9 and resume[0]['skipped'] is False
+      and resume[0]['n_ra'] == 1, 'resume event carries the Ra')
 
 # (b) skip, and a refused release while nothing waits
 ok, msg = ac.collect_continue({'ra': 0.5})
@@ -700,6 +712,95 @@ check(not [e for e in events() if e['phase'] == 'wait'] and not [c for c in robo
 from apriltag_nav.arm_controller import image_file_name as _ifn, image_name_prefix as _inp
 check(_inp(106, 14, 37) == 'g106_p14_i0037' and _ifn(14, 2, 0.5, 'g106_p14_i0037') == 'g106_p14_i0037_s2.png',
       'image name helpers')
+
+
+# ================================================================ method A: batches (2026-10-06 evening)
+print('== collect mode, batch_size 2: one stop per two scanned points, offsets from the tip')
+pts = [pose_pt(1, -1.30, 0.20), pose_pt(2, -1.30, 0.225), joint_pt(99, scan=False), pose_pt(3, -1.325, 0.225)]
+got = []
+def _release_batch(a, st):
+    got.append([(p['group_id'], p['point_id'], p['is_tip'], p['dx_world_mm'], p['dy_world_mm'],
+                 p['dx_arm_mm'], p['dy_arm_mm']) for p in st['points']])
+    a.collect_continue({'points': [{'group_id': p['group_id'], 'point_id': p['point_id'],
+                                    'readings': f"{0.4 + 0.01 * p['point_id']:.2f}"}
+                                   for p in st['points']]})
+robot, ac, seen = run_collect(pts, _release_batch, batch=2,
+                              csv_path='/x/scan_pose_b2_ra_map_20261006_130000.csv')
+ev = events()
+check([e['phase'] for e in ev if e['phase'] in ('wait', 'resume')] == ['wait', 'resume', 'wait', 'resume'],
+      f"3 scanned points, batch 2: stop after point 2 and after the LAST point: {[e['phase'] for e in ev]}")
+check(len(got) == 2 and [g[:3] for g in got[0]] == [(106, 1, False), (106, 2, True)] and [g[:3] for g in got[1]] == [(106, 3, True)],
+      f'first stop lists points 1 + 2 with point 2 under the tip, the last stop point 3 alone: {got}')
+check(got[0][0][3] == 0.0 and got[0][0][4] == -25.0, f'world offset of point 1 from the tip: dx 0, dy -25 mm: {got[0][0][3:5]}')
+check(got[0][0][5] is not None and abs(abs(got[0][0][5]) + abs(got[0][0][6]) - 25.0) < 0.5,
+      f'arm-frame offset through transform_world_to_arm, 25 mm long: {got[0][0][5:7]}')
+movel = [c for c in robot.calls if c[0] == 'MoveL']
+check(len(movel) == 4, f'retreat + return per STOP, not per point: {len(movel)} MoveL')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_b2_ra_map_20261006_130000_ra_measured.csv'))
+check([(r['point_id'], r['ra_measured']) for r in rec] == [('1', '0.4100'), ('2', '0.4200'), ('3', '0.4300')],
+      f'one row per point with its own Ra: {[(r["point_id"], r["ra_measured"]) for r in rec]}')
+check(rec[0]['images'] == 'g106_p1_i0001_s1.png' and rec[1]['images'] == 'g106_p2_i0002_s1.png' and rec[2]['images'] == 'g106_p3_i0004_s1.png',
+      'frame names per row (run index skips the traverse row)')
+check(collect_states()[-1]['n_recorded'] == 3, 'three recorded')
+
+print('== batch release rules')
+def _partial(a, st):
+    ok, msg = a.collect_continue({'ra': 0.5})
+    _partial.flat = (ok, msg)
+    ok, msg = a.collect_continue({'points': [{'group_id': 999, 'point_id': 1, 'ra': 0.5}]})
+    _partial.wrong = (ok, msg)
+    ok, msg = a.collect_continue({'points': [{'group_id': 106, 'point_id': 1, 'note': 'x'}]})
+    _partial.empty = (ok, msg)
+    a.collect_continue({'points': [{'group_id': 106, 'point_id': 1, 'ra': 0.5}]})   # point 2 not entered
+robot, ac, seen = run_collect([pose_pt(1, -1.30, 0.20), pose_pt(2, -1.30, 0.225)], _partial, batch=2,
+                              csv_path='/x/scan_pose_b2r_ra_map_20261006_130100.csv')
+check(not _partial.flat[0] and '2 points are waiting' in _partial.flat[1], f'the flat form is refused for a 2-point batch: {_partial.flat[1]}')
+check(not _partial.wrong[0] and 'not in the waiting batch' in _partial.wrong[1], 'a point outside the batch is refused')
+check(not _partial.empty[0] and 'no Ra value' in _partial.empty[1], 'a listed point without a value is refused')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_b2r_ra_map_20261006_130100_ra_measured.csv'))
+check([(r['point_id'], r['ra_measured'], r['skipped'], r['note']) for r in rec] == [('1', '0.5000', 'False', ''), ('2', '', 'True', 'not entered')],
+      f'a batch point left out of the release is recorded as skipped "not entered": {rec}')
+
+print('== set_collect_config')
+ok, msg = ac.set_collect_config({'mode': 'mark', 'batch_size': 3, 'mark_dwell_s': 2})
+check(ok and ac.collect_mode == 'mark' and ac.collect_batch_size == 3 and ac.collect_mark_dwell_s == 2.0, msg)
+st = collect_states()[-1]
+check(st['mode'] == 'mark' and st['batch_size'] == 3 and st['mark_dwell_s'] == 2.0, 'config published in the state')
+ok, msg = ac.set_collect_config({'mode': 'x'})
+check(not ok and 'unknown collect mode' in msg, 'bad mode refused')
+ok, msg = ac.set_collect_config({'batch_size': 0})
+check(not ok and 'out of range' in msg, 'batch 0 refused')
+
+# ================================================================ method B: mark pass
+print('== mark pass: no capture, stop at every scanned point, template CSV with running numbers')
+pts = [pose_pt(1, -1.30, 0.20), joint_pt(99, scan=False), pose_pt(2, -1.30, 0.225)]
+marks = []
+def _mark(a, st):
+    marks.append((st['kind'], st['mark_no'], st['group_id'], st['point_id']))
+    a.collect_continue({})                      # anything releases a mark stop
+robot, ac, seen = run_collect(pts, _mark, mode='mark', csv_path='/x/scan_pose_mk_ra_map_20261006_140000.csv')
+check(ac.pipeline.captured == [] and ac.pipeline.preopened == 0, 'mark pass captures nothing and never opens the camera')
+check(marks == [('mark', 1, 106, 1), ('mark', 2, 106, 2)], f'running numbers 1, 2 over the scanned points only: {marks}')
+movel = [c for c in robot.calls if c[0] == 'MoveL']
+check(len(movel) == 4 and abs(movel[0][2][2] - 330.0) < 1e-6, f'30 mm retreat + return per stop: {len(movel)}, z {movel[0][2][2]}')
+check(ac.last_results is None or not os.path.exists('/x'), 'no Ra map written for a mark pass')
+tpl = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_mk_ra_map_20261006_140000_mark_template.csv'))
+check([(r['mark_no'], r['group_id'], r['point_id'], r['ra_measured'], r['images']) for r in tpl]
+      == [('1', '106', '1', '', ''), ('2', '106', '2', '', '')], f'template: number -> group / point, blank Ra, no images: {tpl}')
+check(tpl[0]['x'] == '-1.3' and tpl[1]['y'] == '0.225', 'template carries the world x y z')
+ev = events()
+check([e for e in ev if e['phase'] == 'wait'][0]['kind'] == 'mark' and [e for e in ev if e['phase'] == 'wait'][0]['mark_no'] == 1,
+      'wait event says mark #1')
+check([e['message'] for e in ev if e['phase'] == 'done'] == ['mark', 'traverse', 'mark'], 'done events say mark')
+check(ac.homed == [1], 'mark pass ends with the home move')
+
+print('== mark pass with a dwell: continues by itself')
+robot, ac, seen = run_collect([pose_pt(1, -1.30, 0.20)], lambda a, st: None, mode='mark', mark_dwell=0.2,
+                              csv_path='/x/scan_pose_mkd_ra_map_20261006_140100.csv')
+tpl = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_mkd_ra_map_20261006_140100_mark_template.csv'))
+check(len(tpl) == 1 and ac.homed == [1], 'dwell 0.2 s: one template row, scan finished without a release')
+ok, msg = ac.collect_continue({'ra': 0.5})
+check(not ok, 'release refused when nothing waits (mark mode too)')
 
 import shutil; shutil.rmtree(COLLECT_DIR, ignore_errors=True)
 

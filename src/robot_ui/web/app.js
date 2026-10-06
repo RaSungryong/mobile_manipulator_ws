@@ -257,7 +257,7 @@ function renderScan(ev) {
       tint(chip, '#7a1f1f');
       break;
     case 'wait':
-      chip.textContent = 'SCAN ' + idx + '/' + total + ' WAIT Ra pt ' + (ev.point_id ?? '?');
+      chip.textContent = 'SCAN ' + idx + '/' + total + (ev.kind === 'mark' ? ' MARK #' + ev.mark_no : ' WAIT Ra ' + ((ev.points || []).length || 1) + ' pt');
       tint(chip, '#1f4a7a');
       break;
     case 'resume':
@@ -274,31 +274,64 @@ function renderScan(ev) {
 }
 
 // Ra data collection state from arm_node (/arm/collect_state, latched):
-// the checkbox follows arm_node's `enabled` (not its own click), the entry
-// fields and buttons are live only while a point is waiting.
+// the checkbox / mode / batch follow arm_node's values (not their own
+// clicks), the entry table and buttons are live only while a stop waits.
 let collectWaiting = false;
+let collectKind = null;
+function fmtMm(v) { return v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1); }
 function renderCollect(st) {
   const waiting = !!st.waiting;
   collectWaiting = waiting;
+  collectKind = waiting ? (st.kind || 'pause') : null;
   setChecked($('chk-collect'), !!st.enabled);
+  if (st.mode && document.activeElement !== $('sel-collect-mode')) $('sel-collect-mode').value = st.mode;
+  if (st.batch_size != null && document.activeElement !== $('num-collect-batch')) $('num-collect-batch').value = st.batch_size;
+  if (st.mark_dwell_s != null && document.activeElement !== $('num-collect-dwell')) $('num-collect-dwell').value = st.mark_dwell_s;
   $('lbl-collect-count').textContent = 'recorded ' + (st.n_recorded || 0) + ', skipped ' + (st.n_skipped || 0)
     + (st.record_csv ? '  → ' + st.record_csv.split('/').pop() : '');
   let text;
-  if (waiting) {
-    text = 'WAITING  g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + ')  — measure under the tip, '
-      + (st.retreated === false ? 'tool NOT retreated' : 'tool ' + (st.retreat_mm || 80) + ' mm up')
-      + '\nimages: ' + ((st.images || []).join(', ') || '—')
+  const tbl = $('tbl-collect'), body = $('tbl-collect-body');
+  if (waiting && st.kind === 'mark') {
+    text = 'MARK  #' + st.mark_no + '  = g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + ')'
+      + '\n→ write  ' + st.mark_no + '  beside the spot under the tip (NOT on it), then Next'
+      + (st.retreated === false ? '\ntool NOT retreated' : '\ntool ' + (st.mark_retreat_mm || 30) + ' mm up')
       + (st.standoff ? '\n' + st.standoff : '');
+    tbl.hidden = true; body.innerHTML = '';
+  } else if (waiting) {
+    const pts = st.points || [];
+    text = 'WAITING  ' + pts.length + ' point(s)  — tip over g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + '), '
+      + (st.retreated === false ? 'tool NOT retreated' : 'tool ' + (st.retreat_mm || 80) + ' mm up')
+      + '\nworld dx dy = the map frame (정반 centre, x east); arm-base dx dy = the arm base_link axes';
+    body.innerHTML = '';
+    pts.forEach((p, i) => {
+      const tr = document.createElement('tr');
+      if (p.is_tip) tr.className = 'tip';
+      tr.dataset.g = p.group_id; tr.dataset.p = p.point_id;
+      tr.innerHTML = '<td>' + (i + 1) + '</td>'
+        + '<td>g' + p.group_id + ' p' + p.point_id + (p.is_tip ? ' (under tip)' : '') + '<br><span class="detail">' + (p.images || []).join(' ') + '</span></td>'
+        + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_world_mm) + ', ' + fmtMm(p.dy_world_mm)) + '</td>'
+        + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_arm_mm) + ', ' + fmtMm(p.dy_arm_mm)) + '</td>'
+        + '<td><input type="text" class="c-ra" inputmode="decimal" autocomplete="off" placeholder="0.41 or 0.40 0.43"></td>'
+        + '<td><input type="text" class="c-note" autocomplete="off"></td>'
+        + '<td><input type="checkbox" class="c-skip"></td>';
+      body.appendChild(tr);
+    });
+    tbl.hidden = pts.length === 0;
   } else if (st.enabled) {
-    text = 'collect mode ON — the next scanned point of a TASK will pause here';
-    if (st.last) text += '\nlast: g' + st.last.group_id + ' p' + st.last.point_id + ' ' + (st.last.skipped ? 'skipped' : 'Ra ' + st.last.ra_measured);
+    text = 'collect mode ON (' + (st.mode || 'pause') + (st.mode === 'mark' ? '' : ', ' + (st.batch_size || 1) + ' point(s) per stop') + ') — the next TASK will stop here';
+    if (st.last) text += '\nlast stop: g' + st.last.group_id + ' p' + st.last.point_id
+      + (st.last.mark_no != null ? ' = #' + st.last.mark_no : ' — ' + (st.last.n_ra ?? 0) + ' Ra, ' + (st.last.n_skip ?? 0) + ' skipped');
+    tbl.hidden = true; body.innerHTML = '';
   } else {
     text = 'collect mode off';
+    tbl.hidden = true; body.innerHTML = '';
   }
   $('lbl-collect').textContent = text;
   tint($('lbl-collect'), waiting ? '#1f4a7a' : '');
-  for (const id of ['txt-collect-ra', 'txt-collect-note', 'btn-collect-next', 'btn-collect-skip']) $(id).disabled = !waiting;
-  if (waiting && document.activeElement !== $('txt-collect-ra') && !$('txt-collect-ra').value) $('txt-collect-ra').focus();
+  for (const id of ['txt-collect-note', 'btn-collect-next', 'btn-collect-skip']) $(id).disabled = !waiting;
+  $('btn-collect-next').textContent = (waiting && st.kind === 'mark') ? 'Next (number written)' : 'Record & next';
+  $('btn-collect-skip').hidden = waiting && st.kind === 'mark';
+  if (waiting && st.kind !== 'mark') { const first = body.querySelector('.c-ra'); if (first && !first.value) first.focus(); }
 }
 
 function standoffText(st) {
@@ -919,18 +952,38 @@ function init() {
 
   // ---- Ra data collection ----
   $('chk-collect').addEventListener('change', (e) => call('set_collect_mode', [e.target.checked]).catch(() => {}));
-  const collectSend = (skip) => {
-    const readings = $('txt-collect-ra').value.trim();
+  $('sel-collect-mode').addEventListener('change', (e) => call('set_collect_config', [{ mode: e.target.value }]).catch(() => {}));
+  $('num-collect-batch').addEventListener('change', (e) => call('set_collect_config', [{ batch_size: parseInt(e.target.value, 10) || 1 }]).catch(() => {}));
+  $('num-collect-dwell').addEventListener('change', (e) => call('set_collect_config', [{ mark_dwell_s: parseFloat(e.target.value) || 0 }]).catch(() => {}));
+  const collectSend = (skipAll) => {
     const note = $('txt-collect-note').value.trim();
-    if (!skip && !readings) { appendLog('[collect] type the measured Ra first (or Skip)'); $('txt-collect-ra').focus(); return; }
-    call('scan_continue', [readings, note, skip]).then((r) => {
-      if (r && r.ok) { $('txt-collect-ra').value = ''; $('txt-collect-note').value = ''; }
+    if (collectKind === 'mark') {
+      call('scan_continue', ['', note, false, null, true]).then((r) => { if (r && r.ok) $('txt-collect-note').value = ''; }).catch(() => {});
+      return;
+    }
+    const points = [];
+    for (const tr of $('tbl-collect-body').querySelectorAll('tr')) {
+      const ra = tr.querySelector('.c-ra').value.trim();
+      const skip = skipAll || tr.querySelector('.c-skip').checked;
+      if (!skip && !ra) { appendLog('[collect] g' + tr.dataset.g + ' p' + tr.dataset.p + ': type the Ra or tick skip'); tr.querySelector('.c-ra').focus(); return; }
+      points.push({ group_id: parseInt(tr.dataset.g, 10), point_id: parseInt(tr.dataset.p, 10), readings: ra,
+                    note: tr.querySelector('.c-note').value.trim(), skip });
+    }
+    if (!points.length) return;
+    call('scan_continue', ['', note, false, points]).then((r) => {
+      if (r && r.ok) $('txt-collect-note').value = '';
       else if (r && r.message) appendLog('[collect] ' + r.message);
     }).catch(() => {});
   };
   $('btn-collect-next').addEventListener('click', () => collectSend(false));
   $('btn-collect-skip').addEventListener('click', () => collectSend(true));
-  $('txt-collect-ra').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); collectSend(false); } });
+  $('tbl-collect-body').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.classList.contains('c-ra')) return;
+    e.preventDefault();
+    const inputs = [...$('tbl-collect-body').querySelectorAll('.c-ra')];
+    const i = inputs.indexOf(e.target);
+    if (i >= 0 && i < inputs.length - 1) inputs[i + 1].focus(); else collectSend(false);
+  });
 
   // ---- Arm ----
   $('btn-standoff').addEventListener('click', () => call('arm_standoff', [num('num-standoff')]).catch(() => {}));

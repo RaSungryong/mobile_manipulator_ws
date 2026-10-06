@@ -165,8 +165,12 @@ class FakeBridge:
         self.emit_state('collect_state', {'enabled': bool(on), 'waiting': False,
                                           'n_recorded': 0, 'n_skipped': 0})
 
-    def scan_continue(self, ra=None, readings=None, note='', skip=False):
-        self.record('scan_continue', ra, tuple(readings or ()), note, bool(skip))
+    def scan_continue(self, ra=None, readings=None, note='', skip=False, points=None):
+        self.record('scan_continue', ra, tuple(readings or ()), note, bool(skip),
+                    None if points is None else tuple((p['group_id'], p['point_id'], tuple(p['readings']), p['note'], p['skip']) for p in points))
+
+    def set_collect_config(self, cfg):
+        self.record('set_collect_config', dict(cfg))
 
     def lift_goto_mm(self, mm):
         self.record('lift_goto_mm', mm)
@@ -486,10 +490,10 @@ def part_a():
                                             'images': ['g106_p14_i0003_s1.png'], 'n_recorded': 2, 'n_skipped': 0})
         bridge.scan_progress.emit({'phase': 'wait', 'index': 3, 'total': 9, 'point_id': 14, 'group_id': 106,
                                    'images': ['g106_p14_i0003_s1.png']})
-        check(any('[collect] 3/9 pt 14 g106: WAITING' in l and 'g106_p14_i0003_s1.png' in l for l in sink.logs()),
-              'wait event logged with the frame name')
+        check(any('[collect] 3/9: WAITING' in l and 'g106 p14' in l and 'g106_p14_i0003_s1.png' in l for l in sink.logs()),
+              'wait event logged with the point and the frame name')
         r = c.api_scan_continue('0.40, 0.43 0.42', 'cutoff 0.8', False)
-        check(r['ok'] and bridge.has('scan_continue', None, (0.40, 0.43, 0.42), 'cutoff 0.8', False),
+        check(r['ok'] and bridge.has('scan_continue', None, (0.40, 0.43, 0.42), 'cutoff 0.8', False, None),
               f'readings parsed (comma / space) and sent with the note: {r}')
         r = c.api_scan_continue('', '', False)
         check(not r['ok'] and 'type the measured Ra' in r['message'] and bridge.count('scan_continue') == 1,
@@ -497,7 +501,25 @@ def part_a():
         r = c.api_scan_continue('0.4 abc', '', False)
         check(not r['ok'] and 'not a number' in r['message'], 'a non-number is refused')
         r = c.api_scan_continue('', 'no access', True)
-        check(r['ok'] and bridge.has('scan_continue', None, (), 'no access', True), 'skip sent with its note')
+        check(r['ok'] and bridge.has('scan_continue', None, (), 'no access', True, None), 'skip sent with its note')
+        # batch (method A) and mark (method B) forms
+        r = c.api_scan_continue('', 'stop note', False,
+                                [{'group_id': 106, 'point_id': 1, 'readings': '0.40 0.42', 'note': 'a', 'skip': False},
+                                 {'group_id': 106, 'point_id': 2, 'readings': '', 'note': '', 'skip': True}])
+        check(r['ok'] and bridge.has('scan_continue', None, (), 'stop note', False,
+                                     ((106, 1, (0.40, 0.42), 'a', False), (106, 2, (), '', True))),
+              f'batch release: one entry per point, readings parsed, skip kept: {r}')
+        r = c.api_scan_continue('', '', False, [{'group_id': 106, 'point_id': 3, 'readings': '', 'skip': False}])
+        check(not r['ok'] and 'type the Ra or tick skip' in r['message'], 'a batch point with neither is refused before sending')
+        r = c.api_scan_continue('', 'written', False, None, True)
+        check(r['ok'] and bridge.has('scan_continue', None, (), 'written', False, None), 'mark release sends a bare continue')
+        r = c.api_set_collect_config({'mode': 'mark', 'batch_size': '2', 'mark_dwell_s': '3'})
+        check(r['ok'] and bridge.has('set_collect_config', {'mode': 'mark', 'batch_size': 2, 'mark_dwell_s': 3.0}),
+              'collect config coerced and sent')
+        r = c.api_set_collect_config({'mode': 'nope'})
+        check(not r['ok'], 'unknown mode refused in the UI')
+        bridge.scan_progress.emit({'phase': 'wait', 'index': 5, 'total': 9, 'point_id': 14, 'group_id': 106, 'kind': 'mark', 'mark_no': 3})
+        check(any('[mark] #3 = pt 14 g106 (5/9)' in l for l in sink.logs()), 'mark wait logged with its number')
         bridge.scan_progress.emit({'phase': 'resume', 'index': 3, 'total': 9, 'point_id': 14, 'group_id': 106,
                                    'ra_measured': 0.4167, 'skipped': False})
         check(any('[collect] 3/9 pt 14 g106: Ra 0.4167 recorded' in l for l in sink.logs()), 'resume event logged')

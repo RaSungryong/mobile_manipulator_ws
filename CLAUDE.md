@@ -447,7 +447,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** — the Ra DATA COLLECTION mode, 2026-10-06: every scanned point of a TASK pauses after the capture with the tool retreated 80 mm along its z until the operator sends the hand-measured Ra (robot_ui Task tab, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `mark` (method B) captures nothing and stops at every scanned point for its running number to be written beside the spot, writing `<run>_mark_template.csv` to fill in by hand later; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -2037,6 +2037,64 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-06 (evening) — Two testers at once: batch stops (method A) and a numbering pass with a template to fill in later (method B), selectable in the UI
+
+User: "조도측정기가 2개 있는데 현재 상태로는 2개를 동시에 활용할 수 없잖아요,
+속도를 더 낼 수 있는 방법 있나요" — then "두 방법 다 진행해주 선택할 수 있게".
+Measurement is the bottleneck (arm ~3 s per point, a tester 20–30 s with
+placing), so both methods make the measuring parallel; `collect.mode`
+chooses (`/arm/collect_config`, robot_ui Task tab).
+
+- **`pause` (A): `batch_size` N.** The scan loop keeps a batch of the
+  scanned points since the last stop and calls `_collect_pause(batch)`
+  when it is full OR after the last scanned point of the list (while the
+  tool is still over it — the arm's path ends with home rows, so an
+  end-of-scan flush would have been nowhere near the spot). The waiting
+  state lists every batch point with its offset from the point under the
+  tip: world dx dy (mm, straight from the CSV x y) and arm-base dx dy
+  (through `transform_world_to_arm`, position only — no new sign
+  convention invented; None for a task without x y z). `collect_continue`
+  takes `points: [{group_id, point_id, ra | readings, note, skip}]` and
+  refuses the flat form for a batch > 1, a point outside the batch, or a
+  listed point without a value; a batch point left out of the release is
+  recorded as skipped "not entered". One row per point, one retreat +
+  return per STOP. UI: a table (last point highlighted, Enter moves down
+  the Ra column, the last Enter sends), Skip all, per-row skip / note.
+- **`mark` (B): no capture, no Ra map.** `_collect_mark_point` at every
+  scanned point after the Keyence standoff: retreat `mark_retreat_mm`
+  (30), publish `wait` kind mark with the running number, block until
+  any `scan_continue` (or `mark_dwell_s` > 0 passes), append the row to
+  `<run>_mark_template.csv` (`mark_no`, group / point / x y z, blank
+  `ra_measured`), return. The operator writes the number BESIDE the spot
+  (outside the Basler's few-mm field), measures everything afterwards
+  with as many testers as there are, fills the template in, runs the
+  same TASK normally for the frames, and `merge_ra_dataset.py <scan run>
+  --measured <template>` — or no flag: the tool takes the newest
+  filled-in template of the same task name and says so. Caveat written
+  into the doc: mark pass and scan pass are two runs with the base's
+  ±2 mm stop error between them.
+- `COLLECT_COLUMNS` gained `mark_no` (blank in pause mode); `/arm/collect_
+  state` carries mode / batch_size / kind / mark_no / points; the SCAN
+  chip reads `WAIT Ra N pt` or `MARK #n`.
+
+Verified offline: `check_scan_progress.py` 103 → **130** (batch 2 over
+three scanned points + a traverse: stops after point 2 and after the last
+point, point 1 listed at world dy −25 mm / a 25 mm arm-frame vector, one
+retreat + return per stop, one CSV row per point with its own Ra, frame
+names skipping the traverse index; the three refusals; "not entered";
+`set_collect_config` + its two refusals; the mark pass: nothing captured,
+camera never opened, numbers 1, 2 over the scanned points only, 30 mm
+retreats, no Ra map, template rows with blank Ra and the world xyz, done
+events `mark`, the home move; dwell 0.2 s continues by itself),
+`check_web_ui.py` 138 → **144** (batch / mark release forms, config
+coercion + refusal, mark log line), `check_task_list_ui.py` 104, the
+page in headless Chrome with no JS error, the merge tool's template
+fallback (picks the filled 14:00 template over the empty 12:00 one) and
+`--measured`. **Not run on the robot**; `arm_node` + `robot_ui_web_node`
+restart required. The arm-frame dx dy sign has only been checked for
+length, not direction, on hardware — the world dx dy is the one to trust
+first.
 
 ### 2026-10-06 — Ra training-data collection: frames named by group / point / index, a per-point COLLECT pause with the hand-measured Ra typed into the web UI, and a merge tool
 

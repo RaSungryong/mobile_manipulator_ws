@@ -26,6 +26,13 @@ measurements with no frame, points whose standoff did not converge).
 Legacy frames (`point_<id>_sample_<n>_ra_<x>.png`, before 2026-10-06) carry
 no group, so they are paired by point_id only and flagged `ambiguous` when
 that id occurs in more than one group of the run.
+
+Method B (mark pass): the measurements live in a FILLED-IN
+`<mark run>_mark_template.csv` (same columns, `mark_no` first), not in a
+`<scan run>_ra_measured.csv` — pass it with `--measured <file>`; without
+it, a scan run that has no measured CSV of its own takes the newest
+template of the SAME TASK (`<task>_ra_map_*_mark_template.csv`) that has
+at least one `ra_measured` filled in, and says which.
 """
 import argparse
 import glob
@@ -45,6 +52,13 @@ OLD_RE = re.compile(r'^point_(?P<p>\d+)_sample_(?P<s>\d+)(?:_ra_[-\d.]+)?\.png$'
 COLUMNS = ['run', 'group_id', 'point_id', 'index', 'sample', 'image',
            'ra_measured', 'ra_readings', 'note', 'model_ra_mean',
            'standoff_ok', 'standoff', 'x', 'y', 'z', 'measured_at', 'flags']
+
+
+def _truthy(v):
+    """CSV cell -> bool: 'True' / 'true' / '1' are True; blank / NaN / 'False' not."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return False
+    return str(v).strip().lower() in ('true', '1', 'yes')
 
 
 def run_stem(arg):
@@ -74,21 +88,51 @@ def list_frames(image_dir):
     return out
 
 
+def task_of(stem):
+    """`<task>` of a `<task>_ra_map_<ts>` stem (the stem itself otherwise)."""
+    m = re.match(r'^(?P<task>.+)_ra_map_\d{8}_\d{6}$', stem)
+    return m['task'] if m else stem
+
+
+def find_measured(stem, measured_dir, override=None):
+    """The measured CSV for a scan run: the override, else the run's own
+    `_ra_measured.csv`, else the newest filled-in mark template of the same
+    task. Returns (path or None, how)."""
+    if override:
+        return override, 'given'
+    own = os.path.join(measured_dir, stem + '_ra_measured.csv')
+    if os.path.exists(own):
+        return own, 'own'
+    task = task_of(stem)
+    cands = sorted(glob.glob(os.path.join(measured_dir, f'{task}_ra_map_*_mark_template.csv')),
+                   reverse=True)
+    for c in cands:
+        try:
+            t = pd.read_csv(c)
+        except Exception:
+            continue
+        if 'ra_measured' in t.columns and t['ra_measured'].notna().any():
+            return c, 'mark template'
+    return None, 'none'
+
+
 def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
-              image_root=None):
+              image_root=None, measured_override=None):
     ra_map_dir = ra_map_dir or _paths.RA_MAP_DIR
     measured_dir = measured_dir or _paths.RA_MEASURED_DIR
     image_root = image_root or _paths.SCAN_IMAGE_DIR
     ra_map_path = os.path.join(ra_map_dir, stem + '.csv')
-    measured_path = os.path.join(measured_dir, stem + '_ra_measured.csv')
+    measured_path, measured_how = find_measured(stem, measured_dir, measured_override)
     image_dir = os.path.join(image_root, stem)
 
     ra_map = pd.read_csv(ra_map_path) if os.path.exists(ra_map_path) else pd.DataFrame()
     measured = (pd.read_csv(measured_path, dtype={'note': str, 'ra_readings': str})
-                if os.path.exists(measured_path) else pd.DataFrame())
+                if measured_path and os.path.exists(measured_path) else pd.DataFrame())
     frames = list_frames(image_dir)
     report = {'run': stem, 'ra_map': os.path.exists(ra_map_path),
-              'measured_csv': os.path.exists(measured_path), 'frames': len(frames),
+              'measured_csv': bool(measured_path and os.path.exists(measured_path)),
+              'measured_how': measured_how,
+              'measured_path': measured_path or '', 'frames': len(frames),
               'measured_rows': len(measured), 'rows': 0, 'labelled': 0,
               'frames_unmeasured': 0, 'measured_without_frame': 0,
               'standoff_not_ok': 0, 'ambiguous': 0}
@@ -131,7 +175,7 @@ def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
         m = meas_rows.get(key)
         r = ra_rows.get(key)
         ra_measured = None
-        if m is not None and not bool(m.get('skipped', False)) and pd.notna(m.get('ra_measured')):
+        if m is not None and not _truthy(m.get('skipped')) and pd.notna(m.get('ra_measured')):
             try:
                 ra_measured = float(m['ra_measured'])
             except (TypeError, ValueError):
@@ -168,7 +212,8 @@ def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
             report['labelled'] += 1
     report['measured_without_frame'] = sum(
         1 for k, m in meas_rows.items()
-        if k not in seen_meas and not bool(m.get('skipped', False)))
+        if k not in seen_meas and not _truthy(m.get('skipped'))
+        and pd.notna(m.get('ra_measured')))
     report['rows'] = len(rows)
     return pd.DataFrame(rows, columns=COLUMNS), report
 
@@ -177,6 +222,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('runs', nargs='*', help='run stem(s) / paths; default: every run with a measured CSV')
     ap.add_argument('--all-frames', action='store_true', help='keep frames without a measurement (blank ra_measured)')
+    ap.add_argument('--measured', help='the measured CSV to use for the given run (e.g. a filled-in mark template)')
     ap.add_argument('--out', help='one combined CSV instead of one per run')
     ap.add_argument('--out-dir', default=_paths.RA_DATASET_DIR)
     ap.add_argument('--ra-map-dir', default=_paths.RA_MAP_DIR)
@@ -192,9 +238,14 @@ def main(argv=None):
             return 1
     tables = []
     for stem in stems:
-        df, rep = merge_run(stem, args.all_frames, args.ra_map_dir, args.measured_dir, args.image_root)
+        if args.measured and len(stems) != 1:
+            print('--measured goes with exactly one run'); return 2
+        df, rep = merge_run(stem, args.all_frames, args.ra_map_dir, args.measured_dir,
+                            args.image_root, args.measured)
         print(f"{stem}: {rep['rows']} rows ({rep['labelled']} labelled) from {rep['frames']} frames, "
               f"{rep['measured_rows']} measured rows"
+              + (f" ({rep['measured_how']}: {os.path.basename(rep['measured_path'])})"
+                 if rep['measured_how'] in ('mark template', 'given') else '')
               + ('' if rep['ra_map'] else ' — NO Ra map')
               + ('' if rep['measured_csv'] else ' — NO measured CSV')
               + (f"; {rep['frames_unmeasured']} frames unmeasured" if rep['frames_unmeasured'] else '')
