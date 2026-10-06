@@ -180,22 +180,30 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
                            # ⚠️ FILE NAME RULE (user, 2026-10-06 evening): the key
-                           # names <product>_<mold>_<plate>_<offset> —
+                           # is <kind>_<product>_<mold>_<plate>_<offset> —
+                           #   kind     joint | pose         (조인트 | 포즈 — FIRST,
+                           #                                 user: "제일 앞에")
                            #   product  hoodouter            (후드 아우터)
                            #   mold     lower | upper        (하형 | 상형)
                            #   plate    plate1 | plate2      (정반 1 | 2)
                            #   offset   offset<N>mm          (planner offset)
-                           # joint vs pose is the PREFIX (rrt_final_path_ →
-                           # scan_joint_, assigned_workpoints_ → scan_pose_), so
-                           # it is not repeated in the key. ASCII only — the
-                           # task name is typed on the Windows PC. Planner
+                           # The file PREFIX still decides the mode (rrt_final_
+                           # path_ → scan_joint_, assigned_workpoints_ →
+                           # scan_pose_), so the task name reads scan_joint_
+                           # joint_… — the doubled word is by the rule, not a
+                           # mistake. A pose twin of a joint file would be
+                           # assigned_workpoints_pose_<rest>.csv, i.e. a
+                           # DIFFERENT key — pairing (IK seed / world xyz) only
+                           # happens on an identical key, so a pair that must
+                           # pair needs the same key in both files. ASCII only —
+                           # the task name is typed on the Windows PC. Planner
                            # exports arrive as joint_path_<x>.csv: rename them
                            # to this rule (originals too) before dropping in.
                            #
                            # Today's keys (2026-10-06 15:54 / 16:42, renamed
-                           # 17:30): hoodouter_lower_plate1_offset{0,10,20,30,
-                           # 40}mm — FIVE JOINT-ONLY files (rrt_final_path_<key>
-                           # .csv, 1267 work points each, groups 104–107 /
+                           # 17:30 / 17:45): joint_hoodouter_lower_plate1_offset
+                           # {0,10,20,30,40}mm — FIVE JOINT-ONLY files (rrt_final_
+                           # path_<key>.csv, 1267 work points each, groups 104–107 /
                            # 118–120, standoff 17, planner speeds 10–30, NO
                            # assigned_workpoints_ twin → no pose task, no world
                            # xyz in the Ra map; the planner zip is log/261006_
@@ -309,7 +317,7 @@ has no `source_point_id` at all: there, `point_id` IS the work-point id.
 ### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
 
 ⚠️ **Status 2026-10-06: the five joint files in task/csv (`rrt_final_path_
-hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
+joint_hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
 pose twin — the tool cannot classify or correct them (it settles a file by
 FK against its pose rows), and the speed-10 boundary rule
 (`tools/slow_task_entry.py`) is not applied either.** `check_retarget_joint_
@@ -2073,19 +2081,22 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
-### 2026-10-06 (evening, 17:30) — task/csv files renamed to the user's naming rule: `<product>_<mold>_<plate>_<offset>`; originals renamed too; backup dir now under task/csv
+### 2026-10-06 (evening, 17:30 / 17:45) — task/csv files renamed to the user's naming rule: `<kind>_<product>_<mold>_<plate>_<offset>`; originals renamed too; backup dir now under task/csv
 
 User: the files in task/csv are ones they renamed (the planner zip
 `log/261006_shift223_s17_offset0_40.zip` delivers `joint_path_offset<N>mm_
 h<H>.csv`; they had given them the `rrt_final_path_` prefix), and from now
 on a path file is designated by product (후드 아우터), mold (상형 / 하형),
-joint / pose, plate (정반) and offset — then "원본 csv 파일도 수정". Applied:
-the five files are `rrt_final_path_hoodouter_lower_plate1_offset{0,10,20,
-30,40}mm.csv` → tasks `scan_joint_hoodouter_lower_plate1_offset<N>mm`
+joint / pose, plate (정반) and offset — then "원본 csv 파일도 수정", then
+(17:45) "조인트/포즈 파일에 이거 구분 제일 앞에 추가". Applied: the five
+files are `rrt_final_path_joint_hoodouter_lower_plate1_offset{0,10,20,30,
+40}mm.csv` → tasks `scan_joint_joint_hoodouter_lower_plate1_offset<N>mm`
 (`git mv` for the two tracked, `mv` for the three untracked; contents
-untouched — the lift_mm-0 test edit stands). joint / pose stays in the
-prefix (it already shows as `scan_joint_` / `scan_pose_`), the base height
-`h652` was dropped (`lift_mm` is in the file). **"lower" is my inference
+untouched — the lift_mm-0 test edit stands). The first pass (17:30,
+commit 75c46cd) left joint / pose to the file prefix; the user wants it
+as the first token of the key as well, so the task name now carries it
+twice (`scan_joint_` from the prefix + `joint_` from the key) — by the
+rule. The base height `h652` was dropped (`lift_mm` is in the file). **"lower" is my inference
 from the layout title** (`260610 shift+223.66mm standoff17 base 652mm`:
 the 260610 set, whose z 0.59–0.67 m were the 하형 heights) — the files have
 no z column, and the user did not say which mold; a `sed` on the five

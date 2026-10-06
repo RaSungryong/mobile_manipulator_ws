@@ -30,10 +30,11 @@ everything they listed as open is either done or restated below.
   changed twice on 2026-10-06: a `10mm` pose + joint pair at 13:37
   (`scan_joint_10mm` ran four times; its frames are gone from
   `results/scan_images`), then at 15:54 / 16:42 FIVE JOINT-ONLY files,
-  renamed at 17:30 to the user's naming rule
-  `<product>_<mold>_<plate>_<offset>` (joint / pose = the file prefix):
-  `rrt_final_path_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
-  → `scan_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
+  renamed at 17:30 / 17:45 to the user's naming rule
+  `<kind>_<product>_<mold>_<plate>_<offset>` (kind = joint | pose, first;
+  the file prefix still decides the mode, so the task name doubles it):
+  `rrt_final_path_joint_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
+  → `scan_joint_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
   each, groups 104–107 / 118–120, standoff 17, planner speeds 10–30,
   `lift_mm` set to 0 in ALL FIVE for a test — the exported 0 / 10 / 20 /
   30 / 40 originals are in `task/csv/task_csv_backup/20261006_base_
