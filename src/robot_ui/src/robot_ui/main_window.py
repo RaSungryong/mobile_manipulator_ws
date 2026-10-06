@@ -717,8 +717,8 @@ class MainWindow(QMainWindow):
         task_layout = QVBoxLayout(task_box)
         note = QLabel(
             'Tasks are the path-data files in task/csv, as task_executor '
-            'reports them on /task_list: assigned_workpoints_* (end-effector '
-            'poses) → scan_pose_*, rrt_final_path_* (joint angles) → '
+            'reports them on /task_list: pose_* (end-effector '
+            'poses) → scan_pose_*, joint_* (joint angles) → '
             'scan_joint_*. A task never returns to the start tag on its own — '
             '"scan then come back" is two commands. Send TASK go_home '
             'separately.')
@@ -1668,9 +1668,23 @@ class MainWindow(QMainWindow):
             self.lbl_pose[axis].setText(text)
         for i, name in enumerate(ARM_JOINTS):
             self.lbl_joint[name].setText(f'{joints[i]:.2f}' if joints_ok else '—')
+        # Link / RPC health overrides the state word (2026-10-06): a dead arm
+        # Ethernet link or an SDK call blocked > 2 s is why the scan stands
+        # still, and it used to be invisible.
         flag = 'BUSY' if state['busy'] else state['state'].upper()
+        color = '#553311' if state['busy'] else '#1b3a1b'
+        if state.get('link_up', True) is False:
+            flag, color = 'LINK DOWN', '#5a1b1b'
+        elif state.get('rpc_stalled'):
+            flag, color = 'RPC STALL', '#5a3a11'
         self.lbl_arm.setText(f'ARM {flag}')
-        self._tint(self.lbl_arm, '#553311' if state['busy'] else '#1b3a1b')
+        self.lbl_arm.setToolTip(
+            f"link {state.get('link_iface') or '?'} "
+            f"{'DOWN' if state.get('link_up', True) is False else 'up'}, "
+            f"drops {state.get('link_down_count', 0)}; "
+            f"RPC stalls {state.get('rpc_stall_count', 0)}"
+            + (f" (last {state['rpc_last_stall']})" if state.get('rpc_last_stall') else ''))
+        self._tint(self.lbl_arm, color)
 
     # ---------- /task_list -> Task tab combo ----------
     @staticmethod

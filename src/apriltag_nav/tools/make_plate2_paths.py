@@ -6,11 +6,11 @@ every point pushed a fixed distance further along the vision tip's axis.
     python3 tools/make_plate2_paths.py SRC_DIR                 # dry run, writes nothing
     python3 tools/make_plate2_paths.py SRC_DIR --apply         # write into task/csv
 
-SRC_DIR holds planner ORIGINALS (assigned_workpoints_<key>.csv +
-rrt_final_path_<key>.csv pairs, as exported — the 2026-09-29 하형 set is
+SRC_DIR holds planner ORIGINALS (pose_<key>.csv + joint_<key>.csv pairs
+under TaskManager's prefixes — rename an export first; the 2026-09-29 하형 set is
 generated in the 정반 1 frame although the workpiece sits on 정반 2). For each
-pair the tool writes assigned_workpoints_<key><suffix>.csv and
-rrt_final_path_<key><suffix>.csv (suffix `_plate2`), which `TaskManager`
+pair the tool writes pose_<key><suffix>.csv and
+joint_<key><suffix>.csv (suffix `_plate2`), which `TaskManager`
 discovers as scan_pose_<key>_plate2 / scan_joint_<key>_plate2.
 
 What changes

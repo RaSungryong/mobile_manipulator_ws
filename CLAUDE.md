@@ -170,40 +170,42 @@ locator/handeye_calib/**/*.png`); frames, captures, other png, video and
 TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            # (since 2026-09-14; `rostopic echo /task_list`
                            # or robot_ui's Task tab lists them):
-                           #   assigned_workpoints_<key>.csv → scan_pose_<key>
+                           #   pose_<key>.csv  → scan_pose_<key>   (assigned_workpoints_
+                           #                      until 2026-10-06 — NOT an alias now)
                            #       end-effector poses x y z rx ry rz — IK per
                            #       point (seeded from the paired rrt file)
-                           #   rrt_final_path_<key>.csv      → scan_joint_<key>
+                           #   joint_<key>.csv → scan_joint_<key>  (rrt_final_path_ until
+                           #                      2026-10-06 — NOT an alias now)
                            #       joint-angle path q1..q6 — MoveJ replay,
                            #       transition/home rows driven through, not
                            #       scanned; world x y z from the paired file
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # ⚠️ FILE NAME RULE (user, 2026-10-06 evening): the key
-                           # is <kind>_<product>_<mold>_<plate>_<offset> —
+                           # ⚠️ FILE NAME RULE (user, 2026-10-06 evening): a path
+                           # file is <kind>_<product>_<mold>_<plate>_<offset>.csv —
                            #   kind     joint | pose         (조인트 | 포즈 — FIRST,
-                           #                                 user: "제일 앞에")
+                           #                                 user: "제일 앞에"; it IS
+                           #                                 the discovery prefix
+                           #                                 since "rrt_final_path 제거")
                            #   product  hoodouter            (후드 아우터)
                            #   mold     lower | upper        (하형 | 상형)
                            #   plate    plate1 | plate2      (정반 1 | 2)
                            #   offset   offset<N>mm          (planner offset)
-                           # The file PREFIX still decides the mode (rrt_final_
-                           # path_ → scan_joint_, assigned_workpoints_ →
-                           # scan_pose_), so the task name reads scan_joint_
-                           # joint_… — the doubled word is by the rule, not a
-                           # mistake. A pose twin of a joint file would be
-                           # assigned_workpoints_pose_<rest>.csv, i.e. a
-                           # DIFFERENT key — pairing (IK seed / world xyz) only
-                           # happens on an identical key, so a pair that must
-                           # pair needs the same key in both files. ASCII only —
-                           # the task name is typed on the Windows PC. Planner
-                           # exports arrive as joint_path_<x>.csv: rename them
-                           # to this rule (originals too) before dropping in.
+                           # The key (everything after kind_) pairs a joint file
+                           # with its pose twin (IK seed / world xyz), so a pair
+                           # has the same <product>_<mold>_<plate>_<offset>.
+                           # ASCII only — the task name is typed on the Windows
+                           # PC. Planner exports arrive as joint_path_<x>.csv /
+                           # assigned_workpoints_<x>.csv: rename them to this
+                           # rule (originals too) before dropping in; the tools
+                           # (retarget, slow_task_entry, make_plate2) read the
+                           # same prefixes from TaskManager, so an old backup
+                           # set must be renamed before a tool reads it.
                            #
                            # Today's keys (2026-10-06 15:54 / 16:42, renamed
-                           # 17:30 / 17:45): joint_hoodouter_lower_plate1_offset
-                           # {0,10,20,30,40}mm — FIVE JOINT-ONLY files (rrt_final_
-                           # path_<key>.csv, 1267 work points each, groups 104–107 /
+                           # 17:30 / 17:45 / 18:00): hoodouter_lower_plate1_offset
+                           # {0,10,20,30,40}mm — FIVE JOINT-ONLY files (joint_<key>
+                           # .csv, 1267 work points each, groups 104–107 /
                            # 118–120, standoff 17, planner speeds 10–30, NO
                            # assigned_workpoints_ twin → no pose task, no world
                            # xyz in the Ra map; the planner zip is log/261006_
@@ -281,7 +283,8 @@ assumes unless the live height says otherwise.
 
 ### The RRT dialect: a path, not a point list
 
-The `rrt_final_path_*` files are **planned paths**. About 30 % of their rows
+The `joint_*` files (`rrt_final_path_*` until 2026-10-06) are **planned
+paths**. About 30 % of their rows
 are `transition` / `home` waypoints: the arm **drives through them** — that is
 the collision-free route, and skipping them would send it straight between
 work points instead — but does not settle, run the Keyence standoff loop,
@@ -309,21 +312,21 @@ Three columns differ from the original dialect, all handled in
 | integer cells | may be `0.000000000000000000e+00` | plain ints |
 
 ⚠️ **The pairing key is `source_point_id`.** Each joint file pairs with the
-`assigned_workpoints_*` file of the SAME standoff — for world (x, y, z) in
+`pose_*` file of the SAME standoff — for world (x, y, z) in
 joint mode, for the IK seed in pose mode. Pairing on `point_id` instead
 matches only 797 of 1035 rows and silently drops the rest. Note the pose file
 has no `source_point_id` at all: there, `point_id` IS the work-point id.
 
 ### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
 
-⚠️ **Status 2026-10-06: the five joint files in task/csv (`rrt_final_path_
-joint_hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
+⚠️ **Status 2026-10-06: the five joint files in task/csv (`joint_
+hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
 pose twin — the tool cannot classify or correct them (it settles a file by
 FK against its pose rows), and the speed-10 boundary rule
 (`tools/slow_task_entry.py`) is not applied either.** `check_retarget_joint_
 paths.py` part 2 reports "no paired pose file". The user's 2026-09-29
 "retarget 안 해도 됨" was about the 260610 set — ask for the
-`assigned_workpoints_` twins and ask before `--apply`. Replayed as exported
+`pose_` twins and ask before `--apply`. Replayed as exported
 the tip lands ~9 mm beside / ~10 mm above the planned point (zone B figures
 of the 09-29 analysis).
 
@@ -338,14 +341,14 @@ configuration, so replayed as exported the tip lands 9 mm (zone B) / 17 mm
 (zone C) beside the planned point and 10 mm above it.
 
 **`tools/retarget_joint_paths.py [task_dir] [--apply]`** re-solves the
-`rrt_final_path_*` rows so the REAL tip is on the PLANNED world pose: work
+`joint_*` rows so the REAL tip is on the PLANNED world pose: work
 points and the transitions between them exactly (IK seeded with the planned
 row, same arm configuration), transitions next to a `home` row by fading the
 work point's correction to 0 at home, `home` rows untouched. Only q1..q6
 cells change. It classifies each file first (ORIGINAL / RETARGETED /
 neither) and rewrites only an ORIGINAL, so a second run is a no-op.
 
-- **`assigned_workpoints_*` is NOT retargeted and must not be**: its x y z
+- **`pose_*` is NOT retargeted and must not be**: its x y z
   rx ry rz are WORLD coordinates and `_exec_pose` applies the live
   `/robot_pose`, the calibrated mount and the measured tip at run time.
   Adding the stop-pose difference to it moves the target off the workpiece.
@@ -2081,7 +2084,7 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
-### 2026-10-06 (evening, 17:30 / 17:45) — task/csv files renamed to the user's naming rule: `<kind>_<product>_<mold>_<plate>_<offset>`; originals renamed too; backup dir now under task/csv
+### 2026-10-06 (evening, 17:30 / 17:45 / 18:00) — task/csv files renamed to the user's naming rule `<kind>_<product>_<mold>_<plate>_<offset>.csv`, and the discovery prefixes became `joint_` / `pose_`; originals renamed too; backup dir now under task/csv
 
 User: the files in task/csv are ones they renamed (the planner zip
 `log/261006_shift223_s17_offset0_40.zip` delivers `joint_path_offset<N>mm_
@@ -2096,7 +2099,32 @@ untouched — the lift_mm-0 test edit stands). The first pass (17:30,
 commit 75c46cd) left joint / pose to the file prefix; the user wants it
 as the first token of the key as well, so the task name now carries it
 twice (`scan_joint_` from the prefix + `joint_` from the key) — by the
-rule. The base height `h652` was dropped (`lift_mm` is in the file). **"lower" is my inference
+rule. The base height `h652` was dropped (`lift_mm` is in the file).
+**Then (18:00) "rrt_final_path 제거"** — the prefix itself goes, so the
+kind token IS the prefix: `TaskManager.JOINT_FILE_PREFIX` / `POSE_FILE_
+PREFIX` are **`joint_` / `pose_`** (were `rrt_final_path_` /
+`assigned_workpoints_`; not kept as aliases — one rule), the files are
+`joint_hoodouter_lower_plate1_offset{0..40}mm.csv` → tasks
+`scan_joint_hoodouter_lower_plate1_offset<N>mm` (the doubled word is
+gone), the originals in the backup dir the same with SHA256SUMS redone.
+The tools that build file names from the prefixes now import them from
+`TaskManager` instead of their own literals: `retarget_joint_paths.py`
+(`JOINT_PREFIX` / `POSE_PREFIX`, which `check_retarget_joint_paths.py` and
+`make_plate2_paths.py` already took from it), `slow_task_entry.py`;
+`check_task_discovery.py`'s two literal names use the constants; robot_ui
+help text and tool docstrings follow. Consequence: a backup set still
+under the old names (every `task_csv_backup` set before 10-06, the 09-29
+zip) must be renamed before a tool reads it. Verified: real `TaskManager`
+five tasks + go_home, 7 steps, lift 0.0; `check_retarget_joint_paths`
+19 ok / the same 5 "no paired pose file" as before (under the new names);
+`check_task_list_ui` 109, `check_web_ui` 145; `check_task_discovery`
+fails as before (assumes pairs). `slow_task_entry.py` on today's files
+stops at its BOM assertion — the 10-06 exports have no BOM, which is
+why the speed-10 rule was never applied to them (pre-existing, not the
+rename). ⚠️ **The running `task_executor` still has the OLD prefixes in
+memory: after this rename `RELOAD_TASKS` found only go_home. `sudo
+systemctl restart mobile-manipulator` is required** before a TASK can
+be sent (no catkin_make — the devel space reads the source package). **"lower" is my inference
 from the layout title** (`260610 shift+223.66mm standoff17 base 652mm`:
 the 260610 set, whose z 0.59–0.67 m were the 하형 heights) — the files have
 no z column, and the user did not say which mold; a `sed` on the five

@@ -54,16 +54,16 @@ debug_mode:=true                                              # EXEC / EVAL 허�
 ## 태스크 명령 (`/task_command`)
 
 태스크 이름은 `src/apriltag_nav/task/csv`의 파일에서 나온다:
-`assigned_workpoints_<key>.csv` → `scan_pose_<key>`, `rrt_final_path_<key>.csv`
+`pose_<key>.csv` → `scan_pose_<key>`, `joint_<key>.csv`
 → `scan_joint_<key>`. 목록은 `rostopic echo /task_list` 또는 웹 UI Task 탭.
 새 경로 파일에서는 **`scan_pose_*`를 먼저** 돌린다 (IK 실패가 진단, 조인트
 재생은 검사 없이 움직인다).
 
 ```bash
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_joint_hoodouter_lower_plate1_offset0mm"   # 2026-10-06 기준, 조인트 파일만
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_joint_hoodouter_lower_plate1_offset10mm"  # … offset20mm / 30mm / 40mm
-# 파일 이름 규칙 (2026-10-06): <조인트|포즈>_<제품>_<상하형>_<정반>_<오프셋>, 예 joint_hoodouter_lower_plate1_offset0mm
-#   접두사(rrt_final_path_ / assigned_workpoints_)가 모드를 정하므로 task 이름은 scan_joint_joint_… 로 두 번 나온다. ASCII만.
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset0mm"   # 2026-10-06 기준, 조인트 파일만
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset10mm"  # … offset20mm / 30mm / 40mm
+# 파일 이름 규칙 (2026-10-06): <joint|pose>_<제품>_<상하형>_<정반>_<오프셋>.csv, 예 joint_hoodouter_lower_plate1_offset0mm.csv
+#   joint_ / pose_ 가 곧 디스커버리 접두사 (rrt_final_path_ / assigned_workpoints_ 는 더 이상 안 읽음). ASCII만.
 rostopic pub -1 /task_command std_msgs/String "TASK go_home"
 rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # task/csv 다시 읽기
 rostopic pub -1 /task_command std_msgs/String "GOTO 105"

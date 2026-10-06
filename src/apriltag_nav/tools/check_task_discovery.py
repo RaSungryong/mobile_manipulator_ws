@@ -5,9 +5,9 @@
 Stubs rospy, loads the REAL TaskManager against the REAL task/csv directory
 and against scratch directories, and asserts:
 
-  * every assigned_workpoints_<key>.csv registers scan_pose_<key> (pose mode,
+  * every pose_<key>.csv registers scan_pose_<key> (pose mode,
     IK seed from the paired rrt file on every work point);
-  * every rrt_final_path_<key>.csv registers scan_joint_<key> (joint mode,
+  * every joint_<key>.csv registers scan_joint_<key> (joint mode,
     transition/home waypoints flagged scan=False, world x y z from the paired
     pose file on every work point);
   * result files next to the inputs are never mistaken for path data;
@@ -296,8 +296,8 @@ try:
     check(list(defs) == ['scan_joint_a_run', 'scan_joint_b_run',
                          'scan_pose_a_run', 'scan_pose_b_run'],
           f'discover_task_defs sorted by name: {list(defs)}')
-    check(defs['scan_pose_a_run']['joint_file'] == 'rrt_final_path_a_run.csv'
-          and defs['scan_joint_a_run']['pose_file'] == 'assigned_workpoints_a_run.csv',
+    check(defs['scan_pose_a_run']['joint_file'] == TaskManager.JOINT_FILE_PREFIX + 'a_run.csv'
+          and defs['scan_joint_a_run']['pose_file'] == TaskManager.POSE_FILE_PREFIX + 'a_run.csv',
           'pairing by key in both directions')
     check(TaskManager.discover_task_defs(os.path.join(tmp, 'nope')) == {},
           'missing dir -> no defs')

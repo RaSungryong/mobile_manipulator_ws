@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Do pose mode and joint mode reach the SAME place? (2026-09-14)
 
-The planner exports each work point twice: joint angles (rrt_final_path_*,
+The planner exports each work point twice: joint angles (joint_*,
 replayed by MoveJ — physically right, per the user) and vision-tip world
-coordinates (assigned_workpoints_*, solved by IK). This check drives the
+coordinates (pose_*, solved by IK). This check drives the
 REAL transform_world_to_arm + ArmController._exec_pose with one paired row
 per lane against a fake Fairino that records the IK target, and compares
 that target with the URDF forward kinematics of the joint row:
@@ -317,7 +317,7 @@ for gid, d in ROWS.items():
     tip_fk = (Mq[:3, 3] + Mq[:3, :3] @ (TIP / 1000)) * 1000
     _worst = max(_worst, float(np.linalg.norm(np.asarray(pos) - tip_fk)))
 check(5.0 < _worst < 80.0,      # 45 mm with the 09-21 mount, 19 mm with the 09-22 one (closer to the design)
-      f'pose rows now land {_worst:.1f} mm from their joint-row twins: EXPECTED — rrt_final_path_* were planned with the '
+      f'pose rows now land {_worst:.1f} mm from their joint-row twins: EXPECTED — joint_* were planned with the '
       'design mount; regenerate them with the updated URDF before trusting scan_joint_* against scan_pose_*')
 
 print(f'\n{N_OK} ok, {N_FAIL} failed')

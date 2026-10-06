@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Retarget the planner's joint paths (rrt_final_path_*.csv) to the robot as it is.
+"""Retarget the planner's joint paths (joint_*.csv) to the robot as it is.
 
     python3 tools/retarget_joint_paths.py [task_dir]            # dry run, writes nothing
     python3 tools/retarget_joint_paths.py [task_dir] --apply    # back up, then rewrite q1..q6
 
 Why
 ---
-A `rrt_final_path_<key>.csv` row is an absolute joint configuration fed straight
+A `joint_<key>.csv` row is an absolute joint configuration fed straight
 to MoveJ (`arm_controller._exec_joint`); no transform reads it, so it puts the
 tool where the planner meant only if the arm base is where the planner assumed.
-The planner's model, settled by FK against its own `assigned_workpoints_*`
+The planner's model, settled by FK against its own `pose_*`
 twins (2026-09-29: 0.010 mm over all 2828 work points, one combination only):
 
     base stop pose   tag of map_idle.yaml - 0.55 m, heading exactly +-90 deg
@@ -40,7 +40,7 @@ arm base, TIP = flange -> vision tip; _p the planner's, _r the robot's):
     home        unchanged (the arm's home joints are not a world target)
 
 Only the q1..q6 cells change; BOM, CRLF and every other cell stay byte-identical.
-`assigned_workpoints_*` is NOT touched: its x y z rx ry rz are WORLD
+`pose_*` is NOT touched: its x y z rx ry rz are WORLD
 coordinates, and `_exec_pose` applies the live /robot_pose to them already.
 
 Safe to re-run: every file is classified first from its work points —
@@ -74,8 +74,13 @@ from apriltag_nav import paths, tf_chain                      # noqa: E402
 from apriltag_nav.arm_fk import ArmChain                      # noqa: E402
 from map_stop_poses import ZONE_HEADING, laying_delta_deg, wrap180   # noqa: E402
 
-JOINT_PREFIX = 'rrt_final_path_'
-POSE_PREFIX = 'assigned_workpoints_'
+from apriltag_nav.task_manager import TaskManager             # noqa: E402
+
+# The file prefixes TaskManager discovers (joint_ / pose_ since 2026-10-06;
+# rrt_final_path_ / assigned_workpoints_ before). A backup set still under
+# the old names must be renamed before this tool reads it.
+JOINT_PREFIX = TaskManager.JOINT_FILE_PREFIX
+POSE_PREFIX = TaskManager.POSE_FILE_PREFIX
 Q_COLS = ['q%d' % i for i in range(1, 7)]
 KINDS = ('home', 'task', 'transition')
 BOM = b'\xef\xbb\xbf'

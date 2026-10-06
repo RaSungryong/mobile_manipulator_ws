@@ -31,7 +31,7 @@ def _is_scan_row(row) -> bool:
 def _as_int(value, default=0) -> int:
     """Integer from a CSV cell, tolerating float spelling.
 
-    The assigned_workpoints_* files write integer columns in scientific
+    The planner's pose files write integer columns in scientific
     notation ('0.000000000000000000e+00'), which plain int() rejects. Going
     through float() accepts both dialects; an empty or unparsable cell falls
     back to `default` rather than killing the whole task load.
@@ -61,7 +61,7 @@ class TaskManager:
     ====================================
     Responsibilities:
     - Discover the path-data CSVs in the task directory and register one
-      task per file (assigned_workpoints_* -> pose, rrt_final_path_* -> joint)
+      task per file (pose_* -> pose, joint_* -> joint)
     - Load explicitly-defined CSV tasks (TASK_DEFS, normally empty)
     - Register system tasks (no CSV)
     - Build dynamic runtime tasks (GOTO)
@@ -96,16 +96,23 @@ class TaskManager:
     # Tasks come from the FILES in the task directory (2026-09-14, user
     # rule: "task 디렉토리에 있는 경로데이터 기반으로 동작"). The planner
     # exports two kinds of path data per run, told apart by filename prefix;
-    # the remainder of the name is the run key that pairs them:
+    # the remainder of the name is the run key that pairs them. Since
+    # 2026-10-06 (user: "rrt_final_path 제거") the prefixes are the user's
+    # own naming rule, <kind>_<product>_<mold>_<plate>_<offset>.csv:
     #
-    #   assigned_workpoints_<key>.csv   end-effector POSES — x y z (world, m)
+    #   pose_<key>.csv                  end-effector POSES — x y z (world, m)
     #                                   + rx ry rz (rad); one row per work
     #                                   point.            -> task scan_pose_<key>
-    #   rrt_final_path_<key>.csv        JOINT-ANGLE path — q1..q6 (rad) along
+    #   joint_<key>.csv                 JOINT-ANGLE path — q1..q6 (rad) along
     #                                   the planned route, work points AND
     #                                   transition/home waypoints
     #                                   (`is_task_waypoint`, see helpers
     #                                   above).           -> task scan_joint_<key>
+    #
+    # e.g. joint_hoodouter_lower_plate1_offset0mm.csv -> scan_joint_hoodouter_
+    # lower_plate1_offset0mm. The planner exports assigned_workpoints_<x>.csv
+    # / rrt_final_path_<x>.csv (joint_path_<x>.csv since 10-06): rename them
+    # to the rule before dropping them in — the old prefixes are NOT aliases.
     #
     # Each registers on its own; when both exist for a key they are paired
     # (the joint file seeds pose-mode IK, the pose file gives the joint
@@ -124,8 +131,8 @@ class TaskManager:
     # CLAUDE.md ("The group -> tag assignment does not survive checking");
     # a pose task solves IK per point and fails loudly instead.
     # --------------------------------------------------------------
-    POSE_FILE_PREFIX = "assigned_workpoints_"
-    JOINT_FILE_PREFIX = "rrt_final_path_"
+    POSE_FILE_PREFIX = "pose_"
+    JOINT_FILE_PREFIX = "joint_"
     POSE_TASK_PREFIX = "scan_pose_"
     JOINT_TASK_PREFIX = "scan_joint_"
     RESULT_SUFFIX = "_ra_map.csv"
@@ -138,8 +145,8 @@ class TaskManager:
     # a discovered pair, for an end-to-end bring-up without copying the CSV:
     #
     #   "scan_g105_10mm": {
-    #       "file": "assigned_workpoints_10mm.csv",      # discovered as scan_pose_10mm
-    #       "joint_file": "rrt_final_path_10mm.csv",     # discovered as scan_joint_10mm
+    #       "file": "pose_10mm.csv",                     # discovered as scan_pose_10mm
+    #       "joint_file": "joint_10mm.csv",              # discovered as scan_joint_10mm
     #       "groups": [105],
     #       "type": "scan",
     #       "scan_mode": "pose",

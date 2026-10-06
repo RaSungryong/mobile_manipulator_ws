@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Set speed 10 on both rows of every transition -> task boundary.
 
-rrt_final_path_<key>.csv : the last `transition` row and the `task` row that
-                           follows it both get speed 10.
-assigned_workpoints_<key>.csv : has no waypoint_kind, so the work point paired
+joint_<key>.csv : the last `transition` row and the `task` row that
+                  follows it both get speed 10.
+pose_<key>.csv  : has no waypoint_kind, so the work point paired
                            with that task row (group_id, source_point_id ==
                            point_id) gets the same speed.
 Text-level edit: only the speed cell changes; BOM, CRLF and every other cell
@@ -11,6 +11,12 @@ stay byte-identical.
 """
 import glob, os, sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src'))
+from apriltag_nav.task_manager import TaskManager   # noqa: E402
+
+JOINT_PREFIX = TaskManager.JOINT_FILE_PREFIX   # joint_ (rrt_final_path_ before 2026-10-06)
+POSE_PREFIX = TaskManager.POSE_FILE_PREFIX     # pose_  (assigned_workpoints_ before)
 SLOW = '10'
 d = sys.argv[1]
 apply = '--apply' in sys.argv
@@ -33,8 +39,8 @@ def save(path, hdr, rows):
         f.write(b'\xef\xbb\xbf' + text.encode('utf-8'))
 
 
-for rrt in sorted(glob.glob(os.path.join(d, 'rrt_final_path_*.csv'))):
-    key = os.path.basename(rrt)[len('rrt_final_path_'):]
+for rrt in sorted(glob.glob(os.path.join(d, JOINT_PREFIX + '*.csv'))):
+    key = os.path.basename(rrt)[len(JOINT_PREFIX):]
     hdr, rows = load(rrt)
     ik, isp, ig, isrc = (hdr.index(c) for c in
                          ('waypoint_kind', 'speed', 'group_id', 'source_point_id'))
@@ -54,9 +60,9 @@ for rrt in sorted(glob.glob(os.path.join(d, 'rrt_final_path_*.csv'))):
     if apply:
         save(rrt, hdr, rows)
 
-    pose = os.path.join(d, 'assigned_workpoints_' + key)
+    pose = os.path.join(d, POSE_PREFIX + key)
     if not os.path.exists(pose):
-        print('  (no paired assigned_workpoints file)')
+        print('  (no paired %s file)' % POSE_PREFIX)
         continue
     ph, prows = load(pose)
     pg, pp, ps = (ph.index(c) for c in ('group_id', 'point_id', 'speed'))

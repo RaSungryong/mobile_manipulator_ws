@@ -30,15 +30,16 @@ everything they listed as open is either done or restated below.
   changed twice on 2026-10-06: a `10mm` pose + joint pair at 13:37
   (`scan_joint_10mm` ran four times; its frames are gone from
   `results/scan_images`), then at 15:54 / 16:42 FIVE JOINT-ONLY files,
-  renamed at 17:30 / 17:45 to the user's naming rule
-  `<kind>_<product>_<mold>_<plate>_<offset>` (kind = joint | pose, first;
-  the file prefix still decides the mode, so the task name doubles it):
-  `rrt_final_path_joint_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
-  → `scan_joint_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
+  renamed 17:30–18:00 to the user's naming rule
+  `<kind>_<product>_<mold>_<plate>_<offset>.csv` (kind = joint | pose IS
+  the discovery prefix now — `TaskManager` reads `joint_` / `pose_`, the
+  old `rrt_final_path_` / `assigned_workpoints_` are gone, not aliased):
+  `joint_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
+  → `scan_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
   each, groups 104–107 / 118–120, standoff 17, planner speeds 10–30,
   `lift_mm` set to 0 in ALL FIVE for a test — the exported 0 / 10 / 20 /
   30 / 40 originals are in `task/csv/task_csv_backup/20261006_base_
-  height_652_originals/` under the same names; NO `assigned_workpoints_`
+  height_652_originals/` under the same names; NO `pose_`
   twin, so no pose task and no world x y z in the Ra map; "lower" is
   inferred from the 260610 heights, not confirmed by the user). **Planner originals: not retargeted, the
   speed-10 boundary rule not applied** — `tools/retarget_joint_paths.py`
@@ -88,7 +89,7 @@ everything they listed as open is either done or restated below.
 1. **The two `offset*` joint files are planner originals without pose
    twins** (see §0): the tip lands ~9 mm beside / ~10 mm above the planned
    point in zone B when replayed as exported (09-29 analysis). Get the
-   `assigned_workpoints_` twins, decide retarget / speed-10, then
+   `pose_` twins, decide retarget / speed-10, then
    `RELOAD_TASKS`.
 2. **Scan height vs the Keyence window.** The 09-30 run read "out of
    range on the far side" at all 271 points — the surface is more than
