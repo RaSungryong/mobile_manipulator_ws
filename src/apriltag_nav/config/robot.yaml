@@ -303,6 +303,19 @@ robot:
   # on the crosshair anyway (nothing to do); costs one forward arrival
   # (~12-15 s) per reverse-ending command.
   reseat_at_command_end: true
+  # Before EVERY pivot the start tag must be exactly on the FWD column
+  # (user rule 2026-10-06: "회전할 태그에 정확히 정한 이미지 화면에 온 후
+  # 회전한다"). A pivot turns about the base centre, so a fore-aft error of
+  # the tag at the start becomes the same LATERAL error on the exit lane
+  # and the exit-tag align (yaw only) cannot remove it. Beyond
+  # pivot_reseat_tol_m the tag is driven onto the column with the normal
+  # arrival algorithm (forward if ahead, backward if behind — 500-series
+  # reverse arrivals stop on the crosshair) and aligned there. A fresh
+  # arrival (+-2 mm) never trips the 10 mm tolerance; what does is a
+  # command starting on a pivot tag the base reached otherwise (the old
+  # 10 cm undock, a hand push, an e-stop mid-hop).
+  pivot_reseat_enabled: true
+  pivot_reseat_tol_m: 0.01
   aim_max_deg: 9.0
   aim_min_deg: 0.3               # smaller aims are skipped (< 1 mm over 0.18 m)
   aim_min_horizon_m: 0.08        # no aim when the tag first appears closer than this
@@ -823,7 +836,14 @@ navifra:
     return_after_goto: false    # GOTO is positioning, not work — leave it where it stops
     dock_tag: 500               # = TaskManager.START_TAG; arrival = docked
     dock_reverse_m: 0.0         # extra reverse push after arriving, if the contacts need it
-    undock_forward_m: 0.10
+    # UNDOCK (operator, and the 85 % stop) does NOT move the base since
+    # 2026-10-06 (user: "undock 할때도 위치는 이동하지 말고 충전명령을 false
+    # 바꾼다"): /crevis/charging false only, the base stays on the dock. So
+    # a following CHARGE finds tag 500 on the crosshair and switches the
+    # relay back on without driving — before this every UNDOCK -> CHARGE
+    # cycle was a 0.10 m forward + a 0.10 m reverse hop. A value > 0
+    # restores the forward move.
+    undock_forward_m: 0.0
     undock_speed: 0.02
     charge_confirm_s: 15.0
     charge_current_min_a: 0.5

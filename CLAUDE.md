@@ -222,8 +222,11 @@ CHARGE                     # Operator dock + charge (2026-09-14): lift origin
                            # manager's battery_return, on demand; works with
                            # charging.enabled false too. robot_ui: Task tab
                            # "Dock & charge", CHARGE chip from /task_state
-UNDOCK                     # /crevis/charging false → 0.10 m forward; no
-                           # automatic return until the next task
+UNDOCK                     # /crevis/charging false; the base STAYS on the
+                           # dock (no forward move since 2026-10-06,
+                           # `undock_forward_m` 0); no automatic return
+                           # until the next task. CHARGE from the dock then
+                           # drives nothing — tag 500 is the current tag
 GOTO <tag_id>              # Navigate to AprilTag
                            # Every TASK / GOTO gets exactly ONE camera-centre-vs-tag
                            # record: log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml
@@ -667,7 +670,17 @@ turns on odom only until the EXIT tag is in view, steers on the tag's
 edge angle from then on, drops to `pivot_tag_slow_max_angular` (0.05
 rad/s) once the predicted settled error is inside `pivot_tag_slow_deg`
 (5°), and stops on the delay-led prediction; the exit-tag align then
-measures at rest and certifies the 0.2° band (both aligns 0.2°). **`center_x_stop_offset` (currently +50 px)** is what
+measures at rest and certifies the 0.2° band (both aligns 0.2°). **Since
+2026-10-06 every pivot first puts its START tag exactly on the FWD
+column** (`_reseat_before_pivot`, `pivot_reseat_enabled` /
+`pivot_reseat_tol_m` 10 mm; user rule: "회전할 태그에 정확히 정한 이미지
+화면에 온 후 회전한다"): a pivot turns about the base centre, so a
+fore-aft error of the tag at the start becomes the same LATERAL error on
+the exit lane and the exit-tag align (yaw only) cannot remove it. Beyond
+the tolerance the tag is driven onto the column with the normal arrival
+algorithm — forward when ahead, backward when behind (500-series reverse
+arrivals stop on the crosshair) — and aligned there; a fresh arrival
+(±2 mm) never trips it, a tag out of view at rest fails the hop. **`center_x_stop_offset` (currently +50 px)** is what
 decides how much tag is left in frame; **more positive** stops earlier and
 leaves more margin. **It is 0 since 2026-09-02** (user: the tag centre must
 reach the target centre), so the target column is the optical axis itself.
@@ -1212,8 +1225,12 @@ tasks the rules below queue, on demand, and independent of `enabled`.
 UI's CHARGE chip.
 
 User rules, in `robot.yaml` `navifra.charging:`: charge until **85 %**
-(`full_pct`), then `/crevis/charging false` and come forward
-`undock_forward_m` (0.10); at **20 %** (`return_pct`; 30 → 20 on the
+(`full_pct`), then `/crevis/charging false` — **the base stays on the dock
+since 2026-10-06** (`undock_forward_m` 0; user: "undock 할때도 위치는
+이동하지 말고 충전명령을 false 바꾼다"; a value > 0 restores the forward
+move, and before this every UNDOCK → CHARGE cycle was a 0.10 m forward +
+a 0.10 m reverse hop, which is what the user saw as "CHARGE from the
+charging position keeps reversing"); at **20 %** (`return_pct`; 30 → 20 on the
 user's instruction the same day) abandon whatever is running and go back
 to the charger; **after a user TASK completes
 normally, go back to the charger too** (`return_after_task`) — but never
@@ -2037,6 +2054,57 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-06 (night) — UNDOCK no longer moves the base; CHARGE from the dock drives nothing; every pivot first puts its start tag on the FWD column
+
+User, three rules in one message: (1) pressing CHARGE at the charging
+position reverses the base — a problem; (2) UNDOCK must not move, only
+`/crevis/charging false`; (3) before a pivot, the tag to turn on must
+first be exactly at the designated image position, then turn.
+
+**(1) and (2) are one change.** Today's `mobile_node` log has every
+dock move arriving normally (12:11 and 13:40: 501 → 500 reverse,
+0.078 / 0.100 m, 500 on the crosshair within 1 mm) and the "already at
+500" path returning at once on earlier days — the reversing the user
+sees is the UNDOCK → CHARGE cycle itself: UNDOCK drove 0.10 m forward
+(12:55 today), which hides tag 500 behind the bumper and makes 501 the
+current tag, and the next CHARGE then planned the reverse hop 501 → 500.
+With `undock_forward_m` **0** (`_battery_undock_task` adds the drive
+item only for a value > 0, like `dock_reverse_m`) the base stays on the
+dock, tag 500 stays on the crosshair, and CHARGE hits `move_to_tag`'s
+"Already at target tag 500" — relay on, no motion. The 85 % stop uses
+the same task, so it no longer comes forward either; the manager's
+phases are unchanged. Not changed: `move_to_tag` itself (the nearest
+visible tag is the start tag; 500 and 501 are 0.202 m apart, so that
+only flips once the base is > 0.1 m off the dock).
+
+**(3) `_reseat_before_pivot`** in the pivot branch of `go_to_next_tag`,
+after the first-hop align: the start tag's fore-aft distance from the
+FWD column, read live; beyond `pivot_reseat_tol_m` (10 mm) the tag is
+driven onto the column with `execute_pure_pursuit` (forward if ahead,
+backward if behind — refused with a message if that tag's reverse column
+is not the crosshair, which no 500-series tag has) and aligned, then
+the pivot. The case that produced the rule is in today's log: the TASK
+of 13:38 started on 501 with the tag 0.125 m ahead of the lens (the
+undocked position) and pivoted from there; a pivot about the base
+centre carries that 0.125 m through the turn as a lateral error on the
+505 lane. A tag not in view at rest fails the hop (nothing to verify
+against; the first-hop align would have failed first anyway).
+
+Verified offline: `check_nav_sequencing.py` 14 → **20** (0.125 m ahead:
+align(501) → pp(501 fwd 0.125) → align → pivot → align(505), base
+centre on the stop pose within 5 mm, 90° within 0.2°; 25 mm behind:
+backward re-seat onto the crosshair; 3 mm off: no re-seat, "on the
+column" logged; key off: the old behaviour, 50 mm short), `check_charging_
+manager.py` 19 → **23** (85 % stop and UNDOCK with no drive; a positive
+`undock_forward_m` still drives; CHARGE from the dock: relay on,
+confirmed, no straight move), `check_front_cam_guard` 31,
+`check_robot_pose_live` 30, `check_robot_pose_heading` 20. UI tooltips
+and `ROSBRIDGE_kr.md` / HANDOVER follow. **Not run on the robot;
+`mobile_node` and `task_executor` restart required** (`sudo systemctl
+restart mobile-manipulator`). The base is currently sitting where today's
+last TASK left it; the first CHARGE after the restart still drives there
+from wherever it is — only CHARGE *from the dock* is motionless.
 
 ### 2026-10-06 (evening) — Two testers at once: batch stops (method A) and a numbering pass with a template to fill in later (method B), selectable in the UI
 

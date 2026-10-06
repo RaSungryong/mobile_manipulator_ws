@@ -86,7 +86,7 @@ python robot_cmd.py "GOTO 105"         # 태그 105로 이동
 python robot_cmd.py "TASK scan_pose_errorX_p000mm_standoff_050mm_height_652mm"
 python robot_cmd.py "STOP"             # 소프트 정지
 python robot_cmd.py "CHARGE"           # 500번 도킹 → 충전 시작
-python robot_cmd.py "UNDOCK"           # 충전 중단 → 0.10 m 전진
+python robot_cmd.py "UNDOCK"           # 충전 중단 (릴레이 false만, 이동 없음 — 2026-10-06)
 python robot_cmd.py "RELOAD_TASKS"     # task/csv 다시 읽기
 python robot_cmd.py "GOTO 105" 60      # 뒤의 숫자 = 상태를 지켜볼 시간(초), 기본 5
 ```

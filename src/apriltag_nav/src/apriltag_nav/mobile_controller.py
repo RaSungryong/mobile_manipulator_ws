@@ -193,6 +193,17 @@ class MobileController:
         # ... and at the END of a command whose last hop arrived in reverse
         # (user rule 2026-09-09): the arm works only at the FWD-column pose.
         self.reseat_at_command_end = bool(self.cfg['robot'].get('reseat_at_command_end', True))
+        # Before EVERY pivot the start tag must sit exactly on the FWD
+        # column (user rule 2026-10-06: the tag to turn on comes to the
+        # designated image position first, then the turn). A pivot turns
+        # about the base centre, so a fore-aft error of the tag at the
+        # start is carried through the turn unchanged as a lateral error
+        # on the exit lane, and nothing after the pivot can take it out.
+        # Beyond pivot_reseat_tol_m the tag is driven onto the column
+        # (forward or backward) and aligned there; a fresh arrival (+-2 mm)
+        # never trips it, so routes that arrive normally cost nothing.
+        self.pivot_reseat_enabled = bool(self.cfg['robot'].get('pivot_reseat_enabled', True))
+        self.pivot_reseat_tol_m = float(self.cfg['robot'].get('pivot_reseat_tol_m', 0.01))
         self._reseat_active = False
         self.camera_params = None
         self.image_center_x_fallback = 0.0
@@ -2046,6 +2057,10 @@ class MobileController:
                 return False
 
         if action_type == 'pivot':
+            # The tag the base turns ON has to be exactly on the FWD
+            # column first (user rule 2026-10-06) — see _reseat_before_pivot.
+            if not self._reseat_before_pivot(current_id):
+                return False
             # Quarter turn that finishes on the EXIT tag (execute_pivot:
             # odom until the exit tag is in view, tag-error from then on,
             # slow inside pivot_tag_slow_deg, delay-led stop), then the same
@@ -2126,6 +2141,66 @@ class MobileController:
             rospy.logerr("[Reseat] failed to bring tag %s to the FWD column", tag_id)
             return False
         return self._align_on_tag(tag_id, 'after re-seat')
+
+    def _reseat_before_pivot(self, tag_id):
+        """Put the pivot's START tag exactly on the FWD column before the
+        turn (user rule 2026-10-06: "회전할 태그에 정확히 정한 이미지 화면에
+        온 후 회전한다").
+
+        A pivot turns about the base centre, so a fore-aft error f of the
+        tag at the start is carried through the quarter turn unchanged —
+        it becomes f of LATERAL error on the exit lane, and the exit-tag
+        align (yaw only) cannot take it out. A fresh arrival leaves the
+        tag within ~2 mm, but a command may start on a pivot tag the base
+        reached some other way — the 10 cm UNDOCK (2026-10-06 13:38: tag
+        501 was 0.125 m ahead of the lens when the pivot began), a hand
+        push, an e-stop inside a hop. Beyond pivot_reseat_tol_m the tag
+        is driven onto the column with the normal arrival algorithm —
+        forward when it is ahead of the lens, backward when behind (a
+        reverse hop into a 500-series tag stops on the crosshair too) —
+        and aligned there. True when nothing had to be done or the
+        re-seat succeeded; False when the tag is not in view (nothing to
+        verify against) or the drive / align failed."""
+        if not self.pivot_reseat_enabled or self._is_temp_missing_tag(tag_id):
+            return True
+        tag = self.detected_tags.get(tag_id)
+        if tag is None:
+            rospy.logerr("[Reseat] pivot tag %s is not in front_cam's view at rest — "
+                         "cannot verify it is on the FWD column; not pivoting", tag_id)
+            return False
+        fore = float(tag.get('x', 0.0))
+        lat = float(tag.get('y', 0.0))
+        column = self._stop_target_fore_m('forward', tag_id)
+        err = fore - column
+        if abs(err) <= self.pivot_reseat_tol_m:
+            rospy.loginfo("[Reseat] pivot tag %s is %+.1f mm from the FWD column "
+                          "(tol %.0f mm, lateral %+.1f mm): on the column, pivoting",
+                          tag_id, err * 1000.0, self.pivot_reseat_tol_m * 1000.0, lat * 1000.0)
+            return True
+        if err > 0:
+            direction, dist = 'forward', err
+        else:
+            direction, dist = 'backward', -err
+            rev_column = self._stop_target_fore_m('backward', tag_id)
+            if abs(rev_column - column) > 0.005:
+                rospy.logerr("[Reseat] pivot tag %s is %.3f m BEHIND the lens, but a reverse "
+                             "arrival on it stops on the REV column (%+.3f m), not the FWD "
+                             "column — cannot re-seat backward; not pivoting",
+                             tag_id, -err, rev_column)
+                return False
+        rospy.loginfo("[Reseat] pivot tag %s is %+.3f m from the FWD column (lateral %+.1f mm): "
+                      "driving it onto the column (%s %.3f m) before the pivot",
+                      tag_id, err, lat * 1000.0, direction, dist)
+        self._reseat_active = True
+        try:
+            ok = self.execute_pure_pursuit(target_id=tag_id, direction=direction,
+                                           total_distance=dist, start_id=None)
+        finally:
+            self._reseat_active = False
+        if not ok:
+            rospy.logerr("[Reseat] failed to bring pivot tag %s to the FWD column", tag_id)
+            return False
+        return self._align_on_tag(tag_id, 'after the pre-pivot re-seat')
 
     def _align_after_arrival(self, target_id, start_id=None):
         """The one tail EVERY hop ends with: base already stopped, now

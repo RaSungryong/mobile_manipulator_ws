@@ -421,7 +421,12 @@ pull + `catkin_make` before anything below.
 - **`CHARGE` / `UNDOCK` on `/task_command` (2026-09-14, robot_ui Task tab):**
   operator versions of the charging manager's dock-and-charge / undock
   tasks; the charger starts only on the `/crevis/charging true` that
-  CHARGE sends after arriving at tag 500. Not yet driven.
+  CHARGE sends after arriving at tag 500. Since 2026-10-06 UNDOCK does
+  NOT move the base (relay off only, `undock_forward_m` 0) and CHARGE
+  from the dock drives nothing (tag 500 is the current tag); every pivot
+  first re-seats its start tag onto the FWD column
+  (`pivot_reseat_tol_m` 10 mm). Driven on the robot up to 2026-10-06;
+  the 10-06 changes are offline-verified only.
 - **Inference runs behind the arm (2026-09-14):** after the capture the
   scan loop hands the frame to a worker thread and moves to the next row;
   the Ra arrives as a `result` event on `/arm/scan_progress` and the CSV

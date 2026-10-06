@@ -372,7 +372,8 @@ class MobileManipulatorTaskExecutor:
     #                   dock_reverse_m] -> /crevis/charging true, confirmed
     #                   by BMS current within charge_confirm_s
     #   battery_undock: /crevis/charging false (wait for the current to
-    #                   drop) -> drive undock_forward_m forward
+    #                   drop); the base STAYS on the dock (user rule
+    #                   2026-10-06) unless undock_forward_m > 0
     # "Charging" is judged from the BMS (current into the pack or status
     # CHARGING), never from the relay feedback topic alone.
     def _is_charging(self):
@@ -416,8 +417,16 @@ class MobileManipulatorTaskExecutor:
         return items
 
     def _battery_undock_task(self):
-        return [{'charge_off': True},
-                {'drive_m': float(self._charge_cfg.get('undock_forward_m', 0.10))}]
+        # Relay off only: the base stays where it is (user, 2026-10-06:
+        # "undock 할때도 위치는 이동하지 말고 충전명령을 false 바꾼다"). The
+        # forward move exists only while undock_forward_m is > 0 — with it
+        # every UNDOCK -> CHARGE cycle was a 0.10 m forward + a 0.10 m
+        # reverse hop, and CHARGE from the dock then always reversed.
+        items = [{'charge_off': True}]
+        fwd = float(self._charge_cfg.get('undock_forward_m', 0.0) or 0.0)
+        if fwd > 0:
+            items.append({'drive_m': fwd})
+        return items
 
     def _charge_tick(self):
         """One evaluation of the charging rules; cheap, called every loop tick."""
@@ -688,8 +697,11 @@ class MobileManipulatorTaskExecutor:
         # The charging manager's two internal tasks, on demand. CHARGE =
         # lift origin home -> drive to the dock tag (500) -> /crevis/charging
         # true -> wait for BMS current (the charger only starts on that
-        # explicit true, user-confirmed). UNDOCK = /crevis/charging false ->
-        # undock_forward_m forward. Both preempt whatever runs, like TASK.
+        # explicit true, user-confirmed). UNDOCK = /crevis/charging false,
+        # base left on the dock (undock_forward_m 0 since 2026-10-06). Both
+        # preempt whatever runs, like TASK. CHARGE while the base is already
+        # on the dock drives nothing: move_to_tag sees tag 500 as the
+        # current tag and only the relay is switched.
         # They do not need charging.enabled — that key gates only the
         # automatic rules — but the manager's phase is kept in step so its
         # rules read the situation correctly afterwards.
@@ -700,7 +712,9 @@ class MobileManipulatorTaskExecutor:
             self._charge_phase = 'returning'
             return
         if cmd.upper() == "UNDOCK":
-            rospy.logwarn("[Charge] operator UNDOCK -> /crevis/charging false, come forward")
+            fwd = float(self._charge_cfg.get('undock_forward_m', 0.0) or 0.0)
+            rospy.logwarn("[Charge] operator UNDOCK -> /crevis/charging false"
+                          + (f", come forward {fwd:.2f} m" if fwd > 0 else ", base stays on the dock"))
             self._queue_internal_task('battery_undock', self._battery_undock_task())
             # 'stopped': no unattended return until the next user task, and
             # a plain idle lamp — 'full' would light the "charged" colour

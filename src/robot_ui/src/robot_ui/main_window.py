@@ -786,16 +786,17 @@ class MainWindow(QMainWindow):
         charge_row = QHBoxLayout()
         btn_charge = QPushButton('Dock && charge (tag 500)')
         btn_charge.setToolTip(
-            'CHARGE: lift origin home → drive to the dock tag → '
-            '/crevis/charging true → wait for the BMS to report current. '
-            'Preempts a running task.')
+            'CHARGE: lift origin home → drive to the dock tag (no drive when '
+            'tag 500 is already under the camera) → /crevis/charging true → '
+            'wait for the BMS to report current. Preempts a running task.')
         btn_charge.clicked.connect(
             lambda: self.bridge.send_task_command('CHARGE'))
         charge_row.addWidget(btn_charge)
         btn_undock = QPushButton('Undock / stop charging')
         btn_undock.setToolTip(
-            'UNDOCK: /crevis/charging false → drive forward off the dock. '
-            'No automatic return until the next task.')
+            'UNDOCK: /crevis/charging false — the base stays on the dock '
+            '(no forward move since 2026-10-06). No automatic return until '
+            'the next task.')
         btn_undock.clicked.connect(
             lambda: self.bridge.send_task_command('UNDOCK'))
         charge_row.addWidget(btn_undock)

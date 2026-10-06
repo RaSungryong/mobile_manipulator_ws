@@ -331,6 +331,60 @@ def main():
           ok and [x[:2] for x in calls] == [('align', 501), ('pivot', 'ccw'), ('align', 505)] and abs(math.degrees(p.psi) - 90.0) <= 0.2,
           f'{calls} psi {math.degrees(p.psi):+.2f}')
 
+    # ---- F2. pivot from a start tag NOT on the column (user rule 2026-10-06):
+    # the base is 0.125 m short of 501 (the old 10 cm undock + arrival error,
+    # exactly the 2026-10-06 13:38 log) -> re-seat forward, align, then pivot
+    c, p = make(-0.125, 0.0, 0.0, {501: (CAM, 0.0)})
+    p.tags[505] = (0.0, CAM, math.pi / 2)
+    c.map_mgr.edges[(501, 505)] = {'type': 'pivot', 'direction': 'ccw'}
+    fore0 = c.detected_tags[501]['x']
+    calls = []; spy(c, calls)
+    ok = c.go_to_next_tag(505, known_start_id=501, first_hop=True)
+    for _ in range(20): Rate(20).sleep()
+    check('F2 pivot tag 0.125 m ahead: align(501) -> reseat pp(501 fwd 0.125) -> align(501) -> pivot -> align(505)',
+          ok and abs(fore0 - 0.125) < 0.01 and [x[:2] for x in calls] == [('align', 501), ('pp', 501), ('align', 501), ('pivot', 'ccw'), ('align', 505)]
+          and calls[1][2] == 'forward' and abs(calls[1][3] - 0.125) < 0.01, f'{calls} fore0 {fore0:.3f}')
+    check('F2b ... the base centre ended on the pivot tag\'s stop pose (within 5 mm) and the turn within 0.2 deg',
+          abs(p.x) < 0.005 and abs(p.y) < 0.005 and abs(math.degrees(p.psi) - 90.0) <= 0.2,
+          f'base ({p.x*1000:+.1f}, {p.y*1000:+.1f}) mm psi {math.degrees(p.psi):+.2f}')
+    check('F2c ... reseat logged as a pivot re-seat', any('[Reseat] pivot tag 501' in l and 'driving it onto the column' in l for l in LOG))
+
+    # ---- F3. the tag BEHIND the lens (base pushed 25 mm past the stop pose): re-seat backward
+    c, p = make(0.025, 0.0, 0.0, {501: (CAM, 0.0)})
+    p.tags[505] = (0.0, CAM, math.pi / 2)
+    c.map_mgr.edges[(501, 505)] = {'type': 'pivot', 'direction': 'ccw'}
+    calls = []; spy(c, calls)
+    ok = c.go_to_next_tag(505, known_start_id=501, first_hop=True)
+    for _ in range(20): Rate(20).sleep()
+    check('F3 pivot tag 25 mm behind: reseat pp(501 bwd ~0.025) on the crosshair (500-series rule), then pivot',
+          ok and [x[:2] for x in calls] == [('align', 501), ('pp', 501), ('align', 501), ('pivot', 'ccw'), ('align', 505)]
+          and calls[1][2] == 'backward' and abs(calls[1][3] - 0.025) < 0.01
+          and abs(p.x) < 0.005 and abs(math.degrees(p.psi) - 90.0) <= 0.2,
+          f'{calls} base x {p.x*1000:+.1f} mm psi {math.degrees(p.psi):+.2f}')
+
+    # ---- F4. inside the tolerance (a fresh arrival, 3 mm): no re-seat, F1's sequence
+    c, p = make(-0.003, 0.0, 0.0, {501: (CAM, 0.0)})
+    p.tags[505] = (0.0, CAM, math.pi / 2)
+    c.map_mgr.edges[(501, 505)] = {'type': 'pivot', 'direction': 'ccw'}
+    calls = []; spy(c, calls)
+    ok = c.go_to_next_tag(505, known_start_id=501, first_hop=True)
+    for _ in range(20): Rate(20).sleep()
+    check('F4 pivot tag 3 mm off (inside pivot_reseat_tol_m 10 mm): no re-seat',
+          ok and [x[:2] for x in calls] == [('align', 501), ('pivot', 'ccw'), ('align', 505)]
+          and any('on the column, pivoting' in l for l in LOG), str(calls))
+
+    # ---- F5. key off: the old behaviour (pivot from wherever the base stands)
+    cfg = copy.deepcopy(CFG0); cfg['robot']['pivot_reseat_enabled'] = False
+    c, p = make(-0.05, 0.0, 0.0, {501: (CAM, 0.0)}, cfg)
+    p.tags[505] = (0.0, CAM, math.pi / 2)
+    c.map_mgr.edges[(501, 505)] = {'type': 'pivot', 'direction': 'ccw'}
+    calls = []; spy(c, calls)
+    ok = c.go_to_next_tag(505, known_start_id=501, first_hop=True)
+    for _ in range(20): Rate(20).sleep()
+    check('F5 pivot_reseat_enabled off: no re-seat, the base pivots 50 mm short and the exit lane is 50 mm off (the old behaviour)',
+          ok and [x[:2] for x in calls] == [('align', 501), ('pivot', 'ccw'), ('align', 505)] and abs(p.x + 0.05) < 0.01,
+          f'{calls} base x {p.x*1000:+.1f} mm')
+
     n = sum(1 for x in checks if not x)
     print(f'\n{len(checks) - n}/{len(checks)} checks passed')
     return 1 if n else 0

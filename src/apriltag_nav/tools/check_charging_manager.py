@@ -210,15 +210,20 @@ def main():
     check('1 charging at 57%: phase charging, lamp magenta, no task', ex._charge_phase == 'charging' and b.lamp and b.lamp[-1] == 'magenta'
           and ex.mobile.calls == [], f'phase {ex._charge_phase} lamp {b.lamp[-1:]} calls {ex.mobile.calls}')
 
-    # ---- 2. reaches 85 %: charging false, forward 0.10, phase full, lamp green
+    # ---- 2. reaches 85 %: charging false, NO motion (undock_forward_m 0 since
+    # 2026-10-06, user: the base stays on the dock), phase full, lamp white
     b.pct = 85.2
     ticks(ex, 20)
-    check('2 85%: /crevis/charging false, forward 0.10 m, phase full, lamp white',
-          ex._charge_phase == 'full' and b.relay is False and ('drive', 0.1) in ex.mobile.calls and b.lamp[-1] == 'white',
+    check('2 85%: /crevis/charging false, base NOT moved, phase full, lamp white',
+          ex._charge_phase == 'full' and b.relay is False and ex.mobile.calls == [] and b.lamp[-1] == 'white',
           f'phase {ex._charge_phase} relay {b.relay} calls {ex.mobile.calls} lamp {b.lamp[-1:]}')
-    n_drives = ex.mobile.calls.count(('drive', 0.1))
     ticks(ex, 30)
-    check('3 stays full afterwards (no repeated undock, no return)', ex.mobile.calls.count(('drive', 0.1)) == n_drives and ('goto', 500) not in ex.mobile.calls)
+    check('3 stays full afterwards (no repeated undock, no return)', ex.mobile.calls == [])
+    # 2b. a positive undock_forward_m still drives forward (the old behaviour, opt-in)
+    ex, b = make(57.0); b.relay = True; ex._charge_cfg['undock_forward_m'] = 0.10
+    ticks(ex, 15); b.pct = 85.2; ticks(ex, 20)
+    check('2b undock_forward_m 0.10: the 85 % stop still drives 0.10 m forward',
+          ex._charge_phase == 'full' and b.relay is False and ex.mobile.calls == [('drive', 0.1)], str(ex.mobile.calls))
 
     # ---- 4. user task running, battery drops to 29 %: preempt, lift home, goto 500, charging true, confirmed
     ex, b = make(60.0, docked=False); ex._charge_phase = 'full'
@@ -328,15 +333,23 @@ def main():
     check('11a UNDOCK queues battery_undock, phase stopped (plain idle lamp, no auto-return)',
           ex._pending_task_name == 'battery_undock' and ex._charge_phase == 'stopped')
     ticks(ex, 30)
-    check('11b it runs: /crevis/charging false, 0.10 m forward, no return afterwards',
-          not b.relay and ('drive', 0.1) in ex.mobile.calls and ex.mobile.calls.count(('goto', 500)) == 1
+    check('11b it runs: /crevis/charging false, the base does NOT move, no return afterwards',
+          not b.relay and not any(c[0] == 'drive' for c in ex.mobile.calls) and ex.mobile.calls.count(('goto', 500)) == 1
           and ex._charge_phase == 'stopped', f'relay={b.relay} {ex.mobile.calls} {ex._charge_phase}')
+    # ---- 11c. CHARGE again from the dock: relay on, confirmed, no extra drive
+    # (the robot never left the dock; the FakeMobile's goto returns at once
+    # like move_to_tag's "Already at target tag 500")
+    ex._command_cb(types.SimpleNamespace(data='CHARGE'))
+    ticks(ex, 30)
+    check('11c CHARGE from the dock: relay on, charging confirmed, no straight move',
+          b.relay and ex._charge_phase == 'charging' and not any(c[0] == 'drive' for c in ex.mobile.calls),
+          f'relay={b.relay} {ex.mobile.calls} {ex._charge_phase}')
     # ---- 12. /task_state carries the charge fields
     seen = []
     ex._task_state_pub = types.SimpleNamespace(publish=lambda m: seen.append(json.loads(m.data)))
     ex._publish_task_state()
     check('12 /task_state carries charge_phase / charging / battery_pct',
-          seen and seen[-1]['charge_phase'] == 'stopped' and seen[-1]['charging'] is False
+          seen and seen[-1]['charge_phase'] == 'charging' and seen[-1]['charging'] is True
           and seen[-1]['battery_pct'] == 55.0, str(seen[-1:]))
 
     n = sum(1 for c in checks if not c)

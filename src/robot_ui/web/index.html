@@ -172,8 +172,8 @@
               </div>
               <label>Charging</label>
               <div class="row">
-                <button id="btn-charge" title="CHARGE: lift origin home → drive to the dock tag → /crevis/charging true → wait for the BMS to report current. Preempts a running task.">Dock &amp; charge (tag 500)</button>
-                <button id="btn-undock" title="UNDOCK: /crevis/charging false → drive forward off the dock. No automatic return until the next task.">Undock / stop charging</button>
+                <button id="btn-charge" title="CHARGE: lift origin home → drive to the dock tag (no drive when tag 500 is already under the camera) → /crevis/charging true → wait for the BMS to report current. Preempts a running task.">Dock &amp; charge (tag 500)</button>
+                <button id="btn-undock" title="UNDOCK: /crevis/charging false — the base stays on the dock (no forward move since 2026-10-06). No automatic return until the next task.">Undock / stop charging</button>
                 <span class="detail" id="lbl-charge-detail"></span>
               </div>
               <label>Raw</label>
