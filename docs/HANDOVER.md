@@ -29,12 +29,17 @@ everything they listed as open is either done or restated below.
 - **Tasks:** names are derived from the files in `task/csv`. The set
   changed twice on 2026-10-06: a `10mm` pose + joint pair at 13:37
   (`scan_joint_10mm` ran four times; its frames are gone from
-  `results/scan_images`), then at 15:54 TWO JOINT-ONLY files —
-  `rrt_final_path_offset0mm_h652.csv` / `rrt_final_path_offset10mm_h662.csv`
-  → `scan_joint_offset0mm_h652` / `scan_joint_offset10mm_h662` (1267 work
-  points each, groups 104–107 / 118–120, `lift_mm` 0 / 10, standoff 17,
-  planner speeds 10–30, NO `assigned_workpoints_` twin, so no pose task and
-  no world x y z in the Ra map). **Planner originals: not retargeted, the
+  `results/scan_images`), then at 15:54 / 16:42 FIVE JOINT-ONLY files,
+  renamed at 17:30 to the user's naming rule
+  `<product>_<mold>_<plate>_<offset>` (joint / pose = the file prefix):
+  `rrt_final_path_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
+  → `scan_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
+  each, groups 104–107 / 118–120, standoff 17, planner speeds 10–30,
+  `lift_mm` set to 0 in ALL FIVE for a test — the exported 0 / 10 / 20 /
+  30 / 40 originals are in `task/csv/task_csv_backup/20261006_base_
+  height_652_originals/` under the same names; NO `assigned_workpoints_`
+  twin, so no pose task and no world x y z in the Ra map; "lower" is
+  inferred from the 260610 heights, not confirmed by the user). **Planner originals: not retargeted, the
   speed-10 boundary rule not applied** — `tools/retarget_joint_paths.py`
   cannot classify a file without its pose twin, and `check_task_discovery.py`
   fails on a joint-only set (it assumes pairs). Ask the user for the pose
@@ -111,6 +116,16 @@ everything they listed as open is either done or restated below.
 9. **Plates D / E** have never been map-calibrated; the `_plate2` task
    conversions of 2026-09-29 were deleted with the rest of that set and
    would have to be regenerated from `task_csv_backup` if wanted.
+10. **The arm Ethernet link (PC `enp2s0` ↔ FR10 controller 192.168.58.2)
+   drops for ~12 s 5–23 times a day** (kernel `NIC Link is Down`, every
+   working day since 2026-09-02, always back at 100 Mbps; the robot idle
+   or not). Each drop freezes whatever Fairino RPC is in flight — a scan
+   stood still 13.5 s / 14.7 s twice on 2026-10-06. Hardware job: patch
+   cable / connectors on LAN 3 first, then PHY negotiation (`ethtool` not
+   installed). Since 2026-10-06 night `/arm/state` carries `link_*` /
+   `rpc_*` and the ARM chip reads `LINK DOWN` / `RPC STALL`, so the next
+   one is visible without the journal. Unverified: what the controller
+   does when a drop lands inside a MoveJ.
 
 ---
 

@@ -19,10 +19,12 @@ Task names are derived from the path-data files in task/csv
 (rostopic echo /task_list, or the web UI's Task tab):
   assigned_workpoints_<key>.csv -> scan_pose_<key>   (end-effector poses, IK per point)
   rrt_final_path_<key>.csv      -> scan_joint_<key>  (joint-angle path, MoveJ replay)
-Today (2026-10-06 15:54) the files are two joint-only paths, keys
-offset0mm_h652 / offset10mm_h662 (no pose twin, so no scan_pose_* task):
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_offset0mm_h652"
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_offset10mm_h662"
+Key naming rule (user, 2026-10-06): <product>_<mold>_<plate>_<offset>, e.g.
+hoodouter_lower_plate1_offset0mm (joint / pose is the prefix; ASCII only).
+Today (2026-10-06) the files are five joint-only paths,
+hoodouter_lower_plate1_offset{0,10,20,30,40}mm (no pose twin, so no scan_pose_* task):
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset0mm"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset10mm"
 rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # re-scan task/csv
 
 Dock and charge / undock (the charger only starts on /crevis/charging true after docking)

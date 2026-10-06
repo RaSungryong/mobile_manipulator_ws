@@ -60,8 +60,10 @@ debug_mode:=true                                              # EXEC / EVAL 허�
 재생은 검사 없이 움직인다).
 
 ```bash
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_offset0mm_h652"    # 2026-10-06 15:54 기준, 조인트 파일만
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_offset10mm_h662"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset0mm"   # 2026-10-06 기준, 조인트 파일만
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset10mm"  # … offset20mm / 30mm / 40mm
+# 파일 이름 규칙 (2026-10-06): <제품>_<상하형>_<정반>_<오프셋>, 예 hoodouter_lower_plate1_offset0mm
+#   조인트/포즈는 접두사(rrt_final_path_ / assigned_workpoints_)가 정한다. ASCII만.
 rostopic pub -1 /task_command std_msgs/String "TASK go_home"
 rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # task/csv 다시 읽기
 rostopic pub -1 /task_command std_msgs/String "GOTO 105"

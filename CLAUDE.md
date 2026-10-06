@@ -126,7 +126,9 @@ keeping was deleted (see the Work Log entry).
 <ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
 <ws>/log/apriltag_nav/calib_pair_20260915_a/        the 2026-09-15 front_cam tilt-fit snapshots
 <ws>/log/apriltag_nav/tip_check/<session>/         robot_ui tip-tour records (frames in results/tip_check)
-<ws>/log/apriltag_nav/task_csv_backup/<date>_*/     planner originals of every task/csv set, with records
+<ws>/src/apriltag_nav/task/csv/task_csv_backup/<date>_*/  planner originals of the CURRENT task/csv set, with
+                                                    records (user moved it here from log/apriltag_nav/ on
+                                                    2026-10-06 evening; the 09-29/30 backups were deleted — git has them)
 <ws>/log/chain_calib/<session>/                     A0-sheet chain / hand_cam intrinsics / Basler-tip sessions
 <ws>/log/path_tag_locator/{calibrate,locate,handeye_calib}/, map_world_*.yaml
                                                     locator default_save_dir / handeye run_root / map_out
@@ -177,20 +179,50 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            #       scanned; world x y z from the paired file
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # Today's keys (2026-10-06 15:54): offset0mm_h652 /
-                           # offset10mm_h662 — TWO JOINT-ONLY files (rrt_final_
-                           # path_<key>.csv, 1267 work points each, groups 104–107 /
-                           # 118–120, lift_mm 0 / 10, standoff 17, planner speeds
-                           # 10–30, NO assigned_workpoints_ twin → no pose task, no
-                           # world xyz in the Ra map). Planner originals: NOT
-                           # retargeted (the tool needs the pose twin to classify),
-                           # speed-10 rule NOT applied — see the retarget section.
+                           # ⚠️ FILE NAME RULE (user, 2026-10-06 evening): the key
+                           # names <product>_<mold>_<plate>_<offset> —
+                           #   product  hoodouter            (후드 아우터)
+                           #   mold     lower | upper        (하형 | 상형)
+                           #   plate    plate1 | plate2      (정반 1 | 2)
+                           #   offset   offset<N>mm          (planner offset)
+                           # joint vs pose is the PREFIX (rrt_final_path_ →
+                           # scan_joint_, assigned_workpoints_ → scan_pose_), so
+                           # it is not repeated in the key. ASCII only — the
+                           # task name is typed on the Windows PC. Planner
+                           # exports arrive as joint_path_<x>.csv: rename them
+                           # to this rule (originals too) before dropping in.
+                           #
+                           # Today's keys (2026-10-06 15:54 / 16:42, renamed
+                           # 17:30): hoodouter_lower_plate1_offset{0,10,20,30,
+                           # 40}mm — FIVE JOINT-ONLY files (rrt_final_path_<key>
+                           # .csv, 1267 work points each, groups 104–107 /
+                           # 118–120, standoff 17, planner speeds 10–30, NO
+                           # assigned_workpoints_ twin → no pose task, no world
+                           # xyz in the Ra map; the planner zip is log/261006_
+                           # shift223_s17_offset0_40.zip — the 260610 set shifted
+                           # +223.66 mm, base 652 + 0/10/20/30/40; "lower" is by
+                           # the 260610 heights, the user has not confirmed the
+                           # mold). Planner originals: NOT retargeted (the tool needs
+                           # the pose twin to classify), speed-10 rule NOT applied —
+                           # see the retarget section. ⚠️ `lift_mm` is the ONLY height
+                           # column the stack reads; `base_height_mm` (652 + the
+                           # planner's lift, as exported) is metadata nothing reads.
+                           # ⚠️ **Since 2026-10-06 evening `lift_mm` is 0 in ALL FIVE
+                           # files — a TEST the user chose knowing the risk** ("위험
+                           # 하긴 하지만 테스트 목적"): the offset10..40 joint rows were
+                           # solved with the arm base RAISED by 10 / 20 / 30 / 40 mm,
+                           # so replayed at the lift origin the tip lands that much
+                           # LOWER than planned (standoff 17 → 7 / −3 / −13 / −23 mm,
+                           # i.e. into the plate from the 20 mm file on). Planner
+                           # originals with the exported lift_mm (same new names):
+                           # task/csv/task_csv_backup/20261006_base_height_652_
+                           # originals/ (SHA256SUMS) — restore them for a normal run.
                            # The 10mm pair of 13:37 (ran 4×) was replaced by them;
                            # git 7724761 has it. The
                            # 2026-09-29/30 sets (260610 three-lift, 260930 joint-only,
                            # errorX 010/030/050 + plate2 twins, upper_mold plate2)
-                           # were removed 2026-10-06; git (before 7724761) and
-                           # log/apriltag_nav/task_csv_backup have them.
+                           # were removed 2026-10-06; git (before 7724761) has them
+                           # and their backups (the log/ backup dirs were deleted).
                            # Keys are SEPARATE tasks because the standoff /
                            # lift changes the solution, not just the offset.
                            # ⚠️ scan_joint_* replays a planned trajectory with
@@ -276,8 +308,8 @@ has no `source_point_id` at all: there, `point_id` IS the work-point id.
 
 ### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
 
-⚠️ **Status 2026-10-06: the two joint files in task/csv (`rrt_final_path_
-offset0mm_h652.csv`, `…offset10mm_h662.csv`) are planner ORIGINALS with NO
+⚠️ **Status 2026-10-06: the five joint files in task/csv (`rrt_final_path_
+hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
 pose twin — the tool cannot classify or correct them (it settles a file by
 FK against its pose rows), and the speed-10 boundary rule
 (`tools/slow_task_entry.py`) is not applied either.** `check_retarget_joint_
@@ -313,8 +345,8 @@ neither) and rewrites only an ORIGINAL, so a second run is a no-op.
   `--apply` (dry run first). `tools/check_retarget_joint_paths.py` fails on
   a joint file that is not retargeted for the current map.
 - **After `map.yaml` or `tf_chain.yaml` changes:** restore the planner
-  ORIGINALS from `log/apriltag_nav/task_csv_backup/<date>_before_stop_pose_
-  retarget/` (the 001 / 020 files are not in git), regenerate the actual
+  ORIGINALS from `task/csv/task_csv_backup/<date>_*/` (the 09-29 backup dirs
+  were deleted 2026-10-06 — git before that has them), regenerate the actual
   stop poses (`tools/map_stop_poses.py`), then run the tool again. A file
   retargeted for the old map is "neither" and is refused.
 - The metadata columns (`base_x_actual_mm` ±1610 = the planner's arm base x)
@@ -436,7 +468,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `mark` (method B) captures nothing and stops at every scanned point for its running number to be written beside the spot, writing `<run>_mark_template.csv` to fill in by hand later; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `mark` (method B) captures nothing and stops at every scanned point for its running number to be written beside the spot, writing `<run>_mark_template.csv` to fill in by hand later; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -2040,6 +2072,132 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-06 (evening, 17:30) — task/csv files renamed to the user's naming rule: `<product>_<mold>_<plate>_<offset>`; originals renamed too; backup dir now under task/csv
+
+User: the files in task/csv are ones they renamed (the planner zip
+`log/261006_shift223_s17_offset0_40.zip` delivers `joint_path_offset<N>mm_
+h<H>.csv`; they had given them the `rrt_final_path_` prefix), and from now
+on a path file is designated by product (후드 아우터), mold (상형 / 하형),
+joint / pose, plate (정반) and offset — then "원본 csv 파일도 수정". Applied:
+the five files are `rrt_final_path_hoodouter_lower_plate1_offset{0,10,20,
+30,40}mm.csv` → tasks `scan_joint_hoodouter_lower_plate1_offset<N>mm`
+(`git mv` for the two tracked, `mv` for the three untracked; contents
+untouched — the lift_mm-0 test edit stands). joint / pose stays in the
+prefix (it already shows as `scan_joint_` / `scan_pose_`), the base height
+`h652` was dropped (`lift_mm` is in the file). **"lower" is my inference
+from the layout title** (`260610 shift+223.66mm standoff17 base 652mm`:
+the 260610 set, whose z 0.59–0.67 m were the 하형 heights) — the files have
+no z column, and the user did not say which mold; a `sed` on the five
+names fixes it if it is 상형. The originals in the backup dir got the same
+names and a regenerated `SHA256SUMS` (contents verified unchanged). The
+user had also moved `log/apriltag_nav/task_csv_backup/` to
+`src/apriltag_nav/task/csv/task_csv_backup/` (the 09-29/30 backup dirs
+deleted, the 09-29 zip + the 10-06 originals kept): discovery reads only
+`.csv` names in task/csv, so the sub-directory is ignored — verified with
+the real `TaskManager`: the five new tasks + go_home, 7 steps each, lift
+0.0. Docs: this rule in the Task Commands block, HANDOVER, README,
+readme.txt. Today's three Ra maps / nav_log records keep the old task
+names (history). `RELOAD_TASKS` sent to the running stack so `/task_list`
+shows the new names without a restart.
+
+### 2026-10-06 (evening, later still) — task/csv: `lift_mm` set to 0 in all five joint files for a TEST, on the user's decision; `base_height_mm` left as exported
+
+User, first: "5개의 경로데이터들의 base_height_mm 인자를 모두 652로 바꿔줘.
+그러면 리프트가 제일 하단에 위치할때가 맞지?" The directory holds FIVE
+planner originals, `rrt_final_path_offset{0,10,20,30,40}mm_h{652,662,672,
+682,692}.csv` (20 / 30 / 40 dropped in at 16:42, untracked until this
+commit), each with `base_height_mm` = 652 + `lift_mm` (0 / 10 / 20 / 30 /
+40). Done as asked, then explained: **`base_height_mm` is read by no code**
+(`TaskManager._extract_lift_height` reads `lift_mm`, aliased to
+`lift_height`; the only other mention is a synthetic header in
+`check_retarget_joint_paths.py`), so that edit changed nothing on the
+robot — 652 IS the base height at the lift origin, but the lift is
+commanded from `lift_mm`. The user then read that as "so I can set lift_mm
+to 0 instead"; told that this is the dangerous direction: the h662..h692
+joint rows were solved with the base RAISED by `lift_mm`, joint mode
+replays absolute angles, so at the lift origin the whole arm — and the
+tip — sits 10 / 20 / 30 / 40 mm lower than planned: standoff 17 → 7 /
+−3 / −13 / −23 mm, into the plate from the 20 mm file on, and nothing
+checks a MoveJ's path. **User's decision: "위험하긴 하지만 일단 테스트
+목적으로 하는 거니까 허용해줘" — roll `base_height_mm` back and set
+`lift_mm` to 0 in all five.** Done: the five files restored byte-for-byte
+from the backup (sha256 verified), then ONLY the `lift_mm` cell changed
+(1750–1752 rows per file; the 0mm file already 0; CRLF kept; no other
+column differs, checked cell by cell). Real `TaskManager`: five tasks,
+every one lift 0.0 mm. Planner originals with the exported lift_mm:
+`log/apriltag_nav/task_csv_backup/20261006_base_height_652_originals/`
+(+ SHA256SUMS; the dir name is from the first, reverted edit — the
+contents are the untouched originals). `RELOAD_TASKS` (or a
+`task_executor` restart) before the test; a hand on the e-stop for the
+h672 / h682 / h692 runs, and watch the first `[Standoff]` line at the
+first point — a reading of "too close" / a positive raw value at arrival
+is the tip already inside the planned standoff.
+
+### 2026-10-06 (night) — "scan 중 한 점에서 유난히 오래 멈춤": the arm Ethernet link drops ~12 s, several times a day; now visible in `/arm/state` and the ARM chip
+
+User: during a scan the arm stays at one point much longer than at the
+others — what is it? Measured from today's `arm_node` log (669 scan
+points): the capture segment is 0.43 s median, 0.55 s p95, and exactly
+two outliers, both in the 16:01 `scan_joint_offset10mm_h662` run —
+**13.5 s at point 65** (16:07:51.9 → 16:08:05.4, inside the
+`GetActualTCPPose` readback that follows every capture; the camera had
+finished at 51.9, its idle close at 56.9 proves it) and **14.7 s at
+traverse 89** (16:08:45.8 → 16:09:00.5, inside `SetSpeed` before the
+MoveJ). Nothing in any ROS log. The kernel journal had both: `igb
+enp2s0: NIC Link is Down` at 16:07:50 and 16:08:45, `Link is Up 100
+Mbps` 12 s later each time, enp2s0 being the connection "fr5 robot arm"
+(192.168.58.100 → the controller at .2). The blocking SDK call simply
+waited for the link plus TCP's retransmit back-off. **Not a one-off:**
+5 drops today (13:41, 15:49, 16:07, 16:08, 16:16 — the last with the
+robot idle, so not motion-related), and the journal shows 5–23 per day
+every working day since 2026-09-02 (23 on 09-08, 21 on 09-28, 19 on
+09-29); the other three NICs have one carrier change since boot, this
+one six; it always renegotiates at 100 Mbps. Cable / connector between
+the PC's LAN 3 and the FR10 cabinet, or the PHY negotiation — a hardware
+job (replace the patch cable first; `ethtool` is not installed, so EEE /
+forced-speed experiments need it). The arm never moved wrongly: a drop
+has not yet landed inside a MoveJ today, and what the controller does if
+one does is unverified.
+
+**Software side (user: "소프트웨어 쪽 체크"):** `apriltag_nav/arm_link_watch.py`.
+`TimedRPC` wraps the `Robot.RPC` object in `ArmController.__init__`
+(every call forwarded unchanged; one that takes > `~rpc_stall_warn_s`
+2 s is logged `Fairino RPC <method> blocked N s` and counted, and a call
+STILL in flight past that is reported live by `check()` — once per
+stuck call — so the freeze shows while it happens). `LinkMonitor`
+resolves the interface of the route to `~robot_ip` once (`ip -o route
+get`), reads its sysfs `carrier` every state tick, logs `ARM LINK DOWN`
+with the node-since-start and kernel-since-boot counts and `back up
+after N s`; `~link_monitor false` turns it off, `~link_iface` pins the
+interface. `ArmState` gained `link_iface / link_up / link_down_count /
+rpc_stalled / rpc_stall_count / rpc_last_stall` (catkin_make);
+`arm_node._tick_state` fills them OUTSIDE the executor lock, so the
+state keeps saying `rpc_stalled` while the worker is stuck.
+`RosBridge._cb_arm` carries them (getattr, so an older message still
+works) and both fronts' ARM chip reads **`ARM LINK DOWN`** (red) /
+**`ARM RPC STALL`** (amber) over the state word, tooltip with iface /
+drops / last stall. Nothing about the arm's behaviour changed — a
+stalled call is still waited for.
+
+Verified offline: `check_scan_progress.py` 136 → **158** (a call gated
+for 0.3 s with warn 0.15: visible in flight, not a stall before warn_s,
+stalled after, live warning once, real result returned, count 1 and
+`rpc_last_stall` text, completion warning names the method, a short
+call after it does not count; LinkMonitor on a temp sysfs: up / down /
+down-held / up transitions with the counts and durations in the log
+lines, no interface = off and `link_up` true, unreadable carrier warned
+once and not flagged down, unroutable address resolves to nothing),
+`check_task_list_ui.py` 104 → **109** (chip precedence LINK DOWN > RPC
+STALL > state word, tooltip, a dict without the keys renders as before),
+`check_web_ui.py` 145, `check_charging_manager.py` 23, the page in
+headless Chrome still builds its grids; `catkin_make` clean. **Not run
+on the robot: `arm_node` + `robot_ui_web_node` restart required**
+(`sudo systemctl restart mobile-manipulator`). First thing to see:
+`arm link monitor: 192.168.58.2 via enp2s0` at start, then at the next
+drop `ARM LINK DOWN: enp2s0 carrier lost (drop 1 since start, N since
+boot)` and, if a scan is running, `Fairino RPC GetActualTCPPose has not
+returned for 2.0 s` followed by `… blocked 13.x s`.
 
 ### 2026-10-06 (evening, later) — Hand-measured Ra CSV moved into the run's frame folder under results/
 
