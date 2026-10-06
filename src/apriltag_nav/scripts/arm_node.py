@@ -455,7 +455,7 @@ class ArmControllerNode:
             rospy.logerr(f"[ArmNode] collect_mode failed: {e}")
 
     def _cb_collect_config(self, msg):
-        """JSON {mode: 'pause'|'mark', batch_size, retreat_mm,
+        """JSON {mode: 'pause'|'mark', batch_size, premark, retreat_mm,
         mark_retreat_mm, mark_dwell_s} — any subset."""
         try:
             cfg = json.loads(msg.data) if msg.data.strip() else {}

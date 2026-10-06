@@ -2077,6 +2077,21 @@ chooses (`/arm/collect_config`, robot_ui Task tab).
 - `COLLECT_COLUMNS` gained `mark_no` (blank in pause mode); `/arm/collect_
   state` carries mode / batch_size / kind / mark_no / points; the SCAN
   chip reads `WAIT Ra N pt` or `MARK #n`.
+- **Then (user, in pinyin: with method A the scan position cannot be
+  found; "1로 진행하기"): `collect.premark`** — in pause mode every
+  scanned point stops once more right after the capture with the tool
+  STILL AT THE STANDOFF (case bottom 16.5 mm up, no retreat; kind
+  `premark`, chip `MARK SPOT`) until any `scan_continue`: the operator
+  marks the spot beside the case (it sits under the case centre), and
+  the retreat + Ra-entry stop follows as before. Nothing is recorded at
+  the premark stop. Why not the lamp or a laser: the vision tip is a
+  virtual point, nothing physical is there; whether the VISION lamp is
+  coaxial (its floor pattern would then mark the axis) is unknown until
+  the user looks, and a cross-line laser on the tool is the robust
+  hardware answer, both offered. `check_scan_progress.py` 130 → **136**
+  (premark at both points of a 2-batch, not retreated, no MoveL before
+  either, the retreat only at the batch stop, a bare continue releases
+  it, rows only from the batch stop), `check_web_ui.py` 144 → **145**.
 
 Verified offline: `check_scan_progress.py` 103 → **130** (batch 2 over
 three scanned points + a traverse: stops after point 2 and after the last

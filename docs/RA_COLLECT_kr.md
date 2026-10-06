@@ -14,6 +14,12 @@
 
 1. 경로대로 이동 → Keyence 거리 보정 → Basler 촬영 (평소와 같음)을 N점 반복
    (`points per stop`, 기본 1; 측정기 2대면 2 또는 4)
+   - **mark spot before retreat** (`collect.premark`)를 켜면 촬영 직후, 공구가
+     아직 표준거리(케이스 바닥이 표면에서 16.5 mm)에 있을 때 점마다 한 번 더
+     멈춘다(SCAN 칩 `MARK SPOT`). 케이스 옆에 점을 찍거나 케이스 윤곽을 그린다
+     — 촬영 지점은 케이스 중심 바로 아래 — 그리고 **Next (spot marked)**.
+     tip은 가상의 점이라 80 mm 위의 공구 아래에서는 못 찾으므로, A 방법에서는
+     이것을 켜는 것이 기본이다 (점당 ~5초 추가).
 2. N점째(또는 마지막 점) 촬영 후 공구가 자기 z축으로 **80 mm 후퇴**하고 대기
    (`collect.retreat_mm`). SCAN 칩이 `WAIT Ra N pt`
 3. UI에 N행 표가 뜬다. 마지막 행(파란색)은 vision tip 바로 아래, 나머지 행은

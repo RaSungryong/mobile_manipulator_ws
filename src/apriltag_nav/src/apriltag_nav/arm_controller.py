@@ -347,6 +347,12 @@ class ArmController:
         # measurement (method B). 2026-10-06 (evening).
         self.collect_mode = str(_cp('mode', 'mode', 'pause'))
         self.collect_batch_size = max(1, int(_cp('batch_size', 'batch_size', 1)))
+        # pause mode: stop at EVERY scanned point right after the capture,
+        # still at the standoff (case bottom 16.5 mm up), so the operator
+        # can mark the spot beside the case before the tool retreats —
+        # the vision tip is a virtual point and nobody can find it under a
+        # tool 80 mm up (user, 2026-10-06 evening).
+        self.collect_premark = bool(_cp('premark', 'premark', False))
         self.collect_mark_retreat_mm = float(_cp('mark_retreat_mm', 'mark_retreat_mm', 30.0))
         self.collect_mark_dwell_s = float(_cp('mark_dwell_s', 'mark_dwell_s', 0.0))
         self.collect_retreat_mm = float(_cp('retreat_mm', 'retreat_mm', 80.0))
@@ -925,6 +931,9 @@ class ArmController:
                         'standoff': entry["execution_message"],
                         'x': p.get('x'), 'y': p.get('y'), 'z': p.get('z'),
                         'csv_path': current_csv_path})
+                    if self.collect_premark:
+                        self._collect_premark_stop(i + 1, n_total, pid, gid,
+                                                   self._collect_batch[-1]['images'])
                     more = any(q.get("scan", True) for q in scan_points[i + 1:])
                     if len(self._collect_batch) >= self.collect_batch_size or not more:
                         batch, self._collect_batch = self._collect_batch, []
@@ -1034,6 +1043,9 @@ class ArmController:
             if n < 1 or n > 50:
                 return False, f"batch_size {n} out of range 1..50"
             self.collect_batch_size = n; changed.append(f"batch {n}")
+        if 'premark' in cfg:
+            self.collect_premark = bool(cfg['premark'])
+            changed.append(f"premark {'on' if self.collect_premark else 'off'}")
         for key, lo, hi in (('retreat_mm', 0.0, 300.0), ('mark_retreat_mm', 0.0, 300.0),
                             ('mark_dwell_s', 0.0, 600.0)):
             if key in cfg:
@@ -1062,7 +1074,7 @@ class ArmController:
             batch = [dict(b) for b in self._collect.get('points') or []]
         if not waiting:
             return False, "no point is waiting for a measurement"
-        if kind == 'mark':
+        if kind in ('mark', 'premark'):
             self._collect_payload = {'mark': True, 'note': str(payload.get('note', '') or '')}
             self._collect_event.set()
             return True, "marked — continuing"
@@ -1112,6 +1124,7 @@ class ArmController:
             st['enabled'] = bool(self.collect_enabled)
             st['mode'] = self.collect_mode
             st['batch_size'] = int(self.collect_batch_size)
+            st['premark'] = bool(self.collect_premark)
             st['retreat_mm'] = float(self.collect_retreat_mm)
             st['mark_retreat_mm'] = float(self.collect_mark_retreat_mm)
             st['mark_dwell_s'] = float(self.collect_mark_dwell_s)
@@ -1329,6 +1342,41 @@ class ArmController:
             with self._collect_lock:
                 self._collect['waiting'] = False
                 self._collect['points'] = []
+            self._publish_collect_state()
+
+    def _collect_premark_stop(self, index, total, pid, gid, images):
+        """Method A's marking stop: the tool stays at the standoff over the
+        spot it just imaged (no retreat); the operator marks the spot
+        beside the case and sends any scan_continue. Nothing is recorded —
+        the batch stop that follows does that. Never raises."""
+        try:
+            with self._collect_lock:
+                self._collect.update({
+                    'waiting': True, 'kind': 'premark', 'index': index,
+                    'total': total, 'group_id': gid, 'point_id': pid,
+                    'images': list(images), 'points': [], 'retreated': False})
+            self._collect_event.clear()
+            self._collect_payload = None
+            self._publish_collect_state()
+            self._progress('wait', index=index, total=total, point_id=pid,
+                           group_id=gid, scan=True, kind='premark', images=list(images),
+                           message='mark the spot beside the case, then Next')
+            rospy.loginfo(f"[Arm REAL] collect: g{gid} p{pid} ({index}/{total}) at the "
+                          "standoff — waiting for the spot to be marked")
+            payload, timed_out = self._collect_wait()
+            if self.cancel_requested and not payload:
+                rospy.logwarn("[Arm REAL] collect: cancelled while waiting for the mark")
+                return
+            if timed_out:
+                rospy.logwarn(f"[Arm REAL] collect: no mark confirmation for g{gid} p{pid} "
+                              f"within {self.collect_wait_timeout_s:.0f} s — going on")
+            self._progress('resume', index=index, total=total, point_id=pid,
+                           group_id=gid, scan=True, kind='premark')
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] collect: premark stop failed at point {pid}: {e}")
+        finally:
+            with self._collect_lock:
+                self._collect['waiting'] = False
             self._publish_collect_state()
 
     def _collect_mark_point(self, index, total, point, pid, gid, entry):

@@ -513,9 +513,11 @@ def part_a():
         check(not r['ok'] and 'type the Ra or tick skip' in r['message'], 'a batch point with neither is refused before sending')
         r = c.api_scan_continue('', 'written', False, None, True)
         check(r['ok'] and bridge.has('scan_continue', None, (), 'written', False, None), 'mark release sends a bare continue')
-        r = c.api_set_collect_config({'mode': 'mark', 'batch_size': '2', 'mark_dwell_s': '3'})
-        check(r['ok'] and bridge.has('set_collect_config', {'mode': 'mark', 'batch_size': 2, 'mark_dwell_s': 3.0}),
+        r = c.api_set_collect_config({'mode': 'mark', 'batch_size': '2', 'mark_dwell_s': '3', 'premark': 1})
+        check(r['ok'] and bridge.has('set_collect_config', {'mode': 'mark', 'batch_size': 2, 'mark_dwell_s': 3.0, 'premark': True}),
               'collect config coerced and sent')
+        bridge.scan_progress.emit({'phase': 'wait', 'index': 6, 'total': 9, 'point_id': 15, 'group_id': 106, 'kind': 'premark'})
+        check(any('[collect] 6/9 pt 15 g106: at the standoff' in l for l in sink.logs()), 'premark wait logged')
         r = c.api_set_collect_config({'mode': 'nope'})
         check(not r['ok'], 'unknown mode refused in the UI')
         bridge.scan_progress.emit({'phase': 'wait', 'index': 5, 'total': 9, 'point_id': 14, 'group_id': 106, 'kind': 'mark', 'mark_no': 3})

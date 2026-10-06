@@ -185,6 +185,7 @@ def make_controller(robot):
     ac.collect_record_dir = COLLECT_DIR
     ac.collect_mode = 'pause'
     ac.collect_batch_size = 1
+    ac.collect_premark = False
     ac.collect_mark_retreat_mm = 30.0
     ac.collect_mark_dwell_s = 0.0
     ac._collect_batch = []
@@ -572,7 +573,7 @@ def collect_states():
 
 
 def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map_20261006_120000.csv',
-                mode='pause', batch=1, mark_dwell=0.0):
+                mode='pause', batch=1, mark_dwell=0.0, premark=False):
     """Run execute_scan_points with collect mode ON; `release(ac, state)` is
     called on a helper thread for every `waiting` state it sees."""
     PUBLISHED.clear(); LOG['err'].clear(); LOG['warn'].clear()
@@ -583,6 +584,7 @@ def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map
     ac.collect_mode = mode
     ac.collect_batch_size = batch
     ac.collect_mark_dwell_s = mark_dwell
+    ac.collect_premark = premark
     for p in points:
         p['csv_path'] = csv_path
     seen = []
@@ -592,8 +594,8 @@ def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map
         last = None
         while not stop.is_set():
             st = [x for x in collect_states() if x.get('waiting')]
-            if st and (last is None or st[-1]['index'] != last):
-                last = st[-1]['index']
+            if st and (last is None or (st[-1]['index'], st[-1].get('kind')) != last):
+                last = (st[-1]['index'], st[-1].get('kind'))
                 seen.append(st[-1])
                 release(ac, st[-1])
             time.sleep(0.01)
@@ -742,6 +744,37 @@ check([(r['point_id'], r['ra_measured']) for r in rec] == [('1', '0.4100'), ('2'
 check(rec[0]['images'] == 'g106_p1_i0001_s1.png' and rec[1]['images'] == 'g106_p2_i0002_s1.png' and rec[2]['images'] == 'g106_p3_i0004_s1.png',
       'frame names per row (run index skips the traverse row)')
 check(collect_states()[-1]['n_recorded'] == 3, 'three recorded')
+
+print('== premark: a marking stop at the standoff at every scanned point, before the batch stop')
+kinds = []
+def _premark(a, st):
+    kinds.append((st['kind'], st['point_id'], st['retreated'], len([c for c in robot_ref[0].calls if c[0] == 'MoveL'])))
+    if st['kind'] == 'premark':
+        ok, msg = a.collect_continue({})
+        _premark.ok = (ok, msg)
+    else:
+        a.collect_continue({'points': [{'group_id': p['group_id'], 'point_id': p['point_id'], 'ra': 0.5} for p in st['points']]})
+robot_ref = [None]
+_orig_make = make_controller
+def make_controller(robot, _m=_orig_make):      # noqa: F811
+    robot_ref[0] = robot
+    return _m(robot)
+robot, ac, seen = run_collect([pose_pt(1, -1.30, 0.20), pose_pt(2, -1.30, 0.225)], _premark, batch=2, premark=True,
+                              csv_path='/x/scan_pose_pm_ra_map_20261006_130200.csv')
+make_controller = _orig_make
+check([k[:3] for k in kinds] == [('premark', 1, False), ('premark', 2, False), ('pause', 2, True)],
+      f'premark at points 1 and 2 (not retreated), then the batch stop (retreated): {kinds}')
+check(kinds[0][3] == 0 and kinds[1][3] == 0 and kinds[2][3] == 1,
+      f'no MoveL before either premark stop, the retreat only at the batch stop: {[k[3] for k in kinds]}')
+check(_premark.ok[0] and 'marked' in _premark.ok[1], f'a bare continue releases a premark stop: {_premark.ok}')
+ev = events()
+check([(e['phase'], e.get('kind')) for e in ev if e['phase'] in ('wait', 'resume')]
+      == [('wait', 'premark'), ('resume', 'premark'), ('wait', 'premark'), ('resume', 'premark'), ('wait', 'pause'), ('resume', 'pause')],
+      'wait / resume events carry the kind')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_pm_ra_map_20261006_130200_ra_measured.csv'))
+check([(r['point_id'], r['ra_measured']) for r in rec] == [('1', '0.5000'), ('2', '0.5000')], 'rows only from the batch stop')
+ok, msg = ac.set_collect_config({'premark': True})
+check(ok and collect_states()[-1]['premark'] is True, 'premark in the config / state')
 
 print('== batch release rules')
 def _partial(a, st):

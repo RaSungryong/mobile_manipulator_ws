@@ -370,7 +370,12 @@ class UiController:
                 f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
                 f"g{ev.get('group_id', '?')}: FAIL — {ev.get('message', '')}")
         elif phase == 'wait':
-            if ev.get('kind') == 'mark':
+            if ev.get('kind') == 'premark':
+                self.append_log(
+                    f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
+                    f"g{ev.get('group_id', '?')}: at the standoff — mark the spot beside "
+                    "the case, then Next")
+            elif ev.get('kind') == 'mark':
                 self.append_log(
                     f"[mark] #{ev.get('mark_no', '?')} = pt {ev.get('point_id', '?')} "
                     f"g{ev.get('group_id', '?')} ({idx}/{total}): write the number beside "
@@ -383,7 +388,9 @@ class UiController:
                     + ', '.join(f"g{g} p{p}" for g, p in pts)
                     + f" — images {', '.join(ev.get('images') or [])}")
         elif phase == 'resume':
-            if ev.get('kind') == 'mark':
+            if ev.get('kind') == 'premark':
+                self.append_log(f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} marked")
+            elif ev.get('kind') == 'mark':
                 self.append_log(f"[mark] #{ev.get('mark_no', '?')} done")
             elif 'n_ra' in ev:
                 self.append_log(
@@ -900,6 +907,8 @@ class UiController:
         try:
             if 'batch_size' in cfg:
                 cfg['batch_size'] = int(cfg['batch_size'])
+            if 'premark' in cfg:
+                cfg['premark'] = bool(cfg['premark'])
             for k in ('retreat_mm', 'mark_retreat_mm', 'mark_dwell_s'):
                 if k in cfg:
                     cfg[k] = float(cfg[k])

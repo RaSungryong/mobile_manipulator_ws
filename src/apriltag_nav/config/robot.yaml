@@ -1528,6 +1528,9 @@ collect:
   enabled:         false      # ~collect_enabled — live switch: /arm/collect_mode
   mode:            pause      # ~collect_mode: pause | mark (above)
   batch_size:      1          # ~collect_batch_size: scanned points per stop (pause mode)
+  premark:         false      # ~collect_premark: pause mode — stop at EVERY scanned point right after
+                              # the capture, tool still at the standoff, until Next: the operator marks
+                              # the spot beside the case (the tip is unfindable under a tool 80 mm up)
   retreat_mm:      80.0       # ~collect_retreat_mm: tool-z retreat during a pause stop
   mark_retreat_mm: 30.0       # ~collect_mark_retreat_mm: retreat during a mark stop (0 = none)
   mark_dwell_s:    0          # ~collect_mark_dwell_s: 0 = wait for Next; >0 = auto-continue after this many s
