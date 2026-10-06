@@ -20,14 +20,14 @@ T_B_world = T_A_world · T_A2B
 
 | 파일 | 역할 |
 |------|------|
-| `config/locator.yaml` | 토픽/태그ID/로봇IP/align 파라미터 |
+| `config/locator.yaml` | 토픽/태그ID/arm_node 프록시 토픽/align 파라미터 |
 | `config/reference_tag.yaml` | `T_A_world` (기준 태그 월드 좌표) |
 | `apriltag_nav/config/tf/tf_chain.yaml` | `T_ab2mb`, `T_mb2fc`, `T_hc2ee`, `T_ee2tip` — 모든 고정 변환 (2026-09-21), **m 단위** |
 | `apriltag_nav/config/tf/T_hc2ee.npz` | 손-눈 보정 결과의 npz 쌍둥이 (yaml 블록과 함께 갱신됨) |
 | `scripts/path_tag_locator_node.py` | locate 노드 |
 | `scripts/handeye_calib_node.py` | 손-눈 보정 노드 |
 | `apriltag_nav/tools/tf_chain_tool.py` | 변환 보기/검사/기록 (`show` / `check` / `set`) |
-| `src/path_tag_locator/tcp_pose.py` | Fairino SDK 래퍼 (IK/MoveJ) |
+| `src/path_tag_locator/arm_interface.py` | arm_node 프록시 — `/arm/state` 읽기, `/arm/move_cart` 이동 (2026-09-01부터 SDK 직결 없음) |
 
 ### 노드는 시작 시 1회 캐시
 
@@ -97,7 +97,7 @@ roslaunch path_tag_locator path_tag_locator.launch
 | 단조 감소 중 (iter 5에서도 작아지는 추세) | 단순 반복 부족 | `max_iterations: 15` |
 | 매 iter `step ... clamped` + 같은 TCP | **작업영역(reach) 경계** | 안쪽 자세로 초기 위치 변경 |
 | 진동 / 증가 | T_hc2ee 회전 오차 | 자세 다양성 ↑ 해서 재보정 |
-| 5회 연속 거의 동일 (변화 < 1 mm) | MoveJ가 실패하지만 에러 안 뜸 / IK 한계 | `tcp_pose.py` MoveJ 반환값 로그 추가 |
+| 5회 연속 거의 동일 (변화 < 1 mm) | 이동이 거부되는데 에러가 안 보임 / IK 한계 | arm_node 로그의 `move_cart` 결과(`MoveL`/`MoveCart error N`)와 `/arm/state`의 `pose_valid` 확인 |
 | iter 1에서 즉시 `RuntimeError: tag A not detected` | 초기 자세에서 시야 밖 | `align_initial_tcp_mm_deg` 재조정 |
 
 #### 진단 - 3단계: reach 경계 확인
@@ -110,11 +110,11 @@ init = [-280, 825, -490]
 final = [-224, 866, -162]
 print(f'initial dist from base = {math.sqrt(sum((v/1000)**2 for v in init)):.3f} m')
 print(f'final   dist from base = {math.sqrt(sum((v/1000)**2 for v in final)):.3f} m')
-# FR10v6 reach ≈ 1.0 m
+# FR10v6 공칭 reach 1.40 m (플랜지 기준); 플랜 생성기는 플랜지 1.25 m 를 한계로 쓴다
 "
 ```
 
-distance ≥ 0.85 m 면 reach 경계 의심. 안쪽 자세 시도:
+플랜지 거리 ≥ 1.25 m 면 reach 경계 의심. 안쪽 자세 시도:
 
 ```bash
 rosservice call /path_tag_locator/locate_path_tag "{
@@ -132,46 +132,27 @@ align:
   max_step_m:            0.20    # 0.10 → 0.20 (클램프 완화)
   max_step_deg:          25.0    # 15 → 25
   target_distance_m:     0.30    # 0.0 → 0.30 (z 기준 고정)
-  position_tol_m:        0.010   # 5mm → 10mm (수렴 기준 완화)
-  angle_tol_deg:         2.0     # 1 → 2
+  position_tol_m:        0.005   # 1mm → 5mm (수렴 기준 완화; 기본 0.001)
+  angle_tol_deg:         1.0     # 0.5 → 1 (기본 0.5; orientation: fixed 에서는 기록만 됨)
 ```
 
-### 1.3 `GetInverseKinRef() takes exactly 4 positional arguments (5 given)`
+### 1.3 Fairino SDK 시그니처 오류 (`GetInverseKinRef() takes ...`, `MoveJ(...)`)
 
-#### 원인
-
-Fairino SDK 버전별 시그니처 차이. 표준 시그니처:
-
-```python
-err, joints = robot.GetInverseKinRef(0, target_pose, q0_deg)   # 3 args
-err, joints = robot.GetInverseKin(0, target_pose, config=-1)   # 2 positional + 1 kw
-err = robot.MoveJ(joints, tool=TOOL_ID, user=0, vel=..., acc=..., ovl=...)
-```
-
-#### 진단
-
-```bash
-grep -n "GetInverseKinRef\|GetInverseKin\|MoveJ" \
-  src/path_tag_locator/src/path_tag_locator/tcp_pose.py
-
-# SDK 예제와 대조
-grep -n "GetInverseKinRef\|GetInverseKin\|MoveJ" \
-  src/fairino_sdk/fairino-python-sdk/examples/*.py
-```
-
-#### 처방
-
-[`tcp_pose.py:move_j_to_pose`](../src/path_tag_locator/tcp_pose.py)을 위 시그니처에 맞게 수정. apriltag_nav의 `arm_controller.py:549-557` 가 동작 검증된 참조.
+2026-09-01 이후 이 패키지는 **SDK 를 직접 호출하지 않는다** — 팔 이동은
+`ArmInterface.move_j_to_pose` → `/arm/move_cart`(arm_node) 경유. 이런
+오류가 보이면 arm_node(apriltag_nav `arm_controller.py`) 쪽이므로 그 노드의
+로그를 본다. 이 패키지에서 확인할 것은 `/arm/state` 가 `pose_valid: true`
+로 오는지(§ 2.6)와 `locator.yaml arm.*` 토픽 이름뿐이다.
 
 ### 1.4 `Tag A not detected in hand-cam image`
 
 #### 진단 체크리스트
 
 1. **태그 family**: `locator.yaml` `tag.family == "tag36h11"` 인지, 실제 태그도 같은가?
-2. **태그 크기**: `tag_a_size_m: 0.060` 이 실제 변 길이(m)와 같은가? (mm로 잘못 적으면 60m로 해석 → 거리 폭주)
+2. **태그 크기**: `tag_a_size_m: 0.090` 이 실제 변 길이(m)와 같고 `detector.hand_cam_size_m` 이 robot.yaml `robot_camera.tag_size.hand_cam` 과 같은가? (mm로 잘못 적으면 90m로 해석 → 거리 폭주)
 3. **태그 ID**: `tag_a_id` 와 실제 인쇄된 ID 일치?
-4. **카메라 토픽**: `rostopic hz /vision_cam/color/image_raw` 가 도는가?
-5. **카메라 K 행렬**: `rostopic echo -n 1 /vision_cam/color/camera_info` 로 `K` 가 픽셀 단위인지 확인.
+4. **카메라 토픽**: `rostopic hz /hand_cam/color/image_raw` 와 `/hand_cam/tag_detections`(robot_camera_node 의 검출, 이 패키지가 소비하는 쪽) 가 도는가? hand_cam 이 `set_enabled false` 면 검출이 없다.
+5. **카메라 K 행렬**: `rostopic echo -n 1 /hand_cam/color/camera_info` 로 `K` 가 픽셀 단위인지 확인 (robot.yaml `intrinsics_override.hand_cam` 이 있으면 검출은 그 K 로 보정된 프레임 기준).
 6. **밝기/초점**: hand_cam.png를 열어 태그가 명확히 보이는가?
 
 ```bash
@@ -289,8 +270,8 @@ python3 -c "
 import math
 tcp = [-280, 825, -490]   # ← 검사할 mm 좌표
 d = math.sqrt(sum((v/1000)**2 for v in tcp))
-print(f'distance from base: {d:.3f} m  (FR10v6 reach ≈ 1.0 m)')
-print('REACH 경계' if d > 0.85 else 'OK')
+print(f'distance from base: {d:.3f} m  (FR10v6 공칭 1.40 m, 플랜 한계 1.25 m — 플랜지 기준)')
+print('REACH 경계' if d > 1.25 else 'OK')
 "
 ```
 
@@ -358,16 +339,14 @@ rosservice info /path_tag_locator/locate_path_tag
 
 `T_ab2mb` = "mb 의 ab 표현" = mb-coord → ab-coord 변환. 이전 주석은 반대로 해석되도록 쓰여 있었음(이미 수정). 다른 코드에서 같은 yaml을 다른 규약으로 읽으면 안 됨.
 
-### 3.7 도구(Tool) 활성화
+### 3.7 도구(Tool) 프레임 — 컨트롤러의 활성 툴은 플랜지
 
-`tcp_index: 1` (= vision_tip)이 컨트롤러에 등록되어 있어야 함:
-
-```bash
-# 1회 등록 (필요 시)
-python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
-```
-
-`GetActualTCPPose()`는 인자 없이 호출 → **현재 활성 tool의 TCP**를 반환. tool=0 이면 flange pose가 나옴. 보정과 locate가 같은 tool 설정에서 돌아야 일관성 유지.
+2026-09-14 확인: 컨트롤러의 활성 툴은 **플랜지(tool 0)** 이고 `/arm/state` 의
+TCP 도 플랜지다(홈 자세 ≈ (−159, 700, 774) mm). 핸드아이 `T_hc2ee`, 플랜
+시드, 체인 전부가 플랜지 기준으로 표현되어 있으므로 **tool 1 (vision_tip)
+을 활성화하면 안 된다** — 하면 체인 전체를 다시 표현해야 한다(CLAUDE.md
+Coordinate Frames). tool 1 의 등록 자체는 `src/apriltag_nav/tools/set_tool_tcp.py`
+가 하며(dry run 이 값을 찍는다), 팁 오프셋은 `tf_chain.yaml T_ee2tip`.
 
 ---
 
@@ -382,27 +361,18 @@ python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
 - [ ] `reference_tag.yaml` 이 identity가 아닌가? (§ 1.5)
 - [ ] 핸드캠/프론트캠 토픽 살아있는가? (§ 1.4)
 - [ ] 노드 측 iter 로그에 `clamped` 가 매번 뜨는가? (§ 1.2)
-- [ ] tool=1 활성화 됐는가? (§ 3.7)
-- [ ] Fairino SDK 호출 시그니처가 SDK 예제와 일치? (§ 1.3)
-- [ ] (map_calibrator 사용 시) base 가 시작 위치에서 어떤 map tag 를 보고 있는가? (§ 6.1)
-- [ ] (map_calibrator 사용 시) apriltag_nav 메인 노드가 죽어 있는가? (§ 6.2)
+- [ ] 활성 툴이 플랜지(tool 0)인가? `/arm/state` 홈 자세 ≈ (−159, 700, 774) mm (§ 3.7)
+- [ ] (map_calibrator 사용 시) base 가 플랜의 첫 태그(정반 1: 100, 정반 2: 126) 위에 서서 front-cam 이 그 태그를 보는가? (§ 6.1)
+- [ ] (map_calibrator 사용 시) 메인 스택이 떠 있고 세션 중 TASK/GOTO 를 보내지 않았는가? (§ 6.2)
 - [ ] (map_calibrator 사용 시) `reference_tags.yaml` 의 `id:` 가 정수인가? (§ 6.7)
 
 ---
 
-## 5. 알려진 수정 이력 (regression 방지)
+## 5. (이력) `tcp_pose.py` 의 SDK 시그니처 수정
 
-`tcp_pose.py` 에 다음 버그들이 있었음:
-
-| 위치 | 잘못 | 수정 |
-|------|------|------|
-| `GetActualTCPPose(self.tcp_index)` | tcp_index=1 을 flag로 오해 | 인자 없이 호출 |
-| `GetActualJointPosDegree(self.tcp_index)` | 동일 | 인자 없이 호출 |
-| `GetInverseKinRef(0, p, q, -1)` | 4 args (3 only) | `(0, p, q)` |
-| `GetInverseKin(0, p, -1)` | config 위치 인자 | `config=-1` kw |
-| `MoveJ(j, p, 0, 0, v, a, o, [0]*6, 0, 0)` | 시그니처 오류 | `(j, tool=1, user=0, vel=v, acc=a, ovl=o)` |
-
-증상이 위 패턴이면 SDK 시그니처 재확인 (`fairino_sdk/.../examples/movej&movel&movecart.py` 참조).
+`tcp_pose.py`(이 패키지의 Fairino SDK 래퍼)는 2026-09-01 리팩터링으로
+삭제됐다 — 팔은 arm_node 경유(§ 1.3). 당시의 시그니처 수정 이력은 git
+이력에 있고, SDK 호출 코드는 이제 apriltag_nav `arm_controller.py` 한 곳뿐이다.
 
 ---
 
@@ -411,27 +381,35 @@ python3 /home/ku/mobile_manipulator_ws/scripts/set_tool_tcp.py
 ### 6.1 첫 번째 entry 에서 `base nav to ... failed`
 
 #### 원인
-- 노드 기동 시점에 base 가 어떤 map tag 도 front-cam 으로 보지 못함
-- `RobotController.get_current_tag_id()` → None, `last_known_tag` → None,
-  결과적으로 `move_to_tag` 가 시작 tag 를 못 정함
+- 세션 시작 시 base 가 어떤 map tag 도 front-cam 으로 보지 못함 →
+  `MobileController.get_current_tag_id()` 가 None, `last_known_tag` 도 None
+  → `move_to_tag` 가 시작 tag 를 못 정함. (2026-09-08부터 첫 hop 은 서 있는
+  태그에 먼저 정렬하므로, 태그가 안 보이면 `align_timeout_s` 로 실패.)
+- front_cam 이 죽어 있음 — mobile_node 는 검출이 1 s 넘게 끊기면 모든
+  `/mobile/goto_tag` 를 `front_cam not working: …` 로 거부한다(2026-09-22).
+- 다른 명령이 base 를 잡고 있음 (TASK/GOTO 진행 중 → mobile_node 가 중복
+  이동 거부).
 
 #### 처방
-실행 전에 base 를 **`map.yaml` 에 등록된 어떤 tag 앞 (예: DOCK 508)** 에
-정차시켜 front-cam 시야에 그 tag 가 들어오게 한 뒤 launch. 첫 entry 의
-`nav_start_id` 를 그 tag 로 두면 BFS 가 안전하게 출발한다.
+실행 전에 base 를 **플랜의 첫 태그 위**(정반 1: 100, 정반 2: 126)에 세워
+front-cam 크로스헤어에 그 태그가 보이게 한다. 생성된 플랜에는 2026-09-02
+부터 `nav_start_id` 가 없으므로 도크 500 을 거치지 않고 그 자리에서 시작한다.
+`rostopic echo /mobile/state` 의 `front_cam_ok` / `front_cam_reason` 과
+`/front_cam/tag_detections` 를 확인.
 
-### 6.2 `/cmd_vel` 이 튕긴다 / base 가 비정상적으로 흔들림
+### 6.2 base 가 세션 중 엉뚱한 곳으로 가거나 이동을 거부함
 
 #### 원인
-다른 노드 (예: `apriltag_nav` 메인 컨트롤러) 가 동시에 `/cmd_vel` 을 publish.
+세션 중에 `TASK`/`GOTO`(또는 CHARGE/UNDOCK)가 들어옴 — task_executor 와
+map_calibrator 는 둘 다 `/mobile/goto_tag` 의 지휘자다. (`/cmd_vel` 은
+mobile_node 만 발행하므로 스택 안에 두 번째 발행자는 없다; 있다면
+`tools/navigate.py` / `tools/vw_drive.py` 같은 독립 도구뿐.)
 
 #### 처방
-```bash
-rosnode list | grep -E "navigate|robot_controller|task_executor"
-rosnode kill <conflict-node>
-```
-`map_calibrator.launch` 사용 시에는 apriltag_nav 메인 컨트롤러를 **반드시
-종료**. 동시 발행자 둘이 서로 덮어쓰면 동작이 비결정적.
+세션 중 TASK/GOTO 금지. **메인 스택은 그대로 떠 있어야 한다** — 캘리브레이션
+노드는 하드웨어를 소유하지 않으므로 arm_node / mobile_node /
+robot_camera_node 를 죽이면 세션이 돌지 않는다. 독립 도구가 떠 있는지만
+확인: `rosnode list | grep -E "navigate|vw_drive"`.
 
 ### 6.3 `auto_align: tag A (id=X) not detected` 가 빈번
 
@@ -441,11 +419,15 @@ rosnode kill <conflict-node>
   (= cm 보다 큰 어긋남 → arm 시드 자세가 빗나감)
 
 #### 처방
-1. 그 entry 의 `nav_start_id` 를 더 가까운 tag 로 변경
+1. (2026-09-04부터 자동) 시드에서 태그를 못 본 재시도는 시드를 다시 추정한다 —
+   같은 ref 의 성공 entry 들의 보정량 → anchor 부트스트랩 → 카메라를
+   `retry_raise_m` 올린 시드 순(`view_tcp_source` 에 기록). `retry_count` 를
+   올리면 뒤 전략까지 간다.
 2. `arm_view_tcp_mm_deg` 를 entry 별로 override (현장 jog 로 ref tag 가
-   잘 보이는 자세를 찾은 뒤 그 TCP 를 yaml 에 기록)
-3. `locator.yaml` 의 `align.max_initial_step_m / max_initial_step_deg` 를
-   키워서 첫 점프가 더 멀리 가게 함 (안전 vs 속도 트레이드오프)
+   잘 보이는 자세를 찾은 뒤 그 TCP 를 yaml 에 기록), 또는 성공 세션으로
+   `update_plan_seeds_from_session.py` 실행.
+3. `locator.yaml` 의 `align.max_initial_steps` / `max_initial_step_m` 를
+   키워서 첫 접근이 더 멀리 가게 함 (안전 vs 속도 트레이드오프)
 
 ### 6.4 `map_world.yaml` 이 일부만 채워짐 (재개 방법)
 
@@ -459,8 +441,9 @@ rosnode kill <conflict-node>
 
 1. `map_world_<ts1>.yaml` 의 `tags:` 키들을 열어 이미 성공한 path_tag_id
    목록을 확인.
-2. `calibration_plan.yaml` 에서 이미 성공한 entry 들을 제거 (또는
-   주석 처리) 한 새 plan 으로 두 번째 실행.
+2. `calibration_plan_plate{1,2}.yaml` 의 사본에서 이미 성공한 entry 들을
+   제거 (또는 주석 처리) 한 새 plan 을 `plan_path` 로 넘겨 두 번째 실행
+   (2026-09-22 의 123–125 부분 플랜이 그 예).
 3. 결과는 새 `map_world_<ts2>.yaml` 에 들어가므로, 사용자가 수동으로
    두 yaml 의 `tags:` 섹션을 병합:
 
@@ -485,18 +468,11 @@ yq eval-all '. as $item ireduce ({}; . * $item)' \
    되면 path tag 결과가 회전 방향으로 멀리 튐.
 4. **Hand-eye 잔차** — § 1.6 참조.
 
-### 6.6 `Navigator: camera_info NOT received within 5.0s`
+### 6.6 (삭제) `Navigator: camera_info NOT received within 5.0s`
 
-#### 원인
-`robot_nav.yaml` 의 `topics.camera_info` 가 실제 publish 토픽과 불일치.
-
-#### 처방
-```bash
-rostopic list | grep -i camera_info
-# 실제 토픽 이름에 맞춰 robot_nav.yaml 수정.
-# base nav 는 floor/front 카메라 전용 — hand-cam(vision_cam) 토픽을
-# 가리키면 안 됨.
-```
+패키지 내부 nav(`nav/`, `robot_nav.yaml`)의 메시지로, 2026-09-01 삭제됐다.
+base nav 는 mobile_node(`MobileClient`) 경유이며 front_cam 이 죽으면
+mobile_node 가 `front_cam not working: …` 로 goto 를 거부한다 (§ 6.1).
 
 ### 6.7 모든 entry 가 `ref_tag_id X not in reference_tags.yaml`
 

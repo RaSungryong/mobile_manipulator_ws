@@ -38,7 +38,6 @@ strictly newer. A stale pre-command state cannot satisfy it.
 import json
 import threading
 
-import numpy as np
 import rospy
 from cv_bridge import CvBridge
 from robot_ui.signals import Signal
@@ -299,9 +298,6 @@ class RosBridge:
             return True, f'{name} already on {"overlay" if overlay else "raw"}'
         topic = self._subscribe_stream(name, overlay)
         return True, f'{name} <- {topic}'
-
-    def stream_is_overlay(self, name):
-        return bool(self._stream_overlay.get(name, False))
 
     def replay(self):
         """Re-emit the latest value of every cached state signal.

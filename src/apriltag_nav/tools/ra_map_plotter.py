@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('csv_path', help='Ra map CSV (output of scan_full_* task)')
+    ap.add_argument('csv_path', help='Ra map CSV (output of a scan task)')
     ap.add_argument('-o', '--output', default=None,
                     help='Output PNG path (default: <csv_basename>.png alongside CSV)')
     ap.add_argument('--interpolate', action='store_true',

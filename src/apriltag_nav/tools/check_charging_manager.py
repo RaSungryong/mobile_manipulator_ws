@@ -313,7 +313,6 @@ def main():
           f'stop {ex._stop_requested} pending {ex._pending_task_name}')
     ex._task_running = False; ex._current_task_name = None
     # the key OFF still republishes /task_state as the battery moves (live battery_pct)
-    n0 = len([l for l in LOG if 'task_state' in l])
     b.pct = 14.0
     for _ in range(3):
         ex._charge_tick(); CLK.t += 2.5

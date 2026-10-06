@@ -43,7 +43,7 @@ the ROS side and ``scripts/check_basler_tip.py`` the offline check.
 import json
 import math
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np

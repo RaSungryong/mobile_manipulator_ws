@@ -1,15 +1,13 @@
 # Reference tags with accurate world coordinates provided by the user.
 # These are the "trusted truth" against which all path tags are calibrated.
 #
-# The "world frame" used here is defined by YOU — typically with one tag
-# chosen as the origin (its pose = identity). For example, the default
-# below treats tag id=0 as the origin: position_m=[0,0,0], rpy_deg=[0,0,0].
-# All other ref tags' position_m / rpy_deg are measured relative to that
-# origin.
-#
-# IMPORTANT: this world frame is NOT the same as apriltag_nav's map.yaml
-# Manipulator frame. The calibrator output (map_world.yaml) lives in
-# the WORLD frame defined here and is NOT a drop-in for map.yaml.
+# The "world frame" used here IS apriltag_nav's map.yaml frame (origin at
+# the centre of plate 1, +x east, +y north, z = 0 at the plate top — see
+# the REAL VALUES block below). No tag is the origin: every cross tag has
+# its design position in that frame. The calibrator output
+# (map_world_<ts>.yaml) is therefore directly comparable with map.yaml's
+# x / y, but it is a different schema (6-DOF per tag) and is never
+# written over map.yaml.
 #
 # Each entry's pose is "pose of the tag in the world frame". Use either:
 #   format: pose      ->  position_m + rpy_deg  (ZYX intrinsic, degrees)
@@ -29,12 +27,12 @@ format: "pose"
 # A tag's local +z points INTO the tag, AWAY from the printed face.
 # So the rpy_deg you declare must match each tag's PHYSICAL mounting:
 #
-#   - tag FACE DOWN (face points downward, viewed from below;
-#                    this project's default convention)
+#   - tag FACE DOWN (face points downward, viewed from below)
 #       -> tag's z = world +z (up)
 #       -> rpy_deg = [0, 0, 0]    (no rotation from world axes)
 #   - tag FACE UP   (face points upward, viewed from above;
-#                    common for floor stickers)
+#                    this project's convention — every cross tag and
+#                    every floor tag)
 #       -> tag's z = world -z (down)
 #       -> rpy_deg = [180, 0, 0]  (flip about x)
 #

@@ -16,13 +16,20 @@ hand_cam 사이의 변환 체인 오차**를 재고, 그 오차를 체인 안의
 ```
 src/chain_calib/
   scripts/chain_calib.py        운영자 도구  check / capture / status / drop / solve
-  scripts/check_chain_calib.py  오프라인 검증 (PDF 코너 규약 + 합성 세션, 37개 검사)
+  scripts/check_chain_calib.py  오프라인 검증 (PDF 코너 규약 + 합성 세션 + 관절 오프셋, 48개 검사)
   scripts/verify_chain.py       보정 검증: 체인으로 계산한 자세로 hand_cam을 태그 위로 보내 실제 중심 편차를 잼
   scripts/sheet_sweep.py        자동 수집 (§3-0): 태그 화이트리스트 위 뷰 계획 → 규칙 검사 → MoveL 청크 → capture, 세션에 바로 저장
-  scripts/check_sheet_sweep.py  그 오프라인 검증 (실제 tf 체인 + 09-21 세션 기하 + 가짜 팔, 33개 검사)
+  scripts/check_sheet_sweep.py  그 오프라인 검증 (실제 tf 체인 + 09-21 세션 기하 + 가짜 팔, 36개 검사)
+  scripts/sheet_path.py         hand_cam 렌즈를 시트 좌표의 점들로 보내 착지 오차를 잼 (§3-5a)
+  scripts/arm_offsets.py        팔 관절 영점 오프셋 피팅 (§5-A; 코너 재투영 잔차, --hand-eye-free)
+  scripts/basler_tip_calib.py   Basler vision tip 보정 CLI — check / capture-hand / capture-basler / status / solve / verify (§6)
+  scripts/check_basler_tip.py   그 오프라인 검증 (11개 검사)
   src/chain_calib/solver.py     수학 (AX = YB 피팅, 홀드아웃 평가, 태그 쌍 지표), ROS 없음
   src/chain_calib/sheet.py      시트 레이아웃, 프레임 누적, multi-tag PnP, ROS 없음
   src/chain_calib/session.py    샘플 저장, 자세 설명, 커버리지 조언, ROS 없음
+  src/chain_calib/basler_tip.py 비전 팁 피팅 수학 (A4 20 mm 태그 시트), ROS 없음
+  src/chain_calib/basler_tip_ros.py  그 ROS 쪽 (BaslerTipSession; CLI 와 robot_ui 가 공유)
+  src/chain_calib/arm_fk.py     apriltag_nav.arm_fk.ArmChain 재export (FR10v6 URDF FK; 2026-09-22 이동)
   sheet/                        A0 시트 PDF(인쇄용) + layout.json(설계 좌표) + 인수인계 문서
 log/chain_calib/<세션>/         samples.npz, corners.json, meta.yaml, corrections.npz
                                 (+ 자동 수집이면 sweep_plan.csv, sweep_log.csv)
@@ -224,9 +231,9 @@ rosrun chain_calib sheet_sweep.py --sx <..> --sy <..> --tag-size <..>           
   capture …`로 같은 것을 쓸 수 있습니다 (전역 옵션, 쉼표 구분, 서브커맨드 앞).
 - 뷰마다 front_cam의 200 위치를 시작과 비교해 3 mm 넘게 움직이면 경고합니다
   (몸체가 움직였다는 뜻; 기록은 됩니다).
-- 검증: `python3 src/chain_calib/scripts/check_sheet_sweep.py` (33) — 실제
+- 검증: `python3 src/chain_calib/scripts/check_sheet_sweep.py` (36) — 실제
   tf_chain + 09-21 세션의 front_cam 기하 + 가짜 팔/검출기로 계획·청크·실행
-  루프·건너뛰기·Ctrl-C를 확인 (36). 2026-09-28 스택 상대 `--dry-run` 35/35 계획,
+  루프·건너뛰기·Ctrl-C를 확인. 2026-09-28 스택 상대 `--dry-run` 35/35 계획,
   최대 회전 43.8°.
 
 ### 3-1. 시작 자세와 점검
@@ -417,7 +424,7 @@ rosrun chain_calib verify_chain.py run  log/chain_calib/<세션> --fit none   # 
 
 ```bash
 source devel/setup.bash
-python3 src/chain_calib/scripts/check_chain_calib.py     # 35 checks
+python3 src/chain_calib/scripts/check_chain_calib.py     # 48 checks
 ```
 
 (1) PDF를 래스터화해 **실제 검출기(dt_apriltags)** 로 11장을 검출하고 코너 0이

@@ -16,13 +16,14 @@ Anything systematically > 1 cm points to either a noisy detection
 
 Usage::
 
-    # Requires path_tag_locator + map_calibrator running, plus the
-    # base parked in front of the plan's first nav_start_id.
+    # Requires the main stack + path_tag_locator.launch running, plus the
+    # base parked ON the plan's first tag (the generated plans carry no
+    # nav_start_id; the session starts where the base stands).
     rosrun path_tag_locator test_repeatability.py
 
     # Or with explicit output paths:
     rosrun path_tag_locator test_repeatability.py \
-        --out1 /tmp/run_a.yaml --out2 /tmp/run_b.yaml
+        --out1 <ws>/log/path_tag_locator/run_a.yaml --out2 <ws>/log/path_tag_locator/run_b.yaml
 """
 import argparse
 import math
@@ -32,6 +33,8 @@ import time
 
 import rospy
 import yaml
+
+from path_tag_locator import LOG_ROOT
 
 
 def call_run_calibration(out_path: str):
@@ -64,7 +67,7 @@ def diff_two(p1: str, p2: str) -> int:
     only_a = sorted(set(ta.keys()) - set(tb.keys()))
     only_b = sorted(set(tb.keys()) - set(ta.keys()))
     if only_a or only_b:
-        print(f"\n⚠ tag sets differ between runs:")
+        print("\n⚠ tag sets differ between runs:")
         if only_a: print(f"  only in run A: {only_a}")
         if only_b: print(f"  only in run B: {only_b}")
 
@@ -108,8 +111,10 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--out1", default="/tmp/path_tag_locator_run_a.yaml")
-    ap.add_argument("--out2", default="/tmp/path_tag_locator_run_b.yaml")
+    # Every record lives inside the workspace (2026-09-14 rule), so the
+    # two outputs default to LOG_ROOT next to the session's map_world files.
+    ap.add_argument("--out1", default=os.path.join(LOG_ROOT, "repeatability_run_a.yaml"))
+    ap.add_argument("--out2", default=os.path.join(LOG_ROOT, "repeatability_run_b.yaml"))
     ap.add_argument("--pause-s", type=float, default=2.0,
                     help="pause between runs (s)")
     args = ap.parse_args()

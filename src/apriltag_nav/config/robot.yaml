@@ -10,8 +10,9 @@ robot:
   # Dimensions (meters) — the replacement base, measured 2026-08-13. The old
   # one was 0.80 x 0.50; the body grew 100 mm longer and 200 mm wider, which
   # also resolves the impossible 0.50 width (narrower than the 0.65 wheel
-  # track). Nothing in apriltag_nav reads either key — see the clearance
-  # warning at wall_dist_work_zone below, which is now the live consequence.
+  # track). Read only as the FALLBACK for aim_body_half_length_m /
+  # aim_body_half_width_m (mobile_controller), which are set below, so they
+  # have no practical effect — see the clearance warning at wall_dist_work_zone.
   length: 0.90
   width: 0.70
   # Distance from robot centre to the front_cam lens, along +body X (forward).
@@ -21,15 +22,16 @@ robot:
   # puts the computed pose somewhere the tag grid does not agree with.
   # ⚠️ The 3 mm against the 2026-08-13 measurement is unreconciled — if 547 is
   # the true lens position, the tags are the thing to move, not this key.
-  # Must equal the tx of config/tf/tf_chain.yaml `T_mb2fc` (generated from here).
-  # This is the ONE key in this block that code actually reads
-  # (mobile_controller.calculate_robot_pose).
+  # Must equal the tx of config/tf/tf_chain.yaml `T_mb2fc` (generated from here):
+  # this is the key the stop-pose geometry (mobile_controller.calculate_robot_pose,
+  # tools/map_stop_poses.py) and T_mb2fc's tx must agree on.
   camera_offset: 0.550
   # Lens lateral offset from the base's rotation centre (m, body y = LEFT
   # positive). Measured by tools/calib_front_cam_pose.py from the arc the
   # lens draws during pivots (2026-09-08 data: -0.005 ± 0.005 m, i.e. inside
-  # the noise). Read by tf_chain_tool.py front-cam (T_mb2fc ty) ONLY —
-  # mobile_controller still assumes the lens is on the centreline.
+  # the noise). Read by tf_chain.physical_T_mb2fc (tf_chain_tool.py front-cam,
+  # T_mb2fc ty, and the check scripts) ONLY — mobile_controller still assumes
+  # the lens is on the centreline.
   camera_lateral: 0.0
 
   # Movement limits
@@ -40,12 +42,6 @@ robot:
   # max_angular_speed above; align has its own cap below.
   move_max_angular_speed: 0.25
   align_max_angular_speed: 0.12
-  slow_factor: 0.3          # Speed multiplier for docking/precision
-
-  # Minimum velocity settings (as ratio of max speed)
-  # ⚠️ Both of these are read by nothing (see CLAUDE.md).
-  min_linear_factor: 0.3    # min_linear = 0.3 * max_linear = 0.015 m/s
-  min_angular_factor: 0.25  # min_angular = 0.25 * max_angular = 0.0625 rad/s
 
   # ⚠️ THERE IS NO ABSOLUTE SPEED FLOOR. A `min_drive_speed: 0.015` clamp was
   # added on 2026-08-14 and REMOVED the same day, on the user's decision, once
@@ -210,8 +206,10 @@ robot:
   # 정반 1's top edge is y = 2.50, i.e. 0.52, chosen to balance the pivot
   # between the north wall and the plate corner rather than to hold 0.10.
   # (0.6275 was the old cell's zone A and no longer describes anything.)
-  # Nothing in apriltag_nav reads these three keys — the robot's real stop
-  # position comes from centring the tag under front_cam, not from here.
+  # wall_dist_work_zone is read only as the FALLBACK for aim_wall_dist_m
+  # (mobile_controller), which is set below, so none of these three keys has
+  # a practical effect — the robot's real stop position comes from centring
+  # the tag under front_cam, not from here.
   wall_dist_work_zone: 0.45  # Zones B, C, D, E
   wall_dist_zone_a: 0.52     # Zone A
   min_wall_clearance: 0.10
@@ -405,14 +403,13 @@ robot:
   # existing visual Pure Pursuit + image-centre stop condition takes over.
   predictive_centering:
     enabled: true
-    # "latest" means newest ~/.ros/path_tag_locator/map_world_*.yaml from the
-    # calibration pipeline. Blind (tag-not-visible) steering ALWAYS has a line
+    # "latest" means the newest <ws>/log/path_tag_locator/map_world_*.yaml
+    # from the calibration pipeline. Blind (tag-not-visible) steering ALWAYS has a line
     # to follow: the calibrated map_world segment when both endpoints are in
     # it, otherwise the map.yaml geometry (2026-09-02; before this, a present
     # map_world file with a missing endpoint disabled prediction for that
-    # segment because fallback_to_map_yaml was false).
+    # segment because the retired fallback_to_map_yaml key was false).
     use_map_world: true
-    fallback_to_map_yaml: true     # no longer read; map.yaml is always the fallback
     map_world_path: "latest"
     # Hops that touch any tag in these ranges / ids run WITHOUT prediction
     # (user request 2026-09-02): tag visible -> plain Pure Pursuit, tag not
@@ -528,9 +525,9 @@ robot:
   # ⚠️ EVERY hop ends with stop -> align_to_tag, no per-tag exception (user
   # rule 2026-09-04: "어떤 상황이든 정지해서 얼라인은 필수"). The
   # `align_skip_tag_ranges: [[400, 499]]` key from 2026-09-02 (400->401 …
-  # 410->411 lane hops were Pure Pursuit only) is retired: mobile_controller
-  # ignores it with a warning if it is ever put back. A tag out of view at
-  # rest now fails the hop on align_timeout_s instead of being waved on.
+  # 410->411 lane hops were Pure Pursuit only) was retired 2026-09-04 and is
+  # not read any more. A tag out of view at rest now fails the hop on
+  # align_timeout_s instead of being waved on.
 
   # Pivot Tuning — execute_pivot (2026-09-08). A corridor pivot ends with
   # an in-place align on the EXIT tag (mandatory, user rule). The start
@@ -641,20 +638,20 @@ robot:
   # shows the whole tag at rest. 400 px ≈ 162 mm at this depth.
   #
   # ⚠️ Consequence: a reverse arrival now stops ~162 mm further along the
-  # reverse direction than a forward arrival at the same tag, and
-  # /robot_pose has no fore-aft term (it is map tag + lateral + camera
-  # offset), so the next hop's odom distance is off by that much — longer
-  # if it drives forward, shorter if it reverses again. Arrival is still
-  # decided by the tag, so the hop still ends on the tag; only the speed
-  # profile / blind-approach zone see the error. Both columns are drawn on
-  # /front_cam/tag_overlay (FWD / REV labels) from these two keys.
+  # reverse direction than a forward arrival at the same tag. /robot_pose
+  # carries that fore-aft distance since 2026-09-04 (robot_pose_use_fore_aft
+  # below), and the next hop's odom distance is corrected for it
+  # (_odom_distance_for_hop) — longer if it drives forward, shorter if it
+  # reverses again. Arrival is still decided by the tag, so the hop still
+  # ends on the tag. Both columns are drawn on /front_cam/tag_overlay
+  # (FWD / REV labels) from these two keys.
   center_x_stop_offset_reverse: 400.0
   # Target tags that keep the FORWARD column even on a reverse hop (user
   # rule 2026-09-04: "500번대 태그가 목표 명령이면 기존 목표 태그 위치에
   # 멈춰야 해"). The 500-series are the dock and the corridor pivot tags —
   # a pivot turns about the base centre, so the base has to be ON the tag's
-  # designed stop pose, not 162 mm short of it. Same [[lo, hi], ...] shape
-  # as align_skip_tag_ranges; matched on the TARGET tag only.
+  # designed stop pose, not 162 mm short of it. [[lo, hi], ...] tag-id
+  # ranges; matched on the TARGET tag only.
   # (was center_x_stop_offset_reverse_skip_tag_ranges — still read as an
   # alias; since 2026-09-04 it applies to BOTH directions and the column
   # for these targets is the crosshair, offset 0.)
@@ -754,9 +751,6 @@ robot:
   # measured with the age capped at 0.3 s. 0.08 s = 0.8 mm of lead.
   stop_latency_linear_s: 0.08
 
-  # Delays (seconds)
-  stop_sleep_duration: 1.0
-
   # Safety timeout (seconds)
   # If tag not reached within this time, emergency stop
   navigation_timeout: 8.0
@@ -767,7 +761,6 @@ topics:
   # mobile_controller's own detector never saw a frame and /robot_pose never
   # published. Navigation now consumes front_cam_detections / front_cam_info
   # below, which robot_camera_node already produces.
-  scan_signal: "/scan_finished"
   # cmd_vel / odom are consumed by the Navifra driver's base_controller node
   # (KU Polishing Robot Driver v0.16). Names already match the driver defaults.
   cmd_vel: "/cmd_vel"
@@ -978,7 +971,7 @@ lifter:
 # /crevis/led/vision.
 #
 # NOTE: this is the wrist/scan camera only. The front navigation camera is a
-# separate device and publishes topics.camera_rgb above.
+# separate device (front_cam); navigation reads topics.front_cam_detections.
 camera:
   service: "/camera/capture"
   num_samples: 1              # frames per capture when the request says <= 0
@@ -1254,9 +1247,9 @@ arm_calibration:
   world_floor_z_m: -0.080
   tag_z_max_offset_m: 0.05
 
-# Arm home joint angles in radians. This matches the hardcoded value used
-# across every controller (arm_controller.py, tools/arm_controller_sdk.py)
-# — they all use j1 = -1.5708, not 0.0. Keep this in sync if either side changes.
+# Arm home joint angles in radians. This matches the hardcoded fallback in
+# arm_controller.py — j1 = -1.5708, not 0.0. Keep this in sync if either
+# side changes.
 arm_home:
   joints_rad: [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
 
@@ -1282,10 +1275,11 @@ keyence:
   sensor_zero_mm:     16.5
   target_distance_mm: 16.5
 
-  # SENSOR POLARITY (set in the DL-EN1, confirmed on the robot 2026-08-05):
-  #   distance > 10 mm (too far)   -> reading NEGATIVE
-  #   distance = 10 mm             -> reading 0
-  #   distance < 10 mm (too close) -> reading POSITIVE
+  # SENSOR POLARITY (set in the DL-EN1, confirmed on the robot 2026-08-05;
+  # the zero moved 10 -> 16.5 mm with the 2026-09-18 case, sensor_zero_mm):
+  #   distance > sensor_zero_mm (too far)   -> reading NEGATIVE
+  #   distance = sensor_zero_mm             -> reading 0
+  #   distance < sensor_zero_mm (too close) -> reading POSITIVE
   # i.e. the reading rises as the tool approaches the surface. That is the same
   # thing the sweep in tools/measure_keyence_angle.py measures as k > 0, and it
   # is what forces keyence_dir = -sign(k) = -1.0 (set in the launch file):
@@ -1560,10 +1554,3 @@ collect:
                               # the CSV goes to <record_dir>/<run>/<run>_ra_measured.csv (or
                               # _mark_template.csv), inside the run's frame folder (2026-10-06
                               # evening, user: results/ not log/)
-
-# Inference / model
-inference:
-  input_height: 900
-  input_width: 900
-  mean: [0.5, 0.5, 0.5]
-  std:  [0.5, 0.5, 0.5]

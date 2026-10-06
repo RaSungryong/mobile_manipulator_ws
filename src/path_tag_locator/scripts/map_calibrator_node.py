@@ -127,7 +127,6 @@ class MapCalibratorNode:
             home_service=self.locator_cfg.arm.home_service,
             default_vel=self.locator_cfg.align.move_vel,
             default_acc=self.locator_cfg.align.move_acc,
-            default_ovl=self.locator_cfg.align.move_ovl,
             motion_timeout_s=self.locator_cfg.arm.motion_timeout_s,
         )
         self.base = BaseInterface()

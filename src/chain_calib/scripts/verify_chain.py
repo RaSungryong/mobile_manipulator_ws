@@ -41,7 +41,6 @@ import numpy as np
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "src"))     # NOT _HERE: scripts/chain_calib.py would shadow the package
 
-from chain_calib import sheet as SH                                    # noqa: E402
 from chain_calib import solver as CC                                   # noqa: E402
 from chain_calib.session import load_samples                           # noqa: E402
 from path_tag_locator.chain import compensate_T_ab2mb                  # noqa: E402

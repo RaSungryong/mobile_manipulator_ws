@@ -137,10 +137,10 @@ class TaskManager:
     # groups (run only these group_ids), result_name. Example — one group of
     # a discovered pair, for an end-to-end bring-up without copying the CSV:
     #
-    #   "scan_g104_standoff010": {
-    #       "file": "assigned_workpoints_errorY_p000mm_standoff_010mm_height_652mm.csv",
-    #       "joint_file": "rrt_final_path_errorY_p000mm_standoff_010mm_height_652mm.csv",
-    #       "groups": [104],
+    #   "scan_g105_10mm": {
+    #       "file": "assigned_workpoints_10mm.csv",      # discovered as scan_pose_10mm
+    #       "joint_file": "rrt_final_path_10mm.csv",     # discovered as scan_joint_10mm
+    #       "groups": [105],
     #       "type": "scan",
     #       "scan_mode": "pose",
     #   },

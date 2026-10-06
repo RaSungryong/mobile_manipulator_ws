@@ -36,8 +36,8 @@ from .align import (
     compute_target_ee_pose,
     is_converged,
 )
-from .detections import (detection_to_T_cam2tag, wait_for_tag_detection,
-                         wait_for_tag_detections, median_tilt_detection)
+from .detections import (detection_to_T_cam2tag, wait_for_tag_detections,
+                         median_tilt_detection)
 from .geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 
 

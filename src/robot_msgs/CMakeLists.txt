@@ -10,7 +10,6 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   Pose2DWithFlag.msg
-  NavDebugStatus.msg
   AprilTagDetection.msg
   AprilTagDetectionArray.msg
   ArmState.msg

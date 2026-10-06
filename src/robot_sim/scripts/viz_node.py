@@ -15,7 +15,6 @@ knowledge of its own.
 import argparse
 import json
 import math
-import sys
 import threading
 
 import matplotlib

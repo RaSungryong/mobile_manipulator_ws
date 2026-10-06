@@ -26,8 +26,6 @@ def _resolve_pkg_dir():
 
 PKG_DIR = _resolve_pkg_dir()
 
-UI_DIR = os.path.join(PKG_DIR, 'ui')
-
 # Where hot-reloadable operator scripts live. Overridable with ~plugin_dir so a
 # site can keep its own collection outside the package.
 PLUGIN_DIR = os.path.join(PKG_DIR, 'plugins')

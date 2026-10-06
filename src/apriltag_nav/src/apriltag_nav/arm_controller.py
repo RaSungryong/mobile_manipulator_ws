@@ -16,8 +16,8 @@ Everything that is not motion control was extracted, same package:
   * scan_results.py  — incremental 13-column result CSV persistence
 
 The public surface is unchanged: execute_scan_points / move_to_home / cancel /
-current_pose_msg / publish_done / is_busy / shutdown. arm_node.py
-wraps this class; nothing else instantiates it.
+current_pose_msg / publish_done / shutdown. arm_node.py wraps this class
+(the only entry point); nothing else instantiates it.
 """
 
 import os
@@ -2173,19 +2173,8 @@ class ArmController:
         self.done_pub.publish(msg)
         rospy.loginfo("[Arm REAL] scan_finished published")
 
-    def is_busy(self):
-        return self.busy
-
     def shutdown(self):
         rospy.loginfo("[Arm REAL] Shutting down...")
         # The camera and the VISION lamp belong to basler_camera_node — it
         # closes the device and darkens the lamp on its own shutdown.
         self.pipeline.shutdown()
-
-
-if __name__ == "__main__":
-    rospy.init_node("arm_controller", anonymous=False)
-    model_path = rospy.get_param('~model_path', None)
-    controller = ArmController(model_path=model_path)
-    rospy.on_shutdown(controller.shutdown)
-    rospy.spin()

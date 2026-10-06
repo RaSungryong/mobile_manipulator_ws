@@ -35,7 +35,6 @@ import math
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -129,7 +128,6 @@ def main():
         move_cart_topic=cfg.arm.move_cart_topic,
         default_vel=cfg.align.move_vel,
         default_acc=cfg.align.move_acc,
-        default_ovl=cfg.align.move_ovl,
         motion_timeout_s=cfg.arm.motion_timeout_s,
     )
 

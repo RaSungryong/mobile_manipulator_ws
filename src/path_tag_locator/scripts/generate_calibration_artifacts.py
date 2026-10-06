@@ -35,7 +35,6 @@ Usage (workspace sourced):
 """
 import argparse
 import csv
-import itertools
 import math
 from pathlib import Path
 

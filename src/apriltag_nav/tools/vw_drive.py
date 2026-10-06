@@ -51,8 +51,8 @@ a move too short to reach `v_top` degrades to a triangle on its own. There are
 no phase ratios to tune, and deceleration is CONSTANT, i.e. the velocity falls
 linearly in time — which is what a smooth stop looks and feels like.
 
-⚠️ **This replaced a copy of `MobileController._smooth_speed_factor`**, which
-ramps down as `(remaining/span)**2` — quadratic in DISTANCE, evaluated against
+⚠️ **This replaced a copy of the old `MobileController._smooth_speed_factor`
+(dead code, deleted 2026-10-06)**, which ramped down as `(remaining/span)**2` — quadratic in DISTANCE, evaluated against
 a limiter that works in TIME. That combination judders into a stop, and both
 reasons were measured in simulation against the real code:
 
@@ -70,8 +70,8 @@ The envelope above has neither problem, because it IS the braking curve: a
 speed on it satisfies `v**2/(2a) == remaining`, so the constant-accel ramp-out
 lands exactly on target.
 
-⚠️ Do not read the above as a description of navigation. **`_smooth_speed_factor`
-is dead code — nothing calls it.** `execute_pure_pursuit` uses a LINEAR-in-
+⚠️ Do not read the above as a description of navigation — nothing ever
+called `_smooth_speed_factor`. `execute_pure_pursuit` uses a LINEAR-in-
 distance ramp, whose peak demand is `v_top*(v_top-v_floor)/(0.4*D)`: milder,
 but still 1.0x the limit on a 0.40 m move and 1.95x on a 0.20 m one at the
 current top speed. See CLAUDE.md.

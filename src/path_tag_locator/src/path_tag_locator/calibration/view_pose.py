@@ -12,7 +12,7 @@ Idea:
   the user world frame), the inter-entry base translation in world is
   approximately the inter-entry path-tag translation in map.yaml.
 - The base's yaw change between entries is observable directly via
-  /odom (``RobotController.current_theta``).
+  /odom (``BaseInterface.current_theta``).
 - Putting these together, we can estimate ``T_world2mb`` for the upcoming
   entry and from that derive a sensible ``arm_view_tcp_mm_deg`` that
   puts the hand camera squarely above the chosen ref tag, ready for
@@ -24,14 +24,13 @@ clamp, so this is plenty for a seed pose.
 """
 import math
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Sequence
 
 import numpy as np
 
 from ..geometry import (
     invert_T,
     matrix_m_to_pose_fr5,
-    rpy_deg_to_R,
 )
 
 

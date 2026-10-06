@@ -26,7 +26,6 @@ What is proven, in order:
      selection matters and the sign is right. Also that the pinhole
      render equals GroundPlane.project(), so the two conventions agree.
 """
-import copy
 import math
 import os
 import sys
@@ -41,7 +40,8 @@ sys.path.insert(0, os.path.join(_PKG, "src"))
 sys.path.insert(0, os.path.join(_PKG, "..", "apriltag_nav", "src"))
 
 try:
-    import rospy  # noqa: F401
+    import importlib
+    importlib.import_module("rospy")
 except ImportError:
     import types
     _r = types.ModuleType("rospy")

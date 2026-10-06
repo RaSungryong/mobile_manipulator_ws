@@ -32,7 +32,6 @@ import numpy as np
 
 from .geometry import (
     invert_T,
-    pose_fr5_to_matrix_m,
     rot2rpy_deg,
 )
 

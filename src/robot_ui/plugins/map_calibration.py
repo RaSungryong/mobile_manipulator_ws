@@ -12,7 +12,8 @@ Prerequisites (this script checks none of them for you):
      alongside the main stack (the calibration nodes are NOT part of
      mobile_manipulator.launch).
   2. reference_tags.yaml holds the six REAL measured tag poses (not the
-     example values) and calibration_plan.yaml lists the entries to run.
+     example values) and calibration_plan_plate{1,2}.yaml list the entries
+     to run (PLATE below picks the pair; the plan + ref file swap together).
   3. Nobody sends TASK/GOTO while this runs — the session drives the base
      through /mobile/goto_tag, the same topic task_executor commands.
 

@@ -150,7 +150,7 @@ def report(rows, design_xy=None):
     if r * 1e3 >= R_HANDEYE_MM:
         print(f"  VERDICT: HAND-EYE. Radius {r*1e3:.1f} mm is arm-side error,")
         print(f"           roughly equivalent to {r*1e3/MM_PER_DEG_HANDEYE:.2f}° of")
-        print(f"           hand-eye rotation (or a comparable translation).")
+        print("           hand-eye rotation (or a comparable translation).")
         print("           -> run handeye_calib; do NOT touch T_mb2fc yet.")
     elif r * 1e3 <= R_CLEAN_MM:
         print(f"  VERDICT: NOT the hand-eye. Radius {r*1e3:.1f} mm is within the")

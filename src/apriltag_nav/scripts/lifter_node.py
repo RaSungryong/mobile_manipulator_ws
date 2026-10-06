@@ -168,7 +168,7 @@ DEFAULTS = {
 }
 
 
-class BaseLifterNode:
+class LifterNode:
     def __init__(self):
         rospy.init_node('lifter_node', anonymous=False)
 
@@ -609,5 +609,5 @@ class BaseLifterNode:
 
 
 if __name__ == '__main__':
-    node = BaseLifterNode()
+    node = LifterNode()
     rospy.spin()

@@ -31,11 +31,10 @@ import re
 import sys
 from pathlib import Path
 
-import numpy as np
 import rospy
 import rospkg
 import yaml
-from geometry_msgs.msg import Point, Pose, Quaternion, Vector3
+from geometry_msgs.msg import Point, Quaternion, Vector3
 from std_msgs.msg import ColorRGBA, Header
 from visualization_msgs.msg import Marker, MarkerArray
 

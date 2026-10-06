@@ -23,13 +23,15 @@ the tool currently is, and does not home first.
 import os
 from datetime import datetime
 
+from robot_ui.paths import DEFAULT_SAVE_DIR
+
 # Grid geometry, in tool-frame mm. Small on purpose: this is an example, and a
 # plugin that sweeps far by default is one careless RUN away from a collision.
 STEP_MM = 5.0
 COLS = 3
 ROWS = 2
 
-SAVE_DIR = '/tmp/robot_ui_captures/grid'
+SAVE_DIR = os.path.join(DEFAULT_SAVE_DIR, 'grid')   # <ws>/results/captures/grid (results stay in the workspace)
 
 
 def run(ctx):

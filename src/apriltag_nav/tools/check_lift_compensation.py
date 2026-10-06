@@ -26,7 +26,6 @@ The checks below pin the three things that could go wrong:
   * that `lift_m=0` still reproduces the old result BIT-FOR-BIT, so this
     is a no-op for every task that runs at the origin.
 """
-import math
 import os
 import sys
 import types
@@ -42,7 +41,7 @@ sys.path.insert(0, os.path.join(PKG, "src"))
 # which is how the real lookup behaves with no param server entry.
 if "rospy" not in sys.modules:
     try:
-        import rospy  # noqa: F401
+        __import__("rospy")      # the real one, when a sourced shell has it
     except ImportError:
         _r = types.ModuleType("rospy")
         _r.get_param = lambda name, default=None: default
@@ -169,8 +168,8 @@ check("a flipped sign would be 2x the lift off (so the sign is testable)",
       f"{(landed_wrong[2] - p['z'])*1e3:.1f} mm vs 2h = {2*h*1e3:.1f} mm")
 
 print("\n== magnitude at the heights the tasks actually use ==")
-for h_mm, what in ((150.0, "optimized_joints_line2"),
-                   (300.0, "optimized_joints_line1"),
+for h_mm, what in ((150.0, "a 150 mm lift_height"),
+                   (300.0, "a 300 mm lift_height"),
                    (STROKE_MM, "top of stroke")):
     print(f"  lift {h_mm:6.2f} mm ({what:24s}) -> uncompensated pose-mode "
           f"error {h_mm:6.2f} mm in world z")

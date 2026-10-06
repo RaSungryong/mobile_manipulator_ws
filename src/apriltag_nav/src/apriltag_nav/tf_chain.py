@@ -371,7 +371,6 @@ def urdf_mobile_to_base(T_ab2mb):
     """(xyz m, rpy rad) of the planner URDF's `mobile_to_base` joint for this
     T_ab2mb: the same transform seen from the URDF's `mobile_base` frame,
     which is yawed 180 deg from mb (its +x points backwards)."""
-    from scipy.spatial.transform import Rotation as R
     Rz180 = np.diag([-1.0, -1.0, 1.0, 1.0])
     M = Rz180 @ invert_T(T_ab2mb)          # mobile_base -> base_link
     rot = _as_rotation(M[:3, :3])

@@ -83,7 +83,7 @@ spin, ~compute, then the sweep). Precondition: the camera at least
 """
 import math
 from dataclasses import dataclass, field, replace
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 import numpy as np
 

@@ -72,7 +72,6 @@ ROS parameters (defaults come from robot.yaml `camera:` when present):
   ~publish_last      (bool)  also publish each frame on /basler/image_raw
 """
 
-import os
 import threading
 
 import rospy

@@ -28,8 +28,10 @@ Snapshots: `rostopic echo -n1 /front_cam/tag_detections > dir/scan_<t>.txt`
 the fit sees already-corrected data). CameraInfo:
 `rostopic echo -n1 /front_cam/color/camera_info > dir/camera_info.txt`.
 The full session (moves, pivots, drives, solve, apply) is
-tools/calib_front_cam_pose.py; this script is the fit it reuses, and
-reproduces the 2026-09-08 record as is:
+tools/calib_front_cam_pose.py; this script is the fit it reuses. The
+defaults are the current 90 mm pair (tags 149 / 150, --size 0.090); the
+2026-09-08 record was taken on the retired 60 mm pair 15 / 16 and
+reproduces as is with:
 
     rosrun apriltag_nav fit_front_cam_ground.py log/apriltag_nav/calib_pair --spacing 0.150 --tags 15 16 --size 0.060
 """
@@ -44,7 +46,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
-from apriltag_nav.ground_plane import GroundPlane, rot_xyz  # noqa: E402
+from apriltag_nav.ground_plane import GroundPlane  # noqa: E402
 
 
 def parse_snapshot(fn):
@@ -159,8 +161,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('dir')
     ap.add_argument('--spacing', type=float, default=0.150, help='tag centre spacing (m)')
-    ap.add_argument('--tags', type=int, nargs=2, default=[15, 16], help='tag ids, first -> second along +x')
-    ap.add_argument('--size', type=float, default=0.060, help='nominal printed tag size (m), refined by the fit')
+    ap.add_argument('--tags', type=int, nargs=2, default=[149, 150],
+                    help='tag ids, first -> second along +x (the 2026-09-08 record used 15 16)')
+    ap.add_argument('--size', type=float, default=0.090,
+                    help='nominal printed tag size (m), refined by the fit (the 2026-09-08 record used 0.060)')
     ap.add_argument('--height', type=float, default=0.30, help='initial lens height (m)')
     ap.add_argument('--camera-info', default=None, help='camera_info dump (default <dir>/camera_info.txt)')
     a = ap.parse_args()

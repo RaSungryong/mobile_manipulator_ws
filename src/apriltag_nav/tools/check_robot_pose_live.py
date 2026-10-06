@@ -144,7 +144,6 @@ def main():
 
     def step(dt):
         real_step(dt)
-        n = len(out)
         src = c.publish_live_robot_pose()
         if src is not None:
             sources.append(src)

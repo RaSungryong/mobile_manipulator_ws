@@ -3,9 +3,8 @@
 """
 Full-system device connection + data reception test.
 
-Complements tools/test_hardware.py, which only opens the three directly-attached
-devices (arm / Keyence / Basler). This script also covers the network map, the
-USB cameras, and — the part that actually matters once the stack is running —
+Covers the three directly-attached devices (arm / Keyence / Basler), the
+network map, the USB cameras, and — the part that actually matters once the stack is running —
 whether every topic is *delivering data*, not merely advertised.
 
 Read-only by design. It never publishes /cmd_vel, never homes or moves the arm,

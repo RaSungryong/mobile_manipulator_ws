@@ -290,7 +290,6 @@ def cmd_capture(args):
         if det is None:
             history.clear()
             line = "target NOT seen                                      "
-            saved = False
         else:
             obj, img, n = det
             motion = still_px(img)

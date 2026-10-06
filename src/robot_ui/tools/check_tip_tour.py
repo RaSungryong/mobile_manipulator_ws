@@ -11,7 +11,6 @@ go to a temp dir, nothing touches ROS.
 """
 
 import csv
-import math
 import os
 import sys
 import tempfile

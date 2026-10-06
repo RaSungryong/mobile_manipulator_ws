@@ -21,7 +21,7 @@ ROS parameters
 --------------
   ~plugin_dir  directory of hot-reloadable operator scripts
                (default robot_ui/plugins)
-  ~save_dir    default capture folder (default /tmp/robot_ui_captures)
+  ~save_dir    default capture folder (default <ws>/results/captures, robot_ui.paths.DEFAULT_SAVE_DIR)
 """
 
 import os

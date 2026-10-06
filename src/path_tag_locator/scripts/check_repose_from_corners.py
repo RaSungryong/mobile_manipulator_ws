@@ -57,7 +57,8 @@ except ImportError:
 # subscriber helpers. The geometry under test needs neither, so stub them
 # and the check runs on a dev box with no ROS install.
 try:
-    import rospy  # noqa: F401
+    import importlib
+    importlib.import_module("rospy")
 except ImportError:
     import types
     _r = types.ModuleType("rospy")

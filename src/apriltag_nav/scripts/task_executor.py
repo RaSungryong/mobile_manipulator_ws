@@ -6,7 +6,6 @@ import os
 import re
 import threading
 import rospy
-import numpy as np
 from datetime import datetime
 from std_msgs.msg import Bool, String
 from enum import Enum, auto

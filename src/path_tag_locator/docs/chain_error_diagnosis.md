@@ -1,5 +1,7 @@
 # Diagnosing the calibration chain's rotation error
 
+> Historical (2026-09-11). The chain_calib A0-sheet method of 2026-09-15..22 (`src/chain_calib/README.md`) superseded the premise — the chain is now measured against the printed sheet as ground truth, and the yaw-sweep plans below are kept as diagnostic tooling only.
+
 Written 2026-09-11, dev side. **Not yet run on the robot.**
 
 ## The problem
@@ -59,7 +61,7 @@ radius large                       -> HAND-EYE     -> run handeye_calib
 radius ~0, but the normal session
   shows a large absolute error     -> FRONT_CAM    -> re-fit the ground plane
                                                      (tools/fit_front_cam_ground.py)
-                                                     -> robot.yaml -> tf_chain_tool.py front-cam --applypy
+                                                     -> robot.yaml -> tf_chain_tool.py front-cam --apply
 ```
 
 ## Running it
@@ -71,8 +73,8 @@ radius ~0, but the normal session
 rosrun path_tag_locator generate_calibration_artifacts.py --diagnostics-only
 ```
 
-`config/calibration_plan_plate{1,2}_yawsweep.yaml` — plate 1 is tag **103**
-/ ref **0**, 6 yaws spanning 355°; plate 2 is tag **141** / ref **3**. The
+`config/calibration_plan_plate{1,2}_yawsweep.yaml` — plate 1 is tag **116**
+/ ref **3**, 6 yaws spanning 355°; plate 2 is tag **141** / ref **3**. The
 tag is chosen for the widest *reachable* yaw span, because the resolving
 power is angular coverage, not entry count.
 

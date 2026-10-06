@@ -116,14 +116,9 @@ _STOP_FWD = (255, 200, 0)     # BGR cyan-blue — forward stop column
 _STOP_REV = (255, 0, 255)     # BGR magenta — reverse stop column
 
 
-def _rot_to_matrix(rot):
-    """scipy compat: >=1.4 spells it as_matrix(), 1.3 only has as_dcm().
-    This machine runs 1.3.3 (the merged stack assumed >=1.4 and crashed
-    at runtime on every call)."""
-    return rot.as_matrix() if hasattr(rot, 'as_matrix') else rot.as_dcm()
-
-
 def _rot_from_matrix(m):
+    """scipy compat: >=1.4 spells it from_matrix(), 1.3 only has from_dcm()
+    (the system scipy is 1.3.3; see CLAUDE.md Coding Conventions)."""
     return (R.from_matrix(m) if hasattr(R, 'from_matrix')
             else R.from_dcm(m))
 

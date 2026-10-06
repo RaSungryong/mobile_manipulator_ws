@@ -64,7 +64,7 @@ from chain_calib import solver as CC                                   # noqa: E
 from chain_calib.arm_fk import ArmChain                                # noqa: E402
 from chain_calib.session import load_samples                           # noqa: E402
 from path_tag_locator.chain import compensate_T_ab2mb                  # noqa: E402
-from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m, rot2rpy_deg  # noqa: E402
+from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m  # noqa: E402
 
 import importlib.util                                                  # noqa: E402
 _spec = importlib.util.spec_from_file_location("chain_calib_tool", os.path.join(_HERE, "chain_calib.py"))

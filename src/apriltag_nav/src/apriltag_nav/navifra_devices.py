@@ -27,7 +27,7 @@ stopping mechanism. The software /estop topic was removed in driver v0.11.
 import time
 
 import rospy
-from std_msgs.msg import Bool, String, Int32, Int16, Float32
+from std_msgs.msg import Bool, String, Int32, Float32
 from sensor_msgs.msg import BatteryState
 
 
@@ -55,7 +55,6 @@ _DEFAULT_TOPICS = {
     'led_status_green': '/crevis/led/status_green',
     'led_status_blue':  '/crevis/led/status_blue',
     'led_state_all':    '/crevis/led_state_all',
-    'crevis_connected': '/crevis/connected',
     'charging':         '/crevis/charging',
     'charge_port_on':   '/crevis/charge_port_on',
     'bms_state':        '/bms/state',
@@ -64,7 +63,6 @@ _DEFAULT_TOPICS = {
     'lift_home':        '/lift/home',
     'lift_position_cmd': '/lift/position_cmd',
     'lift_inc_position_cmd': '/lift/inc_position_cmd',
-    'lift_velocity_cmd': '/lift/velocity_cmd',
     'lift_reset':       '/lift/reset',
     'lift_position':    '/lift/position',
     'lift_status':      '/lift/status',
@@ -109,7 +107,6 @@ class NavifraDevices:
 
         # ---------- Battery state ----------
         self._battery = None
-        self._battery_stamp = 0.0
         self._soc = None
 
         # ---------- Lift state ----------
@@ -126,7 +123,6 @@ class NavifraDevices:
 
         # ---------- Lighting / charging state ----------
         self._led_state_all = None
-        self._crevis_connected = None
         self._charge_port_on = None
 
         # ---------- Publishers ----------
@@ -146,7 +142,6 @@ class NavifraDevices:
         self._pub_lift_home         = pub('lift_home', Bool)
         self._pub_lift_position_cmd = pub('lift_position_cmd', Int32)
         self._pub_lift_inc_cmd      = pub('lift_inc_position_cmd', Int32)
-        self._pub_lift_velocity_cmd = pub('lift_velocity_cmd', Int16)
         self._pub_lift_reset        = pub('lift_reset', Bool)
 
         # ---------- Subscribers ----------
@@ -163,7 +158,6 @@ class NavifraDevices:
         sub('lift_error', Bool, self._cb_lift_error)
         sub('lift_alarm', String, self._cb_lift_alarm)
         sub('led_state_all', String, self._cb_led_state_all)
-        sub('crevis_connected', Bool, self._cb_crevis_connected)
         sub('charge_port_on', Bool, self._cb_charge_port_on)
 
         rospy.loginfo("[Navifra] Peripheral interface ready "
@@ -197,7 +191,6 @@ class NavifraDevices:
 
     def _cb_bms(self, msg):
         self._battery = msg
-        self._battery_stamp = time.time()
 
     def _cb_soc(self, msg):
         self._soc = float(msg.data)
@@ -222,9 +215,6 @@ class NavifraDevices:
 
     def _cb_led_state_all(self, msg):
         self._led_state_all = msg.data
-
-    def _cb_crevis_connected(self, msg):
-        self._crevis_connected = bool(msg.data)
 
     def _cb_charge_port_on(self, msg):
         self._charge_port_on = bool(msg.data)
@@ -282,12 +272,6 @@ class NavifraDevices:
         """VISION lamp — scan illumination. Single fixed-colour lamp, on/off only."""
         self._set_led('vision', on)
 
-    def front_led(self, on):
-        self._set_led('front', on)
-
-    def side_led(self, on):
-        self._set_led('side', on)
-
     def set_status_color(self, color):
         """Drive the RGB STATUS lamp. Always writes all three channels."""
         key = (color or 'off').lower()
@@ -316,10 +300,6 @@ class NavifraDevices:
     @property
     def led_state_all(self):
         return self._led_state_all
-
-    @property
-    def crevis_connected(self):
-        return self._crevis_connected
 
     # ==========================================================
     # BATTERY
@@ -408,13 +388,6 @@ class NavifraDevices:
     def lift_stop(self):
         self._lift_cancel = True
         self._pub_lift_command.publish(String("stop"))
-
-    def lift_velocity(self, rpm):
-        """Raw velocity command [rpm], sign = direction. Manual mode only.
-
-        Same unbounded-at-the-top caveat as lift_up(); prefer lift_goto().
-        """
-        self._pub_lift_velocity_cmd.publish(Int16(int(rpm)))
 
     def lift_reset_alarm(self):
         """Manual alarm reset (PID_ALARM_RESET). Driver may auto-reset first."""

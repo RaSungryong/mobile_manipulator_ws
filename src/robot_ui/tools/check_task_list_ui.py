@@ -138,7 +138,6 @@ def main():
           'window asked the bridge to replay latched state')
 
     print('== /task_list arrives')
-    logged_before = win.txt_log.toPlainText() if hasattr(win, 'txt_log') else ''
     bridge.task_list.emit(PAYLOAD)
     app.processEvents()
     names = [t['name'] for t in PAYLOAD['tasks']]

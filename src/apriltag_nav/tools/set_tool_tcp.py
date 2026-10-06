@@ -115,8 +115,8 @@ def main():
     print()
     print('Done. Now update arm_controller.py:')
     print(f'  MoveJ(joints_deg, tool={args.tool_id}, user=0)')
-    print(f'  GetInverseKin(0, target, config=-1)   → tool is implicit')
-    print(f'  GetInverseKinRef(0, target, q0_deg)   → tool is implicit')
+    print('  GetInverseKin(0, target, config=-1)   → tool is implicit')
+    print('  GetInverseKinRef(0, target, q0_deg)   → tool is implicit')
 
 
 if __name__ == '__main__':

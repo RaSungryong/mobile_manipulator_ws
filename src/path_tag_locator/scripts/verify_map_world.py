@@ -16,8 +16,9 @@ robot / ROS master needed. Runs two independent checks:
 Usage::
 
     rosrun path_tag_locator verify_map_world.py
-        # picks the most recent map_world_*.yaml under ~/.ros/path_tag_locator/locate/
-        # and the package's config/map.yaml
+        # picks the most recent map_world_*.yaml under <ws>/log/path_tag_locator/
+        # and apriltag_nav's config/map.yaml (the only map; the in-package
+        # copy was deleted 2026-09-01)
 
     rosrun path_tag_locator verify_map_world.py \
         --map-world /path/to/map_world_xxx.yaml \
@@ -26,7 +27,6 @@ Usage::
 """
 import argparse
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -77,7 +77,7 @@ def per_tag_summary(mw: dict) -> None:
 def relative_geometry_check(mw: dict, mm: dict, threshold_m: float) -> int:
     """Compare distances along map.yaml's 'move' edges in both frames.
     Returns the number of flagged edges (|diff| > threshold)."""
-    print(f"\n=== Relative geometry vs map.yaml ===")
+    print("\n=== Relative geometry vs map.yaml ===")
     print(f"(flagging |Δdistance| > {threshold_m*1000:.0f} mm)")
     print(f"{'from':>5} {'to':>5}  {'map_d (m)':>10}  {'world_d (m)':>12}  "
           f"{'diff (m)':>10}")
@@ -122,7 +122,7 @@ def main():
                          "(default: latest in <ws>/log/path_tag_locator/)")
     ap.add_argument("--map-yaml", default=None,
                     help="path to apriltag_nav-style map.yaml "
-                         "(default: package's config/map.yaml)")
+                         "(default: apriltag_nav's config/map.yaml)")
     ap.add_argument("--threshold-m", type=float, default=0.05,
                     help="|Δdistance| threshold for flagging (m, default 0.05)")
     args = ap.parse_args()

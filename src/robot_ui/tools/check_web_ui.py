@@ -37,8 +37,8 @@ sys.path.insert(0, os.path.join(PKG, 'src'))
 import numpy as np                                   # noqa: E402
 
 from robot_ui.signals import Signal                  # noqa: E402
-from robot_ui.ros_bridge import RosBridge, STREAM_CAMERAS   # noqa: E402
-from robot_ui.web_ui import UiController, FrameEncoder      # noqa: E402
+from robot_ui.ros_bridge import RosBridge                  # noqa: E402
+from robot_ui.web_ui import UiController                    # noqa: E402
 
 N_OK = 0
 N_FAIL = 0

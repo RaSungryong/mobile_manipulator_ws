@@ -60,6 +60,7 @@ except ImportError:
         setattr(_r, _f, lambda *a, **k: None)
     _r.is_shutdown = lambda: False
     sys.modules["rospy"] = _r
+    rospy = _r
     _m = types.ModuleType("robot_msgs")
     _mm = types.ModuleType("robot_msgs.msg")
     _mm.AprilTagDetectionArray = object
@@ -67,7 +68,6 @@ except ImportError:
     sys.modules["robot_msgs"] = _m
     sys.modules["robot_msgs.msg"] = _mm
 
-import rospy  # noqa: E402
 from path_tag_locator import align_runner                                  # noqa: E402
 from path_tag_locator.align import (alignment_metrics, clamp_step,          # noqa: E402
                                     compute_target_ee_pose, is_converged,
@@ -346,7 +346,7 @@ print("§5 config")
 try:
     Cfg2 = dict(target_distance_m=0, max_iterations=1, position_tol_m=0, angle_tol_deg=0,
                 max_step_m=0, max_step_deg=0, max_initial_step_m=0, max_initial_step_deg=0,
-                move_vel=0, move_acc=0, move_ovl=0, move_settle_s=0, orientation="sideways")
+                move_vel=0, move_acc=0, move_settle_s=0, orientation="sideways")
     AlignCfg(**Cfg2)
     check(False, "unknown orientation refused")
 except ValueError:

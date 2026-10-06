@@ -3,16 +3,17 @@
 # All string paths support `$(find pkg)/...`, `~`, and `$VAR` expansion. If
 # left empty, the corresponding yaml default from map_calibrator.yaml is used.
 #
-# - plan_path     : path to calibration_plan.yaml
+# - plan_path     : path to the plan file (calibration_plan_plate{1,2}.yaml)
 # - ref_tags_path : path to reference_tags.yaml
 # - map_in_path   : path to the source map.yaml (used read-only for base
 #                   nav metadata; never mutated)
 # - map_out_path  : path to write the WORLD-FRAME map_world.yaml (atomic
-#                   write each step). NOTE: this is NOT a drop-in for
-#                   apriltag_nav's map.yaml — coordinates live in the
-#                   world frame defined by reference_tags.yaml, NOT the
-#                   Manipulator/Map frame.
-#                   "" => default ~/.ros/path_tag_locator/map_world_<ts>.yaml
+#                   write each step). The world frame is the one of
+#                   reference_tags.yaml — since 2026-09-01 that IS the
+#                   map.yaml frame (origin = centre of plate 1), so x / y
+#                   compare directly; the file is still a different schema
+#                   (6-DOF per tag) and is never written over map.yaml.
+#                   "" => default <ws>/log/path_tag_locator/map_world_<ts>.yaml
 # - dry_run       : if true, no /cmd_vel, no MoveJ, no map_out write —
 #                   the node only parses the plan and reports what it would do.
 string plan_path

@@ -44,13 +44,11 @@ class ArmInterface:
                  home_service='/arm/move_home',
                  default_vel=20.0,
                  default_acc=20.0,
-                 default_ovl=100.0,
                  motion_timeout_s=60.0,
                  state_timeout_s=5.0,
                  connect_timeout_s=15.0):
         self.default_vel = float(default_vel)
         self.default_acc = float(default_acc)
-        self.default_ovl = float(default_ovl)  # accepted for signature
         self.motion_timeout_s = float(motion_timeout_s)
         self.state_timeout_s = float(state_timeout_s)
         self._connect_timeout_s = float(connect_timeout_s)
@@ -90,9 +88,6 @@ class ArmInterface:
         return False, 'shutdown'
 
     # ------------------------------------------------------------------
-    def enable(self):
-        """No-op: arm_node enables the arm; kept for call-site parity."""
-
     def _fresh(self, st, max_age_s=1.0):
         """A state message counts only if it is RECENT. Without this, a
         dead arm_node leaves the last state cached forever and a stale
@@ -149,7 +144,7 @@ class ArmInterface:
 
     # ------------------------------------------------------------------
     def move_j_to_pose(self, target_pose_mm_deg,
-                       vel=None, acc=None, ovl=None,
+                       vel=None, acc=None,
                        settle_s: float = 0.2, linear: bool = True,
                        physical: bool = False):
         """Command an absolute Cartesian TCP move through arm_node and
@@ -163,8 +158,7 @@ class ArmInterface:
         (the align's correction steps) — there the offsets cancel.
 
         Same semantics as the old SDK path (IK + MoveJ to a mm/deg ZYX
-        descriptor pose); ``ovl`` is accepted for signature compatibility
-        and ignored, exactly as before.
+        descriptor pose).
         """
         ok, reason = self.wait_for_node()
         if not ok:

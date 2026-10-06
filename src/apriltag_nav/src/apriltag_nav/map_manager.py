@@ -52,11 +52,6 @@ class MapManager:
         """Returns the dictionary info for a specific tag ID."""
         return self.tags.get(tag_id) # Returns None if not found
 
-    def get_tag_type(self, tag_id):
-        """Returns the type string (WORK, PIVOT, MOVE, DOCK) or None."""
-        info = self.get_tag_info(tag_id)
-        return info.get('type') if info else None
-
     def get_edge(self, from_id, to_id):
         """Finds the edge definition between two tags."""
         if from_id in self.edges:

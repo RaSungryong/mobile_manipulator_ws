@@ -354,10 +354,6 @@ def safe_path(T_from, T_to, rules: Rules, cfg: SweepCfg):
 # execution — every ROS / arm / camera access is a callable, so the
 # offline check drives the same loop against a fake
 # ----------------------------------------------------------------------
-class Stop(Exception):
-    pass
-
-
 def execute(targets, rules: Rules, cfg: SweepCfg, *, get_T, move, capture, on_sample, settle, log,
             return_to=None, front_ref_t=None, max_recapture=1):
     """Drive the accepted views. ``get_T()`` -> current flange 4x4 (m);

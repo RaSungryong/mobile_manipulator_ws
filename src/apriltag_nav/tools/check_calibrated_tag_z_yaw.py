@@ -17,9 +17,7 @@
 
 Runs with no ROS master (rospy / msgs stubbed by the nav harness).
 """
-import copy
 import importlib.util
-import math
 import os
 import sys
 

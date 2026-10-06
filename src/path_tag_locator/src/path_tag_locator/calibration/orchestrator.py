@@ -27,9 +27,8 @@ import numpy as np
 import rospy
 from std_msgs.msg import Int32, String
 
-from ..align import clamp_step, tag_in_cam_report
+from ..align import tag_in_cam_report
 from ..align_runner import run_auto_align, AutoAlignError, approach_pose
-from ..geometry import matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 from ..chain import compensate_T_ab2mb, compute_T_A2B, compute_T_B_world
 from ..detections import (detection_to_T_cam2tag, mean_detection,
                           wait_for_tag_detections)
@@ -62,13 +61,13 @@ from .view_pose import (
 class OrchestratorCfg:
     """Bundle of paths + parameters consumed by the orchestrator. The
     fields cover everything the orchestrator needs that is NOT already
-    on the existing path_tag_locator AlignCfg / FairinoTCPClient."""
+    on the existing path_tag_locator AlignCfg / ArmInterface."""
     # File paths
     ref_tags_yaml: str
     plan_yaml: str
     map_in_path: str
     map_out_path: str
-    save_dir: str                         # persistence root (~/.ros/...)
+    save_dir: str                         # persistence root (<ws>/log/path_tag_locator)
     # Shared-detector observations (reused from locator.yaml)
     hand_cam_detections_topic: str
     front_cam_detections_topic: str
@@ -385,7 +384,7 @@ class CalibrationOrchestrator:
         Source order (attempt 1, or a retry after a non-seed failure):
             1. Per-entry override (entry.arm_view_tcp_mm_deg)
             2. Bootstrap auto-estimate (if anchor available + auto_view_pose)
-            3. Defaults from calibration_plan.yaml
+            3. Defaults from the plan file (calibration_plan_plate*.yaml)
         A retry after "tag not seen from the seed" goes through
         _retry_view_tcp instead (session correction -> anchor -> raised).
         """

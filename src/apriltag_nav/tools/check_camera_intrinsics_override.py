@@ -12,7 +12,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'src'))
 from apriltag_nav.camera_intrinsics import (IntrinsicsOverride, Rectifier, intrinsics_override,
                                             effective_intrinsics, rectify_raw_frame)
-from apriltag_nav.paths import CONFIG_PATH
 
 fails = 0
 N_CHECKS = [0]

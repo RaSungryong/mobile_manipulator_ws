@@ -25,12 +25,12 @@ import math
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 import yaml
 
-from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m
+from path_tag_locator.geometry import invert_T
 
 from .solver import ChainSample, rotation_diversity_deg
 

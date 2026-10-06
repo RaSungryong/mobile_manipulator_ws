@@ -1,8 +1,9 @@
 # 태그 맵 캘리브레이션 사용 가이드 (2026-09-01 리팩터링 기준)
 
 십자태그(참조 태그) 기반으로 바닥 태그들의 월드 좌표를 자동 측정하는
-절차입니다. 이 문서가 현장 기준이며, 세부 원리는 `USAGE_kr.md`(일부
-구버전 내용 포함)와 영문 `README.md`를 참조하세요.
+절차입니다. 이 문서가 현장 기준이며, 세부 원리는 영문 `README.md`를,
+증상별 진단은 `TROUBLESHOOTING_kr.md`를 참조하세요. (옛 `USAGE_kr.md`는
+2026-10-06 삭제 — 아직 유효한 참고 내용은 아래 부록으로 옮김.)
 
 ## 구성 요약
 
@@ -159,7 +160,9 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
 
 ## 첫 실기 권장 순서
 
-전 과정은 아직 오프라인 검증만 완료된 상태입니다.
+실기 세션은 2026-09-02부터 돌고 있습니다(정반 2 첫 세션). 정반 1은
+2026-09-22와 09-28에 측정되어 `map.yaml`에 적용됨(태그 100–125의 x, y,
+yaw; z는 사용 안 함). 새 체인/새 정반에서 처음 돌릴 때의 권장 순서:
 
 1. 드라이런 (`DRY_RUN = True`)
 2. 단일 locate, `auto_align: false`
@@ -172,3 +175,83 @@ rosservice call /path_tag_locator/locate_path_tag "{tag_b_id: 105, auto_align: f
 ```bash
 rosrun path_tag_locator generate_calibration_artifacts.py [--lift-mm N] [--view-m 0.5]
 ```
+
+---
+
+## 부록 A. 핸드아이 샘플 재사용 (resume)
+
+캡처 도중 노드를 종료해도 디스크 아카이브
+(`$MM_WS/log/path_tag_locator/handeye_calib/run_<ts>/`)는 남습니다.
+
+```bash
+roslaunch path_tag_locator path_tag_locator.launch use_handeye_calib:=true
+rosservice call /handeye_calib/load_latest "{}"   # 현 세션을 제외한 가장 최신 run_*/ 적재
+rosservice call /handeye_calib/status  "{}"       # samples ≥ min_samples 확인
+rosservice call /handeye_calib/capture "{}"       # 자세 다양성이 부족하면 추가 캡처 (합쳐짐)
+rosservice call /handeye_calib/compute "{}"       # npz + tf_chain.yaml 블록 갱신, 새 run_<ts>/result.{npz,yaml}
+rosservice call /handeye_calib/reset   "{}"       # 메모리 비움 + 새 run_<ts>/ (디스크 기록 보존)
+```
+
+특정 디렉터리를 합치려면 `config/handeye_calib.yaml`의
+`io.load_samples_dirs`(목록)에 `run_<ts>/` 또는 그 아래 `samples/`를
+적으면 노드 시작 시 적재됩니다. 적재된 샘플은 새 run에 다시 저장되지
+않습니다(중복 방지). 새 `T_hc2ee`는 노드가 기동 시 1회 로드하므로
+캘리브레이션 노드 **재시작** 후 반영됩니다.
+
+## 부록 B. `locate_path_tag` 호출의 전체 필드
+
+```bash
+rosservice call /path_tag_locator/locate_path_tag "{
+  tag_b_id: -1,                       # -1 = locator.yaml 의 tag_b_id
+  override_ref: false,                # true 면 ref_pose 를 T_A_world 로 사용 (쿼터니언 전부 0 금지, 무회전 = w: 1.0)
+  ref_pose: {position: {x: 0, y: 0, z: 0}, orientation: {x: 0, y: 0, z: 0, w: 1}},
+  save_result: true,                  # 안내용 — 성공/실패 모두 항상 저장됨
+  save_dir: '',                       # '' = locator.yaml io.default_save_dir
+  auto_align: true,                   # 시드 자세로 이동 후 자동 정렬 (translation 만 보정, 기울기는 기록)
+  align_initial_tcp_mm_deg: [300, 0, 400, 180, 0, 0]   # mm, deg (ZYX)
+}"
+```
+
+응답: `position_m`, `rpy_deg`(ZYX, deg), `t_a2b_row_major`, 정렬 보고
+(`align_iterations_used`, `align_final_xy_offset_m`, `align_final_tilt_deg`,
+`align_final_tcp_mm_deg`). 마지막 성공 결과는 latched 토픽
+`/path_tag_locator/tag_world_pose`(`geometry_msgs/PoseStamped`)에도 남습니다.
+정렬 동작은 `config/locator.yaml`의 `align:` 블록(`max_iterations`,
+`position_tol_m` 0.001, `angle_tol_deg` 0.5, `max_step_m` / `max_step_deg`
+클램프, `orientation: fixed`)으로 조정합니다.
+
+## 부록 C. 기록 구조
+
+```
+$MM_WS/log/path_tag_locator/
+  locate/<YYYYMMDD>/run_<ts>_tag<id>[_FAILED]/
+      hand_cam.png, front_cam.png       검출기에 들어간 영상
+      K_hc.npz, K_fc.npz                호출 시점의 K
+      result.npz                        T_B_world, T_A2B, T_A_world, T_hc2ee, T_ab2mb,
+                                        T_mb2fc, tcp_pose_mm_deg, position_m, rpy_deg
+      result.yaml                       요약 + observations (카메라 좌표계: x=영상 오른쪽,
+                                        y=영상 아래, z=광축 거리; camera_frame_note 참조)
+                                        + auto_align.tag_in_cam / history
+      request.yaml                      요청 echo
+  locate/locate_log.csv                 append-only 인덱스 (success 열 0 = 실패)
+  calibrate/<YYYYMMDD_HHMMSS>/          세션 1개
+      entries/NNN_tag<id>_attempt<n>_<ok|fail>.yaml   시도마다 실행 순서대로 번호 (덮어쓰기 없음)
+      session.yaml, entries_log.csv, map_world.yaml   순서 인덱스 / 한 줄 요약 / 결과 사본
+  map_world_<ts>.yaml                   세션 결과 (월드 = map.yaml 좌표계)
+  handeye_calib/run_<ts>/
+      samples/NNNN_image.png, NNNN_pose.npz, samples_index.csv, result.{npz,yaml}
+```
+
+`dry_run: true`는 아무것도 기록하지 않습니다. 실패한 entry의 원인은
+그 run 디렉터리의 `hand_cam.png` / `front_cam.png`(다른 태그를 본 것은
+아닌지)와 `result.yaml`의 에러 메시지로 추적합니다.
+
+## 부록 D. 검증 스크립트
+
+| 스크립트 | 로봇 | 용도 |
+|---|---|---|
+| `verify_map_world.py` | ❌ | 태그별 요약 + `map.yaml` edge 기반 상대 거리 비교(`--threshold-m`, 기본 5 cm) |
+| `test_repeatability.py` | ✓ | `/map_calibrator/run_calibration` 두 번 → 두 결과 diff(반복정밀도) |
+| `verify_arm_pointing.py` | ✓ | 월드 좌표에서 관측 자세를 계산해 이동 → hand-cam 재검출 → 잔차(폐루프 검증) |
+| `visualize_map_world.py` | RViz | ref(빨강) + 보정 태그(초록) + 원점 축을 `MarkerArray`로 publish |
+| `error_budget.py` | ❌ | 오차원별 기여를 경로 태그 위치/yaw 오차로 환산 |

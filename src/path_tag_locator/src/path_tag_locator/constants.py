@@ -8,9 +8,8 @@ helpers — no ROS imports here, so the loaders work in unit-test scripts too.
 """
 import math
 import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import yaml
@@ -102,14 +101,13 @@ class AlignCfg:
     max_initial_step_deg: float
     move_vel: float
     move_acc: float
-    move_ovl: float
     move_settle_s: float
     # Auto-view-pose bootstrap (used by map_calibrator only, ignored by
     # the single-tag locator). When ``auto_view_pose`` is true and the
     # orchestrator has at least one previous successful entry, the next
     # entry's ``arm_view_tcp_mm_deg`` is auto-computed from the previous
     # anchor + map.yaml relative offsets. Explicit per-entry override in
-    # calibration_plan.yaml always wins.
+    # the plan file (calibration_plan_plate*.yaml) always wins.
     auto_view_pose: bool = True
     auto_view_distance_m: float = 0.20
     # When an align arm move fails (IK/reach/timeout) but the ref tag is
@@ -214,7 +212,6 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
         max_initial_step_deg=180.0,
         move_vel=20.0,
         move_acc=20.0,
-        move_ovl=100.0,
         move_settle_s=0.3,
         auto_view_pose=True,
         auto_view_distance_m=0.20,
@@ -224,6 +221,9 @@ def load_locator_cfg_from_dict(d: dict) -> LocatorCfg:
         retry_raise_m=0.25,
     )
     align_defaults.update(root.get("align", {}))
+    # ``move_ovl`` was removed 2026-10-06 (it was plumbed to ArmInterface,
+    # which never used it); a yaml that still carries the key loads unchanged.
+    align_defaults.pop("move_ovl", None)
     align = AlignCfg(**align_defaults)
     return LocatorCfg(
         topics=topics,
@@ -333,9 +333,6 @@ class Extrinsics:
     front_cam_frame: str          # "level" | "physical" (resolved)
     ground_plane: Optional[dict]  # robot.yaml block used for the derivation
     note: str = ""
-
-    def as_tuple(self):
-        return self.T_ab2mb, self.T_mb2fc_chain
 
 
 def load_extrinsics_full(yaml_path=None, front_cam_frame="auto",

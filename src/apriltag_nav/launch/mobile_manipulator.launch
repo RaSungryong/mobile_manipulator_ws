@@ -132,8 +132,8 @@
              Re-measure it with the tool in sensor range if the sensor is
              remounted or its polarity is reconfigured. -->
         <!-- Sensor polarity (robot.yaml keyence: documents it in full): the
-             reading is 0 at a 10 mm standoff, NEGATIVE when too far, POSITIVE
-             when too close — so a negative reading must move the tool closer. -->
+             reading is 0 at a 16.5 mm standoff (keyence.sensor_zero_mm), NEGATIVE
+             when too far, POSITIVE when too close — so a negative reading must move the tool closer. -->
         <param name="keyence_dir"           value="-1.0"/>
         <param name="keyence_kp"            value="0.8"/>
         <param name="keyence_max_steps"     value="15"/>
@@ -142,11 +142,12 @@
              inside the last ~2 mm; further out an approach step may be up to
              half the measured gap, and retreat steps up to
              keyence_retreat_step_mm. Kept at 1.0 (was 5.0 before 2026-08-05):
-             with the 42.6 deg beam it caps the laser spot's lateral walk to
-             1*tan(42.6) = 0.92 mm per fine step, which is what kept the first
+             with the 37.1 deg beam (keyence.beam_angle_deg, re-measured
+             2026-09-18; 42.6 before) it caps the laser spot's lateral walk to
+             1*tan(37.1) = 0.76 mm per fine step, which is what kept the first
              live run from diverging on sloped material. The adaptive gain now
              backs that up. The rest of the loop's tuning (approach_fraction,
-             retreat_step_mm, activate_threshold 20, max_travel_mm, samples,
+             retreat_step_mm, activate_threshold 45, max_travel_mm, samples,
              settle_s, seek, require_converged, target_distance_mm) lives in
              robot.yaml keyence: and is not overridden here.
              Since 2026-09-29 robot.yaml keyence.move_mode is `direct`: the

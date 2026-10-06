@@ -89,11 +89,6 @@ class BaseInterface:
             self.client.clear_stop_flag()
         return bool(self.client.move_to_tag(int(target_id)))
 
-    def current_tag_id(self):
-        state = self.client.state or {}
-        visible = state.get('visible_tags') or []
-        return visible[0] if visible else state.get('last_known_tag')
-
     def stop(self):
         self.client.preempt_stop_robot()
 

@@ -33,7 +33,7 @@ we
 
 The user-notation ``T_hc2ee`` is what the locator node loads.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 

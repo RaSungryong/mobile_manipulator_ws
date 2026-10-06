@@ -37,6 +37,7 @@ robot aligned with its corridor.
 """
 import json
 import math
+import os
 import threading
 
 import numpy as np
@@ -52,6 +53,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from robot_msgs.msg import AprilTagDetection, AprilTagDetectionArray, ArmState
 
 from apriltag_nav.paths import CONFIG_PATH, MAP_PATH
+import path_tag_locator
 from path_tag_locator.constants import load_extrinsics_full
 from path_tag_locator.hand_eye import load_T_hc2ee
 from path_tag_locator.geometry import (
@@ -65,6 +67,24 @@ except ImportError:
     _Rot = None
 
 FLOOR_Z = -0.080
+
+
+def _ptl_config_dir():
+    """<ws>/src/path_tag_locator/config, without rospkg.
+
+    Under a sourced devel space `path_tag_locator.__file__` is the catkin
+    shim in devel/, so the source dir is taken from `__path__` (the shim
+    extends it with <ws>/src/path_tag_locator/src/path_tag_locator); the
+    package's own WS_DIR is the fallback.
+    """
+    for entry in getattr(path_tag_locator, '__path__', []):
+        cand = os.path.abspath(os.path.join(entry, os.pardir, os.pardir, 'config'))
+        if os.path.isdir(cand):
+            return cand
+    return os.path.join(path_tag_locator.WS_DIR, 'src', 'path_tag_locator', 'config')
+
+
+PTL_CONFIG_DIR = _ptl_config_dir()
 ZONE_YAW_DEG = {"A": 0.0, "DOCK": 0.0, "B": 90.0, "D": 90.0,
                 "C": -90.0, "E": -90.0}
 
@@ -201,7 +221,7 @@ class SimNode:
                                  yaw, floor_size, 'floor'))
         for fname in ('reference_tags.yaml', 'reference_tags_plate2.yaml'):
             try:
-                refs = yaml.safe_load(open(ptl + '/config/' + fname))
+                refs = yaml.safe_load(open(os.path.join(PTL_CONFIG_DIR, fname)))
                 for r in refs['reference_tags']:
                     x, y, z = r['position_m']
                     yaw = float(r['rpy_deg'][2])

@@ -37,8 +37,7 @@ sys.path.insert(0, str(WS / "src" / "apriltag_nav" / "src"))
 
 from path_tag_locator.chain import compute_T_A2B, compute_T_B_world
 from path_tag_locator.constants import load_extrinsics_full
-from path_tag_locator.geometry import invert_T, pose_fr5_to_matrix_m, \
-    matrix_m_to_pose_fr5
+from path_tag_locator.geometry import invert_T, matrix_m_to_pose_fr5
 from path_tag_locator.hand_eye import load_T_hc2ee
 
 FLOOR_Z = -0.080
@@ -257,7 +256,6 @@ def main():
     M = T_hc2ee.copy()
     M[:3, :3] = M[:3, :3] @ rz(0.1)
     sens("hand-eye +0.1 deg yaw", hc2ee=M)
-    Aerr = yaml_ref_T(ref)
     # ref tag yaw error: rotates result about A
     T_wA_e = face_up(*ref["position_m"], yaw_deg=ref["rpy_deg"][2] + 0.1)
     out = compute_T_A2B(T_hc2A=T_hc2A0, T_fc2B=T_fc2B0,

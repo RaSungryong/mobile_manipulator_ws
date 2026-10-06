@@ -6,12 +6,11 @@ Yaml schema loaders for the map-calibration workflow.
 Two files:
 1. ``reference_tags.yaml`` — multiple basis tags with accurate world
    poses provided by the user.
-2. ``calibration_plan.yaml`` — ordered list of path_tag -> ref_tag
+2. a plan file (``calibration_plan_plate{1,2}.yaml``) — ordered list of path_tag -> ref_tag
    assignments, plus per-entry overrides.
 """
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -106,7 +105,7 @@ def load_reference_tags(yaml_path) -> Dict[int, RefTag]:
 
 
 def load_calibration_plan(yaml_path) -> CalibrationPlan:
-    """Parse calibration_plan.yaml -> :class:`CalibrationPlan`.
+    """Parse a plan file (calibration_plan_plate*.yaml) -> :class:`CalibrationPlan`.
 
     Schema::
 

@@ -90,10 +90,8 @@ import yaml
 _TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_TOOLS, '..', 'src'))
 sys.path.insert(0, _TOOLS)
-from apriltag_nav.ground_plane import GroundPlane  # noqa: E402
 from apriltag_nav.paths import CONFIG_PATH, WS_DIR  # noqa: E402
-from fit_front_cam_ground import (fit_ground, load_snapshots, parse_camera_info,  # noqa: E402
-                                  parse_snapshot)
+from fit_front_cam_ground import fit_ground, load_snapshots, parse_camera_info  # noqa: E402
 
 DEFAULT_TAGS = (149, 150)      # 2026-09-15: the 90 mm tags on hand (the 60 mm 15/16 pair is gone); user's pick
 DEFAULT_SIZE = 0.090

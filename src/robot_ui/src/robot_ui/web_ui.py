@@ -1283,10 +1283,6 @@ class UiController:
             self.api_set_preview(False)
         return {'ok': True, 'message': 'stop all sent'}
 
-    # ---------- misc ----------
-    def api_ping(self):
-        return {'ok': True, 'message': 'pong', 'time': time.time()}
-
     # ==========================================================
     # ROI persistence (image coordinates, like ImageView)
     # ==========================================================

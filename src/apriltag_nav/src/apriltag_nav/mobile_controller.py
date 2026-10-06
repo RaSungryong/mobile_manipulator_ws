@@ -15,7 +15,6 @@ import yaml
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CameraInfo
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
 
 # No image handling here any more: robot_camera_node owns the cameras and
 # publishes AprilTagDetectionArray, this class only consumes it. cv2 /
@@ -67,7 +66,6 @@ class MobileController:
         # centre column against the image centre); cx/cy are not simply w/2, h/2.
         self.info_sub = rospy.Subscriber(self.cfg['topics']['front_cam_info'], CameraInfo, self.info_callback)
         self.odom_sub = rospy.Subscriber(self.cfg['topics']['odom'], Odometry, self.odom_callback)
-        self.scan_sub = rospy.Subscriber(self.cfg['topics']['scan_signal'], Bool, self.scan_callback)
 
         # Vision-triggered soft stop (see robot.yaml `vision_stop:`). front_cam
         # detections only -- robot_camera_node publishes, we decide. Driven
@@ -208,9 +206,7 @@ class MobileController:
         self.camera_params = None
         self.image_center_x_fallback = 0.0
         self.image_center_y_fallback = 0.0
-        self.scan_finished_signal = False
         self.last_known_tag = None  # Tracks the last visited tag
-        self.stop_sleep_duration = self.cfg['robot'].get('stop_sleep_duration', 0.0)
         temp_cfg = self.cfg['robot'].get('temporary_missing_tags', {}) or {}
         self.temp_missing_tags_enabled = bool(temp_cfg.get('enabled', False))
         self.temp_missing_tag_ids = set(
@@ -232,8 +228,6 @@ class MobileController:
         self.align_max_angular = float(
             self.cfg['robot'].get('align_max_angular_speed',
                                   self.move_max_angular))
-        self.min_linear = self.max_linear * self.cfg['robot'].get('min_linear_factor', 0.3)
-        self.min_angular = self.max_angular * self.cfg['robot'].get('min_angular_factor', 0.25)
         self.linear_accel = self.cfg['robot'].get('linear_accel', 0.05)
         self.angular_accel = self.cfg['robot'].get('angular_accel', 0.3)
         self.ramp_enabled = self.cfg['robot'].get('ramp_enabled', True)
@@ -283,7 +277,7 @@ class MobileController:
             float(rev) if rev is not None else self.center_x_stop_offset)
         # Target tags for which a REVERSE hop still stops on the FORWARD
         # column (user rule 2026-09-04: "500번대 태그가 목표면 기존 목표
-        # 위치에 정지"). Same [[lo, hi], ...] shape as align_skip_tag_ranges.
+        # 위치에 정지"). [[lo, hi], ...] tag-id ranges.
         self.reverse_stop_fwd_column_ranges = []
         # 2026-09-04: the exception now applies to BOTH directions (forward
         # got a far column too), so the key is `stop_offset_skip_tag_ranges`;
@@ -426,10 +420,8 @@ class MobileController:
         pred_cfg = self.cfg['robot'].get('predictive_centering', {}) or {}
         self.pred_centering_enabled = bool(pred_cfg.get('enabled', True))
         self.pred_use_map_world = bool(pred_cfg.get('use_map_world', True))
-        # fallback_to_map_yaml used to gate map.yaml prediction when a
-        # map_world file existed; since 2026-09-02 map.yaml is ALWAYS the
-        # fallback, so the key no longer changes anything.
-        self.pred_fallback_to_map_yaml = True
+        # map.yaml is ALWAYS the prediction fallback since 2026-09-02 (the
+        # old fallback_to_map_yaml gate is gone).
         self.pred_map_world_path = pred_cfg.get('map_world_path', 'latest')
         # Hops touching these tags run WITHOUT prediction (user request
         # 2026-09-02, for the zone A transit lane 400-499): tag visible ->
@@ -452,12 +444,8 @@ class MobileController:
         # are Pure Pursuit only; any hop with a 100- or 500-series endpoint
         # still aligns). Ranges only — a pivot never qualifies.
         # ⚠️ There is deliberately NO per-tag align skip any more (user rule
-        # 2026-09-04: "어떤 상황이든 정지해서 얼라인은 필수"). The
-        # `align_skip_tag_ranges` key that let 400→400 lane hops skip the
-        # in-place align (2026-09-02) is ignored if present.
-        if self.cfg['robot'].get('align_skip_tag_ranges'):
-            rospy.logwarn("[Align] robot.align_skip_tag_ranges is no longer "
-                          "honoured — every hop ends with align_to_tag")
+        # 2026-09-04: "어떤 상황이든 정지해서 얼라인은 필수"); the
+        # `align_skip_tag_ranges` key of 2026-09-02 was retired with it.
         self.pred_lookahead = float(
             pred_cfg.get('lookahead_m', self.cfg['robot']['look_ahead_base']))
         self.pred_min_lookahead = float(
@@ -496,7 +484,6 @@ class MobileController:
         self._nav_session = None        # dict being appended to
         self._nav_session_path = None
         self._nav_seq = 0
-        self._last_prediction_segment_active = False
         self.pred_calibrated_xy = {}
         self.pred_loaded_map_world_path = None
         self.pred_map_world_available = False
@@ -1143,7 +1130,8 @@ class MobileController:
         robot stays stopped until move_to_tag() clears the flag for the next
         TASK/GOTO, exactly like the existing preempt_stop_robot() callers.
         """
-        if self.stop_requested or not self.vision_stop_tag_ids:
+        if (not self.vision_stop_enabled or self.stop_requested
+                or not self.vision_stop_tag_ids):
             return
         cx, cy = msg.image_width / 2.0, msg.image_height / 2.0
         for det in msg.detections:
@@ -1156,11 +1144,6 @@ class MobileController:
                     f"on front_cam -> preempt_stop_robot()")
                 self.preempt_stop_robot()
                 return
-
-    def scan_callback(self, msg):
-        """External node says scan is done."""
-        if msg.data:
-            self.scan_finished_signal = True
 
     # =========================================================
     # MOVEMENT PRIMITIVES
@@ -1891,7 +1874,7 @@ class MobileController:
         else:
             robot_x, robot_y, heading = tag_x, tag_y, 0.0
 
-        cam_offset = self.cfg['robot'].get('camera_offset', 0.45)
+        cam_offset = self.camera_offset
 
         if self.robot_pose_offset_along_heading and zone in ('A', 'DOCK', 'B', 'C', 'D', 'E'):
             # 2026-09-28: the body sits at `heading` (zone + align residual +
@@ -2753,23 +2736,6 @@ class MobileController:
         rospy.loginfo(f"[Manual] {msg}")
         return True, msg
 
-    def _smooth_speed_factor(self, ratio, phase='accel'):
-        """
-        Converts linear ratio [0,1] to smooth speed factor.
-        For acceleration: fast ramp up (sqrt curve)
-        For deceleration: smooth ramp down (quadratic curve)
-        """
-        ratio = max(0.0, min(1.0, ratio))  # Clamp to [0, 1]
-
-        if phase == 'accel':
-            # Square root curve: ramps up quickly at start, then slows
-            # ratio=0 -> 0, ratio=0.25 -> 0.5, ratio=1 -> 1
-            return math.sqrt(ratio)
-        else:
-            # Quadratic curve for smooth deceleration
-            # ratio=0 -> 0, ratio=1 -> 1, smooth end
-            return ratio * ratio
-
     @staticmethod
     def _plan_ref(plan, s):
         """(b, db/ds, d2b/ds2) of the plan's quintic at travel s: from
@@ -2889,7 +2855,6 @@ class MobileController:
             start_odom_y=start_odom_y,
             start_theta=start_theta,
             fallback_distance=total_distance)
-        self._last_prediction_segment_active = prediction_segment is not None
         if prediction_segment is not None:
             rospy.loginfo(
                 "[PredictiveCentering] %s -> %s using %s geometry, len=%.3fm",
@@ -3454,7 +3419,7 @@ class MobileController:
                 # We've traveled most of the distance, slow down and look for tag
                 if not tag_visible:
                     speed = min_speed * move_dir_sign
-                    rospy.logwarn_throttle(0.5, f"Near target but tag not visible, slowing down")
+                    rospy.logwarn_throttle(0.5, "Near target but tag not visible, slowing down")
 
             # ===== FINAL APPROACH — APPLIED LAST =====
             # Order matters and is the whole point of doing it here: both the

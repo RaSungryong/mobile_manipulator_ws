@@ -37,6 +37,7 @@ from cv_bridge import CvBridge
 
 from robot_msgs.srv import CaptureImages
 from apriltag_nav.inference_interface import InferenceInterface
+from apriltag_nav import paths
 
 
 
@@ -75,7 +76,7 @@ class RaScanPipeline:
                  num_samples=1,
                  delay_between_samples=0.2,
                  save_images=False,
-                 output_dir='/tmp/scan_results',
+                 output_dir=None,
                  model_path=None):
         self.capture_service_name = capture_service
         self.capture_timeout_s = float(capture_timeout_s)
@@ -83,7 +84,9 @@ class RaScanPipeline:
         self.num_samples = int(num_samples)
         self.delay_between_samples = float(delay_between_samples)
         self.save_images = bool(save_images)
-        self.output_dir = output_dir
+        # arm_controller always passes arm_node's ~output_dir; the default is
+        # the workspace's scan_images root (never /tmp — user rule 2026-09-14).
+        self.output_dir = output_dir or paths.SCAN_IMAGE_DIR
 
         self._capture_srv = None
         self.bridge = CvBridge()
