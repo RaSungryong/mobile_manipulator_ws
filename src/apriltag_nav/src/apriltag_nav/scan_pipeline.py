@@ -39,6 +39,32 @@ from robot_msgs.srv import CaptureImages
 from apriltag_nav.inference_interface import InferenceInterface
 
 
+
+def image_file_name(point_id, sample_no, ra_value=None, name_prefix=None):
+    """File name of one saved scan frame.
+
+    With `name_prefix` (the scan loop: `g<group>_p<point>_i<index>`) the name
+    is `<prefix>_s<n>.png` — group, work-point id, run index and sample, no
+    model value. Until 2026-10-06 every frame was `point_<id>_sample_<n>_
+    ra_<model>.png`: `point_id` repeats across groups in every current path
+    file (260930: 557 of 1267 work points share their id with another
+    group), so a run's frames could only be told apart by the model's Ra
+    digits — useless for pairing a frame with a hand-measured Ra. The
+    legacy form is kept for callers that pass no prefix.
+    """
+    if name_prefix:
+        return f"{name_prefix}_s{int(sample_no)}.png"
+    ra_part = f"_ra_{float(ra_value):.4f}" if ra_value is not None else ""
+    return f"point_{point_id}_sample_{int(sample_no)}{ra_part}.png"
+
+
+def image_name_prefix(group_id, point_id, index):
+    """`g<group>_p<point>_i<index>` — the prefix the scan loop gives
+    image_file_name for run index `index` (1-based position in the scan
+    point list, zero-padded so names sort in execution order)."""
+    return f"g{int(group_id)}_p{int(point_id)}_i{int(index):04d}"
+
+
 class RaScanPipeline:
     """Capture → infer → publish/persist for one scan point at a time."""
 
@@ -180,12 +206,18 @@ class RaScanPipeline:
             rospy.logwarn(f"  [Scan] Point {point_id}: no frames captured")
         return frames
 
-    def process(self, point_id, frames, cancelled=None):
+    def process(self, point_id, frames, cancelled=None, name_prefix=None):
         """Infer, publish and persist the frames captured for one point.
 
         Safe to call from a thread other than the capture's: it touches no
         camera state, only the ONNX session, the publishers and the disk.
         Returns the per-point stats dict, or None if no valid sample.
+
+        name_prefix: when given, the saved frames are named
+        `<name_prefix>_s<n>.png` (see image_file_name) — the scan loop passes
+        `g<group>_p<point>_i<index>` so a frame can be paired with its Ra-map
+        row and with a hand-measured Ra by name alone. None keeps the
+        legacy `point_<id>_sample_<n>_ra_<model>.png` of the one-off tools.
         """
         cancelled = cancelled or (lambda: False)
         results = []
@@ -240,15 +272,15 @@ class RaScanPipeline:
         }
         self.result_pub.publish(json.dumps(scan_result))
 
+        scan_result['images'] = []
         if self.save_images and images:
             os.makedirs(self.output_dir, exist_ok=True)
             for idx, img in enumerate(images):
-                fname = (
-                    f"point_{point_id}_sample_{idx+1}"
-                    f"_ra_{ra_values[idx]:.4f}.png"
-                )
+                fname = image_file_name(point_id, idx + 1, ra_values[idx],
+                                        name_prefix)
                 t0 = time.time()
                 cv2.imwrite(os.path.join(self.output_dir, fname), img)
+                scan_result['images'].append(fname)
                 rospy.logdebug(f"  [Scan] saved {fname} "
                                f"({(time.time() - t0) * 1000:.0f} ms)")
 

@@ -121,6 +121,7 @@ function onState(name, value) {
     case 'camera_state': $('chip-camera').textContent = 'CAM ' + value; break;
     case 'lamp_state': tint($('chip-camera'), value ? '#665500' : ''); break;
     case 'standoff_state': renderStandoff(value); break;
+    case 'collect_state': renderCollect(value); break;
   }
 }
 
@@ -255,6 +256,14 @@ function renderScan(ev) {
       chip.textContent = 'SCAN ' + idx + '/' + total + ' ok ' + nOk + ' fail ' + nFail;
       tint(chip, '#7a1f1f');
       break;
+    case 'wait':
+      chip.textContent = 'SCAN ' + idx + '/' + total + ' WAIT Ra pt ' + (ev.point_id ?? '?');
+      tint(chip, '#1f4a7a');
+      break;
+    case 'resume':
+      chip.textContent = 'SCAN ' + idx + '/' + total + ' ok ' + nOk + ' fail ' + nFail;
+      tint(chip, nFail ? '#663300' : '#553311');
+      break;
     case 'finished': {
       const tail = ev.cancelled ? ' (cancelled)' : '';
       chip.textContent = 'SCAN done ' + nOk + ' ok / ' + nFail + ' fail' + tail;
@@ -262,6 +271,34 @@ function renderScan(ev) {
       break;
     }
   }
+}
+
+// Ra data collection state from arm_node (/arm/collect_state, latched):
+// the checkbox follows arm_node's `enabled` (not its own click), the entry
+// fields and buttons are live only while a point is waiting.
+let collectWaiting = false;
+function renderCollect(st) {
+  const waiting = !!st.waiting;
+  collectWaiting = waiting;
+  setChecked($('chk-collect'), !!st.enabled);
+  $('lbl-collect-count').textContent = 'recorded ' + (st.n_recorded || 0) + ', skipped ' + (st.n_skipped || 0)
+    + (st.record_csv ? '  → ' + st.record_csv.split('/').pop() : '');
+  let text;
+  if (waiting) {
+    text = 'WAITING  g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + ')  — measure under the tip, '
+      + (st.retreated === false ? 'tool NOT retreated' : 'tool ' + (st.retreat_mm || 80) + ' mm up')
+      + '\nimages: ' + ((st.images || []).join(', ') || '—')
+      + (st.standoff ? '\n' + st.standoff : '');
+  } else if (st.enabled) {
+    text = 'collect mode ON — the next scanned point of a TASK will pause here';
+    if (st.last) text += '\nlast: g' + st.last.group_id + ' p' + st.last.point_id + ' ' + (st.last.skipped ? 'skipped' : 'Ra ' + st.last.ra_measured);
+  } else {
+    text = 'collect mode off';
+  }
+  $('lbl-collect').textContent = text;
+  tint($('lbl-collect'), waiting ? '#1f4a7a' : '');
+  for (const id of ['txt-collect-ra', 'txt-collect-note', 'btn-collect-next', 'btn-collect-skip']) $(id).disabled = !waiting;
+  if (waiting && document.activeElement !== $('txt-collect-ra') && !$('txt-collect-ra').value) $('txt-collect-ra').focus();
 }
 
 function standoffText(st) {
@@ -879,6 +916,21 @@ function init() {
       roi: $('chk-roi').checked, save_dir: $('txt-save-dir').value,
     }]).then((r) => { if (r && r.ok) showView('shot'); }).catch(() => {});
   });
+
+  // ---- Ra data collection ----
+  $('chk-collect').addEventListener('change', (e) => call('set_collect_mode', [e.target.checked]).catch(() => {}));
+  const collectSend = (skip) => {
+    const readings = $('txt-collect-ra').value.trim();
+    const note = $('txt-collect-note').value.trim();
+    if (!skip && !readings) { appendLog('[collect] type the measured Ra first (or Skip)'); $('txt-collect-ra').focus(); return; }
+    call('scan_continue', [readings, note, skip]).then((r) => {
+      if (r && r.ok) { $('txt-collect-ra').value = ''; $('txt-collect-note').value = ''; }
+      else if (r && r.message) appendLog('[collect] ' + r.message);
+    }).catch(() => {});
+  };
+  $('btn-collect-next').addEventListener('click', () => collectSend(false));
+  $('btn-collect-skip').addEventListener('click', () => collectSend(true));
+  $('txt-collect-ra').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); collectSend(false); } });
 
   // ---- Arm ----
   $('btn-standoff').addEventListener('click', () => call('arm_standoff', [num('num-standoff')]).catch(() => {}));

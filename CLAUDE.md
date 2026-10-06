@@ -114,7 +114,11 @@ keeping was deleted (see the Work Log entry).
 
 ```
 <ws>/log/apriltag_nav/ra_maps/<task>_ra_map_<ts>.csv task_manager result_dir  (versioned)
-<ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored)
+<ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored);
+                                                    g<group>_p<point>_i<index>_s<n>.png since 2026-10-06
+<ws>/log/apriltag_nav/ra_measured/<run>_ra_measured.csv  arm_node COLLECT mode: the hand-measured Ra per
+                                                    scanned point (versioned) — docs/RA_COLLECT_kr.md
+<ws>/results/ra_dataset/<run>_dataset.csv           tools/merge_ra_dataset.py, one row per frame (ignored)
 <ws>/results/captures/                              robot_ui Collect tab       (ignored)
 <ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
 <ws>/log/apriltag_nav/calib_pair/                   the 2026-09-08 front_cam tilt-fit snapshots
@@ -443,7 +447,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** — the Ra DATA COLLECTION mode, 2026-10-06: every scanned point of a TASK pauses after the capture with the tool retreated 80 mm along its z until the operator sends the hand-measured Ra (robot_ui Task tab, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -2033,6 +2037,88 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-06 — Ra training-data collection: frames named by group / point / index, a per-point COLLECT pause with the hand-measured Ra typed into the web UI, and a merge tool
+
+User: to build the Ra estimation model, scan data must be collected now —
+the Basler images plus the Ra a hand-held roughness tester reads at the
+same spot, written down by hand after each shot, on the real scan TASK
+paths as they are; what has to be prepared? Then "모두 진행해주".
+
+**Two things found in the last run before building anything.** (1) The
+09-30 `scan_joint_260930_…offset0cm` Ra map: 271 scanned points, 271
+`standoff NOT corrected: out of range on the far side`, 0 converged — the
+frames were taken wherever the CSV put the tool, not at the 16.5 mm the
+Basler is focused at, so as data they are worthless. Not a code matter:
+the surface is outside the Keyence window at the CSV pose (the 09-29
+open issue); check it on the mould with Auto standoff and run the
+collection with `keyence.require_converged: true`. (2) The frame name
+`point_<id>_sample_<n>_ra_<model>.png` carries no group: `source_point_id`
+repeats across groups in every current path file (260930: 557 of 1267
+work points; that run's 271 successes had 187 distinct ids), so a frame
+could only be told from its namesake by the model's Ra digits.
+
+**Built.**
+- `scan_pipeline.image_file_name` / `image_name_prefix`: the scan loop
+  saves `g<group>_p<point>_i<index>_s<n>.png` (index = 1-based position
+  in the scan point list, the name is known at CAPTURE time, before the
+  worker has the model Ra); the legacy name stays for callers without a
+  prefix. `process()` returns the saved names in `images`.
+- **COLLECT mode** (`robot.yaml collect:`; `arm_node ~collect_*`;
+  `/arm/collect_mode` Bool live switch, `/arm/scan_continue` JSON,
+  latched `/arm/collect_state`): after a scanned point's capture
+  `_collect_pause` MoveLs the tool `retreat_mm` (80) along its own z AWAY
+  from the surface (the standoff loop's sign: approach = −keyence_dir, so
+  retreat = +keyence_dir), publishes `waiting` with the frame names and
+  a `wait` progress event, blocks (cancel-aware, optional
+  `wait_timeout_s` → recorded as skipped) until `collect_continue` brings
+  `ra` or `readings` (mean recorded) or `skip`, appends the row to
+  `log/apriltag_nav/ra_measured/<run>_ra_measured.csv` (run, index,
+  group_id, point_id, images, ra_measured, ra_readings, note, skipped,
+  standoff, x y z, image_dir, measured_at), publishes `resume`, MoveLs
+  back to the captured pose. A release with no value is refused and the
+  point keeps waiting; transition rows, failed moves and points with no
+  frames never pause; a cancel during the wait ends the scan with the
+  tool left retreated (no return move). `task_executor` needs no change:
+  its `/scan_finished` wait has no timeout.
+- **robot_ui (web only; the Qt window untouched):** Task tab group "Ra
+  data collection" — Collect mode checkbox (follows arm_node's state, not
+  its own click), the waiting readout (point, run index, frame names,
+  standoff message), Ra reading(s) + Note fields live only while a point
+  waits (Enter = Record & next), Skip point, recorded / skipped counts;
+  SCAN chip `WAIT Ra pt N`. Usable from a phone on the LAN at port 8080.
+  Bridge `set_collect_mode` / `scan_continue`, `collect_state` cached +
+  replayed; `api_set_collect_mode` / `api_scan_continue`.
+- **`tools/merge_ra_dataset.py [run …] [--all-frames] [--out one.csv]`**:
+  joins the Ra map, the measured CSV and the frame folder of a run into
+  `results/ra_dataset/<run>_dataset.csv`, ONE ROW PER FRAME (image path,
+  ra_measured, readings, note, model Ra, `standoff_ok`, x y z, flags) and
+  reports frames without a measurement, measurements without a frame,
+  rows whose standoff did not converge; legacy frames pair by point_id
+  and are flagged `ambiguous` when that id sits in several groups.
+- `docs/RA_COLLECT_kr.md` (operator procedure + what to prepare).
+
+**Verified offline:** `check_scan_progress.py` 73 → **103** (two scanned
+points + a traverse pause twice with the right frame names and run
+index, retreat +80 mm base z for a tool pointing down with xy / rpy kept,
+return to the captured pose, measured CSV rows with the readings' mean
+and the world xyz, the inference worker saving under the same prefix,
+final state counts; skip; a value-less release refused; cancel while
+waiting → retreat only, nothing recorded, scan cancelled before the next
+capture; timeout → skipped with the reason; mode off → no pause and the
+new names still; no frames → no pause), `check_web_ui.py` 130 → **138**,
+`check_task_list_ui.py` 104, the page in headless Chrome with no JS
+error and the new elements present (`check_web_ui_browser.py` dies at
+`Page.navigate` in this session — the pre-existing environment issue),
+the merge tool on synthetic runs (new + legacy names, skipped,
+unmeasured, missing frame, ambiguous id). **Not run on the robot:**
+`arm_node` and `robot_ui_web_node` restart required (`sudo systemctl
+restart mobile-manipulator`). First thing to watch: with Collect mode
+ticked, the first scanned point's `[Arm REAL] collect: point … waiting
+for Ra` line, the tool 80 mm up, and after Record & next the return
+MoveL landing where the capture was before the next row's MoveJ. Still
+the user's to decide: which points to collect (all 1266 at ~1 min each
+is 20 h), and surfaces with other Ra ranges than the one mould.
 
 ### 2026-09-30 — Three new planner joint paths installed as `rrt_final_path_260930_standoff20mm_offset{0cm,1.5cm,3cm}_height{652,667,682}mm.csv`
 

@@ -160,6 +160,14 @@ class FakeBridge:
         self.record('send_task_command', text)
         return True
 
+    def set_collect_mode(self, on):
+        self.record('set_collect_mode', bool(on))
+        self.emit_state('collect_state', {'enabled': bool(on), 'waiting': False,
+                                          'n_recorded': 0, 'n_skipped': 0})
+
+    def scan_continue(self, ra=None, readings=None, note='', skip=False):
+        self.record('scan_continue', ra, tuple(readings or ()), note, bool(skip))
+
     def lift_goto_mm(self, mm):
         self.record('lift_goto_mm', mm)
 
@@ -468,6 +476,31 @@ def part_a():
         check(r['ok'] and bridge.has('arm_standoff', 12.0), 'auto standoff with the typed target')
         flags = [p['standoff_inflight'] for p in sink.ui_patches('standoff_inflight')]
         check(flags[-2:] == [True, False], f'standoff_inflight True then False: {flags}')
+
+        # ---- Ra data collection (2026-10-06) ----
+        r = c.api_set_collect_mode(True)
+        check(r['ok'] and bridge.has('set_collect_mode', True), 'collect mode switch reaches the bridge')
+        check(sink.of('state', 'collect_state'), 'collect_state forwarded as plain state for the page')
+        bridge.emit_state('collect_state', {'enabled': True, 'waiting': True, 'index': 3, 'total': 9,
+                                            'group_id': 106, 'point_id': 14,
+                                            'images': ['g106_p14_i0003_s1.png'], 'n_recorded': 2, 'n_skipped': 0})
+        bridge.scan_progress.emit({'phase': 'wait', 'index': 3, 'total': 9, 'point_id': 14, 'group_id': 106,
+                                   'images': ['g106_p14_i0003_s1.png']})
+        check(any('[collect] 3/9 pt 14 g106: WAITING' in l and 'g106_p14_i0003_s1.png' in l for l in sink.logs()),
+              'wait event logged with the frame name')
+        r = c.api_scan_continue('0.40, 0.43 0.42', 'cutoff 0.8', False)
+        check(r['ok'] and bridge.has('scan_continue', None, (0.40, 0.43, 0.42), 'cutoff 0.8', False),
+              f'readings parsed (comma / space) and sent with the note: {r}')
+        r = c.api_scan_continue('', '', False)
+        check(not r['ok'] and 'type the measured Ra' in r['message'] and bridge.count('scan_continue') == 1,
+              'empty readings refused, nothing sent')
+        r = c.api_scan_continue('0.4 abc', '', False)
+        check(not r['ok'] and 'not a number' in r['message'], 'a non-number is refused')
+        r = c.api_scan_continue('', 'no access', True)
+        check(r['ok'] and bridge.has('scan_continue', None, (), 'no access', True), 'skip sent with its note')
+        bridge.scan_progress.emit({'phase': 'resume', 'index': 3, 'total': 9, 'point_id': 14, 'group_id': 106,
+                                   'ra_measured': 0.4167, 'skipped': False})
+        check(any('[collect] 3/9 pt 14 g106: Ra 0.4167 recorded' in l for l in sink.logs()), 'resume event logged')
 
         # ---- task / lift ----
         c.api_task_command('TASK scan_pose_x')

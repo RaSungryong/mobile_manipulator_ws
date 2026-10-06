@@ -162,6 +162,14 @@ class ArmControllerNode:
         # cancel through /arm/cancel like every other motion.
         rospy.Subscriber('/arm/standoff', String, self._cb_standoff,
                          queue_size=1)
+        # Ra data collection mode (2026-10-06). Both are handled on the
+        # callback thread like /arm/cancel — the scan worker holds the
+        # executor lock for the whole scan, so a worker-queued handler
+        # could never release the point it is waiting on.
+        rospy.Subscriber('/arm/collect_mode', Bool, self._cb_collect_mode,
+                         queue_size=1)
+        rospy.Subscriber('/arm/scan_continue', String, self._cb_scan_continue,
+                         queue_size=4)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
         rospy.Service('/arm/reset_error', Trigger, self._srv_reset_error)
 
@@ -171,7 +179,7 @@ class ArmControllerNode:
 
         rospy.loginfo("[ArmNode] Ready — /arm/scan_command, /arm/cancel, "
                       "/arm/move_cart, /arm/jog_cmd, /arm/move_joint, /arm/jog_joint, /arm/move_home, "
-                      "/arm/reset_error; "
+                      "/arm/reset_error, /arm/collect_mode, /arm/scan_continue; "
                       "state on /arm/state")
 
     # ==========================================================
@@ -433,6 +441,31 @@ class ArmControllerNode:
                 self._bump(False, f"standoff exception: {e}")
             finally:
                 self._publish_status('idle')
+
+    # ==========================================================
+    # RA DATA COLLECTION MODE
+    # ==========================================================
+    def _cb_collect_mode(self, msg):
+        try:
+            ok, message = self.arm.set_collect_mode(bool(msg.data))
+            rospy.loginfo(f"[ArmNode] {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] collect_mode failed: {e}")
+
+    def _cb_scan_continue(self, msg):
+        """JSON {"ra": 0.41} | {"readings": [0.40, 0.42]} | {"skip": true},
+        optional "note". Releases the scanned point the collect mode is
+        waiting on; refused (logged) when nothing is waiting."""
+        try:
+            payload = json.loads(msg.data) if msg.data.strip() else {}
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] bad /arm/scan_continue JSON: {e}")
+            return
+        try:
+            ok, message = self.arm.collect_continue(payload)
+            (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] scan_continue: {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] scan_continue failed: {e}")
 
     # ==========================================================
     # CANCEL

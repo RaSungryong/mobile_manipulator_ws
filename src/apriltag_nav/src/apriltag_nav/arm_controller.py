@@ -34,6 +34,14 @@ from scipy.spatial.transform import Rotation as R
 
 from apriltag_nav import paths
 from apriltag_nav.paths import load_yaml_block
+try:
+    from apriltag_nav.scan_pipeline import image_name_prefix, image_file_name
+except ImportError:                     # offline harness with a stub module
+    def image_name_prefix(group_id, point_id, index):
+        return f"g{int(group_id)}_p{int(point_id)}_i{int(index):04d}"
+
+    def image_file_name(point_id, sample_no, ra_value=None, name_prefix=None):
+        return f"{name_prefix}_s{int(sample_no)}.png"
 from apriltag_nav.arm_transform import transform_world_to_arm, tag_floor_z_m
 from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
@@ -319,6 +327,35 @@ class ArmController:
         # went by.
         self.progress_pub = rospy.Publisher("/arm/scan_progress", String,
                                             queue_size=50)
+        # ---------- Ra data collection mode (2026-10-06) ----------
+        # With it on, every SCANNED point pauses after the capture: the tool
+        # retreats along its own Z (away from the surface) so the operator
+        # can put a roughness tester on the spot the Basler just imaged,
+        # and the scan resumes on /arm/scan_continue carrying the measured
+        # Ra, which is appended to <record_dir>/<run>_ra_measured.csv next
+        # to the frame names. Switched live by /arm/collect_mode; nothing
+        # changes while it is off. State on /arm/collect_state (latched).
+        _collect_cfg = load_yaml_block('collect')
+
+        def _cp(name, key, default):
+            return rospy.get_param('~collect_' + name, _collect_cfg.get(key, default))
+        self.collect_enabled = bool(_cp('enabled', 'enabled', False))
+        self.collect_retreat_mm = float(_cp('retreat_mm', 'retreat_mm', 80.0))
+        self.collect_retreat_speed = int(_cp('retreat_speed', 'retreat_speed', 10))
+        self.collect_wait_timeout_s = float(_cp('wait_timeout_s', 'wait_timeout_s', 0.0))
+        self.collect_record_dir = _paths.expand_path(
+            _cp('record_dir', 'record_dir', _paths.RA_MEASURED_DIR))
+        self.collect_state_pub = rospy.Publisher("/arm/collect_state", String,
+                                                 queue_size=1, latch=True)
+        self._collect_event = threading.Event()
+        self._collect_payload = None
+        self._collect_lock = threading.Lock()
+        self._collect = {'waiting': False, 'n_recorded': 0, 'n_skipped': 0,
+                         'record_csv': ''}
+        if self.collect_enabled:
+            rospy.logwarn("[Arm REAL] Ra COLLECT mode is ON: every scanned point "
+                          "pauses for a hand measurement (/arm/scan_continue)")
+        self._publish_collect_state()
         # Pose snapshot taken by the WORKER thread between its own RPC calls,
         # so arm_node can keep /arm/state live during a scan (its timer must
         # not touch the single RPC socket while a motion holds it).
@@ -837,8 +874,17 @@ class ArmController:
                     results.append(entry)
                     # Incremental CSV save (preserves results even if cancelled mid-scan)
                     self._save_results(current_csv_path, results)
+                image_prefix = image_name_prefix(gid, pid, i + 1)
                 if frames:
-                    infer_q.put((i + 1, pid, gid, entry, frames, current_csv_path))
+                    infer_q.put((i + 1, pid, gid, entry, frames, current_csv_path,
+                                 image_prefix))
+                # Ra data collection: pause here, tool retreated, until the
+                # operator has measured the spot and sent /arm/scan_continue.
+                # A cancel during the wait ends the scan at the loop top
+                # with the tool left retreated.
+                if frames and self.collect_enabled:
+                    self._collect_pause(i + 1, n_total, p, pid, gid, entry,
+                                        image_prefix, len(frames))
 
             if not self.cancel_requested:
                 rospy.loginfo("[Arm REAL] Scan finished → Home")
@@ -869,7 +915,8 @@ class ArmController:
     # BACKGROUND INFERENCE (one worker per scan)
     # --------------------------------------------------
     def _infer_worker(self, infer_q, results, n_total):
-        """Consume (index, pid, gid, entry, frames, csv_path) until None.
+        """Consume (index, pid, gid, entry, frames, csv_path, image_prefix)
+        until None.
 
         Fills the entry's ra_* fields in place, rewrites the CSV under
         _results_lock and publishes a `result` progress event. Never lets
@@ -880,9 +927,10 @@ class ArmController:
             item = infer_q.get()
             if item is None:
                 return
-            index, pid, gid, entry, frames, csv_path = item
+            index, pid, gid, entry, frames, csv_path, image_prefix = item
             try:
-                scan_result = self.pipeline.process(pid, frames)
+                scan_result = self.pipeline.process(pid, frames,
+                                                    name_prefix=image_prefix)
             except Exception as e:
                 rospy.logerr(f"[Arm REAL] Inference failed at point {pid}: {e}")
                 scan_result = None
@@ -910,6 +958,201 @@ class ArmController:
             self.results_writer.save(csv_path, results)
         except Exception as csv_err:
             rospy.logerr(f"[Arm REAL] Failed to save results: {csv_err}")
+
+    # --------------------------------------------------
+    # RA DATA COLLECTION MODE (2026-10-06)
+    # --------------------------------------------------
+    def set_collect_mode(self, on):
+        """Switch the per-point pause on / off. Takes effect at the next
+        scanned point; a point already waiting is not released by this."""
+        self.collect_enabled = bool(on)
+        rospy.loginfo(f"[Arm REAL] Ra collect mode {'ON' if on else 'OFF'}")
+        self._publish_collect_state()
+        return True, f"collect mode {'on' if on else 'off'}"
+
+    def collect_continue(self, payload=None):
+        """Release the point the scan is waiting on. payload (dict):
+        ra (float) and/or readings (list of floats — ra = their mean when ra
+        is absent), note (str), skip (bool: record the point as not
+        measured). Called from the ROS callback thread, like cancel()."""
+        payload = dict(payload or {})
+        with self._collect_lock:
+            if not self._collect.get('waiting'):
+                return False, "no point is waiting for a measurement"
+        readings = payload.get('readings')
+        if isinstance(readings, str):
+            readings = [float(v) for v in readings.replace(',', ' ').split()]
+        readings = [float(v) for v in (readings or [])]
+        ra = payload.get('ra')
+        if ra is None and readings:
+            ra = float(np.mean(readings))
+        skip = bool(payload.get('skip', False))
+        if ra is None and not skip:
+            return False, "no Ra value — give ra / readings, or skip"
+        self._collect_payload = {'ra': None if ra is None else float(ra),
+                                 'readings': readings,
+                                 'note': str(payload.get('note', '') or ''),
+                                 'skip': skip}
+        self._collect_event.set()
+        return True, ("skipped" if skip else f"Ra {float(ra):.4f} recorded")
+
+    def _publish_collect_state(self, **extra):
+        try:
+            with self._collect_lock:
+                st = dict(self._collect)
+            st.update(extra)
+            st['enabled'] = bool(self.collect_enabled)
+            st['retreat_mm'] = float(self.collect_retreat_mm)
+            st['stamp'] = rospy.get_time()
+            self.collect_state_pub.publish(String(json.dumps(st, default=str)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Arm REAL] collect state publish failed: {e}")
+
+    def _collect_csv_path(self, csv_path):
+        """<record_dir>/<ra_map stem>_ra_measured.csv — the stem the run's
+        Ra map and image folder carry, so the three pair by name."""
+        stem = (os.path.splitext(os.path.basename(csv_path))[0] if csv_path
+                else time.strftime('collect_%Y%m%d_%H%M%S'))
+        return os.path.join(self.collect_record_dir, f"{stem}_ra_measured.csv")
+
+    COLLECT_COLUMNS = ['run', 'index', 'group_id', 'point_id', 'images',
+                       'ra_measured', 'ra_readings', 'note', 'skipped',
+                       'standoff', 'x', 'y', 'z', 'image_dir', 'measured_at']
+
+    def _collect_record(self, row):
+        """Append one row (dict over COLLECT_COLUMNS) to the run's measured
+        CSV; the header is written when the file is new."""
+        path = row['_path']
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        new = not os.path.exists(path)
+        import csv
+        with open(path, 'a', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=self.COLLECT_COLUMNS,
+                               extrasaction='ignore')
+            if new:
+                w.writeheader()
+            w.writerow(row)
+
+    def _collect_retreat(self):
+        """MoveL the tool collect_retreat_mm along its own Z AWAY from the
+        surface (the standoff loop's sign convention: approach = -keyence_dir
+        along tool Z, so retreat = +keyence_dir). Returns the pose read
+        before the move — the pose to return to — or None if it failed."""
+        ret, pose = self.robot.GetActualTCPPose()
+        if ret != 0:
+            rospy.logerr(f"[Arm REAL] collect: GetActualTCPPose failed: {ret}")
+            return None
+        p0 = np.array(pose[:3], dtype=float)
+        rpy = [float(v) for v in pose[3:6]]
+        r = R.from_euler('xyz', rpy, degrees=True)
+        r_mat = r.as_matrix() if hasattr(r, 'as_matrix') else r.as_dcm()
+        z_vec = np.array(r_mat[:, 2], dtype=float)
+        dz = float(self.collect_retreat_mm) * float(self.keyence_dir)
+        target = [float(v) for v in (p0 + z_vec * dz)] + rpy
+        self.robot.SetSpeed(int(self.collect_retreat_speed))
+        ret = self.robot.MoveL(target, TOOL_ID, 0)
+        if ret != 0:
+            rospy.logerr(f"[Arm REAL] collect: retreat MoveL failed: {ret}")
+            return None
+        self._refresh_live_pose()
+        return [float(v) for v in pose]
+
+    def _collect_return(self, pose):
+        self.robot.SetSpeed(int(self.collect_retreat_speed))
+        ret = self.robot.MoveL(list(pose), TOOL_ID, 0)
+        if ret != 0:
+            rospy.logerr(f"[Arm REAL] collect: return MoveL failed: {ret}")
+            return False
+        self._refresh_live_pose()
+        return True
+
+    def _collect_pause(self, index, total, point, pid, gid, entry,
+                       image_prefix, n_frames):
+        """One collection stop: retreat, publish `wait`, block until
+        collect_continue() or cancel, record, return to the captured pose.
+        Never raises into the scan loop."""
+        csv_path = point.get("csv_path", "")
+        record_csv = self._collect_csv_path(csv_path)
+        images = [image_file_name(pid, k + 1, None, image_prefix)
+                  for k in range(int(n_frames))]
+        image_dir = getattr(self.pipeline, 'output_dir', '') or ''
+        standoff = entry.get("execution_message", "")
+        try:
+            back_pose = self._collect_retreat()
+            info = {'index': index, 'total': total, 'group_id': gid,
+                    'point_id': pid, 'images': images, 'image_dir': image_dir,
+                    'standoff': standoff, 'retreated': back_pose is not None}
+            with self._collect_lock:
+                self._collect.update(info)
+                self._collect['waiting'] = True
+                self._collect['record_csv'] = record_csv
+            self._collect_event.clear()
+            self._collect_payload = None
+            self._publish_collect_state()
+            self._progress('wait', index=index, total=total, point_id=pid,
+                           group_id=gid, scan=True, images=images,
+                           message='waiting for the hand measurement')
+            rospy.loginfo(f"[Arm REAL] collect: point {pid} g{gid} ({index}/{total}) "
+                          f"waiting for Ra — images {images}")
+
+            t0 = time.time()
+            timed_out = False
+            while not self.cancel_requested:
+                if self._collect_event.wait(0.1):
+                    break
+                if (self.collect_wait_timeout_s > 0
+                        and time.time() - t0 > self.collect_wait_timeout_s):
+                    timed_out = True
+                    break
+            payload = self._collect_payload or {}
+            if self.cancel_requested and not payload:
+                rospy.logwarn(f"[Arm REAL] collect: cancelled while waiting at point {pid}; "
+                              "tool left retreated")
+                return
+            if timed_out and not payload:
+                payload = {'ra': None, 'readings': [], 'skip': True,
+                           'note': f'timeout after {self.collect_wait_timeout_s:.0f} s'}
+                rospy.logwarn(f"[Arm REAL] collect: no measurement for point {pid} "
+                              f"within {self.collect_wait_timeout_s:.0f} s — skipped")
+
+            row = {'_path': record_csv,
+                   'run': os.path.splitext(os.path.basename(csv_path))[0] if csv_path else '',
+                   'index': index, 'group_id': gid, 'point_id': pid,
+                   'images': ';'.join(images),
+                   'ra_measured': '' if payload.get('ra') is None else f"{payload['ra']:.4f}",
+                   'ra_readings': ' '.join(f"{v:.4f}" for v in payload.get('readings', [])),
+                   'note': payload.get('note', ''),
+                   'skipped': bool(payload.get('skip', False)),
+                   'standoff': standoff,
+                   'x': point.get('x', ''), 'y': point.get('y', ''), 'z': point.get('z', ''),
+                   'image_dir': image_dir,
+                   'measured_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+            try:
+                self._collect_record(row)
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] collect: record failed: {e}")
+            with self._collect_lock:
+                if row['skipped']:
+                    self._collect['n_skipped'] += 1
+                else:
+                    self._collect['n_recorded'] += 1
+                self._collect['last'] = {'group_id': gid, 'point_id': pid,
+                                         'ra_measured': row['ra_measured'],
+                                         'skipped': row['skipped']}
+            rospy.loginfo(f"[Arm REAL] collect: point {pid} g{gid} -> "
+                          f"{'skipped' if row['skipped'] else 'Ra ' + row['ra_measured']}"
+                          f" (recorded in {os.path.basename(record_csv)})")
+            self._progress('resume', index=index, total=total, point_id=pid,
+                           group_id=gid, scan=True,
+                           ra_measured=payload.get('ra'), skipped=row['skipped'])
+            if back_pose is not None and not self.cancel_requested:
+                self._collect_return(back_pose)
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] collect: pause failed at point {pid}: {e}")
+        finally:
+            with self._collect_lock:
+                self._collect['waiting'] = False
+            self._publish_collect_state()
 
     # --------------------------------------------------
     # PROGRESS EVENTS + LIVE POSE (for the operator UI)

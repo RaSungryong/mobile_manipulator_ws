@@ -101,6 +101,7 @@ class RosBridge:
         'handeye_progress',  # /handeye_calib/progress (sweep events)
         'scan_progress',    # /arm/scan_progress events (per point)
         'standoff_state',   # /arm/standoff_state: live Keyence standoff
+        'collect_state',    # /arm/collect_state: Ra collection mode (latched)
         'tag_ids',          # (camera, [tag ids in latest frame])
         'log',
     )
@@ -109,7 +110,7 @@ class RosBridge:
     STATE_SIGNALS = (
         'arm_state', 'task_state', 'task_list', 'lift_state',
         'mobile_state', 'battery_state', 'estop_state', 'camera_state',
-        'lamp_state', 'standoff_state',
+        'lamp_state', 'standoff_state', 'collect_state',
     )
 
     def __init__(self, node_name='robot_ui', init_node=True):
@@ -172,6 +173,12 @@ class RosBridge:
                                                queue_size=1)
         self._pub_arm_standoff = rospy.Publisher('/arm/standoff', String,
                                                  queue_size=1)
+        # Ra data collection mode (2026-10-06): the per-point pause switch
+        # and the release carrying the hand-measured Ra.
+        self._pub_arm_collect_mode = rospy.Publisher('/arm/collect_mode', Bool,
+                                                     queue_size=1)
+        self._pub_arm_scan_continue = rospy.Publisher('/arm/scan_continue', String,
+                                                      queue_size=4)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
                                                queue_size=1)
         self._pub_cam_lamp = rospy.Publisher('/camera/set_lamp', Bool,
@@ -232,6 +239,10 @@ class RosBridge:
         # Periodic like /lifter/state, so cached + replayed.
         self._sub('/arm/standoff_state', String, self._cb_json,
                   callback_args=self.standoff_state, queue_size=1)
+        # Collect mode state (latched by arm_node): enabled, waiting point,
+        # its image names, counts. Cached + replayed like the others.
+        self._sub('/arm/collect_state', String, self._cb_json,
+                  callback_args=self.collect_state, queue_size=1)
         # Latest tag detections per camera, for scripts that need to ask
         # "what does the hand cam see right now" (e.g. the cross-tag
         # survey). Snapshot store only — no signal, poll via
@@ -575,6 +586,28 @@ class RosBridge:
         """
         self._pub_arm_cancel.publish(Bool(True))
         self.log.emit('[UI] arm cancel published')
+
+    def set_collect_mode(self, on):
+        """Ra data collection: pause after every scanned point of a TASK
+        (tool retreated) until scan_continue(). Takes effect at the next
+        scanned point; /arm/collect_state reports the truth back."""
+        self._pub_arm_collect_mode.publish(Bool(bool(on)))
+        self.log.emit(f'[UI] collect mode <- {"on" if on else "off"}')
+
+    def scan_continue(self, ra=None, readings=None, note='', skip=False):
+        """Release the scanned point the collect mode is waiting on, with
+        the hand-measured Ra (or several readings — arm_node records their
+        mean), or skip it. Fire-and-forget like arm_cancel: arm_node logs a
+        refusal when nothing is waiting, /arm/collect_state shows the
+        result (n_recorded / last)."""
+        req = {'note': str(note or ''), 'skip': bool(skip)}
+        if ra is not None:
+            req['ra'] = float(ra)
+        if readings:
+            req['readings'] = [float(v) for v in readings]
+        self._pub_arm_scan_continue.publish(String(json.dumps(req)))
+        self.log.emit('[UI] scan_continue <- ' + ('skip' if skip else json.dumps(
+            {k: v for k, v in req.items() if k in ('ra', 'readings')})))
 
     # ==========================================================
     # CAMERA + INFERENCE

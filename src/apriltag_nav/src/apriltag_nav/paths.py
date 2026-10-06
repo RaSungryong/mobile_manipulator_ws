@@ -97,6 +97,12 @@ RA_MAP_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'ra_maps')
 # arm_node save_images: <ra_map stem>/point_<id>_sample_<n>_ra_<x>.png —
 # unaffected: the bulk frames stay in results/ (unversioned, large).
 SCAN_IMAGE_DIR = os.path.join(RESULTS_DIR, 'scan_images')
+# arm_node collect mode (2026-10-06): <ra_map stem>_ra_measured.csv — the
+# hand-measured Ra per scanned point, keyed like the Ra map and the frames
+# (run stem, group_id, point_id, run index). Versioned like the Ra maps.
+RA_MEASURED_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'ra_measured')
+# tools/merge_ra_dataset.py: one row per frame joining the three above.
+RA_DATASET_DIR = os.path.join(RESULTS_DIR, 'ra_dataset')
 
 
 def expand_path(path):

@@ -306,7 +306,7 @@ class UiController:
         # Plain state: forwarded as-is; the browser renders the chips.
         for name in ('task_list', 'lift_state', 'mobile_state',
                      'battery_state', 'estop_state', 'camera_state',
-                     'standoff_state'):
+                     'standoff_state', 'collect_state'):
             getattr(b, name).connect(
                 lambda value, n=name: self.sink.state('state', n, value))
 
@@ -369,6 +369,17 @@ class UiController:
             self.append_log(
                 f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
                 f"g{ev.get('group_id', '?')}: FAIL — {ev.get('message', '')}")
+        elif phase == 'wait':
+            self.append_log(
+                f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
+                f"g{ev.get('group_id', '?')}: WAITING for the hand measurement — "
+                f"images {', '.join(ev.get('images') or [])}")
+        elif phase == 'resume':
+            ra = ev.get('ra_measured')
+            what = 'skipped' if ev.get('skipped') else f"Ra {float(ra):.4f} recorded"
+            self.append_log(
+                f"[collect] {idx}/{total} pt {ev.get('point_id', '?')} "
+                f"g{ev.get('group_id', '?')}: {what}")
         elif phase == 'finished':
             tail = ' (cancelled)' if ev.get('cancelled') else ''
             self.append_log(
@@ -856,6 +867,30 @@ class UiController:
         finally:
             self._patch_ui({'standoff_inflight': False})
         return self._result(res)
+
+    # ---------- Ra data collection ----------
+    def api_set_collect_mode(self, on):
+        """Pause after every scanned point of a TASK for a hand Ra
+        measurement (/arm/collect_mode). The truth comes back on
+        /arm/collect_state, which the browser renders."""
+        self.bridge.set_collect_mode(bool(on))
+        return {'ok': True, 'message': f'collect mode {"on" if on else "off"}'}
+
+    def api_scan_continue(self, readings='', note='', skip=False):
+        """Record the measured Ra for the waiting point and resume.
+        readings: one or more numbers (space / comma separated — the mean
+        is the Ra); skip: record the point as not measured."""
+        vals = []
+        text = str(readings or '').replace(',', ' ')
+        for tok in text.split():
+            try:
+                vals.append(float(tok))
+            except ValueError:
+                return {'ok': False, 'message': f'not a number: {tok!r}'}
+        if not vals and not skip:
+            return {'ok': False, 'message': 'type the measured Ra first (or Skip)'}
+        self.bridge.scan_continue(readings=vals, note=note, skip=bool(skip))
+        return {'ok': True, 'message': 'skip' if skip else f'{len(vals)} reading(s) sent'}
 
     # ---------- Task / lift ----------
     def api_task_command(self, text):

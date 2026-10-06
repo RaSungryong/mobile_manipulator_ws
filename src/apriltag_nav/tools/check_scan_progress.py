@@ -82,9 +82,10 @@ class FakePipeline:
         self.captured.append(point_id)
         return [np.zeros((4, 4), dtype=np.uint8)]
 
-    def process(self, point_id, frames, cancelled=None):
+    def process(self, point_id, frames, cancelled=None, name_prefix=None):
         # Runs on the controller's inference worker thread.
         self.processed_on.append(threading.current_thread().name)
+        self.prefixes = getattr(self, 'prefixes', []) + [name_prefix]
         return {'ra_mean': 0.4, 'ra_std': 0.0, 'ra_min': 0.4, 'ra_max': 0.4,
                 'num_samples': 1}
 
@@ -99,6 +100,8 @@ from apriltag_nav.arm_controller import ArmController, TOOL_ID   # noqa: E402
 from apriltag_nav.scan_results import ScanResultWriter            # noqa: E402
 
 N_OK = N_FAIL = 0
+import tempfile                                                      # noqa: E402
+COLLECT_DIR = tempfile.mkdtemp(prefix='ra_measured_')
 
 
 def check(cond, what):
@@ -143,6 +146,11 @@ class FakeRobot:
         self.pose = [self.pose[0] + 1.0] + self.pose[1:]
         return 0
 
+    def MoveL(self, pose, tool, user, **kw):
+        self.calls.append(('MoveL', tool, tuple(round(v, 2) for v in pose)))
+        self.pose = [float(v) for v in pose]
+        return 0
+
     def GetActualTCPPose(self):
         return 0, list(self.pose)
 
@@ -169,6 +177,18 @@ def make_controller(robot):
     ac._live_lock = threading.Lock()
     ac._live_pose = None; ac._live_joints = None; ac._live_stamp = 0.0
     ac._adjust_distance_to_surface = lambda: None
+    # Ra collect mode (2026-10-06): off unless a scenario turns it on.
+    ac.collect_enabled = False
+    ac.collect_retreat_mm = 80.0
+    ac.collect_retreat_speed = 10
+    ac.collect_wait_timeout_s = 0.0
+    ac.collect_record_dir = COLLECT_DIR
+    ac.keyence_dir = -1.0
+    ac.collect_state_pub = _Pub('/arm/collect_state')
+    ac._collect_event = threading.Event()
+    ac._collect_payload = None
+    ac._collect_lock = threading.Lock()
+    ac._collect = {'waiting': False, 'n_recorded': 0, 'n_skipped': 0, 'record_csv': ''}
     ac.homed = []
     ac.move_to_home = lambda: ac.homed.append(1)
     ac.last_results = None
@@ -307,7 +327,7 @@ print('== a failing inference is recorded, not fatal; the next point still gets 
 PUBLISHED.clear()
 robot = FakeRobot(); ac = make_controller(robot)
 calls = []
-def _flaky(point_id, frames, cancelled=None):
+def _flaky(point_id, frames, cancelled=None, name_prefix=None):
     calls.append(point_id)
     if point_id == 1:
         raise RuntimeError('onnx exploded')
@@ -534,6 +554,154 @@ try:
           'error_is_clear: tuple / int / failed read / unknown shapes')
 finally:
     _acmod.time.sleep = _real_sleep
+
+# ================================================================ scenario: Ra collect mode (2026-10-06)
+print('== Ra collect mode: pause after every scanned point, retreat, record, resume')
+import csv as _csv
+
+
+def collect_states():
+    return [json.loads(d) for t, d in PUBLISHED if t == '/arm/collect_state']
+
+
+def run_collect(points, release, timeout=0.0, csv_path='/x/scan_pose_demo_ra_map_20261006_120000.csv'):
+    """Run execute_scan_points with collect mode ON; `release(ac, state)` is
+    called on a helper thread for every `waiting` state it sees."""
+    PUBLISHED.clear(); LOG['err'].clear(); LOG['warn'].clear()
+    robot = FakeRobot(); ac = make_controller(robot)
+    ac.pipeline.output_dir = '/img/scan_pose_demo_ra_map_20261006_120000'
+    ac.collect_enabled = True
+    ac.collect_wait_timeout_s = timeout
+    for p in points:
+        p['csv_path'] = csv_path
+    seen = []
+    stop = threading.Event()
+
+    def helper():
+        last = None
+        while not stop.is_set():
+            st = [x for x in collect_states() if x.get('waiting')]
+            if st and (last is None or st[-1]['index'] != last):
+                last = st[-1]['index']
+                seen.append(st[-1])
+                release(ac, st[-1])
+            time.sleep(0.01)
+    th = threading.Thread(target=helper, daemon=True); th.start()
+    ac.execute_scan_points(points)
+    stop.set(); th.join(1.0)
+    return robot, ac, seen
+
+
+def read_csv(path):
+    with open(path) as f:
+        return list(_csv.DictReader(f))
+
+
+# (a) two scanned points + a traverse: each scanned point waits once
+pts = [pose_pt(1, -1.30, 0.20), joint_pt(99, scan=False), pose_pt(1, -1.31, 0.21)]
+pts[2]['group_id'] = 107           # same point_id in another group
+robot, ac, seen = run_collect(
+    pts, lambda a, st: a.collect_continue({'readings': [0.40, 0.42], 'note': 'ok'}))
+ev = events()
+check([e['phase'] for e in ev if e['phase'] in ('wait', 'resume')] == ['wait', 'resume', 'wait', 'resume'],
+      f"wait/resume once per SCANNED point, none for the traverse: {[e['phase'] for e in ev]}")
+check(len(seen) == 2 and seen[0]['images'] == ['g106_p1_i0001_s1.png'] and seen[1]['images'] == ['g107_p1_i0003_s1.png'],
+      f"the waiting state names the frames by group / point / run index: {[s['images'] for s in seen]}")
+check(seen[0]['image_dir'].endswith('scan_pose_demo_ra_map_20261006_120000') and seen[0]['total'] == 3,
+      'waiting state carries the image dir and the totals')
+movel = [c for c in robot.calls if c[0] == 'MoveL']
+check(len(movel) == 4, f'retreat + return MoveL per scanned point: {len(movel)}')
+# retreat: 80 mm along tool z, the sign that moves AWAY from the surface
+# (keyence_dir -1 => dz = -80 along tool z; tool rpy (180, 0, 90) => tool z = -base z)
+z0 = 300.0
+check(abs(movel[0][2][2] - (z0 + 80.0)) < 1e-6 and movel[0][2][:2] == movel[1][2][:2]
+      and movel[0][2][3:] == movel[1][2][3:],
+      f'retreat is +80 mm base z for a tool pointing down (keyence_dir -1), xy / rpy kept: {movel[0][2]}')
+check(abs(movel[1][2][2] - z0) < 1e-6, f'return goes back to the captured pose: {movel[1][2]}')
+speeds = [c[1] for c in robot.calls if c[0] == 'SetSpeed']
+check(10 in speeds, 'retreat / return use collect_retreat_speed')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_demo_ra_map_20261006_120000_ra_measured.csv'))
+check(len(rec) == 2 and rec[0]['ra_measured'] == '0.4100' and rec[0]['ra_readings'] == '0.4000 0.4200'
+      and rec[0]['note'] == 'ok' and rec[0]['skipped'] == 'False',
+      f'measured CSV: mean of the readings, the readings, the note: {rec[0] if rec else None}')
+check(rec[0]['images'] == 'g106_p1_i0001_s1.png' and rec[1]['images'] == 'g107_p1_i0003_s1.png'
+      and rec[0]['group_id'] == '106' and rec[1]['group_id'] == '107',
+      'rows keyed by group / point with the frame names')
+check(rec[0]['run'] == 'scan_pose_demo_ra_map_20261006_120000' and rec[0]['x'] == '-1.3',
+      f"row carries the run stem and the world x y z: run={rec[0]['run']} x={rec[0]['x']}")
+check(ac.pipeline.prefixes == ['g106_p1_i0001', 'g107_p1_i0003'],
+      f'the inference worker saves the frames under the same prefix: {ac.pipeline.prefixes}')
+st = collect_states()[-1]
+check(st['waiting'] is False and st['n_recorded'] == 2 and st['n_skipped'] == 0 and st['enabled'],
+      f'final collect state: {st}')
+check(ac.homed == [1] and [e['phase'] for e in ev][-1] == 'finished', 'scan ends normally (home, finished)')
+resume = [e for e in ev if e['phase'] == 'resume']
+check(abs(resume[0]['ra_measured'] - 0.41) < 1e-9 and resume[0]['skipped'] is False, 'resume event carries the Ra')
+
+# (b) skip, and a refused release while nothing waits
+ok, msg = ac.collect_continue({'ra': 0.5})
+check(not ok and 'no point is waiting' in msg, f'release refused while nothing waits: {msg}')
+robot, ac, seen = run_collect([pose_pt(3, -1.30, 0.20)], lambda a, st: a.collect_continue({'skip': True, 'note': 'no access'}),
+                              csv_path='/x/scan_pose_skip_ra_map_20261006_120100.csv')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_skip_ra_map_20261006_120100_ra_measured.csv'))
+check(len(rec) == 1 and rec[0]['skipped'] == 'True' and rec[0]['ra_measured'] == '' and rec[0]['note'] == 'no access',
+      f'skip recorded with a blank Ra: {rec[0]}')
+check(collect_states()[-1]['n_skipped'] == 1, 'skip counted')
+check(len([c for c in robot.calls if c[0] == 'MoveL']) == 2, 'skip still returns the tool to the captured pose')
+
+# (c) a release with no value is refused and the point keeps waiting
+def _bad_then_good(a, st):
+    ok, msg = a.collect_continue({'note': 'oops'})
+    _bad_then_good.refused = (not ok, msg)
+    a.collect_continue({'ra': 0.33})
+robot, ac, seen = run_collect([pose_pt(4, -1.30, 0.20)], _bad_then_good,
+                              csv_path='/x/scan_pose_bad_ra_map_20261006_120200.csv')
+check(_bad_then_good.refused[0] and 'no Ra value' in _bad_then_good.refused[1],
+      f'a release without ra / readings / skip is refused: {_bad_then_good.refused[1]}')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_bad_ra_map_20261006_120200_ra_measured.csv'))
+check(len(rec) == 1 and rec[0]['ra_measured'] == '0.3300', 'the good release is the one recorded')
+
+# (d) cancel during the wait: the scan ends, the tool stays retreated, nothing recorded
+robot, ac, seen = run_collect([pose_pt(5, -1.30, 0.20), pose_pt(6, -1.30, 0.21)],
+                              lambda a, st: setattr(a, 'cancel_requested', True),
+                              csv_path='/x/scan_pose_cancel_ra_map_20261006_120300.csv')
+check(len([c for c in robot.calls if c[0] == 'MoveL']) == 1, 'cancel while waiting: retreat only, no return move')
+check(not os.path.exists(os.path.join(COLLECT_DIR, 'scan_pose_cancel_ra_map_20261006_120300_ra_measured.csv')),
+      'nothing recorded for the cancelled point')
+check(ac.homed == [] and events()[-1]['cancelled'] is True and len(ac.pipeline.captured) == 1,
+      'scan ends cancelled at the next loop top, the second point never captured')
+check(collect_states()[-1]['waiting'] is False, 'waiting cleared after the cancel')
+
+# (e) wait timeout: recorded as skipped with the reason, scan goes on
+robot, ac, seen = run_collect([pose_pt(7, -1.30, 0.20)], lambda a, st: None, timeout=0.3,
+                              csv_path='/x/scan_pose_to_ra_map_20261006_120400.csv')
+rec = read_csv(os.path.join(COLLECT_DIR, 'scan_pose_to_ra_map_20261006_120400_ra_measured.csv'))
+check(len(rec) == 1 and rec[0]['skipped'] == 'True' and 'timeout' in rec[0]['note'] and ac.homed == [1],
+      f'timeout -> skipped with the reason, scan finished: {rec[0]["note"]}')
+
+# (f) collect mode OFF: no wait, no MoveL, no record, prefix still passed
+PUBLISHED.clear()
+robot = FakeRobot(); ac = make_controller(robot)
+ac.execute_scan_points([pose_pt(8, -1.30, 0.20, )])
+check(not [e for e in events() if e['phase'] in ('wait', 'resume')] and not [c for c in robot.calls if c[0] == 'MoveL'],
+      'collect mode off: no pause, no retreat')
+check(ac.pipeline.prefixes == ['g106_p8_i0001'], 'frames are still named g<group>_p<point>_i<index> with the mode off')
+ok, msg = ac.set_collect_mode(True)
+check(ok and ac.collect_enabled and collect_states()[-1]['enabled'] is True, 'set_collect_mode publishes the state')
+
+# (g) a point whose move failed or captured nothing does not pause
+ac.pipeline.capture = lambda point_id, cancelled: []
+PUBLISHED.clear(); robot.calls.clear()
+ac.execute_scan_points([pose_pt(9, -1.30, 0.20)])
+check(not [e for e in events() if e['phase'] == 'wait'] and not [c for c in robot.calls if c[0] == 'MoveL'],
+      'no frames captured -> no pause')
+
+# (h) the image naming helper itself
+from apriltag_nav.arm_controller import image_file_name as _ifn, image_name_prefix as _inp
+check(_inp(106, 14, 37) == 'g106_p14_i0037' and _ifn(14, 2, 0.5, 'g106_p14_i0037') == 'g106_p14_i0037_s2.png',
+      'image name helpers')
+
+import shutil; shutil.rmtree(COLLECT_DIR, ignore_errors=True)
 
 print(f'\n{N_OK} ok, {N_FAIL} failed')
 sys.exit(1 if N_FAIL else 0)

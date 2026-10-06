@@ -1495,6 +1495,28 @@ keyence:
   # controller-side block. A `timeout_s: 0.5` key sat here until 2026-08-05 and
   # was read by nothing at all.
 
+# Ra data collection mode (2026-10-06) — arm_node ~collect_* overrides.
+# For building the Ra model's training set: images from the TASK scan path
+# paired with a hand-held roughness tester's reading at the same spot. With
+# `enabled` true (or robot_ui Task tab -> "Collect mode", /arm/collect_mode),
+# every SCANNED point of a TASK does, after the Keyence standoff and the
+# capture: retreat `retreat_mm` along the tool's own z axis AWAY from the
+# surface -> publish /arm/collect_state waiting -> block until
+# /arm/scan_continue arrives with the measured Ra (robot_ui "Record & next",
+# usable from a phone on the LAN) or `skip` -> append the row to
+# <record_dir>/<run>_ra_measured.csv -> MoveL back to the captured pose ->
+# next path row. The spot to measure is directly under the vision tip,
+# retreat_mm above it. Transition rows, failed points and points with no
+# frames do not pause. /arm/cancel during a wait ends the scan with the
+# tool left retreated. tools/merge_ra_dataset.py joins the measured CSV
+# with the Ra map and the frames (g<group>_p<point>_i<index>_s<n>.png).
+collect:
+  enabled:         false      # ~collect_enabled — live switch: /arm/collect_mode
+  retreat_mm:      80.0       # ~collect_retreat_mm: tool-z retreat during the pause
+  retreat_speed:   10         # ~collect_retreat_speed: SetSpeed % for retreat / return
+  wait_timeout_s:  0          # ~collect_wait_timeout_s: 0 = wait until released
+  record_dir:      "${MM_WS}/log/apriltag_nav/ra_measured"   # ~collect_record_dir
+
 # Inference / model
 inference:
   input_height: 900

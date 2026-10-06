@@ -184,6 +184,27 @@
             </div>
           </div>
           <div class="group">
+            <div class="group-title">Ra data collection  (hand roughness tester)</div>
+            <p class="note">For the Ra model's training set. With Collect mode on, every scanned point of a TASK pauses after the Keyence standoff and the capture: the tool retreats 80 mm along its own z, the spot the Basler just imaged is directly under the vision tip. Measure it with the roughness tester, type the reading(s) — several separated by spaces, their mean is recorded — and press Record &amp; next; the arm returns to the captured pose and goes on. Skip records the point as not measured. Rows go to log/apriltag_nav/ra_measured/&lt;run&gt;_ra_measured.csv with the frame names g&lt;group&gt;_p&lt;point&gt;_i&lt;index&gt;_s&lt;n&gt;.png; tools/merge_ra_dataset.py joins them with the Ra map. Cancel arm motion (or STOP ALL) during a wait ends the scan with the tool left retreated. Works from a phone on the LAN.</p>
+            <div class="toolbar">
+              <label title="/arm/collect_mode — takes effect at the next scanned point; the chip shows arm_node's own state"><input type="checkbox" id="chk-collect"> Collect mode (pause after every scanned point)</label>
+              <span class="spacer"></span>
+              <span class="detail" id="lbl-collect-count">recorded 0, skipped 0</span>
+            </div>
+            <div class="readout" id="lbl-collect">collect: — (no /arm/collect_state yet)</div>
+            <div class="form">
+              <label>Ra reading(s)</label>
+              <input type="text" id="txt-collect-ra" class="grow" inputmode="decimal" autocomplete="off" placeholder="e.g. 0.41  or  0.40 0.43 0.42 (mean is recorded)" disabled>
+              <label>Note</label>
+              <input type="text" id="txt-collect-note" class="grow" autocomplete="off" placeholder="optional (direction, cutoff, remark)" disabled>
+              <span></span>
+              <div class="row">
+                <button id="btn-collect-next" class="btn-primary" disabled title="Record the Ra for the waiting point and resume the scan">Record &amp; next</button>
+                <button id="btn-collect-skip" disabled title="Record the point as not measured and resume">Skip point</button>
+              </div>
+            </div>
+          </div>
+          <div class="group">
             <div class="group-title">Lift</div>
             <p class="note">Reach a scan height by lift origin homing and then climbing — the drive has backlash, so a height reached by descending is not the same physical position. Absolute moves are refused before origin homing.</p>
             <div class="toolbar">
