@@ -30,8 +30,8 @@
 4. 두 사람이 각자 자기 행의 자리를 재고 값 입력 (여러 번 잰 값은 띄어쓰기,
    평균이 기록됨). 못 잰 행은 skip 체크. Enter로 다음 행, 마지막 행에서
    Enter 또는 **Record & next**. **Skip all**은 전부 미측정으로.
-5. 행이 `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`에 점별로
-   추가되고, 공구가 촬영 자세로 복귀한 뒤 다음 경로 행으로 진행
+5. 행이 `results/scan_images/<run>/<run>_ra_measured.csv`(그 run의 사진
+   폴더 안)에 점별로 추가되고, 공구가 촬영 자세로 복귀한 뒤 다음 경로 행으로 진행
 
 ### 방법 B — `mark`: 번호만 적고, 측정은 나중에 따로
 
@@ -41,8 +41,8 @@
    (카메라 시야 몇 mm 밖, 지점 위에는 쓰지 말 것)에 펜으로 **n**을 쓰고
    **Next (number written)**. `mark dwell [s]`를 0보다 크게 두면 그 시간 뒤
    자동으로 넘어간다
-3. run이 끝나면 `log/apriltag_nav/ra_measured/<run>_mark_template.csv`가
-   생긴다: mark_no → group_id / point_id / x y z, `ra_measured` 빈칸
+3. run이 끝나면 `results/scan_images/<run>/<run>_mark_template.csv`가
+   생긴다 (mark run은 사진이 없지만 폴더는 같은 규칙으로 만든다): mark_no → group_id / point_id / x y z, `ra_measured` 빈칸
 4. 측정기 몇 대든, 순서 상관없이 전부 재고 템플릿의 `ra_measured`(필요하면
    `ra_readings`, `note`)를 엑셀/LibreOffice로 채워 **같은 이름으로** 저장
 5. 같은 TASK를 수집 모드 **끄고** 평소대로 돌려 프레임을 찍는다 (점당 ~3초)
@@ -95,8 +95,8 @@ sudo systemctl restart mobile-manipulator      # arm_node / web UI가 새 코드
 | 파일 | 내용 |
 |---|---|
 | `log/apriltag_nav/ra_maps/<run>.csv` | Ra map: 포인트별 x y z, 모델 Ra, 거리 보정 결과 |
-| `log/apriltag_nav/ra_measured/<run>_ra_measured.csv` | 방법 A의 수기 Ra: run, mark_no(빈칸), index, group_id, point_id, images, ra_measured, ra_readings, note, skipped, standoff, x y z, measured_at |
-| `log/apriltag_nav/ra_measured/<run>_mark_template.csv` | 방법 B의 템플릿, 같은 컬럼에 mark_no가 채워져 있고 ra_measured는 빈칸 — 손으로 채운다 |
+| `results/scan_images/<run>/<run>_ra_measured.csv` | 방법 A의 수기 Ra (사진과 같은 폴더; git에 올라감): run, mark_no(빈칸), index, group_id, point_id, images, ra_measured, ra_readings, note, skipped, standoff, x y z, measured_at |
+| `results/scan_images/<run>/<run>_mark_template.csv` | 방법 B의 템플릿, 같은 컬럼에 mark_no가 채워져 있고 ra_measured는 빈칸 — 손으로 채운다 |
 | `results/scan_images/<run>/g<group>_p<point>_i<index>_s<n>.png` | 프레임. 이름만으로 Ra map 행과 수기 행에 1:1 대응 |
 
 ```

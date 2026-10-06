@@ -1524,7 +1524,7 @@ keyence:
 # surface -> publish /arm/collect_state waiting -> block until
 # /arm/scan_continue arrives with the measured Ra (robot_ui "Record & next",
 # usable from a phone on the LAN) or `skip` -> append the row to
-# <record_dir>/<run>_ra_measured.csv -> MoveL back to the captured pose ->
+# <record_dir>/<run>/<run>_ra_measured.csv -> MoveL back to the captured pose ->
 # next path row. The spot to measure is directly under the vision tip,
 # retreat_mm above it. Transition rows, failed points and points with no
 # frames do not pause. /arm/cancel during a wait ends the scan with the
@@ -1556,7 +1556,10 @@ collect:
   mark_dwell_s:    0          # ~collect_mark_dwell_s: 0 = wait for Next; >0 = auto-continue after this many s
   retreat_speed:   10         # ~collect_retreat_speed: SetSpeed % for retreat / return
   wait_timeout_s:  0          # ~collect_wait_timeout_s: 0 = wait until released
-  record_dir:      "${MM_WS}/log/apriltag_nav/ra_measured"   # ~collect_record_dir
+  record_dir:      "${MM_WS}/results/scan_images"   # ~collect_record_dir: the FRAME root —
+                              # the CSV goes to <record_dir>/<run>/<run>_ra_measured.csv (or
+                              # _mark_template.csv), inside the run's frame folder (2026-10-06
+                              # evening, user: results/ not log/)
 
 # Inference / model
 inference:

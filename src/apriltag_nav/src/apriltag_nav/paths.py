@@ -97,10 +97,21 @@ RA_MAP_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'ra_maps')
 # arm_node save_images: <ra_map stem>/point_<id>_sample_<n>_ra_<x>.png —
 # unaffected: the bulk frames stay in results/ (unversioned, large).
 SCAN_IMAGE_DIR = os.path.join(RESULTS_DIR, 'scan_images')
-# arm_node collect mode (2026-10-06): <ra_map stem>_ra_measured.csv — the
-# hand-measured Ra per scanned point, keyed like the Ra map and the frames
-# (run stem, group_id, point_id, run index). Versioned like the Ra maps.
-RA_MEASURED_DIR = os.path.join(LOG_DIR, 'apriltag_nav', 'ra_measured')
+# arm_node collect mode (2026-10-06): <run>/<run>_ra_measured.csv (method A)
+# and <run>/<run>_mark_template.csv (method B) — the hand-measured Ra per
+# scanned point, keyed like the Ra map and the frames (run stem, group_id,
+# point_id, run index). INSIDE the run's own frame folder under results/
+# since 2026-10-06 (evening; user: "손으로 잰 Ra 도 log/ 밑에 말고 results/
+# 에") — it was log/apriltag_nav/ra_measured/<run>_ra_measured.csv for the
+# first run of that day (moved). The root is the frame root; .gitignore
+# excludes only the png / jpg under it, so the CSVs stay versioned.
+RA_MEASURED_DIR = SCAN_IMAGE_DIR
+
+
+def ra_measured_path(run_stem, suffix='_ra_measured.csv', root=None):
+    """<root>/<run_stem>/<run_stem><suffix> — the measured CSV (or the
+    mark template) of a run, next to that run's frames."""
+    return os.path.join(root or RA_MEASURED_DIR, run_stem, run_stem + suffix)
 # tools/merge_ra_dataset.py: one row per frame joining the three above.
 RA_DATASET_DIR = os.path.join(RESULTS_DIR, 'ra_dataset')
 

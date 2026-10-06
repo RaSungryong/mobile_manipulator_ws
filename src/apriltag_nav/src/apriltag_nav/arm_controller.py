@@ -332,8 +332,8 @@ class ArmController:
         # retreats along its own Z (away from the surface) so the operator
         # can put a roughness tester on the spot the Basler just imaged,
         # and the scan resumes on /arm/scan_continue carrying the measured
-        # Ra, which is appended to <record_dir>/<run>_ra_measured.csv next
-        # to the frame names. Switched live by /arm/collect_mode; nothing
+        # Ra, which is appended to <record_dir>/<run>/<run>_ra_measured.csv
+        # — inside the run's frame folder (results/scan_images by default). Switched live by /arm/collect_mode; nothing
         # changes while it is off. State on /arm/collect_state (latched).
         _collect_cfg = load_yaml_block('collect')
 
@@ -1134,9 +1134,12 @@ class ArmController:
             rospy.logwarn_throttle(10.0, f"[Arm REAL] collect state publish failed: {e}")
 
     def _collect_csv_path(self, suffix='_ra_measured.csv'):
-        """<record_dir>/<ra_map stem><suffix> — the stem the run's Ra map and
-        image folder carry, so the three pair by name."""
-        return os.path.join(self.collect_record_dir, self._collect_run_stem + suffix)
+        """<record_dir>/<ra_map stem>/<ra_map stem><suffix> — the stem the
+        run's Ra map and image folder carry, so the three pair by name; with
+        record_dir = the frame root (default) the CSV sits in the run's own
+        frame folder."""
+        return _paths.ra_measured_path(self._collect_run_stem, suffix,
+                                       root=self.collect_record_dir)
 
     COLLECT_COLUMNS = ['run', 'mark_no', 'index', 'group_id', 'point_id', 'images',
                        'ra_measured', 'ra_readings', 'note', 'skipped',

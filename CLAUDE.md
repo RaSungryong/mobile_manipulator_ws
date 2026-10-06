@@ -116,8 +116,11 @@ keeping was deleted (see the Work Log entry).
 <ws>/log/apriltag_nav/ra_maps/<task>_ra_map_<ts>.csv task_manager result_dir  (versioned)
 <ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored);
                                                     g<group>_p<point>_i<index>_s<n>.png since 2026-10-06
-<ws>/log/apriltag_nav/ra_measured/<run>_ra_measured.csv  arm_node COLLECT mode: the hand-measured Ra per
-                                                    scanned point (versioned) — docs/RA_COLLECT_kr.md
+<ws>/results/scan_images/<run>/<run>_ra_measured.csv  arm_node COLLECT mode: the hand-measured Ra per
+                                                    scanned point, IN THE RUN'S FRAME FOLDER (versioned —
+                                                    only the png/jpg under scan_images are ignored); also
+                                                    <run>_mark_template.csv — docs/RA_COLLECT_kr.md.
+                                                    Was log/apriltag_nav/ra_measured/ until 2026-10-06 evening
 <ws>/results/ra_dataset/<run>_dataset.csv           tools/merge_ra_dataset.py, one row per frame (ignored)
 <ws>/results/captures/                              robot_ui Collect tab       (ignored)
 <ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
@@ -2054,6 +2057,36 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-06 (evening, later) — Hand-measured Ra CSV moved into the run's frame folder under results/
+
+User: "손으로 잰 Ra 도 log/ 밑에 말고, results/ 에 저장해줘. 필요하다면
+results 아래에 scan_images/ 폴더 만들어도 돼". The COLLECT-mode records
+(`<run>_ra_measured.csv`, method A; `<run>_mark_template.csv`, method B)
+now go to **`results/scan_images/<run>/`** — the same folder the run's
+frames land in, so one directory per run holds the pictures and the
+labels that go with them. `paths.RA_MEASURED_DIR` is the frame root and
+`paths.ra_measured_path(stem, suffix, root)` builds the file path (used by
+`ArmController._collect_csv_path` and `merge_ra_dataset.find_measured`);
+`robot.yaml collect.record_dir` is `${MM_WS}/results/scan_images` and means
+the ROOT (the CSV goes to `<record_dir>/<run>/`). A mark run captures no
+frames but creates the folder for its template by the same rule. The
+merge tool's default run discovery globs `<root>/*/*_ra_measured.csv`, and
+the mark-template fallback `<root>/<task>_ra_map_*/…_mark_template.csv`;
+`--measured-dir` keeps its meaning as the root. Versioning kept: the
+`.gitignore` line `results/scan_images/` became `results/scan_images/**/
+*.png` + `*.jpg`, so the CSVs beside the frames are tracked while the
+frames are not (`git check-ignore` confirms both). The one existing file
+(the 14:05 run) was `git mv`'d into its run folder and the empty
+`log/apriltag_nav/ra_measured/` removed; its `image_dir` column already
+pointed there. Verified: `check_scan_progress.py` **136** (its expected
+paths follow the new rule), the yaml resolves to the results root, the
+merge tool finds the moved file by itself and by `--measured`. **Not run
+on the robot — `arm_node` reads `record_dir` at start, so until
+`sudo systemctl restart mobile-manipulator` the running node still writes
+to the old log/ path.** Found on the way, left alone: the index held
+four staged doc deletions and an `arm_joint_offsets.yaml` edit from
+another session; this commit lists its own paths only.
 
 ### 2026-10-06 (late) — Workspace tidy: latest log + calibration data kept, the rest removed; the Work Log split
 

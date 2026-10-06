@@ -34,11 +34,15 @@ src/apriltag_nav/task/csv/*_result_*.csv
 src/apriltag_nav/task/csv/*_ra_map_*.csv
 # The bulk that goes with them is not versioned (gitignore has no trailing
 # comments — keep each pattern on its own line):
-#   results/scan_images/  wrist-camera frames, ~10 MB each (ra_maps/ holds the numbers)
+#   results/scan_images/  wrist-camera frames, ~10 MB each (ra_maps/ holds the numbers);
+#                         only the png / jpg are excluded — the hand-measured
+#                         <run>/<run>_ra_measured.csv / _mark_template.csv that
+#                         sit beside them since 2026-10-06 ARE versioned
 #   results/captures/     robot_ui Collect-tab captures
 #   results/tip_check/    tip-tour Basler frames (6-9 MB each; the records are in log/apriltag_nav/tip_check)
 #   log/ros/              roslaunch / node logs (ROS_LOG_DIR, set by the env hook)
-results/scan_images/
+results/scan_images/**/*.png
+results/scan_images/**/*.jpg
 results/captures/
 results/ra_dataset/
 results/tip_check/**/*.png

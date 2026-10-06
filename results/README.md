@@ -6,8 +6,9 @@ Everything a run PRODUCES lives in the workspace: results here, records under
 | path | writer | versioned |
 |---|---|---|
 | `scan_images/<task>_ra_map_<ts>/g<group>_p<point>_i<index>_s<n>.png` | `arm_node` (`save_images`, one folder per run; `point_<id>_sample_<n>_ra_<x>.png` before 2026-10-06) | no — ~10 MB per frame |
+| `scan_images/<run>/<run>_ra_measured.csv`, `…/<run>_mark_template.csv` | `arm_node` COLLECT mode (`collect.record_dir`): the hand-measured Ra per scanned point, in the run's own frame folder (`../log/apriltag_nav/ra_measured/` before 2026-10-06 evening) — `../docs/RA_COLLECT_kr.md` | **yes** — only the png / jpg under `scan_images/` are ignored |
 | `captures/` | robot_ui Collect tab | no |
-| `ra_dataset/<run>_dataset.csv` | `tools/merge_ra_dataset.py` — one row per frame with the hand-measured Ra (`../log/apriltag_nav/ra_measured/`) and the Ra map joined | no — regenerate from the versioned inputs |
+| `ra_dataset/<run>_dataset.csv` | `tools/merge_ra_dataset.py` — one row per frame with the hand-measured Ra (the run folder's CSV above) and the Ra map joined | no — regenerate from the versioned inputs |
 
 `scan_images/20260914_flat_three_runs/` holds the 1273 frames of the three
 runs of 2026-09-14, from before frames were split per run (see its README).

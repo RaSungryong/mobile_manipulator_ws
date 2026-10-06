@@ -8,8 +8,10 @@ leaves, all keyed by the run stem `<task>_ra_map_<ts>`:
   log/apriltag_nav/ra_maps/<run>.csv                 the Ra map: per work point
                                                       x y z, the MODEL's Ra,
                                                       the standoff outcome
-  log/apriltag_nav/ra_measured/<run>_ra_measured.csv the HAND-MEASURED Ra the
+  results/scan_images/<run>/<run>_ra_measured.csv    the HAND-MEASURED Ra the
                                                       operator typed per point
+                                                      (log/apriltag_nav/ra_measured/
+                                                      before 2026-10-06 evening)
   results/scan_images/<run>/g<g>_p<p>_i<i>_s<n>.png   the frames
 
 This writes results/ra_dataset/<run>_dataset.csv with ONE ROW PER FRAME:
@@ -100,11 +102,12 @@ def find_measured(stem, measured_dir, override=None):
     task. Returns (path or None, how)."""
     if override:
         return override, 'given'
-    own = os.path.join(measured_dir, stem + '_ra_measured.csv')
+    own = _paths.ra_measured_path(stem, root=measured_dir)
     if os.path.exists(own):
         return own, 'own'
     task = task_of(stem)
-    cands = sorted(glob.glob(os.path.join(measured_dir, f'{task}_ra_map_*_mark_template.csv')),
+    cands = sorted(glob.glob(os.path.join(measured_dir, f'{task}_ra_map_*',
+                                          f'{task}_ra_map_*_mark_template.csv')),
                    reverse=True)
     for c in cands:
         try:
@@ -226,15 +229,16 @@ def main(argv=None):
     ap.add_argument('--out', help='one combined CSV instead of one per run')
     ap.add_argument('--out-dir', default=_paths.RA_DATASET_DIR)
     ap.add_argument('--ra-map-dir', default=_paths.RA_MAP_DIR)
-    ap.add_argument('--measured-dir', default=_paths.RA_MEASURED_DIR)
+    ap.add_argument('--measured-dir', default=_paths.RA_MEASURED_DIR,
+                    help='root holding <run>/<run>_ra_measured.csv (default: the frame root)')
     ap.add_argument('--image-root', default=_paths.SCAN_IMAGE_DIR)
     args = ap.parse_args(argv)
 
     stems = [run_stem(r) for r in args.runs]
     if not stems:
-        stems = sorted(run_stem(p) for p in glob.glob(os.path.join(args.measured_dir, '*_ra_measured.csv')))
+        stems = sorted(run_stem(p) for p in glob.glob(os.path.join(args.measured_dir, '*', '*_ra_measured.csv')))
         if not stems:
-            print(f'no *_ra_measured.csv under {args.measured_dir}')
+            print(f'no <run>/<run>_ra_measured.csv under {args.measured_dir}')
             return 1
     tables = []
     for stem in stems:
