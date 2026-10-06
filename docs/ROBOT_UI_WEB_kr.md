@@ -31,11 +31,14 @@ Windows PC ─┘   (JSON + JPEG / WebSocket)                        lifter_node
 ### 2-1. 로봇 PC
 
 `mobile_manipulator.launch`에 포함돼 있다 (2026-09-15부터, `use_web_ui`
-기본 true). 스택을 올리면 같이 뜬다:
+기본 true). 2026-09-22부터는 그 launch가 부팅 시 systemd 서비스
+`mobile-manipulator`로 자동으로 뜨므로 따로 띄울 것이 없다
+(`sudo systemctl status mobile-manipulator`, `docs/STOP_LAUNCH_kr.md` §0.5).
+손으로 띄울 때는 먼저 `sudo systemctl stop mobile-manipulator`:
 
 ```bash
 source ~/mobile_manipulator_ws/devel/setup.bash
-roslaunch apriltag_nav mobile_manipulator.launch
+setsid nohup roslaunch apriltag_nav mobile_manipulator.launch > log/ros/launch_manual.out 2>&1 &
 ```
 
 확인:
@@ -79,7 +82,7 @@ PyQt 창과 같은 배치다.
 | Basler 칸 | 드래그로 ROI, 우클릭으로 해제. 초록 사각형 = 추론이 잘라 쓰는 900 px 중앙 영역 |
 | Collect | Live preview, VISION lamp 홀드, 촬영(저장 폴더·접두어·장수·램프·저장·Ra 예측·ROI 사용), **CAPTURE** |
 | Arm | 현재 TCP 자세 + 축별 ± 조그 + 절대 목표를 한 표로(live / jog + / jog − / target 행, step/speed), **Joints (2026-09-21): 현재 관절각 J1..J6, 관절별 ± 조그(deg step), MOVE J 절대 관절 이동(빈 칸 = 현재값 유지, MoveJ 한 번, IK·도달·충돌 검사 없음)**, Keyence 거리 보조(실시간 standoff, Auto standoff), Arm home pose / Cancel arm motion(탭 상단) |
-| Task | `/task_list`의 태스크 선택 + 상세, Send TASK, Reload tasks, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지) |
+| Task | `/task_list`의 태스크 선택 + 상세, Send TASK, Reload tasks, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지), **Ra data collection** (Collect 모드, 배치 Ra 입력 / 번호 매기기, 2026-10-06 — `docs/RA_COLLECT_kr.md`) |
 | Mobile | 거리 전진/후진, 각도 회전(속도 지정), Stop base, Clear stop latch, 베이스 상태 |
 | Calibration | 맵 캘리브레이션 세션(플레이트/야우 스윕 선택, dry run, START/Cancel, 진행 카운트), 핸드-아이(auto-sample, capture, compute, load, reset, status), 단일 태그 locate |
 | Scripts | `robot_ui/plugins/*.py` 목록, RUN / Stop (스크립트는 **로봇 PC에서** 실행된다; 어느 브라우저가 눌렀든) |

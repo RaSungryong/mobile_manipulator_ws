@@ -1,7 +1,12 @@
 # Lift vs `arm_base_z` — problem analysis and calibration method
 
-**Status: analysis only. No transform code has been changed.**
-Written 2026-07-30 against Navifra *KU Polishing Robot Driver* v0.16.
+**Status: HISTORICAL.** Written 2026-07-30 (Navifra *KU Polishing Robot Driver*
+v0.16) as analysis only. Since then: Option B was implemented on 2026-09-11 —
+the live `/lifter/height` enters `transform_world_to_arm` as `lift_m` — and
+`arm_calibration.arm_base_z` was replaced by `tf_chain.yaml T_ab2mb` on
+2026-09-21 (`arm_base_z` 0.652 m at the lift origin is now the design tz of
+that block). The config snippets and §4–§6 below describe the 2026-07 state;
+kept for the reasoning (direction and size of the error).
 
 The new mobile base adds a lift under the arm. The arm transform still assumes
 the arm base sits at a fixed height. This document records exactly why that is

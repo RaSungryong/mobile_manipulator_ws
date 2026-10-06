@@ -13,7 +13,7 @@ launch(`path_tag_locator.launch`)를 종료하는 절차. 2026-09-21에 실제�
 | **정상 종료 = SIGINT** | launch 터미널의 Ctrl-C 와 동일. roslaunch가 노드들에 순서대로 SIGINT → 각 노드의 rospy 종료 훅 실행 (VISION 램프 off, Basler close, 팔 disconnect, 충전 릴레이 off, STATUS 램프 off). |
 | **`kill -9` 는 마지막 수단** | roslaunch만 죽고 노드들이 고아로 남아 마스터에 등록된 채 계속 돎 → 다음 launch 때 이름 충돌, `/cmd_vel` 이중 publisher. |
 | **launch를 띄운 터미널과 다른 터미널에서 작업** | launch 터미널이 얼어 있는 경우(§3) 거기서 명령을 치면 같이 얼어붙음. |
-| **종료 = 충전 릴레이 off** | `task_executor`의 `devices.shutdown()`이 릴레이를 끊음 (CLAUDE.md 2026-09-14). 충전 중이었다면 재시작 후 `UNDOCK` → `CHARGE`. |
+| **종료 = 충전 릴레이 off** | `task_executor`의 `devices.shutdown()`이 릴레이를 끊음 (CLAUDE.md 2026-09-14). 충전 중이었다면 재시작 후 `CHARGE` (도크 위에서는 움직이지 않고 릴레이만 켠다, 2026-10-06). |
 
 ## 0.5. 부팅 시 자동 실행 — systemd `mobile-manipulator` (2026-09-22)
 
@@ -42,7 +42,7 @@ sudo src/apriltag_nav/tools/systemd/install_service.sh --uninstall    # 아예 �
 | **시작 순서** | `run_stack.sh`가 ROS master(최대 120 s) → Fairino 컨트롤러 RPC 포트 192.168.58.2:20003(최대 180 s) → Keyence(최대 30 s)를 기다린 뒤 `roslaunch apriltag_nav mobile_manipulator.launch`. 팔·Keyence가 시간 안에 안 켜지면 **경고만 남기고 그냥 띄운다** — 카메라·베이스·웹 UI는 팔 없이도 쓸 수 있고, `arm_node`만 죽어 있다. 팔을 켠 뒤 `sudo systemctl restart mobile-manipulator`. |
 | **launch 인자** | `src/apriltag_nav/tools/systemd/mobile-manipulator.env`의 `LAUNCH_ARGS=` (예: `use_hand_cam:=false`). 고친 뒤 restart. 대기 시간도 같은 파일(`WAIT_ARM_S=0` 이면 안 기다림). |
 | **손으로 띄울 때** | 서비스가 떠 있는 채로 `roslaunch … mobile_manipulator.launch`를 또 띄우면 노드 이름 충돌로 서로 죽이고 9090/8080 포트가 겹친다. **먼저 `sudo systemctl stop mobile-manipulator`**, 끝나면 `start`. `install_service.sh --start`와 `tools/stop_stack.sh`가 이 경우를 검사한다 (stop_stack은 서비스로 뜬 launch에는 손대지 않고 systemctl을 안내). |
-| **종료 = 충전 릴레이 off** | §0과 같다. 리부트·`systemctl stop`도 `task_executor`의 shutdown 훅을 지나므로 충전 중이면 끊긴다. 재시작 후 `UNDOCK` → `CHARGE`. |
+| **종료 = 충전 릴레이 off** | §0과 같다. 리부트·`systemctl stop`도 `task_executor`의 shutdown 훅을 지나므로 충전 중이면 끊긴다. 재시작 후 `CHARGE`. |
 | **arm은 움직이지 않는다** | 자동 시작이라도 CLAUDE.md의 규칙 그대로: 팔 홈 자세 이동 없음, 리프트 원점복귀 없음(`lifter.auto_home_on_start` false; 드라이버 자체의 원점복귀는 별개로 navifra가 함). |
 | **로그 위치** | stdout은 journal(`journalctl -u mobile-manipulator`), 파일 로그는 `devel/setup.bash`의 env hook이 잡는 `<ws>/log/ros/<run_id>/` — 터미널에서 띄울 때와 같다. |
 | **워크스페이스 경로** | 설치 스크립트가 유닛 파일에 이 워크스페이스의 절대 경로를 박아 넣는다. 워크스페이스를 옮기거나 다른 checkout으로 바꾸면 `install_service.sh`를 그 위치에서 다시 실행. |
@@ -142,11 +142,12 @@ tail -f log/ros/calib_launch_*.out      # 보고 싶으면 이렇게
 `config/tf/*` 수정 시각). 2026-09-22에는 그 사이에 체인이 바뀌어 100–122(옛 체인)와
 123–125(새 체인)가 20 mm 이상 어긋났고, 병합본은 쓰지 못하고
 `calibrate/20260922_161657/map_world_plate1_merged_CHAIN_MISMATCH.yaml` 로
-남겨 두었다 — 결국 전체를 새 체인으로 다시 돌려야 한다.
+남겨 두었다 — 그날 저녁(16:23, 16:53)과 09-28에 전체를 새 체인으로 다시 돌려
+map.yaml에 반영했다.
 
 ## 4. 재시작 체크리스트
 
 - 새(얼지 않은) 터미널, `source devel/setup.bash` (→ `MM_WS`, `ROS_LOG_DIR=log/ros`)
 - 손으로 띄운 `rosbridge_websocket` 이 있으면 먼저 종료 (9090 충돌)
 - `roslaunch apriltag_nav mobile_manipulator.launch`
-- 충전 중이었으면 `UNDOCK` → `CHARGE`
+- 충전 중이었으면 `CHARGE` (도크 위에서는 릴레이만 다시 켠다)

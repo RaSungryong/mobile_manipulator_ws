@@ -2,44 +2,27 @@
 build/
 devel/
 install/
-logs/
 .catkin_workspace
-
-# Isaac Sim USD scene assets (~600 MB).
-# Simulation support was removed from this workspace, so nothing here reads
-# them any more. Kept on disk but out of git — the .usd/.stp files are large
-# binaries and were never a sensible thing to version.
-polishing_env/
-
-# Local review / analysis output, not part of the deliverable
-review_reports/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 
-# Large model files
+# Large model files and rendered documents
 *.onnx
 *.pt
 *.pth
 *.pdf
 
-# Runtime / backup output. Result CSVs are written to
-# log/apriltag_nav/ra_maps/ (results/ra_maps/ before 2026-09-15, moved on
-# user request — see results/README.md) and ARE versioned there (the
-# deliverable, ~100 KB each); a stray copy next to the input path files in
-# task/csv is not.
-src/apriltag_nav/task/csv/*_result_*.csv
-src/apriltag_nav/task/csv/*_ra_map_*.csv
-# The bulk that goes with them is not versioned (gitignore has no trailing
-# comments — keep each pattern on its own line):
-#   results/scan_images/  wrist-camera frames, ~10 MB each (ra_maps/ holds the numbers);
-#                         only the png / jpg are excluded — the hand-measured
-#                         <run>/<run>_ra_measured.csv / _mark_template.csv that
-#                         sit beside them since 2026-10-06 ARE versioned
+# Run output under results/ (see results/README.md). The numbers are
+# versioned — Ra maps in log/apriltag_nav/ra_maps/, the hand-measured
+# <run>/<run>_ra_measured.csv / _mark_template.csv beside the frames — the
+# bulk is not (gitignore has no trailing comments — one pattern per line):
+#   results/scan_images/  wrist-camera frames, ~10 MB each
 #   results/captures/     robot_ui Collect-tab captures
-#   results/tip_check/    tip-tour Basler frames (6-9 MB each; the records are in log/apriltag_nav/tip_check)
+#   results/ra_dataset/   merge_ra_dataset.py output, regenerable
+#   results/tip_check/    tip-tour Basler frames (records in log/apriltag_nav/tip_check)
 #   log/ros/              roslaunch / node logs (ROS_LOG_DIR, set by the env hook)
 results/scan_images/**/*.png
 results/scan_images/**/*.jpg
@@ -54,11 +37,9 @@ log/ros/
 src/orbbec_camera/
 src/realsense-ros/
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
 
@@ -68,26 +49,16 @@ Thumbs.db
 # GitHub personal access token used for pushing — never commit
 token
 
-# Robot run logs moved into the workspace 2026-09-09 (log/).
-# The RECORDS are versioned — yaml (nav_log arrivals, calibration session /
-# entry records, map_world), npz (hand-eye observations) and csv, ~6.5 MB.
-# The bulk is not, and both exclusions are deliberate:
-#   *.mp4 / *.webm  screen recordings, 230-388 MB each. GitHub hard-blocks
-#                   any file over 100 MB, so these CANNOT be pushed without
-#                   Git LFS + a paid data pack. Kept on disk / USB instead
-#                   (user's decision 2026-09-09).
-#   *.png           front_cam snapshots, 776 files / 471 MB. They would take
-#                   the repo from 119 MB to ~600 MB permanently; the yaml
-#                   record of each run is kept and carries the numbers.
+# Records under log/ are versioned (yaml, npz, csv); the bulk is not:
+#   *.mp4 / *.webm  screen recordings — GitHub blocks files over 100 MB
+#   *.png           front_cam / locate snapshots — the yaml record of each run
+#                   carries the numbers
 log/**/*.mp4
 log/**/*.webm
 log/**/*.png
-# …except the hand-eye samples: they are the INPUT the calibration is
-# recomputed from (calibrate() re-detects over the archive), ~0.4 MB each,
-# not re-checkable evidence like the front_cam snapshots above.
+# …except the hand-eye samples: they are the INPUT calibrate() re-detects
+# over, ~0.4 MB each.
 !log/path_tag_locator/handeye_calib/**/*.png
-log/*.mp4
-log/*.webm
 log/**/*.tmp
 
 # LibreOffice lock files

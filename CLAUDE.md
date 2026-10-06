@@ -8,7 +8,9 @@
 
 Mobile manipulator system: Fairino FR10v6 6-DOF arm on a Navifra mobile base.
 AprilTag visual navigation, arm scanning tasks, surface roughness (Ra) prediction.
-Real robot only — simulation support has been removed.
+Real robot only — there is no simulation mode of the stack; `src/robot_sim`
+(dev machine) renders only the hardware-owner boundary (base, cameras, arm
+protocol) so navigation and calibration code can be checked offline.
 
 Base driver: **Navifra KU Polishing Robot Driver v0.16** (separate ROS1 install
 at `~/navifra`, systemd unit `navifra-robot`). It owns `/cmd_vel` + `/odom` plus
@@ -16,7 +18,7 @@ the lift / lighting / battery / Safety-PLC peripherals. Field tuning lives in
 `~/navifra/param.yaml`, not in this workspace.
 
 **Read `docs/HANDOVER.md` before substantive work** — it is the short
-current-state summary (rewritten 2026-09-02): what is verified on hardware,
+current-state summary (rewritten 2026-10-06): what is verified on hardware,
 what is still open, and the interim operating rules. This file holds the
 detail and the reasoning; HANDOVER.md holds the checklist.
 
@@ -62,14 +64,12 @@ detail and the reasoning; HANDOVER.md holds the checklist.
 - **Inference:** ONNX Runtime (CPU), ResNet3D; preprocessing uses
   `torchvision.transforms` + PIL (also hard runtime deps)
 - **Transforms:** scipy, numpy
-- **Offline validation only:** `validate_transform.py` / `validate_compare.py`
-  use roboticstoolbox-python for URDF FK; not a runtime dependency
 
 ## Build & Run
 
 ```bash
 catkin_make && source devel/setup.bash
-roslaunch apriltag_nav mobile_manipulator.launch   # starts all nine nodes
+roslaunch apriltag_nav mobile_manipulator.launch   # starts eight apriltag_nav nodes
                                                    # + rosbridge on :9090 (use_rosbridge:=false to skip)
                                                    # + the WEB operator UI on :8080 (use_web_ui:=false)
 ```
@@ -124,7 +124,10 @@ keeping was deleted (see the Work Log entry).
 <ws>/results/ra_dataset/<run>_dataset.csv           tools/merge_ra_dataset.py, one row per frame (ignored)
 <ws>/results/captures/                              robot_ui Collect tab       (ignored)
 <ws>/log/apriltag_nav/nav_log/<day>/<ts>_<cmd>.yaml mobile_controller alignment_result_dir
-<ws>/log/apriltag_nav/calib_pair/                   the 2026-09-08 front_cam tilt-fit snapshots
+<ws>/log/apriltag_nav/calib_pair_20260915_a/        the 2026-09-15 front_cam tilt-fit snapshots
+<ws>/log/apriltag_nav/tip_check/<session>/         robot_ui tip-tour records (frames in results/tip_check)
+<ws>/log/apriltag_nav/task_csv_backup/<date>_*/     planner originals of every task/csv set, with records
+<ws>/log/chain_calib/<session>/                     A0-sheet chain / hand_cam intrinsics / Basler-tip sessions
 <ws>/log/path_tag_locator/{calibrate,locate,handeye_calib}/, map_world_*.yaml
                                                     locator default_save_dir / handeye run_root / map_out
 <ws>/log/ros/<run_id>/                              roslaunch + node logs, ROS_LOG_DIR (ignored)
@@ -174,46 +177,22 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            #       scanned; world x y z from the paired file
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # Today's keys (2026-09-29, 18:10; plus the 2026-09-30
-                           # rrt_final_path_260930_standoff20mm_offset{0cm,1.5cm,
-                           # 3cm}_height{652,667,682}mm joint-only set — new work
-                           # points, new tag assignment, NO pose twin, see the
-                           # Work Log): 260610_standoff
-                           # 20mm_offset{0,1.5,3}cm_height{652,667,682}mm — the
-                           # planner's "260610_rot" export (task/260610_rot_
-                           # standoff20mm_offset0_15_30.zip): the SAME 1266
-                           # work points on 정반 1 tags 104–108 / 119–121 at
-                           # three LIFT heights (lift_mm 0 / 15 / 30 — the
-                           # "offset" is the arm base height, the joint rows
-                           # are solved at it), standoff 20 mm, speeds 10–30.
-                           # Planner ORIGINALS, NOT retargeted (user, 18:20:
-                           # "retarget 안 해도 됨") — see the Work Log.
-                           # Plus upper_mold_errorX_p000mm_standoff_{001,010,
-                           # 020}mm_height_652mm_plate2: the 정반 2 set of the
-                           # evening (tags 131–133 / 143–145, retargeted,
-                           # 20 mm tip-down), restored from the 18:06 backup
-                           # on the user's word that it is the 상형 (18:35;
-                           # the planner zip's folder called it 하형 — the
-                           # name follows the user). Plus the 2026-09-14 set
-                           # brought back from git (commit 68bac0d, user
-                           # 18:45): errorX_p000mm_standoff_{010,030,050}mm_
-                           # height_652mm (정반 1, tags 106–108 / 118–121, z
-                           # 0.34–0.44 m, planner originals of that day) and
-                           # errorX_…_standoff_{010,030,050}mm_…_plate2 (19:00
-                           # / 19:10, user: these for 정반 2 as well — the same
-                           # make_plate2_paths.py conversion, tags 106/107/108/
-                           # 119/120/121 → 132/133/134/144/145/146, 20 mm
-                           # tip-down; 2 / 3 work points per file sit 4–9 mm
-                           # beyond the arm's reach there, see the Work Log;
-                           # the 010_plate2 JOINT file is at 16.1 mm of
-                           # tip-down since 20:30 = what the Keyence measured
-                           # on group 132, its pose twin at 20;
-                           # the 09-14 "+26" 050_plate2 files are replaced,
-                           # git 68bac0d has them).
+                           # Today's keys (2026-10-06 15:54): offset0mm_h652 /
+                           # offset10mm_h662 — TWO JOINT-ONLY files (rrt_final_
+                           # path_<key>.csv, 1267 work points each, groups 104–107 /
+                           # 118–120, lift_mm 0 / 10, standoff 17, planner speeds
+                           # 10–30, NO assigned_workpoints_ twin → no pose task, no
+                           # world xyz in the Ra map). Planner originals: NOT
+                           # retargeted (the tool needs the pose twin to classify),
+                           # speed-10 rule NOT applied — see the retarget section.
+                           # The 10mm pair of 13:37 (ran 4×) was replaced by them;
+                           # git 7724761 has it. The
+                           # 2026-09-29/30 sets (260610 three-lift, 260930 joint-only,
+                           # errorX 010/030/050 + plate2 twins, upper_mold plate2)
+                           # were removed 2026-10-06; git (before 7724761) and
+                           # log/apriltag_nav/task_csv_backup have them.
                            # Keys are SEPARATE tasks because the standoff /
                            # lift changes the solution, not just the offset.
-                           # 🛑 target_line 2 (groups 118/119/120) is not
-                           #    trustworthy yet — see the scan-CSV section.
                            # ⚠️ scan_joint_* replays a planned trajectory with
                            #    no reach/collision check; only safe if the base
                            #    is at the planned stop of every group tag.
@@ -241,9 +220,9 @@ EXEC <code> / EVAL <expr>  # Debug execution
 ```
 
 Each task registers one step per `group_id` in ascending order, and the robot
-drives to that tag before scanning its points. The `standoff_010mm` pair is
-`[104, 105, 106, 107, 118, 119]`; 030 and 050 differ (`…107, 119, 120` and
-`…106, 119, 120`) because the standoff changes the assignment. All of them
+drives to that tag before scanning its points. The `offset*` files register
+`[104, 105, 106, 107, 118, 119, 120]`; a different standoff or lift changes
+the assignment, which is why every planner export is its own key. All of them
 route from `START_TAG` 500.
 
 `TaskManager.discover_task_defs()` builds the definitions from the directory
@@ -297,6 +276,17 @@ has no `source_point_id` at all: there, `point_id` IS the work-point id.
 
 ### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
 
+⚠️ **Status 2026-10-06: the two joint files in task/csv (`rrt_final_path_
+offset0mm_h652.csv`, `…offset10mm_h662.csv`) are planner ORIGINALS with NO
+pose twin — the tool cannot classify or correct them (it settles a file by
+FK against its pose rows), and the speed-10 boundary rule
+(`tools/slow_task_entry.py`) is not applied either.** `check_retarget_joint_
+paths.py` part 2 reports "no paired pose file". The user's 2026-09-29
+"retarget 안 해도 됨" was about the 260610 set — ask for the
+`assigned_workpoints_` twins and ask before `--apply`. Replayed as exported
+the tip lands ~9 mm beside / ~10 mm above the planned point (zone B figures
+of the 09-29 analysis).
+
 A planner export is solved for the planner's model, settled by FK against
 its own pose rows (0.010 mm over 2828 work points, one combination only):
 **base stop pose = tag of `config/map_idle.yaml` − 0.55 m at exactly ±90°**
@@ -333,9 +323,10 @@ neither) and rewrites only an ORIGINAL, so a second run is a no-op.
   mode applies their xy part — ~9 mm between the two modes remains) and the
   per-arrival stop error (±2 mm / ±0.2°), which only pose mode sees.
 
-### 🛑 The group → tag assignment does not survive checking
+### The 2026-09-11 group → tag finding (historical — re-check every new export)
 
-Measured from the robot's **STOP pose** (tag − 0.55 m `camera_offset`, which
+Found on the 2026-09-11 RRT set (deleted since); kept because every export has
+had to pass the same test. Measured from the robot's **STOP pose** (tag − 0.55 m `camera_offset`, which
 is what `/robot_pose` reports — not the tag position), every group's work
 points are nearest to a DIFFERENT tag than the one it is assigned to, and
 all of them cluster near tags 102–104:
@@ -351,7 +342,9 @@ all of them cluster near tags 102–104:
 
 The work points span only **~0.9 × 0.8 m in total** with heavily overlapping
 per-group bounding boxes — one area, spread across tags up to 6.4 m apart.
-**Only group 104 is reachable.** Needs the generator's author.
+Only group 104 was reachable in that set. Later exports (09-14, 09-29, the
+10-06 files) assign differently; run `scan_pose_*` first — its IK failure is
+the diagnostic, a joint replay is not.
 
 ⚠️ **Both kinds register since 2026-09-14 (user instruction: run from the
 files in task/csv), joint tasks included.** The hazard stands: joint angles
@@ -417,16 +410,6 @@ Two facts from the previous warning that are still load-bearing:
 Merged-scan output is a 13-column CSV: `group_id, point_id, x, y, z,
 ra_mean, ra_std, ra_min, ra_max, num_samples, success, execution_message,
 validated_at`. Render with `tools/ra_map_plotter.py <csv> [--interpolate]`.
-
-## Arm Controller Variants
-
-| File | IK Engine | Scan |
-|------|-----------|------|
-| `src/apriltag_nav/arm_controller.py` | Fairino SDK + q0 ref | Yes (default) |
-| `tools/arm_controller_sdk.py` | Fairino SDK (basic) | No |
-
-Switch via the import in `scripts/arm_node.py`:
-`from apriltag_nav.arm_controller import ArmController`
 
 ## Architecture
 
@@ -617,12 +600,10 @@ correctly (see the Work Log; those two test tags were deleted 2026-08-13, so
 don't go looking for them in `map.yaml`). These are the two ways it fails
 *silently*. Both were observed on hardware, not reasoned about.
 
-🗓️ **Both are scheduled to be fixed on 2026-08-14**, on the user's decision
-(2026-08-13: "둘 다 내일 고치자"). They had been left open since 2026-08-12
-pending exactly that call, so this is the go-ahead, not a new request. Do them
-together with that day's on-robot verification of the front_cam rotation port —
-the first defect is the one that will show up *during* that verification, since
-every drive ends with the tag at or past the frame edge.
+Status: the first (`align_to_tag` waiting forever) was fixed 2026-09-02 —
+`align_timeout_s`, and every hop aligns (see below). The second, the frozen
+`/odom` deadlock (next ⚠️), still has no guard in `execute_pure_pursuit`;
+only the manual `/mobile/move_cmd` moves check that odom advances.
 
 ✅ **`align_to_tag()` is bounded since 2026-09-02** — `align_timeout_s`
 (20 s, `<= 0` disables) fails the hop with a logged reason (tag not visible /
@@ -683,25 +664,26 @@ the exit lane and the exit-tag align (yaw only) cannot remove it. Beyond
 the tolerance the tag is driven onto the column with the normal arrival
 algorithm — forward when ahead, backward when behind (500-series reverse
 arrivals stop on the crosshair) — and aligned there; a fresh arrival
-(±2 mm) never trips it, a tag out of view at rest fails the hop. **`center_x_stop_offset` (currently +50 px)** is what
-decides how much tag is left in frame; **more positive** stops earlier and
-leaves more margin. **It is 0 since 2026-09-02** (user: the tag centre must
+(±2 mm) never trips it, a tag out of view at rest fails the hop. **`center_x_stop_offset`** decides how much tag is left in frame (more
+positive stops earlier). **It is 0 since 2026-09-02** (user: the tag centre must
 reach the target centre), so the target column is the optical axis itself.
 **The target column depends on the direction since 2026-09-04**: forward
 hops stop the tag on `cx + center_x_stop_offset` (0 = the crosshair);
 reverse hops stop it on `cx + center_x_stop_offset_reverse` (**+400 px**,
 the far RIGHT of the frame = the tag ~162 mm AHEAD of the lens — user
 request, "후진할 때만 화면 기준 최대한 오른쪽") — **unless the TARGET tag is
-in `center_x_stop_offset_reverse_skip_tag_ranges` (`[[500, 599]]`)**: a
-reverse hop into a dock / pivot tag stops on the forward column, i.e. the
-designed stop pose, because a pivot turns about the base centre and needs
+in `stop_offset_skip_tag_ranges` (`[[500, 599]]`; the 2026-09-04 name
+`center_x_stop_offset_reverse_skip_tag_ranges` is still read as an alias)**: a
+hop into a dock / pivot tag stops on the crosshair column in BOTH directions,
+i.e. the designed stop pose, because a pivot turns about the base centre and needs
 the base ON that pose (user rule, same day). Removing that key restores
 the 2026-09-02 one-column rule (reverse stops on the forward column from
 the other side; a cx − offset mirror to the LEFT was tried and backed out
 that day — the opposite side of this one). `robot_camera_node` draws both
 columns on `/front_cam/tag_overlay` (cyan `FWD stop`, magenta `REV stop`,
 from the same two keys). Because a reverse arrival leaves the lens 162 mm
-short of the tag and `/robot_pose` has no fore-aft term, `go_to_next_tag`
+short of the tag (`/robot_pose` carries that fore-aft term since 2026-09-04,
+but the hop planner needs it too), `go_to_next_tag`
 corrects the next hop's odom distance (`_odom_distance_for_hop`: edge ±
 (where the lens rests vs the start tag − where the stop column puts it),
 read live from the start tag when visible) — without it a reverse hop ran
@@ -716,40 +698,38 @@ lands at body x = 0.567 m either way.)
 `traveled_dist` comes from odom, and the S-curve reads it: `traveled == 0`
 means `accel_factor == 0` means `target = min_speed`. If the base is not
 actually moving, traveled never grows, so the command never rises above
-**0.01 m/s** and the loop keeps writing it to a dead drive for the full
+the floor (`s_curve_min_speed_factor` × `max_linear_speed` = **0.02 m/s**) and the loop keeps writing it to a dead drive for the full
 60 s timeout with no error. Nothing checks that odom is advancing. This is how
 a `MOTOR_FEEDBACK_TIMEOUT` presented as "the robot just sits there quietly".
 
 #### Speed: what the config actually produces
 
-Measured against the real loop and confirmed on hardware (5.1 s to reach top
-speed, predicted 4.9 s). `max_linear_speed: 0.05` is the ceiling and **every
-move reaches it** — `s_curve_accel_ratio + decel_ratio = 0.7 < 1`, so a cruise
-window always exists, and the 0.05 m/s² ramp needs only 1.0 s / 2.5 cm.
+Measured against the real loop and confirmed on hardware at the 2026-08 value
+0.05 m/s (5.1 s to reach top speed, predicted 4.9 s). **`max_linear_speed` is
+0.1 since 2026-09-02** and every move still reaches it — `s_curve_accel_ratio +
+decel_ratio = 0.7 < 1`, so a cruise window always exists; the 0.05 m/s² ramp
+now needs 2.0 s / 10 cm, and the aim-and-drive pre-slow (`plan_prepare_dist`)
+caps the visible approach well below it.
 
 | | value |
 |---|---|
-| top linear | 0.05 m/s (motor ≈ 52 rpm) |
-| start/end floor | 0.01 m/s (motor ≈ 10 rpm) |
+| top linear | 0.1 m/s (motor ≈ 104 rpm) |
+| start/end floor | 0.02 m/s (motor ≈ 21 rpm) |
 | top angular | 0.25 rad/s = 14.3 °/s |
-| 0.40 m move | ~13.8 s, timeout 60 s |
+| 0.40 m hop incl. aim + align | ~22 s median (2026-09-28 records), timeout 60 s |
 
 Pure-pursuit steering never approaches the angular limit (6.4 °/s at 20 cm
 lateral); only `align_to_tag` past ~20° of error and `execute_pivot` clip.
 The navifra `base_controller` limits (2.0 m/s / 20 rad/s) are 40x away and
 never bind — `robot.yaml` is the only constraint.
 
-⚠️ **Four `robot:` keys in `robot.yaml` are read by nothing.** Tuning them does
-nothing at all:
-
-- `min_linear_factor` / `min_angular_factor` — `self.min_linear` /
-  `self.min_angular` are computed in `MobileController.__init__` and never
-  read. The real floor is `s_curve_min_speed_factor` (0.2 → 0.01 m/s). Note
-  the comment at `min_linear_factor` claims it prevents motor stiction; the
-  speed actually commanded is *lower* than the 0.015 m/s it intends.
-- `slow_factor` — no reference anywhere.
-- `navigation_timeout` (8.0) — `timeout_limit = max(8.0, D/min_speed * 1.5)`,
-  and the second term wins for any D above 5.3 cm. It never applies.
+⚠️ **Dead `robot:` keys were removed from `robot.yaml` on 2026-10-06**
+(`slow_factor`, `min_linear_factor`, `min_angular_factor`, `stop_sleep_duration`,
+`predictive_centering.fallback_to_map_yaml`, `topics.scan_signal`, the
+`inference:` block). The real speed floor is `s_curve_min_speed_factor`
+(0.2 → 0.02 m/s). `navigation_timeout` (8.0) IS read —
+`timeout_limit = max(navigation_timeout, D / min_speed × 1.5)` — and with a
+0.02 m/s floor the 8 s wins for hops under ~10.7 cm (re-seat hops).
 
 ### Arm split
 
@@ -996,8 +976,7 @@ moment when nobody expects motion. Going to the home pose is explicit only —
 table two sections down. `lifter_node` follows the same startup rule for
 its own, unrelated reason.)
 
-Both controller variants (`arm_controller.py`, `tools/arm_controller_sdk.py`)
-follow this. Don't reintroduce an init-time home to "get to a known state".
+`arm_controller.py` follows this. Don't reintroduce an init-time home to "get to a known state".
 
 ### ⚠️ "Homing" means two unrelated things — always qualify it
 
@@ -1061,9 +1040,9 @@ one place:
   up; it does not need repeating (confirmed on the robot 2026-08-10).
 
 ⚠️ **The lift is capped at 1000 rpm by a hardware setting on the MDROBOT
-controller**, so `up_speed_rpm` (currently 2000) and `post_home_speed_scale`
-(2.0) in `~/navifra/param.yaml` are both already clipped and changing them does
-nothing. The cap is raisable to 16000 but is deliberately left at 1000. That
+controller**, so `posi_ctrl_vel_rpm` (1000) with `post_home_speed_scale` (2.0) in
+`~/navifra/param.yaml` is already clipped and raising it does nothing
+(`up_speed_rpm` is 500 today; it was 2000 when the cap was found). The cap is raisable to 16000 but is deliberately left at 1000. That
 is why every timing figure here is ~28.2 s per 7000 counts (so ~27.8 s over the
 6900-count clamp) and why it does not vary between origin homing and a
 post-home move. Earlier docs said "28 s at 2000 rpm" —
@@ -1261,8 +1240,9 @@ percentage next to the live BAT chip), and both UIs now print the LIVE
 Mechanics: `_charge_tick()` runs every main-loop tick (`_tick()`, the
 old `run()` body) and only QUEUES two internal tasks — `battery_return`
 (lift origin home → `move_to_tag(dock_tag)` → optional `dock_reverse_m`
-→ `charge_on`) and `battery_undock` (`charge_off` → `drive_m` forward
-via the new `MobileClient.drive_distance`, mobile_node `/mobile/move_cmd`)
+→ `charge_on`) and `battery_undock` (`charge_off`, plus a forward `drive_m` via
+`MobileClient.drive_distance` only while `undock_forward_m` > 0 — it is 0
+since 2026-10-06)
 — which go through the ordinary task machinery: a user TASK/GOTO
 preempts them, the safety gate applies, `/task_state` and the lamp follow.
 "Charging" is judged by `NavifraDevices.charging_by_bms()` (current >
@@ -1279,8 +1259,8 @@ nothing else is queued — a GUI that queues "scan, scan, scan" still runs
 all three before the robot returns. ⚠️ Assumed, not verified: the
 designed stop pose on dock 500 (reverse arrival, crosshair column) makes
 the charger contacts; if it needs an extra push, `dock_reverse_m` is the
-knob, and if 10 cm forward does not break contact raise
-`undock_forward_m`. Offline checks: `tools/check_charging_manager.py`
+knob, and `undock_forward_m` (0 today) restores a forward move after
+undocking if contact ever needs breaking. Offline checks: `tools/check_charging_manager.py`
 (13: charge → 85 % undock → lamp; 29 % mid-task preempt → return → true
 → confirmed; return after a completed task; return_after_task off;
 STOP disarms; dock without current → dock_failed, no retry; disabled).
@@ -1425,7 +1405,8 @@ and the workspace copy is the stale one.
 
 `robot.length` / `robot.width` are **0.90 / 0.70** as of 2026-08-13 (the old
 base was 0.80 / 0.50, a width narrower than the 0.65 m wheel track and
-therefore impossible). Nothing reads either key.
+therefore impossible). Read only as fallbacks for `aim_body_half_length_m` /
+`aim_body_half_width_m`, which robot.yaml sets explicitly.
 
 `wall_dist_work_zone` was raised **0.35 → 0.45** on 2026-08-13 to go with it.
 These are centre-to-wall distances and they track the body half-width:
@@ -1435,8 +1416,8 @@ every corridor lane sits 450 from the 정반 face — so 0.45 survived the
 2026-08-21 map swap unchanged. **`wall_dist_zone_a` did not: 0.6275 → 0.52**,
 because the new zone A lane (y = 3.02) is 520 from 정반 1's top edge and was
 chosen to balance the pivot between the north wall and the plate corner, not to
-hold a clearance figure. Nothing reads these three keys
-today — the robot's real stop position comes from centring the tag under
+hold a clearance figure. `wall_dist_work_zone` is only the fallback for
+`aim_wall_dist_m` (set); the other two are read by nothing — the robot's real stop position comes from centring the tag under
 front_cam, not from here.
 
 **The 100 mm the wider body costs was paid back by moving the arm, not the
@@ -1466,14 +1447,14 @@ tool Z before each capture. **Since 2026-09-08 the loop itself is
 offline-tested)**; the controller only projects the reading by
 `cos(beam_angle)`, converts approach mm to tool Z with `keyence_dir`, and
 does the MoveL. What the rewrite changed: it engages over the whole sensor
-range (`activate_threshold` 20 mm, was 5), an approach step is at most half
+range (`activate_threshold` 45 mm since 2026-09-29; 20 on 09-08, 5 before), an approach step is at most half
 the MEASURED gap while far and `max_step_mm` (1.0) near the target while a
 retreat may be 3 mm, a `max_travel_mm` budget bounds the whole adjustment,
 every decision is the median of 5 readings that arrived AFTER the last move
 (a cached value cannot drive the arm; a silent sensor means no motion), a
 reading that does not follow the motion aborts, the gain adapts DOWN to the
 measured sensitivity on sloped material, `keyence.target_distance_mm` is
-live (default 10 = the sensor zero), and the outcome is written into the
+live (16.5 = the sensor zero since the 2026-09-18 case change), and the outcome is written into the
 CSV row's `execution_message` (`require_converged` makes a failed standoff
 fail the point). **`seek_enabled` is OFF since 2026-09-29** (user; it was ON
 2026-09-21..29): the key is shared by the TASK scan and robot_ui's Auto
@@ -1517,22 +1498,25 @@ move pre-compensates the first move of the next adjustment nearby
 Three things about it are not guessable from the code — full
 record in `docs/keyence_scan_chain.md`:
 
-- **The laser is mounted oblique, 42.6° off tool Z** (measured, not documented
+- **The laser is mounted oblique, 37.1° off tool Z since the 2026-09-18 remount**
+  (42.6° before; measured, not documented
   anywhere in the URDF or TCP). The reading is a distance along the *beam*, so
   it is projected by `cos(beam_angle_deg)` before anything else. After that
   projection `keyence_tol`, `keyence_max_step_mm` and
   `keyence_activate_threshold` are all **perpendicular standoff mm** — never
   compare them against the raw reading.
 - **`keyence_dir` must be `-sign(k)`, currently −1.0.** The sensor reads 0 at a
-  10 mm standoff, negative when too far, positive when too close, so a positive
+  16.5 mm standoff (10 before 2026-09-18), negative when too far, positive when too close, so a positive
   reading must *retreat*. It sat at +1.0 for a long time, which amplifies the
   error by (1 + kp) per step and drives the tool into the workpiece; it was
   never noticed because `keyence_dlen1_node` was commented out of the launch
   file, so the loop had literally never run. Re-derive with
-  `tools/measure_keyence_angle.py` if the sensor is remounted.
+  `tools/measure_keyence_angle_via_node.py` (stack up) or
+  `measure_keyence_angle.py` (stack down) if the sensor is remounted.
 - **`keyence_max_step_mm` is 1.0 and is doing real work.** The oblique beam
   walks the laser spot `0.919*dz` sideways per correction, so on a sloped
-  surface the effective sensitivity is much larger than the calibrated 1.358
+  surface the effective sensitivity is much larger than the calibrated 1.25
+  (1.358 on the old mount)
   — one observed step hit 7.52, past the divergence limit of 3.40. The clamp
   is what kept that from running away; since 2026-09-08 it is the approach
   FINE step and the adaptive gain backs it up, but don't raise it without
@@ -1571,9 +1555,6 @@ clamped to `keyence_max_step_mm` (1.0 mm) per step and cannot close a
   the origin changed.
 - Joint mode is untouched: those CSVs are absolute joint angles fed to
   `MoveJ` and no transform reads them.
-- ⚠️ `tools/arm_controller_sdk.py` holds a SECOND copy of this geometry
-  (`_transform_pose`) that did **not** get the fix — flagged in its
-  docstring, alongside the scipy-compat work it already needed.
 
 `tools/check_lift_compensation.py` (14 checks) pins the sign, that only z
 moves, and the unknown-height policy. See also
@@ -1584,12 +1565,12 @@ from scanning at an unexpected height.
 ## Vision-Triggered Soft Stop (front_cam)
 
 `robot_camera_node` publishes `AprilTagDetectionArray` (per-frame, per-camera)
-to `/front_cam/tag_detections` and `/side_cam/tag_detections`. It never acts
+to `/<cam>/tag_detections` for front_cam, side_cam and hand_cam. It never acts
 on a detection itself — it is the same "device owner publishes, consumer
 decides" split as `basler_camera_node` / `task_executor`.
 
 `mobile_controller.py`'s `vision_stop_callback` (subscribed only to the
-front_cam topic; side_cam is published but has no consumer yet) is the
+front_cam topic; side_cam / hand_cam detections serve the calibration session) is the
 consumer: when a tag ID listed in `robot.yaml` `vision_stop.stop_tag_ids` is
 detected within `center_tolerance_px` of the image center, it calls
 `preempt_stop_robot()` — the same soft-stop used when a new `TASK`/`GOTO`
@@ -1725,7 +1706,8 @@ block together); nothing edits the numbers by hand. The planner URDF's
 `mobile_to_base` / `vision_tip_joint` is the ONE copy outside it (the
 planner's input) — `check_pose_vs_joint.py` and `tf_chain_tool.py check`
 assert it agrees, `tf_chain_tool.py urdf` prints the lines. `robot.yaml
-arm_calibration` keeps only `csv_euler`. Restart `arm_node` (T_ab2mb,
+arm_calibration` keeps only `csv_euler` and the tag-z keys (`use_tag_z`,
+`world_floor_z_m`, `tag_z_max_offset_m`). Restart `arm_node` (T_ab2mb,
 T_ee2tip) and the calibration nodes (all four) after a change. Before this
 the same values sat in six files that had to be changed together —
 `path_tag_locator/config/extrinsics.yaml`, its `hand_eye/T_hc2ee.npz`
@@ -1800,7 +1782,7 @@ design). `chain_calib.py solve` reports `planar` next to `base` / `joint`
 and saves `T_ab2mb_planar` in `corrections.npz`; `solver.fit_planar_
 T_ab2mb` / `--planar-tz`. `arm_transform`'s tilt_x / tilt_y are 0 again
 and the lift is purely along arm z. The URDF `mobile_to_base` follows
-(xyz 0.006706 0.106230 0.652000, rpy 0 0 0.014030243).
+(rpy 0 0 0.014030243; xyz 0.007804 0.099245 0.652000 since the 09-28 shift).
 
 **And on 2026-09-28 (evening) the applied `T_ab2mb` x, y moved once more
 by (−1, +7) mm → t (−9.20, −99.13, −652.00) mm, yaw / tz unchanged:** the
@@ -1823,7 +1805,10 @@ is now FIVE values from one chain: K → T_hc2ee → joint offsets →
 T_ab2mb (planar) → T_ee2tip; `tf_chain_tool.py check` 13/13.
 
 **Since 2026-09-21 (later the same day, user: the corrected chain is for
-end-effector pose control too) pose-mode IK uses the SAME transform:**
+end-effector pose control too) pose-mode IK uses the SAME transform** (the
+numbers in this paragraph are the 09-21 6-DOF fit, HISTORY — the applied
+value is the planar one above: tilt 0, lift purely along arm z, URDF xyz
+0.007804 0.099245 0.652 rpy 0 0 0.014030):
 `transform_world_to_arm` derives its 4-DOF parametrisation from
 `tf_chain.yaml T_ab2mb` at call time — offsets (−0.013008, −0.120318,
 0.629002), mount_yaw 3.166578737 rad (181.43°), tilt_x/y 0.005927 /
@@ -1845,7 +1830,7 @@ superseded by this — the applied tilt is as much this parking's chassis
 attitude as the mount (±1°), kept so the locator and the arm agree.
 `check_front_cam_extrinsics.py` and `tf_chain_tool.py check` pin T_ab2mb
 to "orthonormal, within 3° of Rz(180) and 50 mm of the design", not to the
-design numbers. Record: `src/chain_calib/docs/CHAIN_CALIB_2026-09-21_kr.md`;
+design numbers. Record: the 2026-09-21 Work Log (its doc and session were deleted 2026-09-22);
 the whole chain with provenance: the comments in `tf_chain.yaml` itself.
 
 ⚠️ **`arm_body_offset_y` corrects POSE mode only.** `arm_transform.py` reads it
@@ -1859,7 +1844,7 @@ All parameters overridable via ROS `~` private params.
 
 **`arm_base_z` is 0.652.** It read **0.651** between 2026-08-13 and
 2026-08-23, when it was corrected by 1 mm to match the cell design record's
-652 — see §3 of the parent directory's CLAUDE.md. Work Log entries citing
+652 — the cell design record (not in this checkout; HANDOVER §4). Work Log entries citing
 651 predate that correction.
 
 ⚠️ Anything older than 2026-08-13 describes the **retired** mobile base and
@@ -1872,8 +1857,8 @@ on top of it** (`transform_world_to_arm`'s `lift_m`, from
 0.995 m at the top of the stroke. The old 343 mm pose-mode error is closed;
 see *The lift no longer breaks `arm_base_z`* above for the direction and
 the unknown-height policy. Joint-mode tasks were never affected.
-`docs/lift_arm_base_z_analysis.md` still holds the background (its §4.2 is
-now obsolete).
+`docs/lift_arm_base_z_analysis.md` is the historical analysis (written before
+the fix; its status line says so).
 
 **`T_mb2fc` is the PHYSICAL front_cam since 2026-09-15 — translation
 (0.55, 0, 0.303), rotation = level camera × the 2026-09-08 ground-plane
@@ -1896,7 +1881,7 @@ the translation was (0.55, 0, 0.300) from 2026-08-21, `(0.547, 0, 0.300)`
 from 2026-08-13 and `(0.45, 0, 0.293)` before the base swap — the height
 moved only 7 mm across a 374 mm deck drop because the camera is mounted off
 the chassis, not the deck. `tx` must stay equal to `robot.yaml`
-`camera_offset`, the only key in that block any code reads.
+`camera_offset`.
 
 ⚠️ **Two front_cam frames now exist, and the chain must use the one its
 detections are in.** `robot_camera_node` re-images front_cam's detections
@@ -1913,7 +1898,7 @@ level frame (`ground_plane.T_tilted_to_level`), picks per
 longer matches `robot.yaml` (0.01° / 1e-6 m) — so an edit to the fit
 without re-running the generator fails the calibration nodes at start
 instead of shifting every result. `robot_sim` renders through the same
-choice. `scripts/check_front_cam_extrinsics.py` (22) pins all of it,
+choice. `scripts/check_front_cam_extrinsics.py` (24) pins all of it,
 including the tilt's sign against `GroundPlane.project` itself.
 
 ⚠️ **The last 3 mm is a design figure overriding a measurement, and it is not
@@ -1946,13 +1931,14 @@ LEFT** of the image (it is *behind* the camera) while an **approaching tag
 enters from the RIGHT** (it is ahead). Both follow from `fc.x = +mb.x`, and
 both were observed on the robot — that is what fixed the sign.
 
-`extrinsics.yaml` and `mobile_controller.py` are **both updated**. It broke in
+`T_mb2fc` (then in `extrinsics.yaml`, now `tf_chain.yaml`) and
+`mobile_controller.py` were **both updated**. It broke in
 three independent places, all now fixed:
 
 | Site | What it assumed | What it now does |
 |---|---|---|
 | `lateral = tag['x']` (`calculate_robot_pose`, `execute_pure_pursuit`) | image X runs left/right, + = right | **`tag['y']`**, sign unchanged — image down = robot right, so the steering sign never moved |
-| `center_y` stop condition | image Y runs fore/aft, and grows as you approach | **`center_x`** vs `camera_params[2]`, falling back to `image_width/2`. It **decreases** on forward approach, so **both comparisons are inverted** and the config key became `center_x_stop_offset: +50.0` |
+| `center_y` stop condition | image Y runs fore/aft, and grows as you approach | **`center_x`** vs `camera_params[2]`, falling back to `image_width/2`. It **decreases** on forward approach, so **both comparisons are inverted** and the config key became `center_x_stop_offset` (+50 then, 0 since 2026-09-02) |
 | `align_to_tag` / `corner0→corner1` angle | edge angle reads 0 when square | the shared `tag_edge_angle_deg()` helper **subtracts 90°** before the wrap. Measured, not assumed: a floor direction along `+mb.x` imaged at −90° before and 0° after |
 
 `path_tag_locator` carried a second, unfixed copy of this logic in
@@ -1973,7 +1959,7 @@ Everything needed already shipped in `AprilTagDetection` (`center_x`) and
 `AprilTagDetectionArray` (`image_width`); `camera_params[2]` is `cx`. No message
 or node change was required.
 
-**Verified offline, not on hardware** (38 checks, `/tmp/t_nav_rot.py`). The
+**Verified offline, not on hardware** (38 checks, a scratch script of that day, since gone). The
 strongest of them reconstructs the *pre-rotation* camera and the *old*
 `center_y` logic with its old −50 offset and compares stop distances on a 1 mm
 grid: forward **0.567 m** and reverse **0.561 m**, identical old-vs-new to
@@ -2005,9 +1991,8 @@ both directions, and `tag_edge_angle_deg` reading 0 for a square tag.
   `robot_camera_node.py`, `arm_transform.py`, `arm_controller.py`; the
   earlier Work Log claim that "this machine runs 1.3.3" was made against the
   system interpreter, not the default one. Runtime code stays compat.
-  `tools/*.py` still hold bare calls, and `tools/arm_controller_sdk.py` is a
-  controller variant `arm_node` can be pointed at — make it compat before
-  switching to it.
+  `tools/*.py` still hold bare calls (offline tools). The never-finished second
+  controller variant `tools/arm_controller_sdk.py` was deleted 2026-10-06.
 
 ---
 
@@ -2020,36 +2005,34 @@ of editing the guide.
 
 | Where | What is now wrong |
 |---|---|
-| §2.1 node table, lines 63 / 66 | says 6개 노드, "6개 중 5개 필수". It is **7개 중 6개 필수** since `lifter_node` (2026-08-07). |
-| Troubleshooting, line 295 | "launch가 띄우는 6개 노드" — same count error. |
+| §2.1 node table, lines 63 / 66; Troubleshooting line 295 | says 6개 노드, "6개 중 5개 필수". The launch starts **8 apriltag_nav nodes, 7 required** (`lifter_node` 2026-08-07, `mobile_node` 2026-08-11, `inference_node` optional 2026-08-12; `camera_viewer_node` dropped 2026-09-04) plus rosbridge and the web UI. |
 | line 653 | "약 7000 카운트, 전 구간 약 28초(2000 rpm)" — both halves are now wrong. The clamp is **6900 counts ≈ 343 mm** (re-measured 2026-08-14, 343.2 mm at count 6897), and the speed is **~27.8 s at 1000 rpm**, which is a hardware cap. |
 | Wherever the lift scale appears | `mm_per_count` is **0.04976077** (343.2 mm / 6897 counts) since 2026-08-14, not 0.0487143 / 0.05. The arm base tops out at **~995 mm**, and `lift_height: 150` is **3014 counts**. |
-| line 704 Appendix / §7 | `arm_base_z` is **0.652 m**, not 1.025 — the mobile base was replaced 2026-08-13, and the value was corrected 0.651 → 0.652 on 2026-08-23. Joint-mode scans therefore sit at 652 + 150 = **802 mm**. |
+| line 704 Appendix / §7 | `arm_base_z` is **0.652 m**, not 1.025 — the mobile base was replaced 2026-08-13, and the value was corrected 0.651 → 0.652 on 2026-08-23. |
 | line 1070 open-issues table | drop the "`arm_base_z` 1.025 vs 0.9541 (71 mm)" row entirely; both figures belong to the retired base. |
 | Appendix A | missing the `lifter:` and `task_flow:` blocks of `robot.yaml`. |
 | Wherever the 655-point fit appears | its data (`task/csv/calib_data*`) was **deleted 2026-09-11** — old-base, and the base was replaced 2026-08-13. The tilt ≈ 0.0001/0.0007 rad number survives as a note in `robot.yaml` / `arm_transform.py`; do not point readers at the files. |
-| Task list / §5 | every `scan_joints_line*` / `scan_grid_line*` / `scan_full_*` task and CSV was deleted 2026-09-11. Current tasks are `scan_grid_standoff{010,030,050}` and `scan_g104_standoff010` (pose mode); the RRT joint tasks are commented out pending a group→tag fix. |
+| Task list / §5 | every `scan_joints_line*` / `scan_grid_line*` / `scan_full_*` task and CSV was deleted 2026-09-11. Task names are DERIVED from the files in task/csv since 2026-09-14 (`scan_pose_<key>` / `scan_joint_<key>`, `RELOAD_TASKS`, `/task_list`); today one pair, key `10mm`. |
 | Appendix B checklist | predates `lifter_node`. (The "`mm_calibrated` is false" caveat it was missing is now moot — measured 2026-08-13, it is true.) |
 | Throughout | "homing" is still used for both senses. The workspace now separates **리프트 원점복귀** (lift origin homing) from **매니퓰레이터 홈 자세** (arm home pose). |
 | Missing entirely | the `lift_height` CSV column and the task flow it drives; that a task ends with lift origin homing and then **stays put** (`go_home` is a separate task); that absolute lift moves are refused before origin homing. |
 | Everywhere | **node names renamed 2026-08-11**: `arm_controller_node` → `arm_node`, `base_lifter_node` → `lifter_node`. Also `robot_controller.py` → `mobile_controller.py` and `RobotController` → `MobileController`. Affects §2.1, §2.4 (line 268 sample output), §5, §7 topic/service tables and the troubleshooting table. |
 | Everywhere | **`/base_lifter/*` → `/lifter/*`** in the same pass, and `robot.yaml`'s `base_lifter:` block key is now `lifter:`. Appendix A must follow. |
 | Wherever output paths appear | **Every result / record lives in the workspace since 2026-09-14**: `log/apriltag_nav/ra_maps` (moved from `results/ra_maps` 2026-09-15), `results/scan_images/<run>/`, `log/apriltag_nav/nav_log`, `log/path_tag_locator/…`, `log/ros` (`ROS_LOG_DIR`). `~/.ros/…`, `~/scan_results`, `/tmp/robot_ui_captures` and result CSVs in `task/csv` are all gone. |
-| §2.1 node table + line 295 | node count is now **8개 중 7개 필수** — `mobile_node` was added 2026-08-11 and is required. |
 | §7 topic tables | `/cmd_vel` and `/robot_pose` are published by **`mobile_node`**, not `mobile_manipulator_system`. New: `/mobile/goto_tag`, `/mobile/state`, `/mobile/busy` and the `/mobile/{stop,cancel,clear_stop}` services. |
 | Missing entirely | that `task_executor` now owns **no device at all** — drive, lift and arm are each reached through a client proxy. Worth a short section; it is the main structural change since the guide was written. |
-| Task list / §5 | `scan_joints_line1_lift` no longer exists (retired 2026-08-13). Both `optimized_joints_line*.csv` now carry `lift_height: 150`, so **every joint-mode scan raises the lift 150 mm** and pose-mode scans still do not. |
 | Appendix / §7 | robot footprint is **0.90 x 0.70 m** (was 0.80 x 0.50), `wheel_radius` 0.0825 / `wheel_separation` 0.65, and `T_mb2fc` is **(0.55, 0, 0.303) with the 1.3° tilt in its rotation, generated from robot.yaml** since 2026-09-15 (was `(0.45, 0, 0.293)`); tz = lens 0.302 above the tag top + 1 mm tag thickness. |
 | Wherever wall clearance appears | `wall_dist_work_zone` is **0.45** (was 0.35). `wall_dist_zone_a` is **0.52** (was 0.6275) since the 2026-08-21 cell change. |
-| §7 / Appendix, transform block | `arm_body_offset_y` is **−0.100 m** — the arm mount was moved 100 mm toward the wall 2026-08-13, so `T_ab2mb` t is `(0, −0.100, −0.652)`. Explain that this corrects **pose mode only**. |
-| Wherever `camera_offset` appears | it is **0.55 m** (was 0.45, briefly 0.547) and it is the only key in the `robot:` block that any code reads. |
+| §7 / Appendix, transform block | `arm_body_offset_y` is **−0.100 m** — the arm mount was moved 100 mm toward the wall 2026-08-13, so the DESIGN `T_ab2mb` t is `(0, −0.100, −0.652)`; the APPLIED value is the calibrated one in `tf_chain.yaml` (t (−9.2, −99.1, −652) mm, yaw 179.196° since 2026-09-28). Explain that the transform corrects **pose mode only**. |
+| Wherever `camera_offset` appears | it is **0.55 m** (was 0.45, briefly 0.547); `T_mb2fc` tx must equal it. |
 | Wherever the cell layout / tag map appears | **the whole cell was replaced 2026-08-21.** Coordinate origin is now the **centre of 정반 1**, and `map.yaml` holds **72 tags / 142 edges** in four corridors (zones B/C/D/E) plus a zone A transit lane. Every tag ID in the old guide is wrong. |
 | Wherever the home / dock tag appears | `TaskManager.START_TAG` is **500**, not 508. In the new map 508 is a zone-E pivot tag, so the old value would drive to the far end of the cell. |
 | Wherever `tag_size` appears | there are now **two physical tag sizes**: 90 mm floor tags (front_cam, straight down) and 30 mm tags on the 정반 step (side_cam, horizontal). Neither is the old 60 mm. |
-| Appendix A, `robot_camera:` block | `tag_size` is no longer a scalar — it is a **per-camera dict** (`front_cam: 0.09`, `side_cam: 0.03`, `hand_cam: null`), with `null` falling back to `robot.tag_size`. |
+| Appendix A, `robot_camera:` block | `tag_size` is no longer a scalar — it is a **per-camera dict** (`front_cam: 0.09`, `side_cam: 0.03`, `hand_cam: 0.09`), with `null` falling back to `robot.tag_size`. |
 | Navigation / troubleshooting | front_cam was **rotated −90° about its optical axis** 2026-08-13: image right = robot forward, image down = robot right. `mobile_controller.py` **was adapted the same day** — no longer a blocker, but the axis meanings need updating wherever the guide explains what the camera sees. |
 | Wherever `extrinsics.yaml`, `hand_eye/T_hc2ee.npz`, `arm_calibration` numbers or `vision_tip_offset_mm` appear | **every fixed transform lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ a `<name>.npz` per transform) since 2026-09-21**, with design values and provenance in its comments; `tools/tf_chain_tool.py` shows / checks / sets them. The old files are deleted. |
-| Wherever the stop offset appears | the key is now **`center_x_stop_offset: +50.0`** (was `center_y_stop_offset: -50.0`) and **more positive** stops earlier. Same physical stop point; the fore/aft image axis moved from rows to columns. |
+| Wherever the stop offset appears | the keys are now **`center_x_stop_offset`** (0 since 2026-09-02, forward), `center_x_stop_offset_reverse` (+400 px) and `stop_offset_skip_tag_ranges` (`[[500, 599]]` stop on the crosshair both ways); the fore/aft image axis moved from rows to columns 2026-08-13. |
+| Missing entirely (2026-09 … 10) | rosbridge :9090 / web UI :8080 / the systemd service / `stop_stack.sh`; CHARGE / UNDOCK and the charging manager; the RRT path dialect, retargeting, `csv_euler`, the tip → flange conversion; Keyence 37.1° / 16.5 mm zero / direct mode / seek off; the front_cam ground-plane correction and liveness guard; aim-and-drive, mandatory align, re-seat rules; pose-mode lift compensation; map.yaml x / y / yaw calibration; the live `/robot_pose`; joint offsets on the command side; the Basler dark-frame fix; Ra collect mode. The guide PDF named in the heading (`docs/mobile_manipulator_guide_kr.pdf`) does not exist on disk — `docs/build_guide_pdf.py` makes it. |
 
 ## Work Log
 
@@ -2087,6 +2070,106 @@ on the robot — `arm_node` reads `record_dir` at start, so until
 to the old log/ path.** Found on the way, left alone: the index held
 four staged doc deletions and an `arm_joint_offsets.yaml` edit from
 another session; this commit lists its own paths only.
+
+### 2026-10-06 (later) — Project tidy, code included: dead code and dead config keys out, stale tools and docs deleted, every standing doc re-checked against the code
+
+User: "전체 프로젝트도 정리해주, 코드까지". Three read-only audits first
+(apriltag_nav; the calibration packages + robot_ui; the top-level docs and
+CLAUDE.md's standing sections), then the edits — behaviour-preserving by
+rule, each removal re-grepped, every check suite re-run. The stack was
+running as the service throughout and was not touched; **restart required**
+(`sudo systemctl restart mobile-manipulator`) before any of this is live.
+
+**Code.** One real bug: `robot_sim/sim_node.py` used an undefined `ptl`
+(its definition went with the 09-21 tf refactor; the try/except hid the
+NameError, so the sim's cross tags never loaded) — fixed. Removed, all
+confirmed uncalled: `MobileController._smooth_speed_factor`, the
+`scan_signal` subscription / `scan_callback` / `scan_finished_signal`, the
+never-read attributes (`min_linear`, `min_angular`, `stop_sleep_duration`,
+`pred_fallback_to_map_yaml`, `_last_prediction_segment_active`), the
+`align_skip_tag_ranges` stale-key guard; `ArmController.is_busy` and its
+`__main__` block; `robot_camera_node._rot_to_matrix`, `MapManager.get_tag_
+type`, `utils.get_package_path` + the Excel mode of `navigate.py` (its data
+dir did not exist); `navifra_devices` `front_led` / `side_led` /
+`crevis_connected` / `lift_velocity` / `_battery_stamp`; `lifter_node`'s
+class renamed `LifterNode`; `path_tag_locator` `align.move_ovl` (plumbed,
+ignored), `BaseInterface.current_tag_id`, `ArmInterface.enable`,
+`Extrinsics.as_tuple`, the unloaded `config/calibration_plan.yaml`;
+`chain_calib` `sheet_sweep.Stop`, the `arm_fk` shim narrowed to `ArmChain`;
+`robot_ui` `paths.UI_DIR`, `RosBridge.stream_is_overlay`, `api_ping`;
+`robot_msgs/NavDebugStatus.msg` (nothing used it). `vision_stop.enabled`
+was read and never consulted — it now gates `vision_stop_callback`
+(`stop_tag_ids` is empty anyway). `grid_capture.py` wrote to `/tmp` —
+now `results/captures/grid`. `CMakeLists` no longer installs a `data/`
+dir that does not exist. pyflakes clean over all five packages (52
+unused imports, 11 placeholder-less f-strings, 7 dead locals).
+
+**Deleted tools (git has them):** `validate_compare.py` /
+`validate_transform.py` (read deleted CSVs), `calibrate_transform.py` /
+`collect_calib_data.py` (the retired 6-number transform; `tf_chain.yaml`
+replaced it), `FrCmd.py` (byte-identical to the SDK's), `send_debug_cmd.py`
+(stale examples; `robot_cmd.py` / `rostopic pub`), `test_hardware.py`
+(superseded by `test_all_devices.py`), `arm_controller_sdk.py` (the
+"alternate controller variant" — `arm_node` calls 17 methods it never had,
+so it was never switchable). `fit_front_cam_ground.py` defaults to the
+90 mm pair 149/150 now.
+
+**Config.** `robot.yaml` lost `slow_factor`, `min_linear_factor`,
+`min_angular_factor`, `stop_sleep_duration`, `predictive_centering.
+fallback_to_map_yaml`, `topics.scan_signal`, the `inference:` block (the
+model crops at a hard-coded 900); every other key is read (the
+`length` / `width` / `wall_dist_*` mirrors are fallbacks for the `aim_*`
+keys, kept as documentation). Stale comments fixed there and in the launch
+file (Keyence 16.5 mm / 37.1° / activate 45, the fore-aft term, map_world
+path). `navigation_timeout` is NOT dead: the 8 s floor wins for hops under
+~10.7 cm at the 0.02 m/s floor.
+
+**Docs.** Deleted: `FC_HC_CHAIN_CALIBRATION_kr.md` (stub),
+`HANDEYE_FITTING_STATUS_2026-09-22_kr.md` (superseded; its one reference in
+`arm_joint_offsets.yaml` re-pointed), `architecture_slides_kr.md` (08-11
+snapshot), `MAP_CALIBRATION_ANALYSIS_2026-09-22_kr.{html,pdf}` (superseded
+by the 09-28 map), the stale `TF_CHAIN_CALIBRATION_STATUS_kr.pdf` render,
+`path_tag_locator/docs/USAGE_kr.md` (largely wrong; README +
+CALIBRATION_GUIDE cover it). **`HANDOVER.md` rewritten** (the 09-02..10-06
+session notes it had accreted are history; it is a current-state checklist
+again), **`README.md` rewritten** (old path, deleted task names, non-existent
+launch files, a `--force` push to another remote). CLAUDE.md standing
+sections: ~55 corrections — the task block for today's files, the 09-11
+group → tag finding marked historical, the "Arm Controller Variants" table
+gone, node count 8, `center_x_stop_offset` 0, `stop_offset_skip_tag_ranges`,
+the fore-aft term, the speed table re-derived for 0.1 m/s, the dead-key
+paragraph, lift rpm, undock, Keyence 37.1° / 16.5 mm / activate 45 / k 1.25,
+the 09-21 T_ab2mb paragraph marked history, URDF xyz, the Deferred table
+(node counts, task names, hand_cam 0.09, stop keys, the missing items, the
+non-existent guide PDF). Package docs: path_tag_locator README /
+TROUBLESHOOTING / CALIBRATION_GUIDE / chain_error_diagnosis, chain_calib
+README (check counts), reference_tags.yaml header (face-up, world = map),
+the two .srv comments, `.gitignore` (dead patterns, stale comments),
+`.claudeignore` (bulk output and vendored trees). `lift_arm_base_z_
+analysis.md` marked HISTORICAL. Small fixes in RA_COLLECT / ROBOT_UI_WEB /
+ROSBRIDGE / STOP_LAUNCH (systemd, UNDOCK → CHARGE, task names) and
+keyence_scan_chain (45).
+
+**Task files moved under the session's feet:** the `10mm` pair of 13:37 was
+replaced at 15:54 by two JOINT-ONLY planner originals,
+`rrt_final_path_offset{0mm_h652,10mm_h662}.csv` (1267 work points, groups
+104–107 / 118–120, lift 0 / 10, standoff 17, no pose twin). The docs
+describe that state; `check_task_discovery.py` fails on a joint-only set
+(assumes pairs — not changed) and `check_retarget_joint_paths.py` part 2
+says "no paired pose file" for both, which is the fact, not a regression.
+
+**Verified:** `catkin_make` clean (msg / srv changes); every other check
+suite at its previous count — basler_lamp 20, calibrated_tag_z_yaw 42,
+camera_intrinsics_override 20, charging_manager 23, front_cam_guard 31,
+front_cam_pose_calib 28, ground_plane 15, hand_cam_intrinsics 21,
+joint_offset_cmd 37, joint_offsets 22, lift_compensation 11,
+nav_sequencing 20, pose_vs_joint 27, robot_camera_latency 13,
+robot_pose_heading 20, robot_pose_live 30, scan_progress 136,
+standoff_direct 50, standoff_seek 23, align_fixed_orientation 76,
+front_cam_extrinsics 24, handeye_refine 14, handeye_sweep 74,
+repose_from_corners 10, basler_tip 11, chain_calib 48, sheet_sweep 36,
+task_list_ui 104, tip_tour 20, web_ui 145 (`check_web_ui_browser` dies at
+`Page.navigate` in this environment as before). Not run on the robot.
 
 ### 2026-10-06 (late) — Workspace tidy: latest log + calibration data kept, the rest removed; the Work Log split
 

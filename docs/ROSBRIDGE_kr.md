@@ -30,10 +30,12 @@ Windows PC (192.168.0.x) ─ 공유기(192.168.0.1) ─ 무선 ─ 피닉스 AP�
 
 1. 전원을 켜면 navifra 서비스가 **roscore와 베이스 드라이버를 자동으로** 띄운다.
    `roscore`를 따로 실행하지 않는다.
-2. 터미널에서 스택을 올린다. rosbridge가 함께 뜬다.
+2. 스택은 systemd 서비스 `mobile-manipulator`가 navifra 뒤에 자동으로 올린다
+   (2026-09-22). rosbridge가 함께 뜬다. `systemctl status mobile-manipulator`로
+   확인. 손으로 띄울 일이 있으면 먼저 `sudo systemctl stop mobile-manipulator`
+   (`docs/STOP_LAUNCH_kr.md` §0.5).
    ```bash
-   source ~/mobile_manipulator_ws/devel/setup.bash
-   roslaunch apriltag_nav mobile_manipulator.launch
+   sudo systemctl status mobile-manipulator
    ```
 3. 다른 터미널에서 rosbridge가 듣고 있는지 확인한다.
    ```bash
@@ -83,7 +85,7 @@ python -m pip install websocket-client
 ```powershell
 python robot_cmd.py "STATE"            # 상태 조회, 모션 없음 — 첫 테스트용
 python robot_cmd.py "GOTO 105"         # 태그 105로 이동
-python robot_cmd.py "TASK scan_pose_errorX_p000mm_standoff_050mm_height_652mm"
+python robot_cmd.py "TASK scan_joint_10mm"   # 이름은 task/csv 파일에서 나온다 — sub /task_list
 python robot_cmd.py "STOP"             # 소프트 정지
 python robot_cmd.py "CHARGE"           # 500번 도킹 → 충전 시작
 python robot_cmd.py "UNDOCK"           # 충전 중단 (릴레이 false만, 이동 없음 — 2026-10-06)
@@ -188,7 +190,7 @@ ws.close()
 | 로봇 PC에서 9090이 안 보임 | `rosnode list \| grep rosbridge` | 수동 rosbridge와 충돌 → `pkill -f rosbridge_websocket` 후 스택 재launch |
 | `sub /task_state` 가 아무것도 안 찍음 | `python robot_cmd.py sub /odom` | `/odom`은 되면 연결은 정상, `task_executor`가 안 떠 있는 것 |
 | `"GOTO 105"` 보냈는데 `state:` 줄이 안 나옴 | `python robot_cmd.py state` | 명령은 갔음. 상태가 5 s 안에 안 바뀌었을 뿐 |
-| `CHARGE` 후 `no charging current within 15s` | 로봇 PC `grep '\[Charge\]' $MM_WS/log/ros/latest/mobile_manipulator_system*.log` | 릴레이는 켜졌는데 전류가 없음. 충전기 표시등·접점 확인, `UNDOCK` → `CHARGE`로 재도킹 |
+| `CHARGE` 후 `no charging current within 15s` | 로봇 PC `grep '\[Charge\]' $MM_WS/log/ros/latest/mobile_manipulator_system*.log` | 릴레이는 켜졌는데 전류가 없음. 충전기 표시등·접점 확인. `UNDOCK` → `CHARGE`는 2026-10-06부터 베이스를 움직이지 않고 릴레이만 다시 켠다; 접점이 의심되면 `GOTO 501` 뒤 `CHARGE`로 다시 도킹 |
 | `pip` 인식 안 됨 | | `python -m pip …` |
 
 ⚠️ **스택을 Ctrl-C로 끄면 충전 릴레이도 꺼진다** (`task_executor` 종료 루틴의

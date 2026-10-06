@@ -1,53 +1,41 @@
-# ============================
-# 模型权重与大型二进制文件
-# ============================
+# Model weights and large binaries
 src/apriltag_nav/model/
 **/*.onnx
 **/*.pt
 **/*.pth
 **/*.h5
 **/*.weights
+**/*.pdf
 
-# ============================
-# ROS 构建产物
-# ============================
+# Catkin build output
 build/
 devel/
 install/
-logs/
 **/*.bag
 
-# ============================
-# Python 缓存
-# ============================
+# Vendored upstream driver trees (built from source, never edited here)
+src/orbbec_camera/
+src/realsense-ros/
+src/fairino_sdk/fairino-python-sdk/examples/
+src/frcobot_ros/frcobot_hw/include/xmlrpc-c/
+
+# Python caches
 **/__pycache__/
 **/*.pyc
 **/*.pyo
 **/*.pyd
 **/.pytest_cache/
 
-# ============================
-# Fairino SDK 示例文件（非项目核心，75+ 文件）
-# ============================
-src/fairino_sdk/fairino-python-sdk/examples/
-
-# ============================
-# 第三方 C++ 库头文件
-# ============================
-src/frcobot_ros/frcobot_hw/include/xmlrpc-c/
-
-# ============================
-# IDE / 编辑器配置
-# ============================
+# Editor / OS
 **/.vscode/
 **/.idea/
 **/*.swp
 **/*.swo
-
-# ============================
-# 系统与日志文件
-# ============================
 **/.DS_Store
 **/Thumbs.db
-**/*.log
+
+# Bulk run output (the records — yaml / csv / npz under log/ — stay readable)
+results/scan_images/
+results/tip_check/
+log/ros/
 **/*.tmp

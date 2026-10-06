@@ -105,7 +105,7 @@ only the two robot-side conversions — `perp = reading × cos(beam)` and
 
 | | before | now |
 |---|---|---|
-| engage window | \|perp\| < 5 mm, else skip | \|err\| < 20 mm (`activate_threshold`); the sensor's own range binds first, out-of-range is the ±99999 sentinel and is rejected as invalid, never treated as a distance |
+| engage window | \|perp\| < 5 mm, else skip | \|err\| < 45 mm (`activate_threshold`; 20 on 2026-09-08, 45 since 09-29); the sensor's own range binds first, out-of-range is the ±99999 sentinel and is rejected as invalid, never treated as a distance |
 | approach step | kp·err clamped to 1.0 mm | ≤ max(1.0, 0.5 × measured gap) — half the gap while far, the 1 mm fine step inside ~2 mm; a reading would have to be 2× wrong to reach the surface and it is re-measured every step |
 | retreat step | same 1.0 mm clamp | up to 3 mm (moving away is always safe) |
 | total travel | 10 × 1 mm implicit | `max_travel_mm` 25, explicit, exceeded → stop + record |
@@ -222,7 +222,7 @@ have broken the moment kp was retuned or the sensor remounted.
 | `keyence_tol` | 0.2 | perp mm | launch |
 | `keyence_max_steps` | 15 (was 10) | — | launch |
 | `keyence_max_step_mm` | **1.0** | perp mm | launch — the APPROACH fine-step cap since 2026-09-08 |
-| `keyence_activate_threshold` | 20.0 (was 5.0) | perp mm | `robot.yaml` |
+| `keyence_activate_threshold` | 45.0 (20.0 on 2026-09-08, was 5.0) | perp mm | `robot.yaml` |
 | `approach_fraction` / `retreat_step_mm` / `max_travel_mm` | 0.5 / 3.0 / 25 | — / perp mm / perp mm | `robot.yaml` (2026-09-08) |
 | `samples` / `settle_s` / `read_timeout_s` | 5 / 0.3 s / 1.0 s | | `robot.yaml` (2026-09-08) |
 | `adaptive_gain` / `gain_ratio_max` / `min_response_ratio` | true / 4.0 / 0.25 | | `robot.yaml` (2026-09-08) |
