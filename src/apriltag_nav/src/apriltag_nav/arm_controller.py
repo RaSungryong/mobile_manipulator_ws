@@ -37,14 +37,16 @@ from apriltag_nav.paths import load_yaml_block
 try:
     from apriltag_nav.scan_pipeline import image_name_prefix, image_file_name
 except ImportError:                     # offline harness with a stub module
-    def image_name_prefix(group_id, point_id, index):
-        return f"g{int(group_id)}_p{int(point_id)}_i{int(index):04d}"
+    def image_name_prefix(group_id, point_id, index, source_point_id=None):
+        sp = '' if source_point_id is None else f"_sp{int(source_point_id)}"
+        return f"g{int(group_id)}_p{int(point_id)}{sp}_i{int(index):04d}"
 
     def image_file_name(point_id, sample_no, ra_value=None, name_prefix=None):
         return f"{name_prefix}_s{int(sample_no)}.png"
 from apriltag_nav.arm_transform import transform_world_to_arm, tag_floor_z_m
 from apriltag_nav.lift_height import LiftHeightListener
 from apriltag_nav.scan_pipeline import RaScanPipeline
+from apriltag_nav.arm_link_watch import TimedRPC
 from apriltag_nav.scan_results import ScanResultWriter
 from apriltag_nav import paths as _paths
 from apriltag_nav.keyence_standoff import (StandoffConfig, StandoffController,
@@ -109,7 +111,12 @@ class ArmController:
 
         # ---------- Fairino ----------
         rospy.loginfo("[Arm REAL] Connecting to Fairino robot...")
-        self.robot = Robot.RPC(robot_ip)
+        # Every SDK call goes through TimedRPC: a call that blocks longer than
+        # ~rpc_stall_warn_s is logged and counted, and one still in flight is
+        # reported live by arm_node's state timer. The 2026-10-06 scan froze
+        # 13–15 s per arm-link drop in exactly such calls with no log line.
+        self.robot = TimedRPC(Robot.RPC(robot_ip),
+                              warn_s=float(rospy.get_param('~rpc_stall_warn_s', 2.0)))
         time.sleep(0.5)
         ret = self.robot.RobotEnable(1)
         rospy.loginfo(f"[Arm REAL] RobotEnable(1) → {ret}")
@@ -341,10 +348,15 @@ class ArmController:
             return rospy.get_param('~collect_' + name, _collect_cfg.get(key, default))
         self.collect_enabled = bool(_cp('enabled', 'enabled', False))
         # 'pause': N scanned points, then one stop for the Ra entry (method
-        # A, two testers measure in parallel); 'mark': no capture at all —
-        # every scanned point stops for the operator to write its number
-        # beside the spot, and a template CSV is written for the later hand
-        # measurement (method B). 2026-10-06 (evening).
+        # A, two testers measure in parallel); 'mark' (method B, redone
+        # 2026-10-07 on the user's word — until then it captured nothing and
+        # wrote a template to fill in later): every scanned point is
+        # CAPTURED, then stops at the standoff with a running number for the
+        # operator to write beside the spot, and after the LAST scanned
+        # point of the group (one execute_scan_points call = one group) the
+        # tool retreats once and the whole group is entered — the pause
+        # stop with the group as the batch. Rows go to <run>_ra_measured.csv
+        # with mark_no filled, so the merge is the same as method A's.
         self.collect_mode = str(_cp('mode', 'mode', 'pause'))
         self.collect_batch_size = max(1, int(_cp('batch_size', 'batch_size', 1)))
         # pause mode: stop at EVERY scanned point right after the capture,
@@ -365,10 +377,12 @@ class ArmController:
         self._collect_event = threading.Event()
         self._collect_payload = None
         self._collect_lock = threading.Lock()
+        self._collect_io_lock = threading.Lock()   # the measured CSV: save (callback thread) vs release (worker)
         self._collect = {'waiting': False, 'n_recorded': 0, 'n_skipped': 0,
-                         'record_csv': ''}
+                         'record_csv': '', 'saved': {}}
         self._collect_batch = []
         self._collect_mark_no = 0
+        self._collect_mark_stem = None      # run stem the counter belongs to
         self._collect_run_stem = ''
         if self.collect_enabled:
             rospy.logwarn("[Arm REAL] Ra COLLECT mode is ON: every scanned point "
@@ -731,9 +745,15 @@ class ArmController:
         self._collect_batch = []
         mark_pass = bool(self.collect_enabled and self.collect_mode == 'mark')
         if mark_pass:
-            self._collect_mark_no = 0
-            rospy.logwarn("[Arm REAL] MARK pass: no capture, no Ra map — every scanned "
-                          "point stops for its number to be written beside the spot")
+            # the running number continues across the task's groups (one
+            # call per group) and across a RESUME of the same run: on a new
+            # run stem start after the highest number already in its CSV
+            if self._collect_run_stem != self._collect_mark_stem:
+                self._collect_mark_stem = self._collect_run_stem
+                self._collect_mark_no = self._collect_last_mark_no()
+            rospy.logwarn("[Arm REAL] MARK pass: capture, then a numbered marking stop at "
+                          "every scanned point; the whole group is entered at its last "
+                          f"point (numbers continue from #{self._collect_mark_no + 1})")
         if base_dir:
             self.pipeline.output_dir = (
                 os.path.join(base_dir,
@@ -773,6 +793,8 @@ class ArmController:
 
                 pid = int(p.get("point_id", i))
                 gid = int(p.get("group_id", -1))
+                spid = p.get("source_point_id")
+                spid = None if spid is None else int(spid)
                 current_csv_path = p.get("csv_path", "")
 
                 # TRAVERSE-ONLY waypoints (2026-09-11). An RRT-planned CSV
@@ -794,11 +816,12 @@ class ArmController:
                 # device-open latency runs in parallel with motion + Keyence
                 # adjustment instead of serially at capture time. Pointless on
                 # a traverse point — nothing is captured there.
-                if do_scan and not mark_pass:
+                if do_scan:
                     self.pipeline.preopen()
 
                 entry = {
                     "point_id":          pid,
+                    "source_point_id":   spid,
                     "group_id":          gid,
                     "success":           False,
                     "execution_message": "Not executed",
@@ -877,19 +900,8 @@ class ArmController:
                         continue
                     entry["execution_message"] = f"Success ({standoff.summary()})"
 
-                # MARK pass (collect mode 'mark'): the tool is at the
-                # standoff over the spot; stop for the operator to write the
-                # point's number beside it, no capture, no Ra-map row.
-                if mark_pass:
-                    entry["execution_message"] = "Mark pass (no capture)"
-                    n_ok += 1
-                    self._refresh_live_pose()
-                    self._progress('done', index=i + 1, total=n_total, point_id=pid,
-                                   group_id=gid, scan=True, message='mark',
-                                   n_ok=n_ok, n_fail=n_fail)
-                    self._collect_mark_point(i + 1, n_total, p, pid, gid, entry)
-                    continue
-
+                if do_scan:
+                    self.pipeline.preopen()
                 # Capture while the arm is at rest; inference and the PNG
                 # save go to the worker. `done` is published as soon as the
                 # frames are in hand (the point is measured); the Ra follows
@@ -913,31 +925,66 @@ class ArmController:
                     results.append(entry)
                     # Incremental CSV save (preserves results even if cancelled mid-scan)
                     self._save_results(current_csv_path, results)
-                image_prefix = image_name_prefix(gid, pid, i + 1)
+                image_prefix = image_name_prefix(gid, pid, i + 1, spid)
                 if frames:
                     infer_q.put((i + 1, pid, gid, entry, frames, current_csv_path,
                                  image_prefix))
-                # Ra data collection (mode 'pause'): after every batch_size
+                # Ra data collection. 'pause': after every batch_size
                 # scanned points — or after the LAST one, while the tool is
                 # still over it — retreat and wait until the operator has
-                # measured the spots and sent /arm/scan_continue. A cancel
-                # during the wait ends the scan at the loop top with the
-                # tool left retreated.
-                if frames and self.collect_enabled and not mark_pass:
+                # measured the spots and sent /arm/scan_continue. 'mark':
+                # every scanned point first stops at the standoff with its
+                # running number (written beside the spot), and the batch
+                # is the WHOLE group — one entry stop after its last point.
+                # A cancel during a wait ends the scan at the loop top with
+                # the tool left retreated.
+                if frames and self.collect_enabled:
                     self._collect_batch.append({
                         'index': i + 1, 'group_id': gid, 'point_id': pid,
+                        'source_point_id': spid,
                         'images': [image_file_name(pid, k + 1, None, image_prefix)
                                    for k in range(len(frames))],
                         'standoff': entry["execution_message"],
                         'x': p.get('x'), 'y': p.get('y'), 'z': p.get('z'),
                         'csv_path': current_csv_path})
-                    if self.collect_premark:
+                    if mark_pass:
+                        self._collect_mark_no += 1
+                        self._collect_batch[-1]['mark_no'] = self._collect_mark_no
+                        # the number -> point mapping goes to the CSV NOW (a
+                        # PENDING row: Ra blank, not skipped), so an
+                        # interruption before the group's entry stop keeps
+                        # the photo and the number: RESUME drives through
+                        # the point and the entry stop lists it
+                        self._collect_write_pending(self._collect_batch[-1])
+                        self._collect_mark_stop(i + 1, n_total, pid, gid,
+                                                self._collect_batch[-1]['images'],
+                                                self._collect_mark_no)
+                    elif self.collect_premark:
                         self._collect_premark_stop(i + 1, n_total, pid, gid,
                                                    self._collect_batch[-1]['images'])
                     more = any(q.get("scan", True) for q in scan_points[i + 1:])
-                    if len(self._collect_batch) >= self.collect_batch_size or not more:
+                    full = (not mark_pass) and len(self._collect_batch) >= self.collect_batch_size
+                    if full or not more:
                         batch, self._collect_batch = self._collect_batch, []
                         self._collect_pause(batch, n_total)
+
+            # Mark pass of a RESUMED group whose points were ALL captured
+            # before the interruption (nothing scanned in this call, so no
+            # entry stop fired in the loop): the pending rows still need
+            # their Ra — one entry stop here, no retreat (the tool is at
+            # the path's last row, not over a spot).
+            if mark_pass and not self.cancel_requested:
+                groups_here = []
+                for q in scan_points:
+                    g = int(q.get('group_id', -1))
+                    if g not in groups_here:
+                        groups_here.append(g)
+                pending = self._collect_pending_rows(groups_here)
+                if pending:
+                    rospy.logwarn(f"[Arm REAL] collect: {len(pending)} point(s) of "
+                                  f"group(s) {groups_here} were captured and numbered "
+                                  "before an interruption — entry stop for their Ra")
+                    self._collect_pause(pending, n_total, retreat=False)
 
             if not self.cancel_requested:
                 rospy.loginfo("[Arm REAL] Scan finished → Home")
@@ -1027,8 +1074,9 @@ class ArmController:
         return True, f"collect mode {'on' if on else 'off'}"
 
     def set_collect_config(self, cfg=None):
-        """mode ('pause' | 'mark'), batch_size (>= 1), retreat_mm,
-        mark_retreat_mm, mark_dwell_s — any subset. Applies from the next
+        """mode ('pause' | 'mark'), batch_size (>= 1, pause mode), premark,
+        retreat_mm, mark_retreat_mm (the marking stop's retreat, 0 = at
+        the standoff), mark_dwell_s — any subset. Applies from the next
         scanned point (the mode from the next SCAN: a running pass keeps
         the one it started with)."""
         cfg = dict(cfg or {})
@@ -1057,16 +1105,54 @@ class ArmController:
         self._publish_collect_state()
         return True, "collect config: " + (', '.join(changed) or 'unchanged')
 
+    def _collect_parse_entries(self, entries, batch, partial=False):
+        """`entries` = [{group_id, point_id, ra | readings, note, skip}] against
+        the waiting `batch`. Returns (parsed {key: {ra, readings, note, skip}},
+        error). An entry with neither a value nor skip is an error at the
+        RELEASE (every point must be answered) and silently left out of a
+        partial SAVE (the operator has not typed it yet)."""
+        keys = {(b['group_id'], b['point_id']) for b in batch}
+        parsed = {}
+        for e in entries:
+            try:
+                key = (int(e['group_id']), int(e['point_id']))
+            except (KeyError, TypeError, ValueError):
+                return None, f"point entry without group_id / point_id: {e}"
+            if key not in keys:
+                return None, f"point g{key[0]} p{key[1]} is not in the waiting batch"
+            readings = e.get('readings')
+            if isinstance(readings, str):
+                readings = readings.replace(',', ' ').split()
+            try:
+                readings = [float(v) for v in (readings or [])]
+                ra = e.get('ra')
+                ra = None if ra is None or str(ra).strip() == '' else float(ra)
+            except (TypeError, ValueError):
+                return None, f"point g{key[0]} p{key[1]}: not a number"
+            if ra is None and readings:
+                ra = float(np.mean(readings))
+            skip = bool(e.get('skip', False))
+            if ra is None and not skip:
+                if partial:
+                    continue
+                return None, f"point g{key[0]} p{key[1]}: no Ra value — give ra / readings, or skip"
+            parsed[key] = {'ra': ra, 'readings': readings,
+                           'note': str(e.get('note', '') or ''), 'skip': skip}
+        return parsed, None
+
     def collect_continue(self, payload=None):
         """Release the stop the scan is waiting on. Called from the ROS
         callback thread, like cancel().
 
         pause mode — payload (dict): `points`: list of {group_id, point_id,
         ra | readings (list, ra = mean), note, skip}; a batch point not in
-        the list is recorded as skipped ("not entered"). The legacy
-        top-level `ra` / `readings` / `skip` / `note` form is accepted when
-        the batch holds ONE point.
-        mark mode — any payload (the operator has written the number)."""
+        the list takes the value SAVED for it (`collect_save`), else is
+        recorded as skipped ("not entered"). The legacy top-level `ra` /
+        `readings` / `skip` / `note` form is accepted when the batch holds
+        ONE point.
+        A marking stop (kind 'mark' / 'premark') — any payload (the operator
+        has written the number / marked the spot); the group's entry stop
+        at the end of a mark pass is a pause stop and takes `points`."""
         payload = dict(payload or {})
         with self._collect_lock:
             waiting = bool(self._collect.get('waiting'))
@@ -1087,34 +1173,71 @@ class ArmController:
             entries = [{'group_id': batch[0]['group_id'], 'point_id': batch[0]['point_id'],
                         'ra': payload.get('ra'), 'readings': payload.get('readings'),
                         'note': payload.get('note', ''), 'skip': payload.get('skip', False)}]
-        parsed = {}
-        for e in entries:
-            try:
-                key = (int(e['group_id']), int(e['point_id']))
-            except (KeyError, TypeError, ValueError):
-                return False, f"point entry without group_id / point_id: {e}"
-            if key not in {(b['group_id'], b['point_id']) for b in batch}:
-                return False, f"point g{key[0]} p{key[1]} is not in the waiting batch"
-            readings = e.get('readings')
-            if isinstance(readings, str):
-                readings = readings.replace(',', ' ').split()
-            try:
-                readings = [float(v) for v in (readings or [])]
-                ra = e.get('ra')
-                ra = None if ra is None else float(ra)
-            except (TypeError, ValueError):
-                return False, f"point g{key[0]} p{key[1]}: not a number"
-            if ra is None and readings:
-                ra = float(np.mean(readings))
-            skip = bool(e.get('skip', False))
-            if ra is None and not skip:
-                return False, f"point g{key[0]} p{key[1]}: no Ra value — give ra / readings, or skip"
-            parsed[key] = {'ra': ra, 'readings': readings,
-                           'note': str(e.get('note', '') or ''), 'skip': skip}
+        parsed, err = self._collect_parse_entries(entries, batch)
+        if err:
+            return False, err
         self._collect_payload = {'points': parsed}
         self._collect_event.set()
         n_ra = sum(1 for v in parsed.values() if not v['skip'])
         return True, f"{n_ra} Ra recorded, {len(batch) - n_ra} skipped"
+
+    @staticmethod
+    def _collect_saved_key(key):
+        return f"{key[0]},{key[1]}"
+
+    def collect_save(self, payload=None):
+        """SAVE the Ra values typed so far WITHOUT releasing the entry stop
+        (2026-10-07 evening, user: a long group entry must not be lost with
+        the browser / the stack). payload `points` as in collect_continue,
+        any subset of the waiting batch; an entry with neither a value nor
+        skip is still being typed and is left out. Every saved point's row
+        goes into the measured CSV at once (`_collect_upsert`: Ra filled,
+        stamped — a pending mark row becomes a recorded one, so a RESUME
+        after an interruption counts it as entered and does not list it
+        again), and into the state's `saved` map, which every browser
+        pre-fills its table from. The release, or a later save, overwrites.
+        Called from the ROS callback thread; refused at a marking stop."""
+        payload = dict(payload or {})
+        with self._collect_lock:
+            waiting = bool(self._collect.get('waiting'))
+            kind = self._collect.get('kind')
+            batch = [dict(b) for b in self._collect.get('points') or []]
+            record_csv = self._collect.get('record_csv') or ''
+        if not waiting:
+            return False, "no point is waiting for a measurement — nothing to save"
+        if kind != 'pause':
+            return False, "a marking stop has nothing to save (press Next)"
+        entries = payload.get('points')
+        if entries is None:
+            return False, "send `points` with the entries to save"
+        parsed, err = self._collect_parse_entries(entries, batch, partial=True)
+        if err:
+            return False, err
+        if not parsed:
+            return False, "nothing to save yet (no Ra value or skip in the entries)"
+        by_key = {(b['group_id'], b['point_id']): b for b in batch}
+        rows = [self._collect_row(by_key[k], m, by_key[k].get('mark_no') or '')
+                for k, m in parsed.items()]
+        try:
+            self._collect_upsert(record_csv or self._collect_csv_path('_ra_measured.csv'), rows)
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] collect: save failed: {e}")
+            return False, f"save failed: {e}"
+        with self._collect_lock:
+            if not self._collect.get('waiting'):          # released meanwhile
+                return False, "the stop was released while saving"
+            saved = dict(self._collect.get('saved') or {})
+            for k, m in parsed.items():
+                saved[self._collect_saved_key(k)] = dict(m, ra=None if m['ra'] is None else round(m['ra'], 4))
+            self._collect['saved'] = saved
+            n_saved = len(saved)
+        n_ra = sum(1 for m in parsed.values() if not m['skip'])
+        for k, m in parsed.items():
+            rospy.loginfo(f"[Arm REAL] collect: saved g{k[0]} p{k[1]} -> "
+                          f"{'skipped' if m['skip'] else 'Ra %.4f' % m['ra']}")
+        self._publish_collect_state()
+        return True, (f"saved {len(parsed)} point(s) ({n_ra} Ra, {len(parsed) - n_ra} skip); "
+                      f"{n_saved} of {len(batch)} on disk")
 
     def _publish_collect_state(self, **extra):
         try:
@@ -1128,6 +1251,7 @@ class ArmController:
             st['retreat_mm'] = float(self.collect_retreat_mm)
             st['mark_retreat_mm'] = float(self.collect_mark_retreat_mm)
             st['mark_dwell_s'] = float(self.collect_mark_dwell_s)
+            st['n_saved'] = len(st.get('saved') or {})
             st['stamp'] = rospy.get_time()
             self.collect_state_pub.publish(String(json.dumps(st, default=str)))
         except Exception as e:
@@ -1141,7 +1265,7 @@ class ArmController:
         return _paths.ra_measured_path(self._collect_run_stem, suffix,
                                        root=self.collect_record_dir)
 
-    COLLECT_COLUMNS = ['run', 'mark_no', 'index', 'group_id', 'point_id', 'images',
+    COLLECT_COLUMNS = ['run', 'mark_no', 'index', 'group_id', 'point_id', 'source_point_id', 'images',
                        'ra_measured', 'ra_readings', 'note', 'skipped',
                        'standoff', 'x', 'y', 'z', 'image_dir', 'measured_at']
 
@@ -1157,6 +1281,109 @@ class ArmController:
             if new:
                 w.writeheader()
             w.writerow(row)
+
+    @staticmethod
+    def _collect_key(row):
+        try:
+            return (int(float(row['group_id'])), int(float(row['point_id'])))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _collect_is_pending(row):
+        """A mark-pass row written at the marking stop: numbered, Ra not
+        yet entered, not skipped."""
+        ra = str(row.get('ra_measured', '') or '').strip()
+        skipped = str(row.get('skipped', '') or '').strip().lower() in ('1', 'true', 'yes', 'y')
+        return ra == '' and not skipped
+
+    def _collect_read(self, path):
+        if not os.path.isfile(path):
+            return []
+        import csv
+        with open(path, newline='', encoding='utf-8-sig') as f:
+            return list(csv.DictReader(f))
+
+    def _collect_upsert(self, path, rows):
+        """Write `rows` (dicts over COLLECT_COLUMNS) into the measured CSV:
+        a row whose (group_id, point_id) is already there REPLACES it (a
+        pending mark row gets its Ra), the others are appended. The file is
+        rewritten atomically."""
+        with self._collect_io_lock:
+            self._collect_upsert_locked(path, rows)
+
+    def _collect_upsert_locked(self, path, rows):
+        import csv
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        existing = self._collect_read(path)
+        by_key = {}
+        for r in rows:
+            k = self._collect_key(r)
+            if k is not None:
+                by_key[k] = r
+        out = []
+        for r in existing:
+            k = self._collect_key(r)
+            if k in by_key:
+                out.append(by_key.pop(k))
+            else:
+                out.append(r)
+        out.extend(r for r in rows if self._collect_key(r) in by_key)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=self.COLLECT_COLUMNS, extrasaction='ignore')
+            w.writeheader()
+            for r in out:
+                w.writerow({c: r.get(c, '') for c in self.COLLECT_COLUMNS})
+        os.replace(tmp, path)
+
+    def _collect_write_pending(self, b):
+        """Mark pass: record the point's number and frames at the marking
+        stop, Ra blank (`measured_at` blank, note 'pending'). The group's
+        entry stop later replaces the row with the Ra (or skipped)."""
+        try:
+            row = self._collect_row(b, {}, b.get('mark_no', ''))
+            row['note'] = 'pending: Ra at the group entry stop'
+            row['measured_at'] = ''
+            self._collect_upsert(self._collect_csv_path('_ra_measured.csv'), [row])
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] mark: pending row failed: {e}")
+
+    def _collect_pending_rows(self, groups):
+        """The run's pending mark rows of `groups`, as batch entries (the
+        shape the scan loop builds), ordered by mark number."""
+        groups = {int(g) for g in groups}
+        out = []
+        for r in self._collect_read(self._collect_csv_path('_ra_measured.csv')):
+            k = self._collect_key(r)
+            if k is None or k[0] not in groups or not self._collect_is_pending(r):
+                continue
+
+            def _f(v):
+                try:
+                    return float(v) if str(v).strip() != '' else None
+                except (TypeError, ValueError):
+                    return None
+            try:
+                mark_no = int(float(r.get('mark_no') or 0)) or None
+            except (TypeError, ValueError):
+                mark_no = None
+            try:
+                index = int(float(r.get('index') or 0))
+            except (TypeError, ValueError):
+                index = 0
+            try:
+                spid = int(float(r.get('source_point_id'))) if str(r.get('source_point_id') or '').strip() else None
+            except (TypeError, ValueError):
+                spid = None
+            out.append({'index': index, 'group_id': k[0], 'point_id': k[1],
+                        'source_point_id': spid,
+                        'images': [s for s in str(r.get('images') or '').split(';') if s],
+                        'standoff': r.get('standoff', ''),
+                        'x': _f(r.get('x')), 'y': _f(r.get('y')), 'z': _f(r.get('z')),
+                        'mark_no': mark_no, 'pending': True})
+        out.sort(key=lambda b: (b['mark_no'] or 0, b['index']))
+        return out
 
     def _collect_retreat(self, retreat_mm):
         """MoveL the tool retreat_mm along its own Z AWAY from the surface
@@ -1226,6 +1453,8 @@ class ArmController:
         out = []
         for b in batch:
             pt = {k: b[k] for k in ('index', 'group_id', 'point_id', 'images', 'standoff')}
+            pt['source_point_id'] = b.get('source_point_id')
+            pt['mark_no'] = b.get('mark_no')
             pt['is_tip'] = b is last
             pt['x'], pt['y'], pt['z'] = b.get('x'), b.get('y'), b.get('z')
             pt['dx_world_mm'] = pt['dy_world_mm'] = None
@@ -1257,6 +1486,7 @@ class ArmController:
         ra = measured.get('ra')
         return {'run': self._collect_run_stem, 'mark_no': mark_no,
                 'index': b['index'], 'group_id': b['group_id'], 'point_id': b['point_id'],
+                'source_point_id': '' if b.get('source_point_id') is None else b['source_point_id'],
                 'images': ';'.join(b.get('images') or []),
                 'ra_measured': '' if ra is None else f"{float(ra):.4f}",
                 'ra_readings': ' '.join(f"{v:.4f}" for v in measured.get('readings', [])),
@@ -1269,18 +1499,28 @@ class ArmController:
                 'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
                 'measured_at': time.strftime('%Y-%m-%d %H:%M:%S')}
 
-    def _collect_pause(self, batch, total):
-        """Method A, one stop: the tool is over batch[-1]. Retreat, publish
-        `wait` with every point of the batch and its offset from the tip,
-        block until collect_continue() / cancel / timeout, record one row
-        per point, return to the captured pose. Never raises into the scan
-        loop."""
+    def _collect_pause(self, batch, total, retreat=True):
+        """One entry stop (method A's batch, method B's group): the tool is
+        over batch[-1]. Retreat (`retreat` False: stay — the tool is not over
+        a spot), publish `wait` with every point of the batch and its offset
+        from the tip, block until collect_continue() / cancel / timeout,
+        record one row per point, return to the captured pose. Pending mark
+        rows of the batch's groups already in the CSV (captured and numbered
+        before an interruption, Ra not entered) are listed in front of the
+        batch and get their Ra here too. Never raises into the scan loop."""
         record_csv = self._collect_csv_path('_ra_measured.csv')
+        have = {(b['group_id'], b['point_id']) for b in batch}
+        earlier = [b for b in self._collect_pending_rows({b['group_id'] for b in batch})
+                   if (b['group_id'], b['point_id']) not in have]
+        if earlier:
+            rospy.loginfo(f"[Arm REAL] collect: {len(earlier)} earlier numbered point(s) "
+                          f"of this group still without Ra are listed too")
+            batch = earlier + list(batch)
         last = batch[-1]
         moved = False
         try:
-            back_pose = self._collect_retreat(self.collect_retreat_mm)
-            moved = back_pose is not None and self.collect_retreat_mm > 0
+            back_pose = self._collect_retreat(self.collect_retreat_mm if retreat else 0.0)
+            moved = back_pose is not None and retreat and self.collect_retreat_mm > 0
             points = self._collect_batch_points(batch)
             with self._collect_lock:
                 self._collect.update({
@@ -1289,7 +1529,7 @@ class ArmController:
                     'point_id': last['point_id'], 'images': last['images'],
                     'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
                     'standoff': last['standoff'], 'points': points,
-                    'retreated': back_pose is not None, 'record_csv': record_csv})
+                    'retreated': moved, 'record_csv': record_csv, 'saved': {}})
             self._collect_event.clear()
             self._collect_payload = None
             self._publish_collect_state()
@@ -1303,11 +1543,17 @@ class ArmController:
                           f"{last['index']}/{total})")
 
             payload, timed_out = self._collect_wait()
+            with self._collect_lock:
+                saved = {tuple(int(v) for v in k.split(',')): dict(m)
+                         for k, m in (self._collect.get('saved') or {}).items()}
             if self.cancel_requested and not payload:
-                rospy.logwarn("[Arm REAL] collect: cancelled while waiting; tool left retreated")
+                rospy.logwarn(f"[Arm REAL] collect: cancelled while waiting; tool left retreated"
+                              f"{'; %d saved point(s) are on disk' % len(saved) if saved else ''}")
                 return
-            measured = (payload or {}).get('points', {})
+            measured = dict(saved)
+            measured.update((payload or {}).get('points', {}))   # the release wins over a save
             n_ra = n_skip = 0
+            new_rows = []
             for b in batch:
                 key = (b['group_id'], b['point_id'])
                 m = measured.get(key)
@@ -1315,17 +1561,19 @@ class ArmController:
                     m = {'ra': None, 'readings': [], 'skip': True,
                          'note': (f'timeout after {self.collect_wait_timeout_s:.0f} s'
                                   if timed_out else 'not entered')}
-                row = self._collect_row(b, m)
-                try:
-                    self._collect_record(record_csv, row)
-                except Exception as e:
-                    rospy.logerr(f"[Arm REAL] collect: record failed: {e}")
+                row = self._collect_row(b, m, b.get('mark_no', ''))
+                new_rows.append(row)
                 if row['skipped']:
                     n_skip += 1
                 else:
                     n_ra += 1
-                rospy.loginfo(f"[Arm REAL] collect: g{key[0]} p{key[1]} -> "
+                rospy.loginfo(f"[Arm REAL] collect: g{key[0]} p{key[1]}"
+                              f"{' #' + str(row['mark_no']) if row['mark_no'] != '' else ''} -> "
                               f"{'skipped' if row['skipped'] else 'Ra ' + row['ra_measured']}")
+            try:
+                self._collect_upsert(record_csv, new_rows)   # pending rows replaced
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] collect: record failed: {e}")
             with self._collect_lock:
                 self._collect['n_recorded'] += n_ra
                 self._collect['n_skipped'] += n_skip
@@ -1345,6 +1593,7 @@ class ArmController:
             with self._collect_lock:
                 self._collect['waiting'] = False
                 self._collect['points'] = []
+                self._collect['saved'] = {}
             self._publish_collect_state()
 
     def _collect_premark_stop(self, index, total, pid, gid, images):
@@ -1382,17 +1631,33 @@ class ArmController:
                 self._collect['waiting'] = False
             self._publish_collect_state()
 
-    def _collect_mark_point(self, index, total, point, pid, gid, entry):
-        """Method B, one stop: the tool is at the standoff over the spot.
-        Retreat mark_retreat_mm, publish `wait` (kind mark) with the running
-        number, block until collect_continue() / cancel (or mark_dwell_s),
-        append the template row, return. Never raises into the scan loop."""
-        template = self._collect_csv_path('_mark_template.csv')
-        self._collect_mark_no += 1
-        mark_no = self._collect_mark_no
-        b = {'index': index, 'group_id': gid, 'point_id': pid, 'images': [],
-             'standoff': entry.get("execution_message", ""),
-             'x': point.get('x'), 'y': point.get('y'), 'z': point.get('z')}
+    def _collect_last_mark_no(self):
+        """The highest mark_no already in the run's measured CSV (a RESUME,
+        or a later group after an arm_node restart), 0 when none."""
+        path = self._collect_csv_path('_ra_measured.csv')
+        if not os.path.isfile(path):
+            return 0
+        import csv
+        best = 0
+        try:
+            with open(path, newline='') as f:
+                for row in csv.DictReader(f):
+                    try:
+                        best = max(best, int(float(row.get('mark_no') or 0)))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as e:
+            rospy.logwarn(f"[Arm REAL] mark: could not read {path}: {e}")
+        return best
+
+    def _collect_mark_stop(self, index, total, pid, gid, images, mark_no):
+        """Method B's marking stop, right after the capture: the tool is at
+        the standoff over the spot it just imaged (retreated
+        mark_retreat_mm, 0 = not at all); publish `wait` (kind mark) with
+        the running number, block until collect_continue() / cancel (or
+        mark_dwell_s), return to the captured pose. The number is already
+        in the CSV as a pending row (`_collect_write_pending`); the group's
+        entry stop fills in the Ra. Never raises into the scan loop."""
         moved = False
         try:
             back_pose = self._collect_retreat(self.collect_mark_retreat_mm)
@@ -1401,37 +1666,34 @@ class ArmController:
                 self._collect.update({
                     'waiting': True, 'kind': 'mark', 'mark_no': mark_no,
                     'index': index, 'total': total, 'group_id': gid,
-                    'point_id': pid, 'images': [], 'image_dir': '',
-                    'standoff': b['standoff'], 'points': [],
-                    'retreated': back_pose is not None, 'record_csv': template})
+                    'point_id': pid, 'images': list(images),
+                    'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
+                    'points': [], 'retreated': moved})
             self._collect_event.clear()
             self._collect_payload = None
             self._publish_collect_state()
             self._progress('wait', index=index, total=total, point_id=pid,
                            group_id=gid, scan=True, kind='mark', mark_no=mark_no,
+                           images=list(images),
                            message=f"write #{mark_no} beside the spot")
             rospy.loginfo(f"[Arm REAL] mark: #{mark_no} = g{gid} p{pid} ({index}/{total}) "
-                          f"— waiting for the operator")
+                          f"— waiting for the number to be written")
             if self.collect_mark_dwell_s > 0:
                 self._collect_event.wait(self.collect_mark_dwell_s)
                 payload = self._collect_payload or {'mark': True}
             else:
-                payload, _ = self._collect_wait()
+                payload, timed_out = self._collect_wait()
+                if timed_out:
+                    rospy.logwarn(f"[Arm REAL] mark: no confirmation for #{mark_no} within "
+                                  f"{self.collect_wait_timeout_s:.0f} s — going on")
             if self.cancel_requested and not payload:
-                rospy.logwarn("[Arm REAL] mark: cancelled while waiting; tool left retreated")
+                rospy.logwarn("[Arm REAL] mark: cancelled while waiting; tool left where it is")
                 return
-            row = self._collect_row(b, {'ra': None, 'readings': [], 'skip': False,
-                                        'note': (payload or {}).get('note', '')}, mark_no)
-            try:
-                self._collect_record(template, row)
-            except Exception as e:
-                rospy.logerr(f"[Arm REAL] mark: template write failed: {e}")
             with self._collect_lock:
-                self._collect['n_recorded'] += 1
                 self._collect['last'] = {'group_id': gid, 'point_id': pid, 'mark_no': mark_no}
             self._progress('resume', index=index, total=total, point_id=pid,
                            group_id=gid, scan=True, kind='mark', mark_no=mark_no)
-            if back_pose is not None and not self.cancel_requested:
+            if back_pose is not None and moved and not self.cancel_requested:
                 self._collect_return(back_pose, moved)
         except Exception as e:
             rospy.logerr(f"[Arm REAL] mark: stop failed at point {pid}: {e}")
@@ -1469,6 +1731,15 @@ class ArmController:
             if joints is not None:
                 self._live_joints = joints
             self._live_stamp = time.time()
+
+    def rpc_health(self):
+        """TimedRPC's health dict (rpc_stalled / rpc_stall_count /
+        rpc_last_stall), or None when the SDK object is not wrapped (checks
+        hand a bare fake in). Calling it also emits the live 'has not
+        returned for N s' warning once per stuck call."""
+        robot = self.__dict__.get('robot')
+        health = getattr(robot, 'health', None)
+        return health() if callable(health) else None
 
     def live_pose(self):
         """(tcp_pose, joints, age_s) of the last worker-thread snapshot, or

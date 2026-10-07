@@ -1530,14 +1530,17 @@ keyence:
 #           with each earlier point's offset from the tip (world mm and
 #           arm-base mm) so two testers can measure in parallel; one row per
 #           point goes to <run>_ra_measured.csv.
-#   mark  — method B: NO capture and no Ra map. Every scanned point stops at
-#           the standoff (retreated mark_retreat_mm) for the operator to
-#           write its running number beside the spot (outside the Basler's
-#           few-mm field); <run>_mark_template.csv maps number -> group /
-#           point / x y z with a blank ra_measured column to fill in later
-#           (any order, as many testers as you like). Then run the same TASK
-#           normally for the frames and merge with
-#           `merge_ra_dataset.py <scan run> --measured <filled template>`.
+#   mark  — method B (redone 2026-10-07): capture as usual, then every
+#           scanned point stops at the standoff (retreated mark_retreat_mm,
+#           0 = the case still on the spot) for the operator to write its
+#           RUNNING NUMBER beside the spot (outside the Basler's few-mm
+#           field); after the LAST scanned point of the GROUP the tool
+#           retreats retreat_mm once and the UI lists the whole group with
+#           its numbers for the Ra entry (measure with as many testers as
+#           you like, type each number's Ra). One row per point goes to
+#           <run>_ra_measured.csv with mark_no filled — the same file and
+#           merge as method A. Numbers continue across the task's groups
+#           and across a RESUME of the same run.
 collect:
   enabled:         false      # ~collect_enabled — live switch: /arm/collect_mode
   mode:            pause      # ~collect_mode: pause | mark (above)
@@ -1546,11 +1549,12 @@ collect:
                               # the capture, tool still at the standoff, until Next: the operator marks
                               # the spot beside the case (the tip is unfindable under a tool 80 mm up)
   retreat_mm:      80.0       # ~collect_retreat_mm: tool-z retreat during a pause stop
-  mark_retreat_mm: 30.0       # ~collect_mark_retreat_mm: retreat during a mark stop (0 = none)
+  mark_retreat_mm: 0.0        # ~collect_mark_retreat_mm: retreat during a marking stop (0 = the case
+                              # stays at the standoff on the spot — the spot is under the case centre;
+                              # 30 until 2026-10-07)
   mark_dwell_s:    0          # ~collect_mark_dwell_s: 0 = wait for Next; >0 = auto-continue after this many s
   retreat_speed:   10         # ~collect_retreat_speed: SetSpeed % for retreat / return
   wait_timeout_s:  0          # ~collect_wait_timeout_s: 0 = wait until released
   record_dir:      "${MM_WS}/results/scan_images"   # ~collect_record_dir: the FRAME root —
-                              # the CSV goes to <record_dir>/<run>/<run>_ra_measured.csv (or
-                              # _mark_template.csv), inside the run's frame folder (2026-10-06
-                              # evening, user: results/ not log/)
+                              # the CSV goes to <record_dir>/<run>/<run>_ra_measured.csv, inside
+                              # the run's frame folder (2026-10-06 evening, user: results/ not log/)

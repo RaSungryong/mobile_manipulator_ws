@@ -145,6 +145,8 @@ class Battery:
         ex.devices.battery_low = lambda: self.pct < 20.0
         ex.devices.safe_to_move = lambda: (True, 'ok')
         ex.devices.take_estop_edge = lambda: False
+        ex.devices.take_estop_cleared_edge = lambda: False
+        ex.devices.estop_active = False
         self.lamp = []
         ex.devices.set_status_color = lambda c: self.lamp.append(c)
     def set_charging(self, on):
@@ -350,6 +352,76 @@ def main():
     check('12 /task_state carries charge_phase / charging / battery_pct',
           seen and seen[-1]['charge_phase'] == 'charging' and seen[-1]['charging'] is True
           and seen[-1]['battery_pct'] == 55.0, str(seen[-1:]))
+
+    # ---- 13. e-stop pressed -> ERROR / red; RELEASED with nothing running
+    # -> IDLE / green by itself (user rule 2026-10-07: the robot booted red
+    # and stayed red until the first command although the PLC had been reset)
+    ERR, IDLE = te.MobileManipulatorState.ERROR, te.MobileManipulatorState.IDLE
+    ex, b = make(55.0)
+    edges = {'set': [], 'clr': []}
+    ex.devices.take_estop_edge = lambda: edges['set'].pop() if edges['set'] else False
+    ex.devices.take_estop_cleared_edge = lambda: edges['clr'].pop() if edges['clr'] else False
+    edges['set'].append(True); ex.devices.estop_active = True
+    ticks(ex, 2)
+    check('13a e-stop edge while idle -> ERROR, lamp red',
+          ex.state is ERR and b.lamp[-1] == 'red', f'{ex.state} {b.lamp[-2:]}')
+    edges['clr'].append(True)                 # cleared edge but the flag still says active
+    ticks(ex, 1)
+    check('13b a cleared edge contradicted by estop_active=True changes nothing',
+          ex.state is ERR, str(ex.state))
+    ex.devices.estop_active = False; edges['clr'].append(True)
+    seen = []
+    ex._task_state_pub = types.SimpleNamespace(publish=lambda m: seen.append(json.loads(m.data)))
+    ticks(ex, 1)
+    check('13c e-stop released, nothing running -> IDLE, lamp green, note on /task_state',
+          ex.state is IDLE and b.lamp[-1] == 'green' and seen and seen[-1]['state'] == 'IDLE'
+          and seen[-1]['note'] == 'e-stop cleared' and seen[-1]['stop_requested'] is False,
+          f'{ex.state} {b.lamp[-2:]} {seen[-1:]}')
+    check('13d the log says so', any('ERROR -> IDLE' in l for l in LOG))
+    ticks(ex, 3)
+    check('13e no further edge, stays IDLE, lamp not re-driven', ex.state is IDLE and b.lamp.count('green') == 1, str(b.lamp))
+    # released while a task is still winding down (ERROR + _task_running True
+    # is the real transient: _abort_for_estop ran, _run_task not returned yet)
+    ex._state = ERR; ex._task_running = True; edges['clr'].append(True)
+    ticks(ex, 1)
+    check('13f released while a task is winding down: ERROR kept', ex.state is ERR)
+    ex._task_running = False; edges['clr'].append(True)
+    ticks(ex, 1)
+    check('13g the next release edge with nothing running -> IDLE', ex.state is IDLE)
+    # released while NOT in ERROR (e.g. IDLE after a command already ran): nothing
+    edges['clr'].append(True); n_lamp = len(b.lamp)
+    ticks(ex, 1)
+    check('13h release edge in IDLE: state and lamp untouched', ex.state is IDLE and len(b.lamp) == n_lamp)
+    # a TASK refused by the safety gate under e-stop -> ERROR; release -> IDLE
+    ex.devices.estop_active = True
+    ex.devices.safe_to_move = lambda: (False, 'hardware e-stop active (/safety/estop=true)')
+    ex._command_cb(types.SimpleNamespace(data='TASK scan_test'))
+    ticks(ex, 2)
+    check('13i TASK under e-stop refused by the gate -> ERROR, nothing ran',
+          ex.state is ERR and ex._current_task is None and not any(c[0] == 'goto' for c in ex.mobile.calls),
+          f'{ex.state} {ex.mobile.calls}')
+    ex.devices.estop_active = False; ex.devices.safe_to_move = lambda: (True, 'ok'); edges['clr'].append(True)
+    ticks(ex, 1)
+    check('13j release after the refusal -> IDLE (the refused task is NOT re-run)',
+          ex.state is IDLE and ex._pending_task is None and not any(c[0] == 'goto' for c in ex.mobile.calls))
+    # the REAL NavifraDevices latch: first message false = idle, not a release
+    d = te.NavifraDevices.__new__(te.NavifraDevices)
+    d._estop = None; d._estop_stamp = 0.0; d._estop_edge_seen = False; d._estop_cleared_seen = False; d._on_estop = None
+    Bool = sys.modules['std_msgs.msg'].Bool
+    d._cb_estop(Bool(False))
+    check('13k NavifraDevices: a first false message latches no cleared edge', not d.take_estop_cleared_edge())
+    d._cb_estop(Bool(True)); d._cb_estop(Bool(True)); d._cb_estop(Bool(False)); d._cb_estop(Bool(False))
+    check('13l NavifraDevices: true,true,false,false -> one set edge, one cleared edge, then none',
+          d.take_estop_edge() and not d.take_estop_edge() and d.take_estop_cleared_edge()
+          and not d.take_estop_cleared_edge() and d.estop_active is False)
+    # boot shape: true as the FIRST message (fail-safe startup) -> set edge, no cleared edge
+    d2 = te.NavifraDevices.__new__(te.NavifraDevices)
+    d2._estop = None; d2._estop_stamp = 0.0; d2._estop_edge_seen = False; d2._estop_cleared_seen = False; d2._on_estop = None
+    d2._cb_estop(Bool(True))
+    check('13m NavifraDevices: true as the first message (fail-safe startup) is a set edge',
+          d2.take_estop_edge() and not d2.take_estop_cleared_edge() and d2.estop_active)
+    d2._cb_estop(Bool(False))
+    check('13n ... and the PLC reset afterwards is a cleared edge', d2.take_estop_cleared_edge())
 
     n = sum(1 for c in checks if not c)
     print(f'\n{len(checks) - n}/{len(checks)} checks passed')

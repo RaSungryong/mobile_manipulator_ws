@@ -172,6 +172,9 @@ class FakeBridge:
     def set_collect_config(self, cfg):
         self.record('set_collect_config', dict(cfg))
 
+    def collect_save(self, points, note=''):
+        self.record('collect_save', tuple((p['group_id'], p['point_id'], tuple(p['readings']), p['note'], p['skip']) for p in points), note)
+
     def lift_goto_mm(self, mm):
         self.record('lift_goto_mm', mm)
 
@@ -520,6 +523,17 @@ def part_a():
         check(any('[collect] 6/9 pt 15 g106: at the standoff' in l for l in sink.logs()), 'premark wait logged')
         r = c.api_set_collect_config({'mode': 'nope'})
         check(not r['ok'], 'unknown mode refused in the UI')
+        # Save during the entry stop (2026-10-07 evening): typed rows only, blank rows left out
+        r = c.api_collect_save([{'group_id': 106, 'point_id': 1, 'readings': '0.40 0.42', 'note': 'a', 'skip': False},
+                                {'group_id': 106, 'point_id': 2, 'readings': '', 'note': '', 'skip': False},
+                                {'group_id': 106, 'point_id': 3, 'readings': '', 'note': 'smudged', 'skip': True}], 'half way')
+        check(r['ok'] and '1 Ra + 1 skip saved' in r['message']
+              and bridge.has('collect_save', ((106, 1, (0.40, 0.42), 'a', False), (106, 3, (), 'smudged', True)), 'half way'),
+              f'save sends the typed rows, leaves the blank one out, stop still open: {r}')
+        r = c.api_collect_save([{'group_id': 106, 'point_id': 2, 'readings': '', 'skip': False}])
+        check(not r['ok'] and 'nothing to save yet' in r['message'] and bridge.count('collect_save') == 1, 'a save with nothing typed is refused, nothing sent')
+        r = c.api_collect_save([{'group_id': 106, 'point_id': 1, 'readings': '0.4 x'}])
+        check(not r['ok'] and 'not a number' in r['message'] and bridge.count('collect_save') == 1, 'a bad number refuses the whole save')
         bridge.scan_progress.emit({'phase': 'wait', 'index': 5, 'total': 9, 'point_id': 14, 'group_id': 106, 'kind': 'mark', 'mark_no': 3})
         check(any('[mark] #3 = pt 14 g106 (5/9)' in l for l in sink.logs()), 'mark wait logged with its number')
         bridge.scan_progress.emit({'phase': 'resume', 'index': 3, 'total': 9, 'point_id': 14, 'group_id': 106,
@@ -533,6 +547,8 @@ def part_a():
         check(bridge.has('send_task_command', 'TASK scan_pose_x') and bridge.has('send_task_command', 'GOTO 105')
               and bridge.has('send_task_command', 'CHARGE'), 'task commands published verbatim')
         check(c.api_task_command('  ')['ok'] is False, 'empty command refused')
+        c.api_task_command('RESUME groups=106,107')
+        check(bridge.has('send_task_command', 'RESUME groups=106,107'), 'a grouped RESUME passes through verbatim')
         c.api_lift_goto(400.0)
         check(bridge.has('lift_goto_mm', 343.0), 'lift target clamped to the 343 mm ceiling')
         c.api_lift_home(); c.api_lift_stop()

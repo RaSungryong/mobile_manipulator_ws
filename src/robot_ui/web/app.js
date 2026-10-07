@@ -168,9 +168,18 @@ function renderArm(st) {
   JOINTS.forEach((name, i) => {
     $('joint-' + name).textContent = jointsOk ? st.joints[i].toFixed(2) : '—';
   });
-  const flag = st.busy ? 'BUSY' : String(st.state || '').toUpperCase();
+  // Link / RPC health overrides the state word: a dead arm Ethernet link
+  // (ARM LINK DOWN) or an SDK call blocked > 2 s (ARM RPC STALL) is the
+  // reason the scan is standing still, and it used to be invisible.
+  let flag = st.busy ? 'BUSY' : String(st.state || '').toUpperCase();
+  let color = st.busy ? '#553311' : '#1b3a1b';
+  if (st.link_up === false) { flag = 'LINK DOWN'; color = '#5a1b1b'; }
+  else if (st.rpc_stalled) { flag = 'RPC STALL'; color = '#5a3a11'; }
   $('chip-arm').textContent = 'ARM ' + flag;
-  tint($('chip-arm'), st.busy ? '#553311' : '#1b3a1b');
+  $('chip-arm').title = 'link ' + (st.link_iface || '?') + (st.link_up === false ? ' DOWN' : ' up')
+    + ', drops ' + (st.link_down_count || 0) + '; RPC stalls ' + (st.rpc_stall_count || 0)
+    + (st.rpc_last_stall ? ' (last ' + st.rpc_last_stall + ')' : '');
+  tint($('chip-arm'), color);
 }
 
 function renderTask(st) {
@@ -298,33 +307,60 @@ function renderCollect(st) {
       + '\nimages: ' + ((st.images || []).join(', ') || '—');
     tbl.hidden = true; body.innerHTML = '';
   } else if (waiting && st.kind === 'mark') {
-    text = 'MARK  #' + st.mark_no + '  = g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + ')'
-      + '\n→ write  ' + st.mark_no + '  beside the spot under the tip (NOT on it), then Next'
-      + (st.retreated === false ? '\ntool NOT retreated' : '\ntool ' + (st.mark_retreat_mm || 30) + ' mm up')
-      + (st.standoff ? '\n' + st.standoff : '');
+    text = 'MARK  #' + st.mark_no + '  = g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + ')  — captured'
+      + '\n→ write  ' + st.mark_no + '  beside the case (the spot is under the case centre, NOT on it), then Next'
+      + (st.retreated ? '\ntool ' + (st.mark_retreat_mm || 0) + ' mm up' : '\ntool at the standoff, NOT retreated')
+      + '\nimages: ' + ((st.images || []).join(', ') || '—');
     tbl.hidden = true; body.innerHTML = '';
   } else if (waiting) {
     const pts = st.points || [];
-    text = 'WAITING  ' + pts.length + ' point(s)  — tip over g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + '), '
+    const numbered = pts.some((p) => p.mark_no != null);
+    const saved = st.saved || {};
+    const nSaved = Object.keys(saved).length;
+    text = 'WAITING  ' + pts.length + ' point(s)' + (numbered ? ' of group ' + st.group_id + ' (numbered spots)' : '')
+      + '  — tip over g' + st.group_id + ' p' + st.point_id + '  (' + st.index + '/' + st.total + '), '
       + (st.retreated === false ? 'tool NOT retreated' : 'tool ' + (st.retreat_mm || 80) + ' mm up')
-      + '\nworld dx dy = the map frame (정반 centre, x east); arm-base dx dy = the arm base_link axes';
-    body.innerHTML = '';
-    pts.forEach((p, i) => {
-      const tr = document.createElement('tr');
-      if (p.is_tip) tr.className = 'tip';
-      tr.dataset.g = p.group_id; tr.dataset.p = p.point_id;
-      tr.innerHTML = '<td>' + (i + 1) + '</td>'
-        + '<td>g' + p.group_id + ' p' + p.point_id + (p.is_tip ? ' (under tip)' : '') + '<br><span class="detail">' + (p.images || []).join(' ') + '</span></td>'
-        + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_world_mm) + ', ' + fmtMm(p.dy_world_mm)) + '</td>'
-        + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_arm_mm) + ', ' + fmtMm(p.dy_arm_mm)) + '</td>'
-        + '<td><input type="text" class="c-ra" inputmode="decimal" autocomplete="off" placeholder="0.41 or 0.40 0.43"></td>'
-        + '<td><input type="text" class="c-note" autocomplete="off"></td>'
-        + '<td><input type="checkbox" class="c-skip"></td>';
-      body.appendChild(tr);
-    });
+      + '\nsaved to CSV: ' + nSaved + ' / ' + pts.length + (nSaved < pts.length ? '  (Save or Enter on a row writes it; Record & next releases)' : '  (all on disk; Record & next releases)')
+      + (numbered ? '\n→ measure every numbered spot, type the Ra next to its number'
+                  : '\nworld dx dy = the map frame (정반 centre, x east); arm-base dx dy = the arm base_link axes');
+    // Rebuild the table only when the POINT SET changed (a save republishes
+    // the state while the operator is typing — the typed values must stay);
+    // a rebuild keeps what was typed and pre-fills the rest from `saved`.
+    const keys = pts.map((p) => p.group_id + ',' + p.point_id);
+    const shown = [...body.querySelectorAll('tr')].map((tr) => tr.dataset.g + ',' + tr.dataset.p);
+    if (keys.join('|') !== shown.join('|')) {
+      const typed = {};
+      for (const tr of body.querySelectorAll('tr')) {
+        typed[tr.dataset.g + ',' + tr.dataset.p] = { ra: tr.querySelector('.c-ra').value, note: tr.querySelector('.c-note').value, skip: tr.querySelector('.c-skip').checked };
+      }
+      body.innerHTML = '';
+      pts.forEach((p, i) => {
+        const tr = document.createElement('tr');
+        if (p.is_tip) tr.className = 'tip';
+        tr.dataset.g = p.group_id; tr.dataset.p = p.point_id;
+        tr.innerHTML = '<td>' + (i + 1) + '</td>'
+          + '<td class="num">' + (p.mark_no != null ? '#' + p.mark_no : '—') + '</td>'
+          + '<td>g' + p.group_id + ' p' + p.point_id + (p.source_point_id != null ? ' sp' + p.source_point_id : '') + (p.is_tip ? ' (under tip)' : '') + '<br><span class="detail">' + (p.images || []).join(' ') + '</span></td>'
+          + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_world_mm) + ', ' + fmtMm(p.dy_world_mm)) + '</td>'
+          + '<td class="num">' + (p.is_tip ? '0, 0' : fmtMm(p.dx_arm_mm) + ', ' + fmtMm(p.dy_arm_mm)) + '</td>'
+          + '<td><input type="text" class="c-ra" inputmode="decimal" autocomplete="off" placeholder="0.41 or 0.40 0.43"></td>'
+          + '<td><input type="text" class="c-note" autocomplete="off"></td>'
+          + '<td><input type="checkbox" class="c-skip"></td>'
+          + '<td class="c-saved"></td>';
+        const k = keys[i], t = typed[k], sv = saved[k];
+        const src = (t && (t.ra || t.note || t.skip)) ? t : (sv ? { ra: sv.skip ? '' : (sv.readings && sv.readings.length ? sv.readings.map((v) => (+v).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')).join(' ') : (sv.ra != null ? String(sv.ra) : '')), note: sv.note || '', skip: !!sv.skip } : null);
+        if (src) { tr.querySelector('.c-ra').value = src.ra || ''; tr.querySelector('.c-note').value = src.note || ''; tr.querySelector('.c-skip').checked = !!src.skip; }
+        body.appendChild(tr);
+      });
+    }
+    for (const tr of body.querySelectorAll('tr')) {
+      const sv = saved[tr.dataset.g + ',' + tr.dataset.p];
+      tr.classList.toggle('saved', !!sv);
+      tr.querySelector('.c-saved').textContent = sv ? (sv.skip ? '✓ skip' : '✓ ' + (sv.ra != null ? (+sv.ra).toFixed(4) : '')) : '';
+    }
     tbl.hidden = pts.length === 0;
   } else if (st.enabled) {
-    text = 'collect mode ON (' + (st.mode || 'pause') + (st.mode === 'mark' ? '' : ', ' + (st.batch_size || 1) + ' point(s) per stop') + ') — the next TASK will stop here';
+    text = 'collect mode ON (' + (st.mode || 'pause') + (st.mode === 'mark' ? ': number every spot, Ra entry per group' : ', ' + (st.batch_size || 1) + ' point(s) per stop') + ') — the next TASK will stop here';
     if (st.last) text += '\nlast stop: g' + st.last.group_id + ' p' + st.last.point_id
       + (st.last.mark_no != null ? ' = #' + st.last.mark_no : ' — ' + (st.last.n_ra ?? 0) + ' Ra, ' + (st.last.n_skip ?? 0) + ' skipped');
     tbl.hidden = true; body.innerHTML = '';
@@ -334,10 +370,11 @@ function renderCollect(st) {
   }
   $('lbl-collect').textContent = text;
   tint($('lbl-collect'), waiting ? '#1f4a7a' : '');
-  for (const id of ['txt-collect-note', 'btn-collect-next', 'btn-collect-skip']) $(id).disabled = !waiting;
+  for (const id of ['txt-collect-note', 'btn-collect-next', 'btn-collect-skip', 'btn-collect-save']) $(id).disabled = !waiting;
   $('btn-collect-next').textContent = (waiting && st.kind === 'mark') ? 'Next (number written)'
     : (waiting && st.kind === 'premark') ? 'Next (spot marked)' : 'Record & next';
   $('btn-collect-skip').hidden = waiting && (st.kind === 'mark' || st.kind === 'premark');
+  $('btn-collect-save').hidden = $('btn-collect-skip').hidden;
   if (waiting && st.kind !== 'mark') { const first = body.querySelector('.c-ra'); if (first && !first.value) first.focus(); }
 }
 
@@ -519,7 +556,11 @@ function taskDetailHtml(info) {
     rows.push(['points', pts]);
   }
   const lift = info.lift_height_mm;
-  rows.push(['lift', lift == null ? '— (left alone)' : Number(lift) + ' mm']);
+  const byGroup = info.lift_by_group_mm;
+  rows.push(['lift', lift == null ? '— (left alone)'
+    : byGroup ? 'per group: ' + Object.keys(byGroup).map((g) => g + ': ' + Number(byGroup[g]) + ' mm').join(', ')
+      + '  <span class="dim">(re-set at each group; descents via origin homing)</span>'
+      : Number(lift) + ' mm']);
   const files = info.files || [];
   if (files.length) rows.push(['source', files.map(esc).join('<br>')]);
   if (info.paired_file) {
@@ -618,9 +659,58 @@ function updateTaskDetail() {
   const lbl = $('lbl-task-detail');
   if (!info) {
     lbl.textContent = !name ? '' : (taskListSeen ? name + ': not in /task_list' : name + ': task list not received yet');
+    renderTaskGroups(null);
     return;
   }
   lbl.innerHTML = '<div class="task-detail-name">' + esc(name) + '</div>' + taskDetailHtml(info);
+  renderTaskGroups(info);
+}
+
+// ---- Group selection (2026-10-07) ----
+// One checkbox per group tag of the selected task, all ticked by default.
+// Send TASK and Resume append `groups=…` when some are unticked; an
+// unticked group is skipped (not driven to) and stays unfinished. The
+// ticks survive a /task_list republish of the same task; a different
+// task starts with everything ticked.
+let taskGroupsFor = null;
+function renderTaskGroups(info) {
+  const box = $('task-groups');
+  const tags = (info && (info.kind === 'scan' || info.scan_mode)) ? (info.tags || []) : [];
+  const key = info ? info.name + ':' + tags.join(',') : null;
+  if (key === taskGroupsFor) return;
+  taskGroupsFor = key;
+  box.innerHTML = '';
+  if (!tags.length) {
+    const empty = document.createElement('span');
+    empty.className = 'empty';
+    empty.textContent = info ? 'no groups (not a scan task)' : '—';
+    box.appendChild(empty);
+    return;
+  }
+  for (const tag of tags) {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+    cb.dataset.group = String(tag);
+    lab.append(cb, document.createTextNode(String(tag)));
+    box.appendChild(lab);
+  }
+}
+
+// `groups=104,105` when some groups are unticked, '' when all are (or the
+// task has none). null = nothing ticked — the callers refuse to send that.
+function selectedGroupsArg() {
+  const boxes = [...$('task-groups').querySelectorAll('input[type=checkbox]')];
+  if (!boxes.length) return '';
+  const on = boxes.filter((b) => b.checked).map((b) => b.dataset.group);
+  if (on.length === boxes.length) return '';
+  if (!on.length) return null;
+  return ' groups=' + on.join(',');
+}
+
+function setAllGroups(checked) {
+  for (const b of $('task-groups').querySelectorAll('input[type=checkbox]')) b.checked = checked;
 }
 
 // ------------------------------------------------------------------
@@ -983,14 +1073,33 @@ function init() {
       else if (r && r.message) appendLog('[collect] ' + r.message);
     }).catch(() => {});
   };
+  // Save (no release): every row with a Ra or skip -> /arm/collect_save; rows
+  // still blank are left out. `rows` limits it (Enter on one row).
+  const collectSave = (rows) => {
+    if (collectKind !== 'pause') return;
+    const note = $('txt-collect-note').value.trim();
+    const points = [];
+    for (const tr of (rows || $('tbl-collect-body').querySelectorAll('tr'))) {
+      const ra = tr.querySelector('.c-ra').value.trim();
+      const skip = tr.querySelector('.c-skip').checked;
+      if (!skip && !ra) continue;
+      points.push({ group_id: parseInt(tr.dataset.g, 10), point_id: parseInt(tr.dataset.p, 10), readings: ra,
+                    note: tr.querySelector('.c-note').value.trim(), skip });
+    }
+    if (!points.length) { if (!rows) appendLog('[collect] nothing to save yet — type a Ra or tick skip first'); return; }
+    call('collect_save', [points, note]).then((r) => {
+      if (r && !r.ok && r.message) appendLog('[collect] save: ' + r.message);
+    }).catch(() => {});
+  };
   $('btn-collect-next').addEventListener('click', () => collectSend(false));
   $('btn-collect-skip').addEventListener('click', () => collectSend(true));
+  $('btn-collect-save').addEventListener('click', () => collectSave());
   $('tbl-collect-body').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || !e.target.classList.contains('c-ra')) return;
     e.preventDefault();
     const inputs = [...$('tbl-collect-body').querySelectorAll('.c-ra')];
     const i = inputs.indexOf(e.target);
-    if (i >= 0 && i < inputs.length - 1) inputs[i + 1].focus(); else collectSend(false);
+    if (i >= 0 && i < inputs.length - 1) { collectSave([e.target.closest('tr')]); inputs[i + 1].focus(); } else collectSend(false);
   });
 
   // ---- Arm ----
@@ -1025,8 +1134,20 @@ function init() {
   document.addEventListener('mousedown', (ev) => {
     if (!$('task-combo').contains(ev.target)) closeTaskDropdown();
   });
-  $('btn-task').addEventListener('click', () => call('task_command', ['TASK ' + $('txt-task').value.trim()]).catch(() => {}));
+  $('btn-task').addEventListener('click', () => {
+    const groups = selectedGroupsArg();
+    if (groups === null) { appendLog('[task] no group ticked — tick at least one group (or all)'); return; }
+    call('task_command', ['TASK ' + $('txt-task').value.trim() + groups]).catch(() => {});
+  });
   $('btn-reload-tasks').addEventListener('click', () => call('task_command', ['RELOAD_TASKS']).catch(() => {}));
+  $('btn-groups-all').addEventListener('click', () => setAllGroups(true));
+  $('btn-groups-none').addEventListener('click', () => setAllGroups(false));
+  $('btn-resume').addEventListener('click', () => {
+    const stem = $('txt-resume').value.trim();
+    const groups = selectedGroupsArg();
+    if (groups === null) { appendLog('[task] no group ticked — tick at least one group (or all)'); return; }
+    call('task_command', [(stem ? 'RESUME ' + stem : 'RESUME') + groups]).catch(() => {});
+  });
   $('btn-goto').addEventListener('click', () => call('task_command', ['GOTO ' + parseInt($('num-goto').value, 10)]).catch(() => {}));
   $('btn-charge').addEventListener('click', () => call('task_command', ['CHARGE']).catch(() => {}));
   $('btn-undock').addEventListener('click', () => call('task_command', ['UNDOCK']).catch(() => {}));

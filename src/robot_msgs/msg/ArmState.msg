@@ -44,3 +44,15 @@ string result_message
 
 # Whether that motion succeeded. Meaningless until motion_seq >= 1.
 bool result_success
+
+# Arm Ethernet link + Fairino RPC health (2026-10-06). The NIC the route to
+# robot_ip goes through flapped 5–23 times a day for weeks (kernel: `enp2s0
+# NIC Link is Down`, ~12 s each); every drop froze the scan 12–15 s inside a
+# blocking SDK call with nothing in any ROS log. link_* is the NIC carrier
+# read from sysfs; rpc_* times every SDK call (apriltag_nav/arm_link_watch.py).
+string link_iface          # "" when no route interface could be resolved
+bool   link_up             # carrier present (true when the monitor is off)
+uint32 link_down_count     # carrier drops seen since arm_node started
+bool   rpc_stalled         # an SDK call has been in flight > ~rpc_stall_warn_s
+uint32 rpc_stall_count     # calls that took longer than that since start
+string rpc_last_stall      # e.g. "GetActualTCPPose 13.5 s at 16:08:05", or ""

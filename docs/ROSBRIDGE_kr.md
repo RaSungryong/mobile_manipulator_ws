@@ -90,6 +90,8 @@ python robot_cmd.py "STOP"             # 소프트 정지
 python robot_cmd.py "CHARGE"           # 500번 도킹 → 충전 시작
 python robot_cmd.py "UNDOCK"           # 충전 중단 (릴레이 false만, 이동 없음 — 2026-10-06)
 python robot_cmd.py "RELOAD_TASKS"     # task/csv 다시 읽기
+python robot_cmd.py "RESUME"           # 중단된 최신 런을 같은 결과 파일에 이어서 (2026-10-06); "RESUME <task>_ra_map_<ts>"로 특정 런
+python robot_cmd.py "RESUME groups=106,107"   # 고른 그룹(= task의 태그)만 (2026-10-07); TASK에도 "TASK <name> groups=106,107" — 나머지 그룹은 건너뛰고 미완료로 남는다
 python robot_cmd.py "GOTO 105" 60      # 뒤의 숫자 = 상태를 지켜볼 시간(초), 기본 5
 ```
 
@@ -152,7 +154,7 @@ ws.close()
 
 | 용도 | 이름 | 타입 / 내용 |
 |---|---|---|
-| 명령 | `/task_command` | String: `TASK <name>`, `GOTO <tag>`, `STOP`, `STATE`, `CHARGE`, `UNDOCK`, `RELOAD_TASKS` |
+| 명령 | `/task_command` | String: `TASK <name>`, `GOTO <tag>`, `STOP`, `STATE`, `CHARGE`, `UNDOCK`, `RELOAD_TASKS`, `RESUME [<run>]`; TASK / RESUME 뒤에 `groups=105,106`으로 그룹 선택 |
 | 로봇 상태 | `/task_state` | String(JSON): state, task, current_group, charge_phase, charging, battery_pct |
 | task 목록 | `/task_list` | String(JSON): 이름, 모드, 태그, 점 수, 파일 |
 | 팔 | `/arm/state` | 10 Hz, TCP 자세·관절·busy |

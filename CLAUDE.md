@@ -115,7 +115,12 @@ keeping was deleted (see the Work Log entry).
 ```
 <ws>/log/apriltag_nav/ra_maps/<task>_ra_map_<ts>.csv task_manager result_dir  (versioned)
 <ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored);
-                                                    g<group>_p<point>_i<index>_s<n>.png since 2026-10-06
+                                                    g<group>_p<point>_sp<source>_i<index>_s<n>.png since 2026-10-07
+                                                    (p = the joint file's point_id = PATH row; sp = its
+                                                    source_point_id = the WORK POINT, user rule 2026-10-07:
+                                                    "소스아이디도 이미지 저장 csv 저장에 다 들어가야 함" — also a
+                                                    column of the Ra map and the collect CSV; no _sp token /
+                                                    blank cell when a point has none; g…_p…_i… 10-06 only)
 <ws>/results/scan_images/<run>/<run>_ra_measured.csv  arm_node COLLECT mode: the hand-measured Ra per
                                                     scanned point, IN THE RUN'S FRAME FOLDER (versioned —
                                                     only the png/jpg under scan_images are ignored); also
@@ -217,16 +222,28 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            # see the retarget section. ⚠️ `lift_mm` is the ONLY height
                            # column the stack reads; `base_height_mm` (652 + the
                            # planner's lift, as exported) is metadata nothing reads.
-                           # ⚠️ **Since 2026-10-06 evening `lift_mm` is 0 in ALL FIVE
-                           # files — a TEST the user chose knowing the risk** ("위험
-                           # 하긴 하지만 테스트 목적"): the offset10..40 joint rows were
-                           # solved with the arm base RAISED by 10 / 20 / 30 / 40 mm,
-                           # so replayed at the lift origin the tip lands that much
-                           # LOWER than planned (standoff 17 → 7 / −3 / −13 / −23 mm,
-                           # i.e. into the plate from the 20 mm file on). Planner
-                           # originals with the exported lift_mm (same new names):
-                           # task/csv/task_csv_backup/20261006_base_height_652_
-                           # originals/ (SHA256SUMS) — restore them for a normal run.
+                           # ⚠️ **Since 2026-10-06 evening `lift_mm` is 0 in the
+                           # offset0..40 files and 10 in offset50mm (a sixth file —
+                           # base 702, 1799 rows, lift 50 as exported — arrived
+                           # 17:37; set to 0 at 17:39, then to 10 on the user's next
+                           # word) — a TEST the user chose knowing the risk** ("위험
+                           # 하긴 하지만 테스트 목적"): the offset10..50 joint rows were
+                           # solved with the arm base RAISED by 10 … 50 mm, so
+                           # replayed at a lower lift the tip lands that much LOWER
+                           # than planned (standoff 17 → 7 / −3 / −13 / −23 mm for
+                           # 10..40 at lift 0; −23 mm for 50 at lift 10, i.e. into
+                           # the plate from the 20 mm file on).
+                           # ⚠️ 2026-10-07: in offset50mm GROUP 119's lift_mm is 0
+                           # (morning) and GROUP 120's too (17:46, user: "120번 그룹
+                           # … 리프트 값을 모두 0"); 105–118 stay 10 — the lift is now
+                           # set PER GROUP (lift section below); the lift-10 file is in
+                           # task_csv_backup/20261007_offset50mm_lift10_before_g119_0/,
+                           # the g119-only state in …_offset50mm_g119_0_before_g120_0/.
+                           # Planner originals with the exported lift_mm (same new
+                           # names): task/csv/task_csv_backup/20261006_base_height_
+                           # 652_originals/ (0..40) and 20261006_hoodouter_offset50mm_
+                           # original/ (50), each with SHA256SUMS — restore them for
+                           # a normal run.
                            # The 10mm pair of 13:37 (ran 4×) was replaced by them;
                            # git 7724761 has it. The
                            # 2026-09-29/30 sets (260610 three-lift, 260930 joint-only,
@@ -240,6 +257,50 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            #    is at the planned stop of every group tag.
 RELOAD_TASKS               # Re-scan task/csv without a restart (refused while
                            # a task runs); republishes /task_list (latched)
+RESUME [<run>]             # Continue an INTERRUPTED run in its own result files
+                           # (2026-10-06): <run> = <task>_ra_map_<ts> (the Ra
+                           # map stem; no arg = the newest Ra map with points
+                           # left). Finished points — Ra map success row, plus a
+                           # _ra_measured.csv row (recorded, skipped, or method
+                           # B's PENDING mark row) when the run collects — are
+                           # left out; finished groups are not driven to; in a
+                           # joint path the finished work points are driven
+                           # THROUGH (scan False, route and frame index intact),
+                           # in pose mode they are dropped.
+                           # ⚠️ METHOD B INTERRUPTED (2026-10-07 evening, user:
+                           # "찍은 사진 살려주"): the marking stop writes the
+                           # point's row AT ONCE (mark_no + frames, Ra blank =
+                           # pending), so a captured-and-numbered point is NOT
+                           # re-shot on RESUME — driven through, and listed at
+                           # its group's entry stop with its number (pending rows
+                           # are REPLACED in place by the Ra / skip; `_collect_
+                           # upsert`). A group with every point captured but the
+                           # entry stop interrupted is kept for the entry alone
+                           # (path driven through, pose mode: one move to the
+                           # last done point, then an entry stop without retreat);
+                           # `scan_resume.pending_points`, plan `n_pending`, log
+                           # `N captured point(s) await their Ra entry`. Method A
+                           # is unchanged (no row until the Ra is entered → such a
+                           # point IS re-shot and gets its stop back).
+                           # Every remaining point keeps the run's csv_path, so
+                           # the Ra map (updated in place), the frame folder and
+                           # the collect CSV GROW instead of a new run starting
+                           # at point 1. Preempts like TASK; a complete run is
+                           # refused. /task_state carries `resume_run`. Logic in
+                           # apriltag_nav/scan_resume.py; robot_ui Task tab
+                           # "Resume interrupted run"; tools/check_scan_resume.py
+                           # ⚠️ GROUP SELECTION (2026-10-07): `TASK <name>
+                           # groups=105,106` and `RESUME [<run>] groups=105,106`
+                           # run ONLY those groups (= the task's tag stops;
+                           # `,` `;` `+` separated, the token may sit anywhere).
+                           # Unselected groups are SKIPPED — not driven to and
+                           # NOT marked done, so a later RESUME offers them
+                           # again. A group the task does not have, a malformed
+                           # list, or a selection with nothing left is refused
+                           # (nothing moves). /task_state carries
+                           # `groups_filter`. robot_ui Task tab "Groups" row
+                           # (web: one checkbox per group, all / none; Qt: a
+                           # comma list) feeds both Send TASK and Resume.
 CHARGE                     # Operator dock + charge (2026-09-14): lift origin
                            # home → drive to the dock tag 500 → /crevis/charging
                            # true → wait for BMS current. = the charging
@@ -307,7 +368,7 @@ Three columns differ from the original dialect, all handled in
 
 | | RRT dialect | original |
 |---|---|---|
-| work-point id | `source_point_id` (`point_id` is the path index) | `point_id` |
+| work-point id | `source_point_id` (`point_id` is the path index — and STAYS the path index in every result: Ra map, collect CSV, frame name `g<g>_p<p>`; the scan point carries `source_point_id` beside it, and since 2026-10-07 every result carries it too — frame name `_sp<n>`, a `source_point_id` column after `point_id` in the Ra map and the collect CSV; a pose point's `point_id` IS the work point and rides under the same name; `merge_ra_dataset.py` reads the name first) | `point_id` |
 | lift height | `lift_mm` | `lift_height` |
 | integer cells | may be `0.000000000000000000e+00` | plain ints |
 
@@ -450,9 +511,11 @@ Two facts from the previous warning that are still load-bearing:
 - Joint mode reads no transform at all: the CSV rows are absolute joint angles
   fed straight to `MoveJ`.
 
-Merged-scan output is a 13-column CSV: `group_id, point_id, x, y, z,
-ra_mean, ra_std, ra_min, ra_max, num_samples, success, execution_message,
-validated_at`. Render with `tools/ra_map_plotter.py <csv> [--interpolate]`.
+Merged-scan output is a 14-column CSV: `group_id, point_id, source_point_id,
+x, y, z, ra_mean, ra_std, ra_min, ra_max, num_samples, success,
+execution_message, validated_at` (13 without `source_point_id` until
+2026-10-07; `ScanResultWriter.save` adds the column to an older file and
+fills it for the registered points). Render with `tools/ra_map_plotter.py <csv> [--interpolate]`.
 
 ## Architecture
 
@@ -479,7 +542,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `log/apriltag_nav/ra_measured/<run>_ra_measured.csv`; `mark` (method B) captures nothing and stops at every scanned point for its running number to be written beside the spot, writing `<run>_mark_template.csv` to fill in by hand later; `scan_progress` gains `wait` / `resume`; `docs/RA_COLLECT_kr.md` |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `results/scan_images/<run>/<run>_ra_measured.csv`; `mark` (method B, redone 2026-10-07) captures as usual, stops at every scanned point at the standoff with a running number to write beside the case — the number goes into `_ra_measured.csv` right there as a PENDING row (Ra blank; same evening) — and after the GROUP's last point retreats once for the whole group's Ra entry, which REPLACES the pending rows in place (`mark_no` filled, numbers continuing across groups and a RESUME; an interrupted group's captured points are not re-shot, see RESUME); until 2026-10-07 it captured nothing and wrote `<run>_mark_template.csv`; `scan_progress` gains `wait` / `resume`; **`/arm/collect_save`** (JSON `{points:[…]}`, 2026-10-07 evening): write the rows typed so far at an entry stop into the CSV WITHOUT releasing it (web Save button / Enter on a row; `collect_state` carries `saved` / `n_saved`; the release takes the saved value for any point it does not name); `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -778,7 +841,7 @@ never bind — `robot.yaml` is the only constraint.
 
 `arm_node.py` **wraps** `arm_controller.ArmController`
 unchanged rather than reimplementing it — that controller holds `TOOL_ID=1`
-(vision_tip TCP), the q0 IK seed, the 4-DOF transform, the 13-column CSV and the
+(vision_tip TCP), the q0 IK seed, the 4-DOF transform, the 14-column CSV and the
 Keyence loop. A previous node-per-device attempt (the deleted `scripts_ros/`
 tree) reimplemented the controller instead of wrapping it and silently lost
 several of those — including using `tool=0` (flange) instead of `TOOL_ID=1`, so
@@ -1141,27 +1204,32 @@ than every run before 2026-08-14. That is the scale being fixed, not a
 regression, but the joint angles in those CSVs were solved at one base height:
 if a scan starts fouling or missing standoff, this is the 3.2 mm to remember.
 
-⚠️ **A task built from several CSVs needs them all to agree.**
-`_extract_lift_height` refuses both a partly-filled column and one whose
-values disagree, and **unregisters the task** rather than picking a winner —
-the joint angles were solved at one base height, so guessing which rows are
-wrong is not safe. This is what unregistered the old `scan_full_joints` when
-its two halves were set to 300 and 150. The current tasks are one CSV each at
-0 mm, so it does not bite today; it will the moment two are concatenated.
+⚠️ **The rows of ONE GROUP must agree; groups may differ (2026-10-07).**
+`_extract_lift_height` refuses a partly-filled column and a group whose
+rows name two heights, and **unregisters the task** rather than picking a
+winner — the joint angles of a group were solved at one base height, so
+guessing which rows are wrong is not safe. (Until 2026-10-07 the rule was
+one value per TASK; the user's "group 119 of offset50mm at 0, the rest at
+10" is what relaxed it.) `get_lift_height(task)` is the single value, or
+the HIGHEST when groups differ (what `/task_list` shows and what decides
+the end-of-task origin homing); `get_group_lift_height(task, tag)` is the
+group's own; `/task_list` carries `lift_by_group_mm` only when they differ
+and both UIs' task detail prints it per group.
 
 ```
-TASK → arm home pose → drive to first tag → SET LIFT → scan group
-     → drive to next tag → scan group (lift untouched)   … repeat …
+TASK → arm home pose → drive to first tag → SET LIFT (group's height) → scan group
+     → drive to next tag → [lift re-set only if this group's height differs:
+       climb = goto; DESCENT = lift origin homing, then climb to the target
+       when it is not 0 — backlash] → scan group   … repeat …
      → arm home pose → LIFT ORIGIN HOMING → stop, wherever it is
 ```
 
-- **One value per task, enforced.** The joint angles in the CSV were solved at
-  one base height, so a file whose rows disagree is **refused at load time**
-  rather than resolved by picking a winner — `task_manager._extract_lift_height`
-  also rejects a partly-filled column, since a blank cell is not 0 mm. A CSV
-  with no such column is unchanged: the lift is never commanded.
-- **The lift is set after arriving at the first tag**, not before driving. A
-  raised lift puts the arm's mass high while the base is moving.
+- **One value per group, enforced.** A CSV with no lift column is unchanged:
+  the lift is never commanded. Between groups of the same height nothing
+  touches the lift.
+- **The lift is set after arriving at the tag**, not before driving. A
+  raised lift puts the arm's mass high while the base is moving — which
+  also means it drives between groups at the PREVIOUS group's height.
 - **`LiftClient` (`src/apriltag_nav/lift_client.py`) is the only way in**, same
   role `ArmClient` plays for the arm. It reconstructs a synchronous call by
   watching `/lifter/state` rather than calling a service — see
@@ -1481,6 +1549,25 @@ software `/estop` topic was removed in driver v0.11 — don't look for it.
 `/safety/estop` is fail-safe (true at startup and on PLC comms loss), so
 `estop_active` reports true only after an actual message, and `safety_link_ok()`
 covers the "driver not running" case separately.
+
+**What `/safety/estop` actually is (2026-10-07):** the driver's `safety_io`
+node ORs the two EMERGENCY inputs and the two bumpers with the PNOZ's own
+`traction_motor_power_on` output (`~/navifra/install/share/safety_io_driver/
+config/safety_io.yaml`). The PNOZ latches its safety outputs (O0/O1 motor
+STO, O3 traction power) OFF after a power-up and after every e-stop /
+bumper event until the panel **RESET SWITCH** (PLC input I6) is pressed
+and released — the latch is the PLC's, nothing in ROS can clear it. So a
+reboot ALWAYS starts with `/safety/estop` true: the stack's first message
+is a false→true edge, `_abort_for_estop` puts the executor in ERROR and
+the lamp goes red although no button is pressed (this morning's boot:
+red 09:57:21, PLC reset 10:00:11, Servo ON 10:00:15). **The release
+(true→false, `NavifraDevices.take_estop_cleared_edge`) takes ERROR back to
+IDLE by itself when no task is running or pending** (`_check_estop_
+recovery` in the main loop, `/task_state` note `e-stop cleared`); a task
+still winding down keeps ERROR until it has, and a non-ERROR state is
+untouched. Before this the lamp stayed red from boot until the first
+command. ERROR from any other cause is also cleared by an e-stop
+press-and-release — by design, that is an operator acknowledgement.
 
 ## Keyence Distance Loop
 
@@ -2083,6 +2170,485 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-07 (17:46) — offset50mm group 120 at lift 0 too
+
+User: "120번 그룹 csv에서 리프트 값을 모두 0으로 해줘". Group 120 appears in
+every joint file, but only `joint_hoodouter_lower_plate1_offset50mm.csv`
+had it at a non-zero lift (10; the offset0..40 files are 0 throughout).
+Its 104 group-120 rows went `lift_mm` 10 → 0, nothing else (cell by cell
+against the backup, CRLF kept; backup + SHA256SUMS in
+`task_csv_backup/20261007_offset50mm_g119_0_before_g120_0/`). Per group
+now 105–118: 10, 119: 0, 120: 0 — the morning's per-group rule covers it,
+so the task registers with the "lift_height differs between groups"
+warning and no refusal. The stack was IDLE (the group-120 RESUME had been
+stopped), so `RELOAD_TASKS` was sent: `/task_list` carries
+`lift_by_group_mm` with 120: 0.0 and the executor log names the new map.
+⚠️ Same hazard as group 119: at group 120 the tip is planned 10 mm lower
+than in the lift-10 groups (standoff 17 − 50 + 0 = −33 mm by the planner's
+numbers) — the user's 10-06 test decision covers it. A RESUME of the
+17:56 run on group 120 now runs at lift 0 (the executor re-reads the
+task definition at the next command).
+
+### 2026-10-07 (evening, later) — Save during the Ra entry stop: the typed rows go to the CSV before the release
+
+User: "현재 한 그룹아이디에서 데이터 수집하고 ra값 입력할 때 저장기능 추가하면
+데이터 소실에 도움됨". The group entry stop of method B lists 36–553 rows and
+nothing reached the disk until Record & next — a closed tab, a phone going
+to sleep, a web-node restart or an e-stop lost every value typed (the
+pending rows kept only the numbers). Built, same shape as the release:
+- `ArmController.collect_save(payload)` (`/arm/collect_save`, String JSON,
+  `arm_node._cb_collect_save` on the callback thread): `points` = any
+  subset of the waiting batch, an entry with neither a value nor skip is
+  left out (still being typed), the rest are upserted into
+  `_ra_measured.csv` at once through `_collect_upsert` (now under
+  `_collect_io_lock` against the worker's release write) — a pending mark
+  row becomes a recorded one (Ra, `measured_at`), method A rows appear
+  before the release — and kept in `_collect['saved']` (`"g,p"` → {ra
+  (rounded as written), readings, note, skip}; `n_saved`) which the
+  latched `collect_state` carries. Refused at a marking stop, when nothing
+  waits, for a point outside the batch, a bad number, or nothing typed.
+  `_collect_pause` merges at the release: payload point > saved value >
+  "not entered"; the cancel warning counts the saved points. The entry
+  parser is shared (`_collect_parse_entries`, `partial=`).
+- Bridge `collect_save(points, note)`, web `api_collect_save` (blank rows
+  dropped, a bad number refuses the whole save), page: **Save** button
+  beside Record & next (hidden at marking stops like Skip all), **Enter**
+  on a Ra field saves THAT row and moves down (the last row's Enter still
+  releases), a `saved` column (✓ value / ✓ skip) and `saved to CSV: k / N`
+  in the readout; the table is rebuilt only when the POINT SET changes
+  (a save republishes the state mid-typing — the typed values stay), and
+  a rebuild (reload, another browser) pre-fills from `saved`.
+- Consequence for RESUME: a saved point has a Ra row, so it is DONE —
+  not re-listed; the unsaved ones stay pending and come up as before.
+
+Verified offline: `check_scan_progress.py` 188 → **204** (save of 2 of 3
+entries: CSV p1 Ra + stamp, p2 still pending, p3 skipped, numbers kept;
+state open with `saved` / `n_saved`; four refusals; a second save
+overwrites in place; a release naming only p3 takes p1 / p2 from the
+save and p3 from the release, no duplicates, saved map cleared; save
+then e-stop → p1 on disk, p2 pending, `scan_resume.pending_points` {p2},
+the resumed entry stop lists p2 alone; save at a marking stop refused;
+method A batch takes a save), `check_web_ui.py` 146 → **149**, the real
+`app.js` in headless Chrome (Enter on row 1 → one `collect_save` with
+that row; a state republish with p1 saved keeps row 2's typed value and
+marks row 1 ✓; Save sends the typed + skipped rows; a fresh table
+pre-fills readings / note / skip from `saved`; the last row's Enter
+sends `scan_continue` with every row; Save hidden at a mark stop,
+disabled idle; no JS error), pyflakes clean. **The service was restarted
+at 17:16:48, after every edit, so the running `arm_node` / web node carry
+it** (the Ready line names `/arm/collect_save`); not yet used on a run.
+(This entry was first written at 17:14 and lost to another session's
+17:18 rewrite of CLAUDE.md; re-added.)
+
+**The 17:56 run's group 119, re-pended (17:40, user: "#337–#589 (253점)
+이부분만"):** the 16:30:35 entry stop was released with **Skip all** (0 Ra,
+553 skipped); #41–#336 were then re-entered at 16:39 (283 Ra + 13 "sheet
+#N: X (not measured)"), but #337–#589 (253 points) stayed `skipped` with
+a blank note — which RESUME counts as ANSWERED, so no entry stop would
+ever come for them. Those 253 rows were set back to pending (Ra / readings
+/ measured_at blank, skipped False, note `pending: Ra at the group entry
+stop`; backup `…_ra_measured.before_g119_337_589_repending_20261007.csv.bak`
+beside the file; `scan_resume.pending_points` = 253, all g119). Next:
+Collect mode on, mark, Groups = 119 only, `RESUME scan_joint_hoodouter_
+lower_plate1_offset50mm_ra_map_20261006_175616` → the path is driven
+through, one entry stop lists #337–#589, Save / Enter as you go. Until
+then a RESUME of another group must UNTICK 119 or it stops there first.
+
+### 2026-10-07 (night) — `docs/RA_COLLECT_kr.md` rewritten as ONE short operator guide (A / B, options, RESUME, merge)
+
+User: "데이터 수집 b 방안 … 가이드 하나 작성 중간에서 이어서하는거까지 포함",
+then on the first draft (a 20 KB method-B-only `RA_COLLECT_B_kr.md`):
+"너무 복잡하다 추가기능도 있어 같이 넣어주". So: that file deleted, and
+`RA_COLLECT_kr.md` (which still carried the superseded 10-06 "번호만
+적고, 측정은 나중에" B section under the rewritten one) replaced by a
+121-line guide — the two methods side by side, one settings table
+(Collect mode, Mode, points per stop, premark, mark dwell, Groups,
+`wait_timeout_s`, `require_converged`), A and B as 5 / 4 numbered steps,
+stopping, Resume as 4 steps plus one paragraph on what the plan does
+(done = entered / skipped / B's numbered point; a group interrupted at
+its entry stop gets the stop again), files + merge, a symptom table,
+the topics. The one standing warning kept in bold: a service restart
+resets Collect mode / Mode to robot.yaml's OFF / pause, so a Resume
+after a restart runs as method A. Facts read off `_collect_mark_stop`,
+`_collect_pause`, `scan_resume`, the RESUME branch, `app.js`. Docs only.
+
+### 2026-10-07 (evening) — Method B interrupted mid-group: the captured photos and numbers are KEPT on RESUME
+
+User, asked whether an accidental e-stop during a method-B group can be
+resumed, was told the gap: B wrote `_ra_measured.csv` rows only at the
+group's entry stop, so the interrupted group's captured points had no
+row, RESUME treated them as unfinished and re-shot them (and, with no CSV
+at all, as finished and never entered). User: "그 그룹의 찍은 점에서
+촬영한 사진 살려주". Built:
+- `ArmController._collect_write_pending` — at every marking stop the
+  point's row is written at once (`mark_no`, frames, standoff, xyz,
+  `ra_measured` blank, `skipped` False, note `pending: Ra at the group
+  entry stop`, no stamp) through the new `_collect_upsert` (rewrite keyed
+  by (group_id, point_id), atomic); the group's entry stop upserts the
+  final rows over them, so the file never holds a point twice. Method A
+  still writes nothing before the Ra (its "re-shoot + stop again" rule
+  stands).
+- `_collect_pause(batch, total, retreat=True)` lists the run's pending
+  rows of the batch's group(s) (`_collect_pending_rows`, CSV → batch
+  entries ordered by number) in front of the batch, so a resumed group's
+  entry stop shows the earlier numbers too; `retreated` in the state is
+  now the real `moved` flag. After the loop, a mark pass whose list had
+  nothing to scan but whose groups still have pending rows (the e-stop
+  hit the entry stop itself) runs ONE entry stop for them, no retreat.
+- `scan_resume.pending_points(measured)` (blank Ra, not skipped);
+  `plan_resume(…, pending=)`: a pending row counts as done (no re-shoot),
+  but a group all done with pending points is KEPT, not dropped — joint:
+  every row `scan False`; pose: the done points are dropped as before,
+  and when nothing would be left the LAST done point stays as the one
+  unscanned move so the run's csv_path reaches the arm; `n_pending`,
+  `nothing_left` false while entries are owed, summary `N captured
+  point(s) await their Ra entry`. `task_executor._resume_plan_for` passes
+  the set. The mark counter already continued from the CSV's highest
+  number, which the pending rows now carry.
+
+Verified offline: `check_scan_progress.py` 165 → **179** (pending row on
+disk at marking stop #1 and #2, replaced in place with the Ra at the entry
+stop; a cancel at the entry stop leaves both rows pending with no home
+move; the resumed list [1, 2 scan False, 3] captures only point 3, numbers
+it #3, lists (1, 2, 3) with the tip on 3 and the retreat, writes three
+rows — one Ra, one skipped, one new; a list with everything captured
+captures nothing, no MoveL, one entry stop without retreat, the row filled;
+method A one row, no mark_no), `check_scan_resume.py` 91 → **102**
+(pending set, a pending row done, an all-pending group kept with scan
+False and `n_pending` 3, the entry-only case still resumable, a mixed group,
+pose mode's one unscanned move with the csv_path, partly done pose
+unchanged), pyflakes clean. **Not run on the robot: `arm_node` +
+`task_executor` restart required** (`sudo systemctl restart
+mobile-manipulator`). **Then checked: the service restarted at 12:53:43,
+AFTER these edits (12:08 / 12:11), so the running `arm_node` /
+`task_executor` already carry them.** Not covered: the frames of the
+re-listed points are the ones taken before the interruption at the
+earlier stop pose (±2 mm).
+
+**`source_point_id` everywhere (13:40, user: "소스아디도 이미지 저장 csv
+저장에 다 들어가야 함", then "소스 아이디가 실제로 촬영한 위치 맞나요" —
+yes: it is the planner's work-point number on the very path row whose
+joints the arm executed before the capture, unique and monotone within a
+group, repeating across groups, so always with group_id; the position
+itself carries the un-retargeted ~9 / 10 mm).** Frame name
+`g<g>_p<p>_sp<source>_i<index>_s<n>.png` (`image_name_prefix(…,
+source_point_id)`; no token without one), `scan_results.COLUMNS` gained
+`source_point_id` after `point_id` (14 columns; an older file gets the
+column and its registered rows filled; the id columns are written as
+Int64 so a blank does not turn the rest into "1.0"), `COLLECT_COLUMNS`
+the same (pending rows and the read-back carry it), the entry table
+shows `sp<n>`, `TaskManager` gives a POSE point `source_point_id =
+point_id`, `merge_ra_dataset.py` takes the name's token first, then the
+CSV columns, then the joint file. The 17:56 run was MIGRATED in place:
+301 frames renamed, both CSVs given the column from the joint file
+(backups `*.before_source_point_id_20261007.csv.bak` beside them; every
+CSV image name exists on disk; plan unchanged 299 done / 150 pending;
+the merge gives 301 rows, 0 without a source id). `check_scan_progress`
+179 → **188**; `check_scan_resume` 102, `check_web_ui` 146,
+`check_task_list_ui` 113. The running nodes are the 12:53 ones and do
+NOT have this: **`arm_node` restart required** before the next scan, or
+its new frames come out without `_sp` and its CSV rows without the
+column (the merge still fills them from the joint file).
+
+**The run the question was about — 17:56 `offset50mm`, group 119
+(13:15):** the morning's mark pass (old code, no pending rows) had 118
+entered at 11:16 (#1–#36) and 119 captured #37–#186 (150 points, frames +
+Ra map rows, 149 standoff ok; the 11:17 attempt was cancelled at 11:25
+and the 11:33 attempt re-shot the same points with the SAME numbers, so
+the case numbering is consistent), cancelled 11:58 at #186. Its CSV had
+no row for 119, so RESUME would have re-shot all 150. On the user's wish
+the 150 rows were BACKFILLED as pending rows from the arm_node log's
+`mark: #N = g119 pP (I/651)` lines (number → point → frame checked file
+by file; backup `…_ra_measured.before_g119_backfill_20261007.csv.bak`
+beside it). Plan now: 299 of 1271 done, 972 left, 150 awaiting Ra;
+`RESUME … groups=119` drives through p11…p185 and scans the 403 open
+points from #187, then the entry stop lists all 553.
+
+### 2026-10-07 — "재부팅하면 빨간불": the PNOZ's power-up latch, and ERROR → IDLE on e-stop release
+
+User: after a power cycle the STATUS lamp comes up RED although nothing
+is in emergency stop — why? Read off this morning's boot (uptime 09:56):
+the navifra base driver logged `Drive not OPERATION_ENABLED (servo OFF
+after STO/E-stop?)` every 5 s from 09:56:59, task_executor got
+`/safety/estop = true` as its FIRST message at 09:57:21 → `HARDWARE
+E-STOP ACTIVE` → `_abort_for_estop` → ERROR → crevis `status_red ON` the
+same second; `E-stop cleared` at 10:00:11, lift origin homing and
+`Servo ON` at 10:00:15 — i.e. the panel RESET was pressed then. The lamp
+stayed red until the operator's CHARGE at 10:04:54, because ERROR was
+only ever left by the next command. Explained to the user (standing text
+in *Navifra Base Driver Interface*): `/safety/estop` includes the PNOZ's
+`traction_motor_power_on` output, which the PLC latches OFF after
+power-up until RESET (I6) is pressed — a safety-relay rule, not a
+software state; the live `/safety/state_all` after the reset reads
+emergency 1b/2b = 1, auto_mode = 1, reset_switch = 0, all three outputs
+1, `hardware_estop = 0`.
+
+**Built, on the user's rule ("e-stop이 해제됐고 실행 중인 작업이 없으면
+ERROR → IDLE(초록)로 자동 복귀"):** `NavifraDevices` latches the
+true→false transition (`_estop_cleared_seen`, `take_estop_cleared_edge`;
+a first message that is false is idle, not a release) and the executor's
+`_tick` calls `_check_estop_recovery` right after `_check_estop_abort`:
+cleared edge AND `estop_active` False AND state ERROR AND no running /
+current task → `[Executor] E-stop cleared, nothing running — ERROR ->
+IDLE`, `_stop_requested` cleared, `/task_state` note `e-stop cleared`,
+lamp green (or the charge colours, as IDLE always is). A task still
+winding down (ERROR with `_task_running` — the abort ran, `_run_task`
+has not returned) keeps ERROR for the next edge; a non-ERROR state logs
+and stays. Also fixed the init-order noise seen in the same log:
+`on_estop` fires inside `NavifraDevices.__init__` before `self.devices`
+/ `_task_state_pub` exist, so `_publish_status_color` /
+`_publish_task_state` now return quietly until the constructor is done
+(the latched edge re-drives the lamp from the main loop as before).
+
+Verified offline: `check_charging_manager.py` 23 → **37** (press →
+ERROR / red; cleared edge contradicted by `estop_active` → no change;
+release → IDLE / green / note / `stop_requested` false, logged once,
+lamp not re-driven; release while winding down keeps ERROR, next edge
+releases; release in IDLE untouched; a TASK refused by the safety gate
+under e-stop → ERROR, release → IDLE without re-running it; the REAL
+`NavifraDevices._cb_estop`: first-false no edge, true,true,false,false
+→ one set + one cleared edge, boot-shaped first-true → set edge then
+the reset → cleared edge), `check_scan_resume.py` 81, pyflakes clean.
+**Not run on the robot: `task_executor` restart required** (`sudo
+systemctl restart mobile-manipulator`). Next boot: red until the panel
+RESET, then `[Executor] E-stop cleared, nothing running — ERROR ->
+IDLE` and the green lamp with no command sent. HANDOVER §3 rule 7.
+
+### 2026-10-07 — offset50mm group 119 at lift 0; the lift height is per GROUP now
+
+User: "joint_hoodouter_lower_plate1_offset50mm.csv 그룹 아이디 119의 lift
+값 0으로 수정". As asked the edit alone would have UNREGISTERED the task:
+`_extract_lift_height` refused any file whose `lift_mm` cells disagree
+(one value per task, 2026-08). So the rule was relaxed to one value per
+GROUP: `TaskManager` keeps `lift_heights_by_group`, refuses only a group
+disagreeing with itself, warns when groups differ, `get_lift_height` =
+the highest (for `/task_list`'s `lift_height_mm` and the end-of-task
+homing), `get_group_lift_height(task, tag)` per group, `/task_list`
+`lift_by_group_mm` when they differ (both UIs print it in the lift row).
+`task_executor._run_task` re-sets the lift at a scan step whose group
+differs from the height set before; `_set_task_lift_height(mm, prev)`
+takes a DESCENT through lift origin homing first and climbs only when
+the target is not 0 (the backlash rule: a count reached by descending is
+not the solved height). The file: 651 rows of group 119 `lift_mm` 10 →
+0, nothing else (cell by cell against the backup
+`task_csv_backup/20261007_offset50mm_lift10_before_g119_0/` + SHA256SUMS;
+CRLF kept). Real `TaskManager`: the task registers, by_group {105..118:
+10, 119: 0, 120: 10}, the warning line names it. ⚠️ The tip at group 119
+lands 10 mm lower than in the other groups (standoff 17 − 50 + 0 = −33
+mm into the plate by the planner's numbers — the user's standing test
+decision of 10-06 covers it). ⚠️ **The 17:56 run was being RESUMED on
+the robot while this was written (Ra map updated 11:22): the running
+`task_executor` neither knows the per-group code nor has re-read the
+file. `RELOAD_TASKS` after the run (refused while one runs) picks the
+file up, but the per-group EXECUTION needs the service restart — until
+then a reloaded task would set 10 mm once and hold it, 119 included.**
+
+Verified offline: `check_scan_resume.py` 81 → **91** (a scratch set at
+10 / 10 / 0 registers and a group disagreeing with itself is refused
+with the new message; by_group / per-tag lookup / `/task_list` field;
+the real executor with the fakes: lift calls `goto 10, home, home` over
+105 / 106 / 107 (held through 106, descent to 0 = homing only, end
+homing), 0 / 10 / 0 gives `goto 0, goto 10, home, home`, `groups=106`
+alone sets 10 once; section 6 now asserts invariants on the live run
+instead of the day's counts), `check_charging_manager` (another
+session's 37), `check_task_list_ui` / `check_web_ui`, the lift row in
+headless Chrome. `check_task_discovery` fails as before (assumes pairs;
+its d5 case — one row of a group at 150 — is still refused).
+
+### 2026-10-07 — Method B redone: capture, numbered marking stop at every point, ONE Ra entry stop per group
+
+User, after asking why method B took no photos and where a resumed B run
+writes: "b 방안은 촬영하고 마커 표시하고 한 그룹 아이디가 끝나면 ra 값
+측정하고 기입하는 거로 수정". The 10-06 B (no capture, a template CSV to
+fill in later, a second pass for the frames) is gone; B is now A's loop
+with a different stop pattern: every scanned point is captured, then
+`_collect_mark_stop` holds the tool at the standoff (`mark_retreat_mm`
+0 — the case on the spot, as the premark finding wanted; 30 until today)
+with its running number until Next (or `mark_dwell_s`), and the batch is
+the WHOLE GROUP — `_collect_pause` once after the last scanned point of
+the `execute_scan_points` list, listing every point with its number
+(`mark_no` in the batch points, a mark column in the web table), rows
+to `<run>_ra_measured.csv` with `mark_no` filled. Numbering continues
+across the task's groups (one call per group) and across a RESUME: on a
+new run stem the counter starts after the highest `mark_no` already in
+that run's CSV (`_collect_last_mark_no`), so an arm_node restart does not
+restart it either. Consequences: the Ra map and the frames exist for a B
+run like any other, so RESUME's done-set works for B (the two gaps named
+in the answer — no Ra map rows, numbers restarting per group — are
+closed); `_mark_template.csv` is not written any more (the merge tool's
+template fallback stays, dormant); `merge_ra_dataset.py <run>` is the
+merge for both methods. Docs: RA_COLLECT_kr §B rewritten, robot.yaml
+comment, web note / select / tooltips, the arm_node row above.
+
+Verified offline: `check_scan_progress.py` 158 → **165** (mark pass:
+captured [1, 2], preopen used, stops #1 / #2 at the standoff with the
+frame names and no MoveL, ONE pause stop after the last point listing
+(1, 106, 1) / (2, 106, 2) retreated 80 mm and returned, rows with
+mark_no / Ra / frame / note, no template, the Ra map rows written, wait
+events mark #1 / mark #2 / pause with the points; the next group on the
+same controller continues at #3, a fresh controller on the same run
+resumes at #4 from the CSV, a new run starts at #1; a dwell releases the
+marking stop by itself while the entry stop waits), `check_web_ui.py`
+146, `check_task_list_ui.py` 113, the page in headless Chrome. **Not run
+on the robot: `arm_node` + `robot_ui_web_node` restart required.** First
+thing to watch: `MARK pass: capture, then a numbered marking stop …
+(numbers continue from #1)` at the scan start, `MARK #1` on the chip
+right after the first capture with the tool still down, and after the
+group's last point the table with the mark column.
+
+### 2026-10-07 — Group selection for scan data collection: `groups=…` on TASK and RESUME, a Groups row on the Task tab
+
+User: "스캔 데이터 수집에서 이어서 진행할 수 있게 만들었는데 지금 그룹 id까지
+선택해서 수집할 수 있게 만들어줘" — the 10-06 request for a group-subset
+task that was folded into RESUME, now on top of it. Built as a trailing
+token on both commands (Task Commands block above): `scan_resume.parse_
+groups_arg` (pure), `check_groups` (every selected id must be a scan
+step's tag of the task), `filter_steps` (a fresh TASK: the other scan
+steps dropped, move-only / service items kept) and `plan_resume(…,
+groups=)` (a resume: an unfinished group that is not selected goes to
+`groups_skipped`, is not driven to and stays undone; `n_remaining` counts
+the selection only; `summary()` names the selection). task_executor keeps
+`_pending_groups` / `_current_groups` beside the resume dict (cleared by
+GOTO, STOP, e-stop, the charging manager's internal tasks and the end of
+the run), publishes `groups_filter` on `/task_state` and appends
+`(groups 106,107)` to the note; a no-arg `RESUME groups=…` still picks
+the newest run by ALL its points and is refused when the selection has
+nothing left there (the operator named a selection that does not fit —
+better than silently resuming another run). UI: web Task tab "Groups" row
+— one checkbox per tag of the selected task, all ticked by default,
+all / none buttons, ticks survive a `/task_list` republish of the same
+task; Send TASK and Resume both append `groups=` when some are unticked
+and refuse (log line) when none is; Qt window: a `groups` text field
+with the same effect. `robot_cmd.py` help, RA_COLLECT_kr §RESUME,
+ROSBRIDGE_kr, ROBOT_UI_WEB_kr, HANDOVER follow.
+
+Verified offline: `check_scan_resume.py` 48 → **81** (parser forms and
+refusals; a 17:56-shaped run with `groups=107`: 105 done / 106 skipped /
+107 planned with the run csv_path, 2 of 9 remaining; selecting only the
+finished group → nothing left; the executor: `RESUME groups=107` drives
+to 107 only with `groups_filter` on `/task_state` and the "skipped, not
+done" log line, `RESUME <stem> groups=999` / `groups=x` / finished-only
+and the no-arg finished-only case refused, `TASK … groups=106,107`
+filters the steps and stamps a fresh csv_path with TaskManager's own
+steps untouched, an unknown group refused, GOTO clears the selection,
+plain TASK unchanged), `check_task_list_ui.py` 111 → **113**,
+`check_web_ui.py` 145 → **146**; the real `app.js` driven in headless
+Chrome with a fake `/task_list`: 3 checkboxes, all ticked → no token,
+one unticked → `groups=105,107`, none → the callers refuse, a republish
+keeps the ticks, a non-scan task shows no groups. **Not run on the robot:
+`task_executor` and `robot_ui_web_node` restart required** (`sudo
+systemctl restart mobile-manipulator`; the page itself reloads from
+source). First use: Task tab, pick the task, untick the groups to skip,
+Resume interrupted run — the log should read `[RESUME] … selected [..],
+skipped [..]` and the base must drive only to the ticked tags.
+
+### 2026-10-06 (night, 20:35–20:50) — Dataset gets `source_point_id`; a renumbering of the results to the work-point id was built, applied to the 17:56 run, and BACKED OUT on the user's word
+
+The user pasted a side analysis: in a joint file `point_id` is the PATH
+row (home / transition / task rows all counted) and `source_point_id`
+the work-point number the pose file uses; the results (Ra map, collect
+CSV, frame name `g<g>_p<p>_…`, `/arm/scan_progress`) carry the path row
+— the 17:56 run's frames read p15, p17, p19 … I read that as "unify on
+the work-point id", changed `TaskManager` so a scanned joint row's
+point_id = source_point_id, wrote `tools/renumber_run_points.py` and
+converted the 17:56 run (628 Ra map rows, 113 measured rows, 114
+frames). **The user then said the two numbers are NOT the same and the
+results must follow the path data's own columns** ("point_id ==
+source_point_id 이 두개 같지않아, source_point_id 경로데이터 기준으로
+작성해"). So: `point_id` stays the path row everywhere, exactly the
+joint file's column; the scan point now carries `source_point_id` as
+its own field (None on a transition / home row); the 17:56 run's files
+were converted BACK with the inverse map from the joint CSV (the backup
+dir had already been removed — the Ra map, the measured CSV and the 114
+frames are verified against the joint file: g105 p15 p17 …, g106 p49,
+measured `index` == point_id on every row); the renumber tool is
+deleted (never committed). **What stays:** `merge_ra_dataset.py` writes
+`source_point_id` after `point_id` in `<run>_dataset.csv` (user: "이
+결과에도 소스아이디 추가"), read from the task's joint CSV by (group,
+path row); pose runs copy point_id, a task without a joint file leaves
+it blank. 17:56 dataset: 111 rows, point_id 15 17 19 … with
+source_point_id 1 2 3 …. The RESUME done-set is keyed by whatever
+point_id the files carry, so nothing there changed. Verified:
+`check_scan_resume` 48 (asserts point_id = path row AND source_point_id
+= work point on the scratch set and on the real run), `check_scan_
+progress` 158, `check_retarget_joint_paths` 19 ok / the same 6
+unpaired. Lesson for the next session: the path data's two numbers are
+to be kept apart, not merged — do not re-add the renumbering.
+
+### 2026-10-06 (night, 20:30) — `RESUME`: an interrupted run continues in its own result files
+
+User, after the 20:07 e-stop of `scan_joint_hoodouter_lower_plate1_
+offset50mm_ra_map_20261006_175616` (group 105 complete: 113 frames, 113
+hand-measured rows, 113 Ra map rows; group 106 p49 captured, its premark
+stop cancelled) first thought the files were lost — they were not (the
+collect counters in the UI reset when Collect mode is toggled; the files
+are written per point) — then asked for a group-subset task to skip 105,
+then changed that to: "그냥 다음에도 중간 끊겨도 이어서 하는 기능 추가".
+Built as `RESUME [<run>]` on `/task_command` (Task Commands block above):
+`apriltag_nav/scan_resume.py` (pure) reads the run's Ra map and, when
+present, its `_ra_measured.csv`, decides the DONE set (success row AND an
+answered collect row — so a captured-but-unanswered point like p49 is
+scanned again and the operator gets its stop back), and rebuilds the
+task: fully done groups dropped (no drive), a partly done joint group
+keeps every path row with the done work points as `scan: False` (the
+planned route and the frame index `i<index>` stay what they were), a
+pose group loses its done points; every point gets the run's own
+csv_path. `task_executor`: `_plan_resume` / `_resume_plan_for`, a pending
+/ current `_resume` beside the pending task, `_run_task` skips the
+timestamp stamping and takes the planned points, `/task_state` gains
+`resume_run`; a plain TASK / GOTO after a pending RESUME drops it. Why no
+writer changes were needed: `ScanResultWriter.save` already updates an
+existing Ra map in place and adds only unseen keys, and the frame folder
+/ collect CSV are named from the csv_path stem. UI: Task tab "Resume
+interrupted run" (web: optional run-stem field; Qt: button, newest run),
+`robot_cmd.py` accepts the verb. Docs: RA_COLLECT_kr §3, ROSBRIDGE_kr,
+HANDOVER.
+
+Verified offline: new `tools/check_scan_resume.py` **48** (done rules
+incl. skip / failed / unanswered / no measured CSV; joint plan keeps 10
+of 10 rows with the right flags; pose plan drops; nothing-left; move-only
+step kept; `find_resumable` passes a complete newer run and an unknown
+task; the real executor with the charging check's fakes: RESUME queues
+and preempts, drives to 106 and 107 only, sends the planned rows with the
+run's csv_path, `/task_state` note `resumed <stem>` + `resume_run`,
+refusals for unknown run / unregistered task / complete run / bad arity,
+TASK after RESUME runs the whole task on a fresh stamp; and the REAL
+17:56 run plans as 105 done / 106 107 118 119 120 to go, 113 of 1271
+done, p49 rescanned), `check_charging_manager` 23, `check_task_list_ui`
+109 → **111**, `check_web_ui` 145, pyflakes clean, the page builds the
+new button in headless Chrome. **Not run on the robot: the running
+`task_executor` does not know the verb — `sudo systemctl restart
+mobile-manipulator`, then Reset arm error (the e-stop left the Fairino
+RPC refused), Collect mode on, `RESUME`.** Not covered: a run whose task
+file changed since (the plan is built from the CURRENT file — the Ra map
+keys would then pair with different rows), and the resumed stop pose's
+±2 mm against the earlier points.
+
+### 2026-10-06 (17:39, then 17:50) — `joint_hoodouter_lower_plate1_offset50mm.csv` added by the user; its `lift_mm` set 50 → 0, then 0 → 10 on the user's next request
+
+User: "이 파일에서 lift_mm인자는 다 0으로 바꿔줘". The sixth planner
+original of the shifted set (base_height_mm 702, lift_mm 50, 1799 rows:
+1271 task / 516 transition / 12 home, groups 105–107 / 118–120, standoff
+17, CRLF, no BOM), dropped in at 17:37 under the new naming rule, so
+`TaskManager` discovers it without a rename. Only the `lift_mm` cell was
+changed (1799 rows; no other column differs, cell by cell); original +
+SHA256SUMS in `task/csv/task_csv_backup/20261006_hoodouter_offset50mm_
+original/` (made under `log/apriltag_nav/task_csv_backup/` first and moved
+next to the other session's relocated backup dir). Real `TaskManager`: six
+`scan_joint_hoodouter_lower_plate1_offset{0..50}mm` tasks, every one
+lift 0.0 mm. Same hazard as the 10–40 files, 10 mm worse: the rows were
+solved with the base 50 mm up, so at the lift origin the tip is planned
+33 mm BELOW the plate surface — the user's standing test decision of this
+evening covers it, said so again. `RELOAD_TASKS` before use. Seen on the
+way: a `find` / `ls` of task/csv failed mid-command once while the other
+session was renaming — transient, the directory was consistent a second
+later. **Then (17:50, user: "lift_mm 모두 10으로 바꿔줘") the same file's
+`lift_mm` went 0 → 10** (1799 rows, lift_mm cell only, verified the same
+way): the task now raises the lift 10 mm, so the tip is planned 40 mm
+below the exported height — 23 mm below the plate surface instead of 33.
+The other five files stay at 0. Real `TaskManager`: offset0..40 at 0.0,
+offset50 at 10.0 mm. `RELOAD_TASKS`.
 
 ### 2026-10-06 (evening, 17:30 / 17:45 / 18:00) — task/csv files renamed to the user's naming rule `<kind>_<product>_<mold>_<plate>_<offset>.csv`, and the discovery prefixes became `joint_` / `pose_`; originals renamed too; backup dir now under task/csv
 

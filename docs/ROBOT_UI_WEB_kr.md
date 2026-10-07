@@ -82,7 +82,7 @@ PyQt 창과 같은 배치다.
 | Basler 칸 | 드래그로 ROI, 우클릭으로 해제. 초록 사각형 = 추론이 잘라 쓰는 900 px 중앙 영역 |
 | Collect | Live preview, VISION lamp 홀드, 촬영(저장 폴더·접두어·장수·램프·저장·Ra 예측·ROI 사용), **CAPTURE** |
 | Arm | 현재 TCP 자세 + 축별 ± 조그 + 절대 목표를 한 표로(live / jog + / jog − / target 행, step/speed), **Joints (2026-09-21): 현재 관절각 J1..J6, 관절별 ± 조그(deg step), MOVE J 절대 관절 이동(빈 칸 = 현재값 유지, MoveJ 한 번, IK·도달·충돌 검사 없음)**, Keyence 거리 보조(실시간 standoff, Auto standoff), Arm home pose / Cancel arm motion(탭 상단) |
-| Task | `/task_list`의 태스크 선택 + 상세, Send TASK, Reload tasks, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지), **Ra data collection** (Collect 모드, 배치 Ra 입력 / 번호 매기기, 2026-10-06 — `docs/RA_COLLECT_kr.md`) |
+| Task | `/task_list`의 태스크 선택 + 상세, **Groups** (그룹별 체크박스 — Send TASK / Resume가 체크된 그룹만 `groups=…`로 보냄, 2026-10-07), Send TASK, Reload tasks, Resume interrupted run, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지), **Ra data collection** (Collect 모드, 배치 Ra 입력 / 번호 매기기, 2026-10-06; 입력 중 **Save** / Enter로 CSV에 중간 저장, 2026-10-07 — `docs/RA_COLLECT_kr.md`) |
 | Mobile | 거리 전진/후진, 각도 회전(속도 지정), Stop base, Clear stop latch, 베이스 상태 |
 | Calibration | 맵 캘리브레이션 세션(플레이트/야우 스윕 선택, dry run, START/Cancel, 진행 카운트), 핸드-아이(auto-sample, capture, compute, load, reset, status), 단일 태그 locate |
 | Scripts | `robot_ui/plugins/*.py` 목록, RUN / Stop (스크립트는 **로봇 PC에서** 실행된다; 어느 브라우저가 눌렀든) |

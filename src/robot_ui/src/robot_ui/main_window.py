@@ -742,7 +742,8 @@ class MainWindow(QMainWindow):
         btn_task = QPushButton('Send TASK')
         btn_task.clicked.connect(
             lambda: self.bridge.send_task_command(
-                f'TASK {self.combo_task.currentText().strip()}'))
+                f'TASK {self.combo_task.currentText().strip()}'
+                + self._groups_arg()))
         row.addWidget(btn_task)
         btn_reload = QPushButton('Reload tasks')
         btn_reload.setToolTip(
@@ -751,6 +752,33 @@ class MainWindow(QMainWindow):
         btn_reload.clicked.connect(
             lambda: self.bridge.send_task_command('RELOAD_TASKS'))
         row.addWidget(btn_reload)
+        btn_resume = QPushButton('Resume run')
+        btn_resume.setToolTip(
+            'RESUME: continue the newest interrupted run in its own result '
+            'files — finished points left out, the rest scanned into the '
+            'same Ra map / frame folder / measured CSV. For a specific run '
+            'send "RESUME <task>_ra_map_<ts>" from the raw command field. '
+            'The groups field narrows it to those groups.')
+        btn_resume.clicked.connect(
+            lambda: self.bridge.send_task_command('RESUME' + self._groups_arg()))
+        row.addWidget(btn_resume)
+        task_layout.addLayout(row)
+
+        # Group selection (2026-10-07): comma-separated group ids (= the
+        # task's tag stops) that Send TASK / Resume run are limited to.
+        # Blank = every group. An unlisted group is skipped, not driven to,
+        # and stays unfinished for a later RESUME.
+        row = QHBoxLayout()
+        row.addWidget(QLabel('groups'))
+        self.txt_groups = QLineEdit()
+        self.txt_groups.setPlaceholderText(
+            'blank = all groups; e.g. 105,106 (the task\'s tags — see the detail below)')
+        self.txt_groups.setToolTip(
+            'Only these groups are run by Send TASK / Resume run '
+            '(groups=… on /task_command). The others are skipped, not driven '
+            'to, and stay unfinished — a later Resume offers them again. A '
+            'group the task does not have is refused by task_executor.')
+        row.addWidget(self.txt_groups, 1)
         task_layout.addLayout(row)
 
         # What the selected task is: mode, tags in order, point counts, lift
@@ -1747,8 +1775,15 @@ class MainWindow(QMainWindow):
                         'through, not scanned)</span>')
             rows.append(('points', val))
         lift = info.get('lift_height_mm')
-        rows.append(('lift', '— (left alone)' if lift is None
-                    else f'{float(lift):g} mm'))
+        by_group = info.get('lift_by_group_mm')
+        if lift is None:
+            lift_s = '— (left alone)'
+        elif by_group:
+            lift_s = ('per group: ' + ', '.join(f'{g}: {float(v):g} mm' for g, v in by_group.items())
+                      + '  <span style="color:#888">(re-set at each group; descents via origin homing)</span>')
+        else:
+            lift_s = f'{float(lift):g} mm'
+        rows.append(('lift', lift_s))
         files = info.get('files') or []
         if files:
             rows.append(('source', '<br>'.join(html.escape(f) for f in files)))
@@ -1826,6 +1861,11 @@ class MainWindow(QMainWindow):
         self._update_task_detail(self.combo_task.currentText())
         self.append_log(f'[task] /task_list: {len(names)} task(s) from '
                         f'{payload.get("task_dir", "?")}')
+
+    def _groups_arg(self):
+        """` groups=105,106` from the groups field, '' when it is blank."""
+        text = self.txt_groups.text().strip().replace(' ', '') if hasattr(self, 'txt_groups') else ''
+        return f' groups={text}' if text else ''
 
     def _update_task_detail(self, text):
         name = (text or '').strip()

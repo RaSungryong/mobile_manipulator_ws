@@ -165,6 +165,17 @@
               </div>
               <span></span>
               <div class="detail" id="lbl-task-detail"></div>
+              <label>Groups</label>
+              <div class="row">
+                <div class="group-picks grow" id="task-groups" title="Which groups (= tag stops) of the selected task to run. All ticked = the whole task. With some unticked, Send TASK and Resume both send groups=…: the unticked groups are skipped (not driven to) and stay unfinished, so a later Resume offers them again."></div>
+                <button id="btn-groups-all" class="small" title="tick every group">all</button>
+                <button id="btn-groups-none" class="small" title="untick every group">none</button>
+              </div>
+              <label>Resume run</label>
+              <div class="row">
+                <input type="text" id="txt-resume" class="grow" autocomplete="off" placeholder="run name (<task>_ra_map_<ts>) — blank = the newest interrupted run">
+                <button id="btn-resume" title="RESUME [run] [groups=…]: continue an interrupted run in its own result files — the points already finished (Ra map row, and the hand-measured row in Collect mode) are left out, the rest is scanned into the same Ra map / frame folder / measured CSV. Finished groups are not driven to; in a joint path the finished points are driven through without a stop. Blank = the newest Ra map with points left. The Groups row above narrows it to the ticked groups (they must be groups of the run's task).">Resume interrupted run</button>
+              </div>
               <label>GOTO tag</label>
               <div class="row">
                 <input type="number" id="num-goto" min="0" max="999" value="105">
@@ -185,23 +196,24 @@
           </div>
           <div class="group">
             <div class="group-title">Ra data collection  (hand roughness tester)</div>
-            <p class="note">For the Ra model's training set: frames from the real scan TASK paired with a hand roughness tester's reading at the same spot. Two methods, pick one in Mode. <b>pause</b> (method A): every N scanned points the tool retreats 80 mm along its z and waits; the table lists the N points with each earlier point's offset from the tip (the last point is directly under the vision tip), so two testers measure in parallel; type each reading (several separated by spaces → their mean), tick skip for a point you could not measure, Record &amp; next — the arm returns to the captured pose and goes on. With <b>mark spot before retreat</b> on, every scanned point first stops at the standoff (tool NOT retreated, case bottom 16.5 mm up): draw a dot or the case outline beside the case — the spot is under the case centre — and press Next; the retreat + Ra entry stop follows as above. <b>mark</b> (method B): NO capture — every scanned point stops at the standoff (retreated 30 mm) for you to write the shown number beside the spot (outside the camera's few-mm field) and press Next; the run writes results/scan_images/&lt;run&gt;/&lt;run&gt;_mark_template.csv (number → group / point / x y z, blank ra_measured). Measure all marks afterwards in any order with any number of testers, fill the column in, run the same TASK normally for the frames, then <code>merge_ra_dataset.py &lt;scan run&gt; --measured &lt;filled template&gt;</code>. Cancel arm motion / STOP ALL during a wait ends the scan with the tool left retreated. Works from a phone on the LAN.</p>
+            <p class="note">For the Ra model's training set: frames from the real scan TASK paired with a hand roughness tester's reading at the same spot. Two methods, pick one in Mode. <b>pause</b> (method A): every N scanned points the tool retreats 80 mm along its z and waits; the table lists the N points with each earlier point's offset from the tip (the last point is directly under the vision tip), so two testers measure in parallel; type each reading (several separated by spaces → their mean), tick skip for a point you could not measure, Record &amp; next — the arm returns to the captured pose and goes on. With <b>mark spot before retreat</b> on, every scanned point first stops at the standoff (tool NOT retreated, case bottom 16.5 mm up): draw a dot or the case outline beside the case — the spot is under the case centre — and press Next; the retreat + Ra entry stop follows as above. <b>mark</b> (method B): every scanned point is captured, then stops at the standoff (case on the spot) for you to write the shown running number beside the case (outside the camera's few-mm field) and press Next; after the group's last point the tool retreats and the table lists the whole group with its numbers — measure every numbered spot with as many testers as you have, type each number's Ra, Record &amp; next. Rows go to the same &lt;run&gt;_ra_measured.csv as method A (mark_no filled), merged the same way. <b>Save</b> (or Enter on a row) writes what is typed so far to that CSV while the stop stays open — a long group entry survives a closed tab, a phone going to sleep or a stack restart; the saved column shows what is on disk, and a RESUME after an interruption does not list a saved point again. Cancel arm motion / STOP ALL during a wait ends the scan with the tool left retreated. Works from a phone on the LAN.</p>
             <div class="toolbar">
               <label title="/arm/collect_mode — takes effect at the next scanned point; the box follows arm_node's own state"><input type="checkbox" id="chk-collect"> Collect mode</label>
-              <label>Mode <select id="sel-collect-mode" title="pause = capture + stop every N points for the Ra entry (method A); mark = no capture, stop at every point to number it, measure later from the template (method B). Applies to the next TASK."><option value="pause">pause (Ra entry at the robot)</option><option value="mark">mark (number the spots, measure later)</option></select></label>
+              <label>Mode <select id="sel-collect-mode" title="pause = capture + stop every N points for the Ra entry (method A); mark = capture + a numbered marking stop at every point, the whole group entered at its last point (method B). Applies to the next TASK."><option value="pause">pause (Ra entry every N points)</option><option value="mark">mark (number the spots, Ra entry per group)</option></select></label>
               <label title="pause mode: stop at EVERY scanned point right after the capture with the tool still at the standoff (case bottom 16.5 mm up) until Next, so you can mark the spot beside the case — then the batch stop retreats for the measurement. The tip is a virtual point and cannot be found under a tool 80 mm up."><input type="checkbox" id="chk-collect-premark"> mark spot before retreat</label>
               <label>points per stop <input type="number" id="num-collect-batch" min="1" max="50" step="1" value="1" style="width:4em" title="pause mode: scanned points between stops; 2 = one point per tester"></label>
-              <label>mark dwell [s] <input type="number" id="num-collect-dwell" min="0" max="600" step="1" value="0" style="width:4em" title="mark mode: 0 = wait for Next; > 0 = continue by itself after this many seconds"></label>
+              <label>mark dwell [s] <input type="number" id="num-collect-dwell" min="0" max="600" step="1" value="0" style="width:4em" title="mark mode's marking stop: 0 = wait for Next; > 0 = continue by itself after this many seconds (the group's Ra entry stop always waits)"></label>
               <span class="spacer"></span>
               <span class="detail" id="lbl-collect-count">recorded 0, skipped 0</span>
             </div>
             <div class="readout" id="lbl-collect">collect: — (no /arm/collect_state yet)</div>
             <table class="collect-table" id="tbl-collect" hidden>
-              <thead><tr><th>#</th><th>point</th><th>from the tip (world dx, dy mm)</th><th>arm-base dx, dy mm</th><th>Ra reading(s)</th><th>note</th><th>skip</th></tr></thead>
+              <thead><tr><th>#</th><th>mark</th><th>point</th><th>from the tip (world dx, dy mm)</th><th>arm-base dx, dy mm</th><th>Ra reading(s)</th><th>note</th><th>skip</th><th title="what is already written to the run's _ra_measured.csv (Save, or Enter on the row)">saved</th></tr></thead>
               <tbody id="tbl-collect-body"></tbody>
             </table>
             <div class="toolbar">
-              <button id="btn-collect-next" class="btn-primary" disabled title="pause: record the Ra of every listed point and resume; mark: the number is written, continue">Record &amp; next</button>
+              <button id="btn-collect-next" class="btn-primary" disabled title="Ra entry stop: record the Ra of every listed point and resume; marking stop: the number is written / the spot is marked, continue">Record &amp; next</button>
+              <button id="btn-collect-save" disabled title="Write every row that has a Ra (or skip) to the run's _ra_measured.csv NOW, without releasing the stop — insurance against losing a long group entry (Enter on a row saves that row too). Record &amp; next overwrites with whatever the table holds then.">Save</button>
               <button id="btn-collect-skip" disabled title="Record every waiting point as not measured and resume">Skip all</button>
               <input type="text" id="txt-collect-note" class="grow" autocomplete="off" placeholder="note for this stop (optional: direction, cutoff, remark)" disabled>
             </div>

@@ -5,7 +5,7 @@ Everything a run PRODUCES lives in the workspace: results here, records under
 
 | path | writer | versioned |
 |---|---|---|
-| `scan_images/<task>_ra_map_<ts>/g<group>_p<point>_i<index>_s<n>.png` | `arm_node` (`save_images`, one folder per run; `point_<id>_sample_<n>_ra_<x>.png` before 2026-10-06) | no — ~10 MB per frame |
+| `scan_images/<task>_ra_map_<ts>/g<group>_p<point>_sp<source>_i<index>_s<n>.png` (`_sp` = source_point_id since 2026-10-07) | `arm_node` (`save_images`, one folder per run; `point_<id>_sample_<n>_ra_<x>.png` before 2026-10-06) | no — ~10 MB per frame |
 | `scan_images/<run>/<run>_ra_measured.csv`, `…/<run>_mark_template.csv` | `arm_node` COLLECT mode (`collect.record_dir`): the hand-measured Ra per scanned point, in the run's own frame folder (`../log/apriltag_nav/ra_measured/` before 2026-10-06 evening) — `../docs/RA_COLLECT_kr.md` | **yes** — only the png / jpg under `scan_images/` are ignored |
 | `captures/` | robot_ui Collect tab | no |
 | `tip_check/<session>/r<n>_tag<id>.png` | robot_ui `tip_check` plugins (one Basler frame per stop; the records are in `../log/apriltag_nav/tip_check/`) | no |

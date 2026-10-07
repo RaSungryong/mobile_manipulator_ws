@@ -178,6 +178,8 @@ class RosBridge:
                                                      queue_size=1)
         self._pub_arm_scan_continue = rospy.Publisher('/arm/scan_continue', String,
                                                       queue_size=4)
+        self._pub_arm_collect_save = rospy.Publisher('/arm/collect_save', String,
+                                                      queue_size=4)
         self._pub_arm_collect_config = rospy.Publisher('/arm/collect_config', String,
                                                        queue_size=1)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
@@ -367,6 +369,14 @@ class RosBridge:
             'motion_seq': int(msg.motion_seq),
             'result_message': msg.result_message,
             'result_success': msg.result_success,
+            # Link / RPC health (2026-10-06); getattr so a robot_msgs built
+            # before the fields existed still works.
+            'link_iface': getattr(msg, 'link_iface', ''),
+            'link_up': bool(getattr(msg, 'link_up', True)),
+            'link_down_count': int(getattr(msg, 'link_down_count', 0)),
+            'rpc_stalled': bool(getattr(msg, 'rpc_stalled', False)),
+            'rpc_stall_count': int(getattr(msg, 'rpc_stall_count', 0)),
+            'rpc_last_stall': getattr(msg, 'rpc_last_stall', ''),
         }
         with self._arm_lock:
             self._arm_latest = state
@@ -616,6 +626,16 @@ class RosBridge:
         self._pub_arm_scan_continue.publish(String(json.dumps(req)))
         self.log.emit('[UI] scan_continue <- ' + ('skip' if skip else json.dumps(
             {k: v for k, v in req.items() if k in ('ra', 'readings', 'points')})))
+
+    def collect_save(self, points, note=''):
+        """Write the Ra typed so far at an entry stop into the run's measured
+        CSV WITHOUT releasing it (/arm/collect_save, 2026-10-07 evening):
+        `points` = [{group_id, point_id, readings | ra, note, skip}, ...], any
+        subset of the waiting batch. Fire-and-forget; /arm/collect_state
+        carries `saved` (per point) and `n_saved` back."""
+        req = {'note': str(note or ''), 'points': [dict(p) for p in points or []]}
+        self._pub_arm_collect_save.publish(String(json.dumps(req)))
+        self.log.emit(f'[UI] collect_save <- {len(req["points"])} point(s)')
 
     # ==========================================================
     # CAMERA + INFERENCE

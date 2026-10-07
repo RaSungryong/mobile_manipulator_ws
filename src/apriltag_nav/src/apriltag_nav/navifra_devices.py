@@ -104,6 +104,7 @@ class NavifraDevices:
         self._estop_stamp = 0.0
         self._safety_connected = None
         self._estop_edge_seen = False      # latches a false->true transition
+        self._estop_cleared_seen = False   # latches a true->false transition (release / PLC reset)
 
         # ---------- Battery state ----------
         self._battery = None
@@ -181,6 +182,9 @@ class NavifraDevices:
                 except Exception as e:
                     rospy.logerr(f"[Navifra] on_estop handler raised: {e}")
         elif prev is True and not self._estop:
+            # Only a REAL release latches: the first message after start being
+            # false (prev None) is the normal idle state, not a recovery.
+            self._estop_cleared_seen = True
             rospy.logwarn("[Navifra] E-stop cleared")
 
     def _cb_safety_connected(self, msg):
@@ -256,6 +260,15 @@ class NavifraDevices:
         """Consume a latched false->true e-stop transition. True once per event."""
         if self._estop_edge_seen:
             self._estop_edge_seen = False
+            return True
+        return False
+
+    def take_estop_cleared_edge(self):
+        """Consume a latched true->false e-stop transition (the button released
+        / the PLC reset pressed). True once per event. task_executor uses it to
+        leave ERROR for IDLE when nothing is running (2026-10-07)."""
+        if self._estop_cleared_seen:
+            self._estop_cleared_seen = False
             return True
         return False
 

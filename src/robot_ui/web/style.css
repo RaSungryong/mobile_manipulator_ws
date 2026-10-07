@@ -31,6 +31,12 @@ body.hints .note { display: block; }
    RRT-set task names (scan_joint_errorX_p000mm_standoff_010mm_height_652mm)
    are long enough that a one-liner ran off-screen. */
 #lbl-task-detail { margin-top: 4px; }
+.group-picks { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-height: 22px;
+  font-family: var(--mono); font-size: 12px; }
+.group-picks label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.group-picks .empty { color: #888; }
+button.small { padding: 2px 8px; font-size: 12px; }
+.group-picks label.done { color: #888; text-decoration: line-through; }
 .task-detail-name { font-family: var(--mono); font-weight: bold; margin-bottom: 3px; }
 .task-detail-mode { color: #cfcfcf; font-size: 12px; margin-bottom: 4px; }
 .task-detail-table { border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
@@ -178,3 +184,5 @@ pre.report { color: #ccc; font-family: var(--mono); font-size: 11.5px; white-spa
 .collect-table tr.tip td { background: #1f3550; }
 .collect-table input[type=text] { width: 100%; box-sizing: border-box; }
 .collect-table td.num { text-align: right; }
+.collect-table td.c-saved { color: #7cd992; white-space: nowrap; }
+.collect-table tr.saved td:first-child { border-left: 3px solid #3f9a5a; }

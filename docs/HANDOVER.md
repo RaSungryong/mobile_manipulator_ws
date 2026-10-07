@@ -26,6 +26,27 @@ everything they listed as open is either done or restated below.
   fix, dead config keys dropped) have NOT been run on the robot. A
   `sudo systemctl restart mobile-manipulator` is required before the next
   task; the first CHARGE after it still drives from wherever the base is.
+- **RESUME (2026-10-06 night, not yet run on the robot):** an interrupted
+  TASK continues in its own result files — `RESUME [<task>_ra_map_<ts>]`
+  on `/task_command` / Task tab "Resume interrupted run"; finished points
+  (Ra map row + answered collect row) are skipped, the rest is scanned
+  into the same Ra map / frame folder / `_ra_measured.csv`. Needs the
+  same restart. The 17:56 `offset50mm` run (group 105 done) is the first
+  candidate. **Group selection (2026-10-07, also not yet run):** `TASK
+  <name> groups=105,106` / `RESUME [<run>] groups=…` — the Task tab's
+  Groups checkboxes; unticked groups are skipped, not done. **Method B
+  (`mark`) redone the same day:** capture + numbered marking stop per
+  point + one Ra entry stop per group, rows in `_ra_measured.csv` with
+  `mark_no` — no template any more; `arm_node` restart. **Since the
+  10-07 evening the number is written at the marking stop as a PENDING
+  row (Ra blank), so a RESUME keeps an interrupted group's photos and
+  numbers (driven through, not re-shot) and lists them at that group's
+  entry stop; a group whose entry stop was the interruption is resumed
+  for the entry alone.** **Lift per
+  group (same day):** offset50mm group 119 has `lift_mm` 0 (the rest 10);
+  `TaskManager` / `task_executor` set the lift per group (descents via
+  origin homing) — `task_executor` restart + `RELOAD_TASKS` before the
+  file's 0 is honoured.
 - **Tasks:** names are derived from the files in `task/csv`. The set
   changed twice on 2026-10-06: a `10mm` pose + joint pair at 13:37
   (`scan_joint_10mm` ran four times; its frames are gone from
@@ -79,7 +100,7 @@ everything they listed as open is either done or restated below.
 | Basler + Ra | mono8 at 5 fps; pre-lamp black frames fixed (flush + per-band dark check); inference in-process for scans and via `inference_node` for the UI, bit-identical | Work Log 08-12, 09-15 |
 | Charging | CHARGE / UNDOCK driven; 85 % stop; return after a user TASK; dock without BMS current → `dock_failed`, not retried | Work Log 09-09, 09-14, 10-06 |
 | External interfaces | rosbridge reached from the Windows PC through the Phoenix bridge (`tools/rosbridge/robot_cmd.py`); web UI used by the operator; both in the main launch | Work Log 09-14, 09-15 |
-| Ra data collection | COLLECT mode (pause after capture, Ra typed in the web UI) ran once on 2026-10-06 (14:05 run, one `ra_measured` CSV); batch / mark / premark variants built the same evening, not yet run | Work Log 10-06 |
+| Ra data collection | COLLECT mode (pause after capture, Ra typed in the web UI) ran once on 2026-10-06 (14:05 run, one `ra_measured` CSV); batch / mark / premark variants built the same evening; method B ran 2026-10-07 (17:56 run, groups 105/118/119); **Save / Enter writes the typed Ra to the CSV mid-entry** (2026-10-07 evening, `/arm/collect_save`), not yet run on the robot | Work Log 10-06 |
 | Build | `catkin_make` clean on the robot PC | 2026-10-06 |
 
 ---
@@ -149,7 +170,13 @@ everything they listed as open is either done or restated below.
 5. Startup never moves the arm or the lift; `move_to_home` is explicit.
 6. Never `apt install ros-noetic-realsense2-camera`; keep
    `ros-noetic-ddynamic-reconfigure` marked manual.
-7. Emergency stop is the PILZ hardware button; `STOP` is secondary.
+7. Emergency stop is the PILZ hardware button; `STOP` is secondary. After
+   a power-up (and after any e-stop / bumper event) the PNOZ keeps the
+   traction power / STO outputs OFF until the panel **RESET** button is
+   pressed, and `/safety/estop` reads true until then — the stack boots
+   into ERROR (red lamp) when the reset comes after it. Since 2026-10-07
+   the release takes ERROR back to IDLE (green) by itself when nothing is
+   running; before that it stayed red until the first command.
 8. Tuning lives in `config/robot.yaml` (manipulator) / `~/navifra/param.yaml`
    (base); a `~param` in `mobile_manipulator.launch` overrides `robot.yaml`
    (`soft_max_counts`, the Keyence loop keys — change both).
@@ -175,7 +202,7 @@ everything they listed as open is either done or restated below.
 | `README.md` | Korean quick reference of commands (loses to `CLAUDE.md` + `robot.yaml` on any conflict) |
 | `docs/STOP_LAUNCH_kr.md` | systemd service, stopping a hand launch, the frozen-terminal failure |
 | `docs/ROSBRIDGE_kr.md` / `docs/ROBOT_UI_WEB_kr.md` | the two external interfaces: rosbridge JSON on :9090 (Windows `robot_cmd.py`) and the web operator UI on :8080 |
-| `docs/RA_COLLECT_kr.md` | Ra training-data collection procedure (COLLECT mode, merge tool) |
+| `docs/RA_COLLECT_kr.md` | Ra data collection, the one operator guide: methods A / B, options, RESUME, merge (rewritten short 2026-10-07) |
 | `docs/TF_CHAIN_CALIBRATION_STATUS_kr.md` | the calibration chain: frames, every applied value with provenance, error sources, dependency order (as of 09-22 with the 09-28 changes marked) |
 | `docs/FRONT_CAM_POSE_CALIBRATION_kr.md` / `docs/HAND_CAM_INTRINSICS_kr.md` | the two camera calibration procedures |
 | `docs/keyence_scan_chain.md` | Keyence standoff loop record |

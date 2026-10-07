@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Incremental scan-result CSV persistence (13-column Ra map schema).
+Incremental scan-result CSV persistence (14-column Ra map schema).
 
 Split out of arm_controller.py — writing CSVs is not motion control.
-Schema (see CLAUDE.md "Task Commands"):
-    group_id, point_id, x, y, z,
+Schema (see CLAUDE.md "Task Commands"; `source_point_id` = the work-point
+number beside the path row, since 2026-10-07 — user rule: the source id
+goes into every saved file):
+    group_id, point_id, source_point_id, x, y, z,
     ra_mean, ra_std, ra_min, ra_max, num_samples,
     success, execution_message, validated_at
 
@@ -21,7 +23,7 @@ import pandas as pd
 
 import rospy
 
-COLUMNS = ['group_id', 'point_id', 'x', 'y', 'z',
+COLUMNS = ['group_id', 'point_id', 'source_point_id', 'x', 'y', 'z',
            'ra_mean', 'ra_std', 'ra_min', 'ra_max', 'num_samples',
            'success', 'execution_message', 'validated_at']
 
@@ -46,7 +48,9 @@ class ScanResultWriter:
             if not p.get("scan", True):
                 continue
             key = (int(p.get("group_id", -1)), int(p.get("point_id", i)))
+            sp = p.get("source_point_id")
             self._scan_meta[key] = {
+                "source_point_id": None if sp is None else int(sp),
                 "x":        float(p["x"]) if "x" in p else None,
                 "y":        float(p["y"]) if "y" in p else None,
                 "z":        float(p["z"]) if "z" in p else None,
@@ -78,7 +82,7 @@ class ScanResultWriter:
                 except (TypeError, ValueError):
                     pass
             new_rows = [{
-                'group_id': gid, 'point_id': pid,
+                'group_id': gid, 'point_id': pid, 'source_point_id': m['source_point_id'],
                 'x': m['x'], 'y': m['y'], 'z': m['z'],
                 'ra_mean': None, 'ra_std': None, 'ra_min': None,
                 'ra_max': None, 'num_samples': 0,
@@ -88,10 +92,20 @@ class ScanResultWriter:
               if (gid, pid) not in existing_keys]
             if new_rows:
                 df = pd.concat([df, pd.DataFrame(new_rows, columns=cols)], ignore_index=True)
+            # an older file (no column) or a resumed run: fill the source id
+            # of every registered row that has none
+            for idx, row in df.iterrows():
+                try:
+                    k = (int(row['group_id']), int(row['point_id']))
+                except (TypeError, ValueError):
+                    continue
+                m = self._scan_meta.get(k)
+                if m and m['source_point_id'] is not None and pd.isna(row.get('source_point_id')):
+                    df.at[idx, 'source_point_id'] = m['source_point_id']
         else:
             # Seed with all queued points so partial results are visible
             rows = [{
-                'group_id': gid, 'point_id': pid,
+                'group_id': gid, 'point_id': pid, 'source_point_id': m['source_point_id'],
                 'x': m['x'], 'y': m['y'], 'z': m['z'],
                 'ra_mean': None, 'ra_std': None, 'ra_min': None,
                 'ra_max': None, 'num_samples': 0,
@@ -122,5 +136,12 @@ class ScanResultWriter:
             return row
 
         df = df.apply(_update, axis=1)
+        # keep the id columns integer in the file (a NaN in a column would
+        # otherwise turn every value into "1.0")
+        for c in ('group_id', 'point_id', 'source_point_id', 'num_samples'):
+            try:
+                df[c] = pd.to_numeric(df[c], errors='coerce').astype('Int64')
+            except (TypeError, ValueError):
+                pass
         df.to_csv(csv_path, index=False)
         rospy.loginfo(f"[Arm REAL] Ra map saved → {csv_path}")

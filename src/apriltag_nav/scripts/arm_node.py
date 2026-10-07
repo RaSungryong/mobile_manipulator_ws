@@ -98,6 +98,7 @@ from std_srvs.srv import Trigger, TriggerResponse
 from robot_msgs.msg import ArmState
 
 from apriltag_nav.arm_controller import ArmController
+from apriltag_nav.arm_link_watch import LinkMonitor
 from apriltag_nav.paths import MODEL_PATH as DEFAULT_MODEL_PATH
 
 
@@ -126,6 +127,14 @@ class ArmControllerNode:
         self._publish_status('starting')
 
         self.arm = ArmController(robot_ip=robot_ip, model_path=model_path)
+
+        # Arm Ethernet link health: the NIC carrier of the route to the
+        # controller, read every state tick (2026-10-06, see arm_link_watch).
+        # ~link_monitor false turns it off; ~link_iface pins the interface.
+        self._link = None
+        if bool(rospy.get_param('~link_monitor', True)):
+            self._link = LinkMonitor(robot_ip,
+                                     iface=rospy.get_param('~link_iface', '') or None)
 
         # Serialises execution: one motion at a time, in a worker thread so
         # /arm/cancel is still delivered while a scan or move is running.
@@ -172,6 +181,10 @@ class ArmControllerNode:
                          queue_size=4)
         rospy.Subscriber('/arm/collect_config', String, self._cb_collect_config,
                          queue_size=1)
+        # Save the Ra typed so far at an entry stop without releasing it
+        # (2026-10-07 evening) — same payload shape as /arm/scan_continue.
+        rospy.Subscriber('/arm/collect_save', String, self._cb_collect_save,
+                         queue_size=4)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
         rospy.Service('/arm/reset_error', Trigger, self._srv_reset_error)
 
@@ -181,7 +194,7 @@ class ArmControllerNode:
 
         rospy.loginfo("[ArmNode] Ready — /arm/scan_command, /arm/cancel, "
                       "/arm/move_cart, /arm/jog_cmd, /arm/move_joint, /arm/jog_joint, /arm/move_home, "
-                      "/arm/reset_error, /arm/collect_mode, /arm/collect_config, /arm/scan_continue; "
+                      "/arm/reset_error, /arm/collect_mode, /arm/collect_config, /arm/scan_continue, /arm/collect_save; "
                       "state on /arm/state")
 
     # ==========================================================
@@ -255,6 +268,22 @@ class ArmControllerNode:
                 msg.motion_seq = self._motion_seq
                 msg.result_message = self._result_message
                 msg.result_success = self._result_success
+            # Link + RPC health. Independent of the executor lock on purpose:
+            # while a worker sits in a blocked SDK call this timer is what
+            # says so (rpc_stalled) instead of publishing a healthy-looking
+            # state for 15 s.
+            if self._link is not None:
+                link = self._link.poll()
+                msg.link_iface = link['link_iface']
+                msg.link_up = link['link_up']
+                msg.link_down_count = link['link_down_count']
+            else:
+                msg.link_up = True
+            rpc = self.arm.rpc_health()
+            if rpc:
+                msg.rpc_stalled = rpc['rpc_stalled']
+                msg.rpc_stall_count = rpc['rpc_stall_count']
+                msg.rpc_last_stall = rpc['rpc_last_stall']
             self._state_pub.publish(msg)
         except Exception as e:
             rospy.logwarn_throttle(10.0, f"[ArmNode] state publish failed: {e}")
@@ -480,6 +509,22 @@ class ArmControllerNode:
             (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] scan_continue: {message}")
         except Exception as e:
             rospy.logerr(f"[ArmNode] scan_continue failed: {e}")
+
+    def _cb_collect_save(self, msg):
+        """{"points": [{"group_id", "point_id", "ra" | "readings", "note",
+        "skip"}, ...]} — any subset of the waiting entry batch: written to the
+        measured CSV at once, the stop stays open. Refused (logged) when
+        nothing is waiting or at a marking stop."""
+        try:
+            payload = json.loads(msg.data) if msg.data.strip() else {}
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] bad /arm/collect_save JSON: {e}")
+            return
+        try:
+            ok, message = self.arm.collect_save(payload)
+            (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] collect_save: {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] collect_save failed: {e}")
 
     # ==========================================================
     # CANCEL

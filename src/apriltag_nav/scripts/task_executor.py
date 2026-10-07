@@ -38,7 +38,8 @@ class MobileManipulatorState(Enum):
 # ============================================================
 # PATHS — resolved centrally, see apriltag_nav/paths.py
 # ============================================================
-from apriltag_nav.paths import CONFIG_PATH, TASK_DIR, RA_MAP_DIR
+from apriltag_nav.paths import CONFIG_PATH, TASK_DIR, RA_MAP_DIR, ra_measured_path
+from apriltag_nav import scan_resume
 
 # Tasks the charging manager queues for itself (2026-09-09). They run through
 # the ordinary task machinery (preempt, safety gate, /task_state, lamp) but
@@ -73,6 +74,15 @@ class MobileManipulatorTaskExecutor:
         # ---------- Task state ----------
         self._current_task_name: Optional[str] = None
         self._current_task: Optional[List[dict]] = None
+        # RESUME (2026-10-06): a pending / running task may be the REST of an
+        # interrupted run — {'stem', 'csv_path', 'points': {tag: [...]}}.
+        # _run_task then keeps that run's csv_path (no new timestamp) and
+        # scans the planned points instead of the task's full list.
+        self._pending_resume: Optional[dict] = None
+        self._current_resume: Optional[dict] = None
+        # group selection of the pending / running command (sorted list or None)
+        self._pending_groups: Optional[list] = None
+        self._current_groups: Optional[list] = None
 
         self._pending_task_name: Optional[str] = None
         self._pending_task: Optional[List[dict]] = None
@@ -197,6 +207,8 @@ class MobileManipulatorTaskExecutor:
         """
         if note is not None:
             self._progress_note = note
+        if getattr(self, '_task_state_pub', None) is None:
+            return      # constructor not finished (see _publish_status_color)
         try:
             payload = {
                 'state': self._state.name,
@@ -208,6 +220,11 @@ class MobileManipulatorTaskExecutor:
                 'tag_id': self._progress_tag,
                 'note': self._progress_note,
                 'stop_requested': bool(self._stop_requested),
+                # the run being RESUMED (its <task>_ra_map_<ts> stem), else None
+                'resume_run': (self._current_resume or {}).get('stem')
+                              if getattr(self, '_current_resume', None) else None,
+                # the `groups=` selection of the running command, else None
+                'groups_filter': getattr(self, '_current_groups', None),
                 # Charging manager (2026-09-14, for robot_ui's CHARGE chip):
                 # phase is the manager's own word, `charging` is the BMS's.
                 'charge_phase': self._charge_phase,
@@ -283,6 +300,11 @@ class MobileManipulatorTaskExecutor:
         color = self._status_colors.get(key)
         if not color:
             return
+        # The e-stop callback can fire inside NavifraDevices' constructor,
+        # before self.devices is assigned; the main loop re-drives the lamp
+        # from the latched edge a moment later, so nothing is lost here.
+        if getattr(self, 'devices', None) is None:
+            return
         try:
             self.devices.set_status_color(color)
         except Exception as e:
@@ -326,6 +348,8 @@ class MobileManipulatorTaskExecutor:
         self._stop_requested = True
         self._pending_task = None
         self._pending_task_name = None
+        self._pending_resume = None
+        self._pending_groups = None
         try:
             self.mobile.emergency_stop_robot()
         except Exception:
@@ -337,6 +361,36 @@ class MobileManipulatorTaskExecutor:
         self._current_task = None
         self._current_task_name = None
         self.state = MobileManipulatorState.ERROR
+
+    def _check_estop_recovery(self):
+        """E-stop RELEASED (true -> false on /safety/estop: the button turned
+        out, or the PLC's RESET pressed after a power-up) with nothing running:
+        ERROR -> IDLE, so the STATUS lamp leaves red without an operator
+        command (user rule 2026-10-07). Until then ERROR was only left by the
+        next TASK / GOTO / CHARGE / STOP, so every boot sat red from the
+        executor's start until the first command even though the PLC had been
+        reset minutes earlier. A task still in flight is not touched (the
+        abort path ends it; a pending task is activated by this same tick).
+        Returns True when the state was changed."""
+        try:
+            if not self.devices.take_estop_cleared_edge():
+                return False
+            if self.devices.estop_active:
+                return False        # a newer message says active again
+        except Exception:
+            return False
+        if self._state is not MobileManipulatorState.ERROR:
+            rospy.loginfo(f"[Executor] E-stop cleared (state {self._state.name}, unchanged)")
+            return False
+        if self._task_running or self._current_task is not None:
+            rospy.logwarn("[Executor] E-stop cleared while a task is still winding "
+                          "down — state stays ERROR until it has")
+            return False
+        rospy.logwarn("[Executor] E-stop cleared, nothing running — ERROR -> IDLE")
+        self._stop_requested = False      # the abort's flag; that stop is over
+        self._progress_note = 'e-stop cleared'
+        self.state = MobileManipulatorState.IDLE
+        return True
 
     def _warn_if_battery_low(self):
         try:
@@ -394,6 +448,8 @@ class MobileManipulatorTaskExecutor:
         path a TASK command takes."""
         self._pending_task_name = name
         self._pending_task = items
+        self._pending_resume = None
+        self._pending_groups = None
         if self._task_running:
             rospy.logwarn(f"[Charge] preempting '{self._current_task_name}' for '{name}'")
             self._stop_requested = True
@@ -548,23 +604,39 @@ class MobileManipulatorTaskExecutor:
         rospy.logerr(f"[TASK] unknown task item {item}")
         return False
 
-    def _set_task_lift_height(self, mm):
+    def _set_task_lift_height(self, mm, prev=None):
         """Raise/lower the lift to the height the task CSV asks for. (ok, why).
 
-        Called once, at the first scan step, and then left alone for the rest
-        of the task: the joint angles were solved at this base height, so it
-        has to stay put between groups. Nothing else in the task loop touches
-        the lift, so "hold" needs no enforcement beyond not commanding it.
+        Called at the first scan step and again at every group whose height
+        differs from the one set before (`prev`, 2026-10-07 — one value per
+        task until then): the joint angles of a group were solved at its base
+        height. Between the groups of one height nothing touches the lift, so
+        "hold" needs no enforcement beyond not commanding it.
 
-        Deliberately after arriving at the first tag rather than before driving
-        — a raised lift puts the arm's mass high while the base is moving.
+        A DESCENT goes through lift origin homing first (then climbs to the
+        target when it is not 0): the drive has backlash, so a count reached
+        by descending is not the height the joint rows were solved at —
+        "reach a scan height by homing and climbing" (CLAUDE.md, lift).
+
+        Deliberately after arriving at the tag rather than before driving —
+        a raised lift puts the arm's mass high while the base is moving.
         """
+        if prev is not None and mm < prev:
+            rospy.loginfo(f"[TASK] Lift {prev:.1f} -> {mm:.1f} mm: descending, so "
+                          "lift origin homing first (backlash)")
+            ok, why = self.lift.home()
+            if not ok:
+                rospy.logerr(f"[TASK] Lift origin homing before {mm:.1f} mm failed — {why}")
+                return False, why
+            if mm <= 0.0:
+                rospy.loginfo(f"[TASK] {why}; lift at the origin for this group")
+                return True, why
         rospy.loginfo(f"[TASK] Setting lift to {mm:.1f} mm before scanning")
         ok, why = self.lift.goto_mm(mm)
         if not ok:
             rospy.logerr(f"[TASK] Lift height {mm:.1f} mm not reached — {why}")
             return False, why
-        rospy.loginfo(f"[TASK] {why}; holding for the rest of the task")
+        rospy.loginfo(f"[TASK] {why}; holding until a group asks for another height")
 
         # One-shot conflict report. The per-group guard is skipped for this
         # task (see _run_task), so this is the only place it gets said.
@@ -771,6 +843,8 @@ class MobileManipulatorTaskExecutor:
             self._stop_requested = True
             self._pending_task = None
             self._pending_task_name = None
+            self._pending_resume = None
+            self._pending_groups = None
 
             try:
                 self.mobile.emergency_stop_robot()
@@ -788,10 +862,54 @@ class MobileManipulatorTaskExecutor:
             return
 
         # ---------- TASK ----------
+        # ---------- RESUME [<run>] (2026-10-06) ----------
+        # Continue an interrupted run in ITS OWN result files: the finished
+        # points (Ra map row + hand-measured row when the run collects) are
+        # left out, the rest is scanned with the run's csv_path, so the Ra
+        # map, the frame folder and the collect CSV grow instead of a new
+        # run starting from the first point. No argument = the newest Ra
+        # map with points left. Preempts like TASK.
+        # `groups=104,105` (2026-10-07) on either command keeps only those
+        # groups: the other unfinished groups are skipped (not driven to),
+        # not marked done, so a later RESUME offers them again.
+        if cmd.upper().split()[:1] == ["RESUME"]:
+            parts, groups, err = scan_resume.parse_groups_arg(cmd.split())
+            if err:
+                rospy.logerr(f"[RESUME] {err}")
+                return
+            if len(parts) > 2:
+                rospy.logerr("[RESUME] Usage: RESUME [<run stem>] [groups=104,105]")
+                return
+            plan = self._plan_resume(parts[1] if len(parts) == 2 else None, groups)
+            if plan is None:
+                return
+            rospy.logwarn(f"[RESUME] Preempt → pending '{plan.task_name}' "
+                          f"({plan.summary()})")
+            self._pending_task_name = plan.task_name
+            self._pending_task = plan.steps
+            self._pending_resume = {'stem': plan.run_stem, 'csv_path': plan.csv_path,
+                                    'points': plan.points_by_tag,
+                                    'summary': plan.summary(),
+                                    'groups': plan.groups_filter}
+            self._pending_groups = plan.groups_filter
+            self._stop_requested = True
+            try:
+                self.mobile.preempt_stop_robot()
+            except Exception:
+                pass
+            try:
+                self.arm.cancel()
+            except Exception:
+                pass
+            return
+
         if cmd.upper().startswith("TASK"):
-            parts = cmd.split()
+            parts, groups, err = scan_resume.parse_groups_arg(cmd.split())
+            if err:
+                rospy.logerr(f"[TASK] {err}")
+                return
             if len(parts) != 2:
-                rospy.logerr("[TASK] Usage: TASK <task_name>")
+                rospy.logerr("[TASK] Usage: TASK <task_name> [groups=104,105]")
                 return
 
             task_name = parts[1]
@@ -799,11 +917,21 @@ class MobileManipulatorTaskExecutor:
             if not task:
                 rospy.logerr(f"[TASK] Unknown task '{task_name}'")
                 return
+            why = scan_resume.check_groups(task, groups)
+            if why:
+                rospy.logerr(f"[TASK] '{task_name}': {why}")
+                return
+            if groups:
+                task = scan_resume.filter_steps(task, groups)
+                rospy.logwarn(f"[TASK] '{task_name}': groups {sorted(groups)} only — "
+                              f"{len(task)} of {len(self.task_mgr.get_task(task_name))} steps")
 
             rospy.logwarn(f"[TASK] Preempt → pending '{task_name}'")
 
             self._pending_task_name = task_name
             self._pending_task = task
+            self._pending_resume = None
+            self._pending_groups = sorted(groups) if groups else None
 
             self._stop_requested = True
 
@@ -833,6 +961,8 @@ class MobileManipulatorTaskExecutor:
 
             self._pending_task_name = f"goto_{tag_id}"
             self._pending_task = task
+            self._pending_resume = None
+            self._pending_groups = None
             self._stop_requested = True
 
             try:
@@ -851,6 +981,58 @@ class MobileManipulatorTaskExecutor:
         if cmd.upper() == "STATE":
             rospy.loginfo(f"[STATE] {self.state.name}")
 
+
+    # ==========================================================
+    # RESUME (2026-10-06)
+    # ==========================================================
+    def _resume_plan_for(self, stem, groups=None):
+        """ResumePlan for one run stem, or None when its task is not
+        registered or a selected group is not the task's (logged). Pure
+        bookkeeping — nothing moves."""
+        task_name = scan_resume.task_of(stem)
+        steps = self.task_mgr.get_task(task_name) if task_name else []
+        if not steps:
+            rospy.logerr(f"[RESUME] run '{stem}' belongs to no registered task "
+                         f"('{task_name}') — RELOAD_TASKS, or check task/csv")
+            return None
+        why = scan_resume.check_groups(steps, groups)
+        if why:
+            rospy.logerr(f"[RESUME] run '{stem}' ({task_name}): {why}")
+            return None
+        csv_path = os.path.join(RA_MAP_DIR, stem + '.csv')
+        done = scan_resume.done_points(csv_path, ra_measured_path(stem))
+        pending = scan_resume.pending_points(ra_measured_path(stem))
+        return scan_resume.plan_resume(
+            stem, task_name, steps,
+            self.task_mgr.scan_points.get(task_name, {}), done, csv_path, groups,
+            pending=pending)
+
+    def _plan_resume(self, stem=None, groups=None):
+        """The plan for `stem`, or for the newest run with points left.
+        With `groups`, the newest run is still chosen by ALL its points
+        (a run whose selected groups are done is refused, not skipped —
+        the operator named a selection that does not fit)."""
+        if stem:
+            stem = scan_resume.run_stem_of(stem)
+            if not os.path.isfile(os.path.join(RA_MAP_DIR, stem + '.csv')):
+                rospy.logerr(f"[RESUME] no Ra map {stem}.csv under {RA_MAP_DIR}")
+                return None
+            plan = self._resume_plan_for(stem, groups)
+            if plan is not None and plan.nothing_left:
+                rospy.logerr(f"[RESUME] nothing left to scan — {plan.summary()}")
+                return None
+            return plan
+        plan = scan_resume.find_resumable(RA_MAP_DIR, self._resume_plan_for)
+        if plan is None:
+            rospy.logerr("[RESUME] no interrupted run found among the newest "
+                         f"Ra maps under {RA_MAP_DIR}")
+            return None
+        if groups:
+            plan = self._resume_plan_for(plan.run_stem, groups)
+            if plan is not None and plan.nothing_left:
+                rospy.logerr(f"[RESUME] nothing left in the selected groups — {plan.summary()}")
+                return None
+        return plan
 
     # ==========================================================
     # SCAN FINISHED CALLBACK
@@ -875,7 +1057,9 @@ class MobileManipulatorTaskExecutor:
         """One pass of the main loop (split out so it can be driven offline)."""
         # Hardware e-stop aborts whatever is in flight, then falls through
         # to the idle path below. Checked every tick, task running or not.
+        # Its release with nothing running takes ERROR back to IDLE.
         self._check_estop_abort()
+        self._check_estop_recovery()
         self._warn_if_battery_low()
         self._charge_tick()
 
@@ -890,8 +1074,12 @@ class MobileManipulatorTaskExecutor:
             )
             self._current_task = self._pending_task
             self._current_task_name = self._pending_task_name
+            self._current_resume = getattr(self, '_pending_resume', None)
+            self._current_groups = getattr(self, '_pending_groups', None)
             self._pending_task = None
             self._pending_task_name = None
+            self._pending_resume = None
+            self._pending_groups = None
 
         if self._current_task is None:
             return
@@ -925,6 +1113,8 @@ class MobileManipulatorTaskExecutor:
 
         self._current_task = None
         self._current_task_name = None
+        self._current_resume = None
+        self._current_groups = None
         self._task_running = False
         self.state = MobileManipulatorState.IDLE
 
@@ -953,30 +1143,45 @@ class MobileManipulatorTaskExecutor:
     # ==========================================================
     def _run_task(self, task_name: str, task_items: List[dict]):
 
-        rospy.loginfo(f"[TASK] Start task '{task_name}'")
+        resume = getattr(self, '_current_resume', None)
+        if resume:
+            rospy.logwarn(f"[TASK] RESUME '{task_name}' — {resume.get('summary')}")
+        else:
+            rospy.loginfo(f"[TASK] Start task '{task_name}'")
 
         # Stamp a fresh timestamp into all scan points' csv_path so each task
-        # execution produces a uniquely named result file
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        for tag_points in self.task_mgr.scan_points.get(task_name, {}).values():
-            for sp in tag_points:
-                orig = sp.get("csv_path", "")
-                if orig:
-                    base, ext = os.path.splitext(orig)
-                    # Strip any previously injected timestamp suffix of the
-                    # form _YYYYMMDD_HHMMSS (15 digits separated by '_').
-                    base = re.sub(r'_\d{8}_\d{6}$', '', base)
-                    sp["csv_path"] = f"{base}_{ts}{ext}"
+        # execution produces a uniquely named result file. A RESUME keeps the
+        # interrupted run's own csv_path (already set on its planned points)
+        # so every writer appends to that run's files.
+        if not resume:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            for tag_points in self.task_mgr.scan_points.get(task_name, {}).values():
+                for sp in tag_points:
+                    orig = sp.get("csv_path", "")
+                    if orig:
+                        base, ext = os.path.splitext(orig)
+                        # Strip any previously injected timestamp suffix of the
+                        # form _YYYYMMDD_HHMMSS (15 digits separated by '_').
+                        base = re.sub(r'_\d{8}_\d{6}$', '', base)
+                        sp["csv_path"] = f"{base}_{ts}{ext}"
 
         # Height from the CSV's lift_height column; None means this task does
-        # not command the lift at all.
+        # not command the lift at all. Per GROUP since 2026-10-07: the lift is
+        # (re-)set at a scan step whose group names a height different from
+        # the one set before (`lift_set` = mm set so far, None = not yet).
         lift_target = self.task_mgr.get_lift_height(task_name)
-        lift_set = False
+        group_lift = getattr(self.task_mgr, 'get_group_lift_height', None)
+        lift_set = None
 
         self._progress_index = 0
         self._progress_total = len(task_items)
         self._progress_tag = -1
-        self._publish_task_state(note='task started')
+        groups = getattr(self, '_current_groups', None)
+        note = f"resumed {resume['stem']}" if resume else 'task started'
+        if groups:
+            note += f" (groups {','.join(str(g) for g in groups)})"
+            rospy.logwarn(f"[TASK] groups {groups} only — the other groups are skipped, not done")
+        self._publish_task_state(note=note)
 
         for idx, item in enumerate(task_items, start=1):
 
@@ -1018,13 +1223,19 @@ class MobileManipulatorTaskExecutor:
                 if lift_target is not None:
                     # The CSV names the height, so it is the authority here and
                     # the scan_height_counts guard below would only second-guess
-                    # it once per group. Set once, then held.
-                    if not lift_set:
-                        ok, _why = self._set_task_lift_height(lift_target)
+                    # it once per group. Set at the first group and whenever a
+                    # group's height differs from the one set before.
+                    want = lift_target
+                    if group_lift is not None:
+                        g = group_lift(task_name, tag_id)
+                        if g is not None:
+                            want = float(g)
+                    if lift_set is None or abs(want - lift_set) > 1e-6:
+                        ok, _why = self._set_task_lift_height(want, prev=lift_set)
                         if not ok:
                             self.state = MobileManipulatorState.ERROR
                             return
-                        lift_set = True
+                        lift_set = want
                 else:
                     # Lift must sit at the height the arm transform was
                     # calibrated at, otherwise every pose IK result is offset.
@@ -1037,9 +1248,14 @@ class MobileManipulatorTaskExecutor:
                 self.state = MobileManipulatorState.SCANNING
                 rospy.loginfo(f"[TASK] Start scan at tag {tag_id}")
 
-                scan_points = self.task_mgr.get_scan_points(
-                    task_name, tag_id
-                )
+                if resume:
+                    # the planned remainder: finished work points are driven
+                    # through (joint) or left out (pose), csv_path = the run's
+                    scan_points = resume['points'].get(tag_id, [])
+                else:
+                    scan_points = self.task_mgr.get_scan_points(
+                        task_name, tag_id
+                    )
 
                 self.scan_done = False
                 self._scan_done_event.clear()

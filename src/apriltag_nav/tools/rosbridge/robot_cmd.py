@@ -10,7 +10,8 @@ ws://192.168.0.20:9090 — the Phoenix Contact AP bridge's WLAN address,
 port-forwarded to the robot PC's 192.168.1.100:9090.
 
 USAGE
-    python robot_cmd.py "GOTO 105"                       task command (TASK/GOTO/STOP/STATE/CHARGE/UNDOCK/RELOAD_TASKS)
+    python robot_cmd.py "GOTO 105"                       task command (TASK/GOTO/STOP/STATE/CHARGE/UNDOCK/RELOAD_TASKS/RESUME)
+    python robot_cmd.py "TASK scan_joint_x groups=105,106"   only those groups (the task's tags); same on RESUME
     python robot_cmd.py state [seconds]                  watch /task_state
     python robot_cmd.py topics | services                list what exists
     python robot_cmd.py type /bms/state                  message type of a topic
@@ -43,7 +44,7 @@ except ImportError:
 
 DEFAULT_HOST = os.environ.get('ROBOT_HOST', '192.168.0.20')
 PORT = 9090
-TASK_WORDS = ('TASK', 'GOTO', 'STOP', 'STATE', 'CHARGE', 'UNDOCK', 'RELOAD_TASKS',
+TASK_WORDS = ('TASK', 'GOTO', 'STOP', 'STATE', 'CHARGE', 'UNDOCK', 'RELOAD_TASKS', 'RESUME',
               'TEST_POSE', 'EXEC', 'EVAL')
 
 _id = 0

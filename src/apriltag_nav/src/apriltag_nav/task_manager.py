@@ -221,6 +221,9 @@ class TaskManager:
         # task_name -> lift height [mm], or None when the CSV has no
         # lift_height column. See _extract_lift_height.
         self.lift_heights: Dict[str, Optional[float]] = {}
+        # task_name -> {group_id: mm} when the file names a lift height (2026-10-07:
+        # groups may differ, rows of ONE group may not)
+        self.lift_heights_by_group: Dict[str, Dict[int, float]] = {}
 
         # task_name -> JSON-safe summary (mode, tags, point counts, files,
         # lift height). What task_executor publishes on /task_list so a UI
@@ -297,7 +300,7 @@ class TaskManager:
 
             # Lift height for the whole task. A disagreement is fatal for the
             # task, so resolve it before anything gets registered.
-            lift_ok, lift_mm = self._extract_lift_height(task_name, all_rows)
+            lift_ok, lift_mm, lift_by_group = self._extract_lift_height(task_name, all_rows)
             if not lift_ok:
                 continue
 
@@ -372,6 +375,7 @@ class TaskManager:
                 )
 
             self.lift_heights[task_name] = lift_mm
+            self.lift_heights_by_group[task_name] = lift_by_group
 
             if task_name in self.tasks:
                 self._record_task_info(task_name, cfg, input_files, want)
@@ -386,6 +390,7 @@ class TaskManager:
         """Summarise a registered task for /task_list (JSON-safe values only)."""
         steps = self.tasks.get(task_name, [])
         by_tag = self.scan_points.get(task_name, {})
+        by_group = self.lift_heights_by_group.get(task_name, {})
         n_scan = sum(1 for pts in by_tag.values() for p in pts
                      if p.get("scan", True))
         n_traverse = sum(1 for pts in by_tag.values() for p in pts
@@ -407,6 +412,9 @@ class TaskManager:
             "points": int(n_scan),
             "traverse_points": int(n_traverse),
             "lift_height_mm": self.lift_heights.get(task_name),
+            # only when the groups differ (2026-10-07): {"119": 0.0, ...}
+            "lift_by_group_mm": ({str(g): v for g, v in sorted(by_group.items())}
+                                 if len(set(by_group.values())) > 1 else None),
             "files": list(input_files),
             "paired_file": paired,
             "result_name": cfg.get("result_name"),
@@ -428,18 +436,22 @@ class TaskManager:
     # LIFT HEIGHT
     # ==================================================
     def _extract_lift_height(self, task_name, rows):
-        """Read the optional `lift_height` column [mm]. Returns (ok, value).
+        """Read the optional `lift_height` column [mm]. Returns
+        (ok, value, by_group).
 
-        The lift is set once per task and held until it finishes, so ONE value
-        has to cover every row — the joint angles in a scan CSV were solved at
-        a specific base height, and running them at a different one drives the
-        arm somewhere else entirely. A file that disagrees with itself is
-        therefore rejected outright rather than resolved by picking a winner:
-        there is no safe way to guess which rows are the wrong ones.
+        The lift is set per GROUP and held through that group's scan (2026-10-07;
+        one value per task until then): the joint angles of a group were
+        solved at one base height, so every row of ONE group must name the
+        same height — a group that disagrees with itself is rejected outright
+        rather than resolved by picking a winner — while different groups may
+        name different heights (task_executor re-sets the lift when the next
+        group's value differs). `value` is the task's height for /task_list
+        and the end-of-task origin homing: the single value when all groups
+        agree, else the highest; `by_group` maps group_id -> mm.
 
         (ok=False) means the task must not be registered at all. A CSV with no
-        such column returns (True, None) — the lift is simply not commanded,
-        which is how every pre-existing task keeps working.
+        such column returns (True, None, {}) — the lift is simply not
+        commanded, which is how every pre-existing task keeps working.
         """
         # `lift_mm` is the RRT dialect's spelling of the same column. Without
         # this alias such a CSV loads as "no lift column" and the lift is
@@ -456,8 +468,8 @@ class TaskManager:
                     "present but every cell is empty — refusing to load. "
                     "Remove the column or fill it in."
                 )
-                return False, None
-            return True, None
+                return False, None, {}
+            return True, None, {}
 
         if len(present) != len(rows):
             rospy.logerr(
@@ -466,27 +478,40 @@ class TaskManager:
                 "blank cell is not the same as 0 mm and guessing which is "
                 "meant is not safe."
             )
-            return False, None
+            return False, None, {}
 
+        by_group: Dict[int, set] = {}
         try:
-            values = {float(r['lift_height']) for r in present}
+            for r in present:
+                gid = _as_int(r.get('group_id'))
+                by_group.setdefault(gid, set()).add(float(r['lift_height']))
         except ValueError as e:
             rospy.logerr(
                 f"[TaskManager] Task '{task_name}': lift_height is not "
                 f"numeric ({e}). Refusing to load."
             )
-            return False, None
+            return False, None, {}
 
-        if len(values) > 1:
+        bad = {g: sorted(v) for g, v in by_group.items() if len(v) > 1}
+        if bad:
             rospy.logerr(
                 f"[TaskManager] Task '{task_name}': lift_height disagrees "
-                f"across rows ({sorted(values)}). The lift is set once per "
-                "task and held, so the CSV must name a single height. "
+                f"across the rows of one group ({bad}). The lift is set once "
+                "per group and held, so a group must name a single height. "
                 "Refusing to load."
             )
-            return False, None
+            return False, None, {}
 
-        return True, values.pop()
+        heights = {g: v.pop() for g, v in by_group.items()}
+        values = set(heights.values())
+        if len(values) > 1:
+            rospy.logwarn(
+                f"[TaskManager] Task '{task_name}': lift_height differs between "
+                f"groups ({ {g: heights[g] for g in sorted(heights)} }) — the "
+                "lift is re-set at every group whose height differs from the "
+                "previous one (descents go through origin homing)."
+            )
+        return True, max(values), heights
 
     # ==================================================
     # SYSTEM TASKS (NO CSV)
@@ -502,6 +527,7 @@ class TaskManager:
         ]
         self.scan_points["go_home"] = {}
         self.lift_heights["go_home"] = None
+        self.lift_heights_by_group["go_home"] = {}
         self.task_info["go_home"] = {
             "name": "go_home", "kind": "system", "scan_mode": None,
             "source": "system", "tags": [self.START_TAG], "points": 0,
@@ -594,6 +620,7 @@ class TaskManager:
 
             # ---- scan point ----
             if scan_mode == "joint":
+                is_scan = _is_scan_row(r)
                 point = {
                     "mode": "joint",
                     "joints": [
@@ -601,12 +628,20 @@ class TaskManager:
                         float(r["q4"]), float(r["q5"]), float(r["q6"]),
                     ],
                     "speed": speed,
+                    # point_id = the row's PATH index, exactly the joint
+                    # file's own `point_id` column (user, 2026-10-06 night:
+                    # the results keep the path data's two numbers apart —
+                    # a renumbering to the work-point id was built and
+                    # backed out the same night). The work-point id rides
+                    # along as `source_point_id` (None on a transition / home
+                    # row) for anything that wants the pose file's number.
                     "point_id": pid,
+                    "source_point_id": _work_point_id(r) if is_scan else None,
                     "group_id": gid,
                     "csv_path": csv_path,
                     "is_discontinuous": is_disc,
                     # False = drive through it, do not scan (see _is_scan_row)
-                    "scan": _is_scan_row(r),
+                    "scan": is_scan,
                 }
                 # Attach world (x, y, z) from paired pose CSV — used for Ra map
                 # output. Keyed on the WORK-POINT id, same reason as the joint
@@ -630,6 +665,10 @@ class TaskManager:
                     "rz": float(r["rz"]),
                     "speed": speed,
                     "point_id": pid,
+                    # a pose file's point_id IS the work-point number; carried
+                    # under the same name as the joint file's column so every
+                    # result (frame name, Ra map, collect CSV) gets it
+                    "source_point_id": pid,
                     "group_id": gid,
                     "csv_path": csv_path,
                     "is_discontinuous": is_disc,
@@ -682,8 +721,19 @@ class TaskManager:
         return self.scan_points.get(task_name, {}).get(tag_id, [])
 
     def get_lift_height(self, task_name: str) -> Optional[float]:
-        """Lift height [mm] the task runs at, or None to leave the lift alone."""
+        """Lift height [mm] the task runs at (the highest of its groups when
+        they differ), or None to leave the lift alone."""
         return self.lift_heights.get(task_name)
+
+    def get_group_lift_height(self, task_name: str, group_id) -> Optional[float]:
+        """Lift height [mm] of ONE group (its tag stop), falling back to the
+        task's value; None when the task does not command the lift."""
+        by_group = self.lift_heights_by_group.get(task_name) or {}
+        try:
+            gid = int(group_id)
+        except (TypeError, ValueError):
+            gid = group_id
+        return by_group.get(gid, self.lift_heights.get(task_name))
 
     def get_all_task_names(self) -> List[str]:
         return list(self.tasks.keys())

@@ -15,10 +15,17 @@ leaves, all keyed by the run stem `<task>_ra_map_<ts>`:
   results/scan_images/<run>/g<g>_p<p>_i<i>_s<n>.png   the frames
 
 This writes results/ra_dataset/<run>_dataset.csv with ONE ROW PER FRAME:
-run, group_id, point_id, index, sample, image (absolute path), ra_measured,
-ra_readings, note, model_ra_mean, standoff_ok, standoff, x, y, z,
-measured_at — and prints what is missing (frames with no measurement,
+run, group_id, point_id, source_point_id, index, sample, image (absolute
+path), ra_measured, ra_readings, note, model_ra_mean, standoff_ok, standoff,
+x, y, z, measured_at — and prints what is missing (frames with no measurement,
 measurements with no frame, points whose standoff did not converge).
+
+`source_point_id` (2026-10-06 night, user request) is the WORK-POINT number
+the planner's pose file carries, read from the task's joint_<key>.csv by
+(group_id, `index` = the row's path position) — so it is right for a run
+written before the renumbering (point_id = path row) as well as after
+(point_id = the same number). Pose-mode runs: = point_id. No joint file for
+the task: blank.
 
   python3 tools/merge_ra_dataset.py                      # every run that has a measured CSV
   python3 tools/merge_ra_dataset.py <run stem or path>   # one run
@@ -48,10 +55,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src'))
 from apriltag_nav import paths as _paths   # noqa: E402
 
-NEW_RE = re.compile(r'^g(?P<g>-?\d+)_p(?P<p>\d+)_i(?P<i>\d+)_s(?P<s>\d+)\.png$')
+NEW_RE = re.compile(r'^g(?P<g>-?\d+)_p(?P<p>\d+)(?:_sp(?P<sp>-?\d+))?_i(?P<i>\d+)_s(?P<s>\d+)\.png$')
 OLD_RE = re.compile(r'^point_(?P<p>\d+)_sample_(?P<s>\d+)(?:_ra_[-\d.]+)?\.png$')
 
-COLUMNS = ['run', 'group_id', 'point_id', 'index', 'sample', 'image',
+COLUMNS = ['run', 'group_id', 'point_id', 'source_point_id', 'index', 'sample', 'image',
            'ra_measured', 'ra_readings', 'note', 'model_ra_mean',
            'standoff_ok', 'standoff', 'x', 'y', 'z', 'measured_at', 'flags']
 
@@ -80,6 +87,7 @@ def list_frames(image_dir):
         m = NEW_RE.match(name)
         if m:
             out.append({'group_id': int(m['g']), 'point_id': int(m['p']),
+                        'source_point_id': int(m['sp']) if m['sp'] is not None else None,
                         'index': int(m['i']), 'sample': int(m['s']),
                         'image': os.path.join(image_dir, name)})
             continue
@@ -119,8 +127,31 @@ def find_measured(stem, measured_dir, override=None):
     return None, 'none'
 
 
+def source_point_map(stem, task_dir=None):
+    """{(group_id, path_index): source_point_id} from the task's joint CSV,
+    or None when the run is not a joint task / the file is missing."""
+    task = task_of(stem)
+    if not task or not task.startswith('scan_joint_'):
+        return None
+    path = os.path.join(task_dir or _paths.TASK_DIR, 'joint_' + task[len('scan_joint_'):] + '.csv')
+    if not os.path.isfile(path):
+        return None
+    j = pd.read_csv(path)
+    if 'source_point_id' not in j.columns:
+        return None
+    out = {}
+    for _, r in j.iterrows():
+        if pd.isna(r.get('source_point_id')):
+            continue
+        try:
+            out[(int(r['group_id']), int(r['point_id']))] = int(r['source_point_id'])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
-              image_root=None, measured_override=None):
+              image_root=None, measured_override=None, task_dir=None):
     ra_map_dir = ra_map_dir or _paths.RA_MAP_DIR
     measured_dir = measured_dir or _paths.RA_MEASURED_DIR
     image_root = image_root or _paths.SCAN_IMAGE_DIR
@@ -132,6 +163,7 @@ def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
     measured = (pd.read_csv(measured_path, dtype={'note': str, 'ra_readings': str})
                 if measured_path and os.path.exists(measured_path) else pd.DataFrame())
     frames = list_frames(image_dir)
+    src_map = source_point_map(stem, task_dir)
     report = {'run': stem, 'ra_map': os.path.exists(ra_map_path),
               'measured_csv': bool(measured_path and os.path.exists(measured_path)),
               'measured_how': measured_how,
@@ -195,10 +227,26 @@ def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
         if standoff and not standoff_ok:
             report['standoff_not_ok'] += 1
             flags.append('standoff_not_ok')
+        index = (f['index'] if f['index'] is not None else
+                 (int(m['index']) if m is not None and pd.notna(m.get('index')) else None))
+        # the work-point number: the frame name's _sp token (2026-10-07),
+        # else the collect CSV's / Ra map's column, else the joint file by
+        # (group, path row); a pose run's point_id is the work point itself
+        src = f.get('source_point_id')
+        for row in (m, r):
+            if src is None and row is not None and pd.notna(row.get('source_point_id')):
+                try:
+                    src = int(float(row['source_point_id']))
+                except (TypeError, ValueError):
+                    src = None
+        if src is None:
+            if src_map is None:
+                src = pid if (task_of(stem) or '').startswith('scan_pose_') else None
+            else:
+                src = src_map.get((gid, index)) if index is not None else None
         rows.append({
-            'run': stem, 'group_id': gid, 'point_id': pid,
-            'index': f['index'] if f['index'] is not None else
-                     (int(m['index']) if m is not None and pd.notna(m.get('index')) else None),
+            'run': stem, 'group_id': gid, 'point_id': pid, 'source_point_id': src,
+            'index': index,
             'sample': f['sample'], 'image': f['image'],
             'ra_measured': ra_measured,
             'ra_readings': (m['ra_readings'] if m is not None and pd.notna(m.get('ra_readings')) else ''),
@@ -218,7 +266,13 @@ def merge_run(stem, all_frames=False, ra_map_dir=None, measured_dir=None,
         if k not in seen_meas and not _truthy(m.get('skipped'))
         and pd.notna(m.get('ra_measured')))
     report['rows'] = len(rows)
-    return pd.DataFrame(rows, columns=COLUMNS), report
+    df = pd.DataFrame(rows, columns=COLUMNS)
+    # Row order = the path data's work-point order (user, 2026-10-06 night:
+    # "소스 아이디 기준으로 배열"): group, then source_point_id (a frame
+    # without one — no joint file — sorts after those with one, by point_id).
+    df = df.sort_values(['group_id', 'source_point_id', 'point_id', 'sample'],
+                        na_position='last', kind='stable').reset_index(drop=True)
+    return df, report
 
 
 def main(argv=None):

@@ -378,8 +378,8 @@ class UiController:
             elif ev.get('kind') == 'mark':
                 self.append_log(
                     f"[mark] #{ev.get('mark_no', '?')} = pt {ev.get('point_id', '?')} "
-                    f"g{ev.get('group_id', '?')} ({idx}/{total}): write the number beside "
-                    "the spot, then Next")
+                    f"g{ev.get('group_id', '?')} ({idx}/{total}): captured — write the "
+                    "number beside the case, then Next")
             else:
                 pts = ev.get('points') or [(ev.get('group_id'), ev.get('point_id'))]
                 self.append_log(
@@ -960,6 +960,28 @@ class UiController:
             return {'ok': False, 'message': 'type the measured Ra first (or Skip)'}
         self.bridge.scan_continue(readings=vals, note=note, skip=bool(skip))
         return {'ok': True, 'message': 'skip' if skip else f'{len(vals)} reading(s) sent'}
+
+    def api_collect_save(self, points, note=''):
+        """Save the rows typed so far at an entry stop (the stop stays open):
+        `points` as in api_scan_continue; a row with neither a reading nor
+        skip is still being typed and is left out, a bad number refuses the
+        whole save (nothing is sent)."""
+        out = []
+        for i, p in enumerate(points or []):
+            try:
+                vals = self._parse_readings(p.get('readings', ''))
+            except ValueError as e:
+                return {'ok': False, 'message': f'point {i + 1}: {e}'}
+            sk = bool(p.get('skip', False))
+            if not vals and not sk:
+                continue
+            out.append({'group_id': p.get('group_id'), 'point_id': p.get('point_id'),
+                        'readings': vals, 'note': str(p.get('note', '') or ''), 'skip': sk})
+        if not out:
+            return {'ok': False, 'message': 'nothing to save yet — type a Ra or tick skip first'}
+        self.bridge.collect_save(out, note=note)
+        n = sum(1 for p in out if not p['skip'])
+        return {'ok': True, 'message': f'{n} Ra + {len(out) - n} skip saved (stop still open)'}
 
     # ---------- Task / lift ----------
     def api_task_command(self, text):

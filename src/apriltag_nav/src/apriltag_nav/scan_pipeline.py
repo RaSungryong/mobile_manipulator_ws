@@ -44,9 +44,9 @@ from apriltag_nav import paths
 def image_file_name(point_id, sample_no, ra_value=None, name_prefix=None):
     """File name of one saved scan frame.
 
-    With `name_prefix` (the scan loop: `g<group>_p<point>_i<index>`) the name
-    is `<prefix>_s<n>.png` — group, work-point id, run index and sample, no
-    model value. Until 2026-10-06 every frame was `point_<id>_sample_<n>_
+    With `name_prefix` (the scan loop: `g<group>_p<point>_sp<source>_i<index>`)
+    the name is `<prefix>_s<n>.png` — group, path row, work-point id, run
+    index and sample, no model value. Until 2026-10-06 every frame was `point_<id>_sample_<n>_
     ra_<model>.png`: `point_id` repeats across groups in every current path
     file (260930: 557 of 1267 work points share their id with another
     group), so a run's frames could only be told apart by the model's Ra
@@ -59,11 +59,16 @@ def image_file_name(point_id, sample_no, ra_value=None, name_prefix=None):
     return f"point_{point_id}_sample_{int(sample_no)}{ra_part}.png"
 
 
-def image_name_prefix(group_id, point_id, index):
-    """`g<group>_p<point>_i<index>` — the prefix the scan loop gives
-    image_file_name for run index `index` (1-based position in the scan
-    point list, zero-padded so names sort in execution order)."""
-    return f"g{int(group_id)}_p{int(point_id)}_i{int(index):04d}"
+def image_name_prefix(group_id, point_id, index, source_point_id=None):
+    """`g<group>_p<point>[_sp<source>]_i<index>` — the prefix the scan loop
+    gives image_file_name for run index `index` (1-based position in the
+    scan point list, zero-padded so names sort in execution order).
+    `source_point_id` (user rule 2026-10-07: the work-point number goes
+    into every saved name and CSV) is written as `_sp<n>` when known —
+    the joint file's own column, or the pose file's point_id, which IS
+    the work point; None (a point without one) leaves the token out."""
+    sp = '' if source_point_id is None else f"_sp{int(source_point_id)}"
+    return f"g{int(group_id)}_p{int(point_id)}{sp}_i{int(index):04d}"
 
 
 class RaScanPipeline:

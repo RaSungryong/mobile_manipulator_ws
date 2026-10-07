@@ -215,6 +215,21 @@ def main():
     check(click(tab, 'Reload tasks'), 'Reload tasks button found')
     check(('send_task_command', 'RELOAD_TASKS') in bridge.calls,
           'Reload tasks publishes RELOAD_TASKS')
+    bridge.calls.clear()
+    check(click(tab, 'Resume run'), 'Resume run button found')
+    check(('send_task_command', 'RESUME') in bridge.calls,
+          'Resume run publishes RESUME (newest interrupted run)')
+    # group selection (2026-10-07): the groups field narrows both commands
+    win.txt_groups.setText(' 105, 106 ')
+    bridge.calls.clear()
+    click(tab, 'Send TASK'); click(tab, 'Resume run')
+    check(('send_task_command', f'TASK {names[0]} groups=105,106') in bridge.calls
+          and ('send_task_command', 'RESUME groups=105,106') in bridge.calls,
+          f'groups field -> groups=105,106 on TASK and RESUME (spaces dropped): {bridge.calls}')
+    win.txt_groups.setText('')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(('send_task_command', f'TASK {names[0]}') in bridge.calls, 'blank groups field -> plain TASK')
 
     print('== dock & charge buttons + CHARGE chip')
     check(click(tab, 'Dock && charge (tag 500)') and ('send_task_command', 'CHARGE') in bridge.calls,
@@ -426,6 +441,30 @@ def main():
     app.processEvents()
     check(win.lbl_joint['j3'].text() == '—', 'pose_valid false blanks the joints too')
     check(win._arm_joints[2] == 100.0, 'the last VALID joints are kept for fill / blank fields')
+
+    print('== ARM chip: link / RPC health (2026-10-06)')
+    # Same live joints as above: the Fill / MOVE J cases below read them back.
+    base = {'state': 'busy', 'busy': True, 'pose_valid': True, 'tcp_pose': [1] * 6,
+            'joints': [-90.123, -85.5, 100.0, -95.25, -90.0, 12.3456],
+            'motion_seq': 4, 'result_message': '', 'result_success': True}
+    bridge.arm_state.emit(dict(base, link_iface='enp2s0', link_up=True, link_down_count=0,
+                               rpc_stalled=False, rpc_stall_count=0, rpc_last_stall=''))
+    app.processEvents()
+    check(win.lbl_arm.text() == 'ARM BUSY', 'healthy link: chip shows the state word')
+    bridge.arm_state.emit(dict(base, link_iface='enp2s0', link_up=True, link_down_count=1,
+                               rpc_stalled=True, rpc_stall_count=0, rpc_last_stall=''))
+    app.processEvents()
+    check(win.lbl_arm.text() == 'ARM RPC STALL', 'an SDK call in flight > warn_s: ARM RPC STALL')
+    bridge.arm_state.emit(dict(base, link_iface='enp2s0', link_up=False, link_down_count=2,
+                               rpc_stalled=True, rpc_stall_count=1,
+                               rpc_last_stall='GetActualTCPPose 13.5 s at 16:08:05'))
+    app.processEvents()
+    check(win.lbl_arm.text() == 'ARM LINK DOWN', 'carrier lost wins over the stall: ARM LINK DOWN')
+    check('enp2s0 DOWN' in win.lbl_arm.toolTip() and 'drops 2' in win.lbl_arm.toolTip()
+          and '13.5 s' in win.lbl_arm.toolTip(), f'tooltip carries iface, drops, last stall: {win.lbl_arm.toolTip()}')
+    bridge.arm_state.emit(dict(base))     # a message without the fields (old robot_msgs)
+    app.processEvents()
+    check(win.lbl_arm.text() == 'ARM BUSY', 'a state dict without the health keys renders as before')
     bridge.calls.clear()
     win.spin_joint_step.setValue(2.5)
     win.spin_vel.setValue(20.0)
