@@ -2405,6 +2405,47 @@ Undock → Collect mode + Mode mark → Groups all → Run name
 → Send TASK (not Resume — a NEW run over the whole path); tomorrow
 `RESUME` with that name in the Resume run field; the finishing mould the
 same with `…_finishing_ra_map_20261015-1016`.
+### 2026-10-13 — Config stage 4: `tf_chain_tool.py urdf --apply` writes the planner URDF's two joint lines
+
+Last stage of the config plan. Until now `urdf` only PRINTED the
+`mobile_to_base` / `vision_tip_joint` lines and someone pasted them into
+`frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf` by hand
+(and `check` caught the cases where they had not). Now:
+
+- `tf_chain.urdf_joint_lines(T_ab2mb, T_ee2tip)` renders the two lines
+  (mobile_to_base 6 / 9 decimals as before; vision_tip_joint 5 decimals =
+  0.01 mm, was 4 in the printout) and `write_urdf_joints(urdf, ...)`
+  replaces exactly the `<origin .../>` of those two joints IN PLACE —
+  every other byte stays; refuses a file without the joint / origin or
+  with `vision_fixed` off 0 (the check sums the two). "Changed" is
+  NUMERIC (1e-6 m / 1e-7 rad): a line that differs only in formatting is
+  left alone, so re-running is a no-op and the file does not churn. After
+  writing, the joints are re-read and must match the chain (1e-5 m / 1e-6
+  rad) or the call raises.
+- `tf_chain_tool.py urdf` shows what would change ("would rewrite ...:
+  was / now"), `urdf --apply` writes it and says to copy the file to the
+  planner PC and re-export the paths (still manual — the planner is a
+  different machine). `--urdf PATH` (top-level, before the subcommand)
+  points check / urdf / show at another file; `_urdf_joint` moved to
+  `tf_chain.read_urdf_joint`.
+- The real URDF: one textual change, `vision_tip_joint` z "0.2220" →
+  "0.22200" (the first, textual-compare version of the tool rewrote it
+  before the numeric rule went in; values identical, `check` 0 failed).
+- `check_tf_chain_yaml.py` +12 (52 total): on a COPY of the URDF — dry
+  run on a synced file says "already holds" and writes nothing; after
+  `use T_ee2tip measured_2026_09_22` the dry run names the joint and
+  `--apply` changes exactly one line to the measured tip, `check --urdf
+  <copy>` passes, a second apply is byte-identical, a file without the
+  joint and one with `vision_fixed` at 1 cm are refused, the real URDF is
+  untouched.
+- `docs/FRAMES_kr.md` §4 / §5: the recipes now say `urdf --apply`.
+
+With this the chain of custody for the two numbers that must agree between
+the robot (`tf_chain.yaml`) and the planner (URDF) is: `set` / `use` →
+`urdf --apply` → `check`; nothing is typed twice. Verified offline:
+`check` 0 failed, `check_tf_chain_yaml` 52, stage-1/2 checks unchanged.
+Nothing here runs on the robot.
+
 ### 2026-10-13 — Config stage 3: tf_chain.yaml blocks tidied — `kind` / one-line `source` / sub-block alternatives, `tf_chain_tool.py use` and `set --new`
 
 Stage 3 of the config plan. The file's VALUES did not change (every

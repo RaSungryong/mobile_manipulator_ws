@@ -20,7 +20,10 @@ What it guards
     code change, `set` on a missing name without --new refuses, `set --new`
     on an existing name refuses;
   * `set` on an existing block keeps its kind line and sub-blocks;
-  * the loader still requires NAMES and is unaffected by extra blocks.
+  * the loader still requires NAMES and is unaffected by extra blocks;
+  * `urdf --apply` rewrites exactly the two joint lines of a COPY of the
+    planner URDF, is a no-op when they already hold the chain, and refuses
+    a file without the joint or with `vision_fixed` off 0.
 """
 import os
 import re
@@ -144,6 +147,42 @@ check('set exits 0, kind still design, sub-blocks intact', rc == 0 and d['T_ee2t
       and set(TC.alternatives(d['T_ee2tip'])) == {'design', 'measured_2026_09_22'})
 rc, out = tool(Y, 'set', 'T_ee2tip', '--kind', 'calibrated', '--t-mm', '0.12', '-251.96', '222.0', '--rpy-deg', '0', '0', '0', '--source', 'kind switch')
 check('set --kind rewrites the kind line', rc == 0 and yaml.safe_load(open(Y))['T_ee2tip']['kind'] == 'calibrated')
+
+print('== urdf --apply (on a copy)')
+REAL_URDF = TC.planner_urdf_path()
+U = os.path.join(tmp, 'planner.urdf')
+shutil.copy(REAL_URDF, U)
+urdf0 = open(U).read()
+rc, out = tool(Y, 'use', 'T_ee2tip', 'design')             # the copy's tip back to the committed value
+rc, out = tool(Y, '--urdf', U, 'urdf')
+check('urdf (dry) on a synced copy: "already holds"', rc == 0 and 'already holds' in out, out.strip().splitlines()[-1] if out.strip() else '')
+check('... and did not write', open(U).read() == urdf0)
+rc, out = tool(Y, 'use', 'T_ee2tip', 'measured_2026_09_22')
+rc, out = tool(Y, '--urdf', U, 'urdf')
+check('urdf (dry) after a tip change: "would rewrite vision_tip_joint", file untouched',
+      rc == 0 and 'would rewrite vision_tip_joint' in out and open(U).read() == urdf0)
+rc, out = tool(Y, '--urdf', U, 'urdf', '--apply')
+check('urdf --apply exits 0', rc == 0, out.strip().splitlines()[-1] if out.strip() else '')
+txyz, trpy = TC.read_urdf_joint(U, 'vision_tip_joint')
+t, r = alts['measured_2026_09_22']
+check('vision_tip_joint now holds the measured tip (1e-5 m)', np.abs(np.array(txyz) - np.array(t) / 1e3).max() < 1e-5 and trpy == [0.0, 0.0, 0.0], str(txyz))
+check('mobile_to_base untouched', TC.read_urdf_joint(U, 'mobile_to_base') == TC.read_urdf_joint(REAL_URDF, 'mobile_to_base'))
+diff = [i for i, (a, b) in enumerate(zip(open(U).read().splitlines(), urdf0.splitlines())) if a != b]
+check('exactly one line of the URDF changed', len(diff) == 1 and open(U).read().count('\n') == urdf0.count('\n'), f'lines {diff}')
+rc, out = tool(Y, '--urdf', U, 'check')
+check('check --urdf <copy> passes with the yaml copy (measured tip, extra block)', rc == 0 and '0 failed' in out)
+u1 = open(U).read()
+rc, out = tool(Y, '--urdf', U, 'urdf', '--apply')
+check('second apply is a no-op ("already holds", bytes identical)', rc == 0 and 'already holds' in out and open(U).read() == u1)
+nj = os.path.join(tmp, 'nojoint.urdf')
+open(nj, 'w').write(re.sub(r'  <joint name="vision_tip_joint".*?</joint>\n', '', u1, flags=re.S))
+rc, out = tool(Y, '--urdf', nj, 'urdf', '--apply')
+check('a URDF without vision_tip_joint is refused', rc != 0 and 'vision_tip_joint' in out)
+vf = os.path.join(tmp, 'vfixed.urdf')
+open(vf, 'w').write(u1.replace('<origin rpy="0 0 0" xyz="0 0 0" />', '<origin rpy="0 0 0" xyz="0 0 0.01" />', 1))
+rc, out = tool(Y, '--urdf', vf, 'urdf', '--apply')
+check('vision_fixed not at 0 is refused', rc != 0 and 'vision_fixed' in out)
+check('the real URDF was not touched', open(REAL_URDF).read() == urdf0)
 
 print('== the real file was not touched')
 check('tf_chain.yaml unchanged', open(REAL).read() == orig_text)

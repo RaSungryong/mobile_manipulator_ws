@@ -396,6 +396,83 @@ def tip_offset_mm(path=None):
     return np.asarray(t_mm(load_transform('T_ee2tip', path)), dtype=float)
 
 
+def planner_urdf_path():
+    """The planner URDF (frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf)."""
+    from apriltag_nav.arm_fk import default_urdf_path
+    return default_urdf_path()
+
+
+def urdf_joint_lines(T_ab2mb, T_ee2tip):
+    """{joint: '<origin .../>'} — the two lines the planner URDF must hold for
+    this chain: `mobile_to_base` (T_ab2mb seen from the URDF's 180-deg-yawed
+    mobile_base, 6 / 9 decimals) and `vision_tip_joint` (T_ee2tip, 5 decimals
+    = 0.01 mm; `vision_fixed` stays at 0)."""
+    xyz, rpy = urdf_mobile_to_base(T_ab2mb)
+    tip = np.asarray(T_ee2tip)[:3, 3]
+    return {
+        'mobile_to_base': '<origin xyz="%.6f %.6f %.6f" rpy="%.9f %.9f %.9f" />'
+                          % (xyz[0], xyz[1], xyz[2], rpy[0], rpy[1], rpy[2]),
+        'vision_tip_joint': '<origin xyz="%.5f %.5f %.5f" rpy="0 0 0" />' % (tip[0], tip[1], tip[2]),
+    }
+
+
+def read_urdf_joint(urdf_path, name):
+    """(xyz, rpy) of one joint's <origin> (zeros when the attribute is absent)."""
+    import xml.etree.ElementTree as ET
+    joints = {j.get('name'): j for j in ET.parse(urdf_path).getroot().findall('joint')}
+    if name not in joints:
+        raise KeyError('%s: no joint %s' % (urdf_path, name))
+    o = joints[name].find('origin')
+    xyz = [float(v) for v in ((o.get('xyz') if o is not None else None) or '0 0 0').split()]
+    rpy = [float(v) for v in ((o.get('rpy') if o is not None else None) or '0 0 0').split()]
+    return xyz, rpy
+
+
+_URDF_ORIGIN = r'(<joint\s+name="%s"[^>]*>(?:(?!</joint>).)*?)(<origin\b[^>]*/>)'
+
+
+def write_urdf_joints(urdf_path, T_ab2mb, T_ee2tip, dry_run=False):
+    """Rewrite the <origin> of `mobile_to_base` and `vision_tip_joint` in the
+    planner URDF IN PLACE (text-level: every other byte stays). Refuses when a
+    joint or its <origin> is missing, or `vision_fixed` is not at 0 (the check
+    sums vision_fixed + vision_tip_joint). Returns [(joint, old, new, changed)];
+    with dry_run nothing is written. After writing, the file is re-read and the
+    joints must match the chain to 1e-5 m / 1e-6 rad (2026-10-13, stage 4)."""
+    with open(urdf_path, 'r') as fh:
+        text = fh.read()
+    fx, fr = read_urdf_joint(urdf_path, 'vision_fixed')
+    if max(abs(v) for v in fx + fr) > 1e-9:
+        raise ValueError('%s: vision_fixed is not at 0 (%s / %s) — the tip offset is split over two joints, '
+                         'fix the file by hand' % (urdf_path, fx, fr))
+    want = {'mobile_to_base': urdf_mobile_to_base(T_ab2mb),
+            'vision_tip_joint': ([float(v) for v in np.asarray(T_ee2tip)[:3, 3]], [0.0, 0.0, 0.0])}
+    out = []
+    for joint, new in urdf_joint_lines(T_ab2mb, T_ee2tip).items():
+        m = re.search(_URDF_ORIGIN % re.escape(joint), text, re.S)
+        if not m:
+            raise KeyError('%s: joint %s with an <origin .../> not found' % (urdf_path, joint))
+        old = m.group(2)
+        have = read_urdf_joint(urdf_path, joint)
+        exyz, erpy = want[joint]
+        # numeric, not textual: a line that differs only in formatting is left alone
+        changed = (np.abs(np.array(have[0]) - np.array(exyz)).max() > 1e-6
+                   or np.abs(np.array(have[1]) - np.array(erpy)).max() > 1e-7)
+        out.append((joint, old, new, bool(changed)))
+        if changed:
+            text = text[:m.start(2)] + new + text[m.end(2):]
+    if dry_run or not any(c for _, _, _, c in out):
+        return out
+    with open(urdf_path, 'w') as fh:
+        fh.write(text)
+    xyz, rpy = read_urdf_joint(urdf_path, 'mobile_to_base')
+    exyz, erpy = urdf_mobile_to_base(T_ab2mb)
+    txyz, _ = read_urdf_joint(urdf_path, 'vision_tip_joint')
+    if (np.abs(np.array(xyz) - exyz).max() > 1e-5 or np.abs(np.array(rpy) - erpy).max() > 1e-6
+            or np.abs(np.array(txyz) - np.asarray(T_ee2tip)[:3, 3]).max() > 1e-5):
+        raise RuntimeError('%s: written joints do not read back as the chain' % urdf_path)
+    return out
+
+
 def urdf_mobile_to_base(T_ab2mb):
     """(xyz m, rpy rad) of the planner URDF's `mobile_to_base` joint for this
     T_ab2mb: the same transform seen from the URDF's `mobile_base` frame,

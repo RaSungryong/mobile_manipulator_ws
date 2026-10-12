@@ -60,7 +60,7 @@ mb   대차 몸체.  x 앞, y 왼쪽, z 위, 원점은 섀시 중심 아래 바�
 | 태그 크기·두께, 바닥 z | `robot.yaml` (`tag_size`, `robot_camera.tag_size`, `tag_thickness`, `arm_calibration.world_floor_z_m`) | design | 손 | 주행, 검출, locator | `locator.yaml tag.*`, `handeye_calib.yaml tag.*` (같은 값을 따로 들고 있음) |
 | 스탠드오프 | `robot.yaml keyence.sensor_zero_mm` (16.5) | design | 손 | Keyence 루프 | `T_ee2tip` 설계값의 "케이스 끝 + 16 mm"가 이 값에 기댐 |
 
-플래너 URDF = `src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`. 런타임 노드는 읽지 않는다 — Windows 플래너와 오프라인 도구만. **플래너 PC의 복사본은 손으로 옮긴다.**
+플래너 URDF = `src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`. 런타임 노드는 읽지 않는다 — Windows 플래너와 오프라인 도구만. 두 조인트 줄은 `tf_chain_tool.py urdf --apply`가 yaml에서 써 넣고 `check`가 감시한다; **플래너 PC의 복사본은 손으로 옮긴다.**
 
 ## 5. 바꿀 때의 절차
 
@@ -68,13 +68,13 @@ mb   대차 몸체.  x 앞, y 왼쪽, z 위, 원점은 섀시 중심 아래 바�
 
 | 바꾸는 것 | 절차 | 재시작 |
 |---|---|---|
-| `T_ab2mb` 재캘리브 | `chain_calib` 세션 → `tf_chain_tool.py set T_ab2mb --npz <result>` → `check` → `urdf`가 출력하는 `mobile_to_base` 줄을 플래너 URDF에 → 플래너 PC에 복사 | arm_node, 캘리브레이션 노드 |
+| `T_ab2mb` 재캘리브 | `chain_calib` 세션 → `tf_chain_tool.py set T_ab2mb --npz <result>` → `check` → **`tf_chain_tool.py urdf --apply`** (플래너 URDF의 `mobile_to_base` 줄을 제자리 치환) → 플래너 PC에 복사 | arm_node, 캘리브레이션 노드 |
 | `T_hc2ee` 재캘리브 | `handeye_calib_node` compute (자동 기록) → 그 뒤 `dq_deg`와 `T_ab2mb`를 다시 맞춤 (한 세트) | 캘리브레이션 노드 |
-| `T_ee2tip` 재측정 | `basler_tip_calib` → `tf_chain_tool.py set T_ee2tip --t-mm x y z` → `check` → `urdf`의 `vision_tip_joint` 줄을 플래너 URDF에 → **플래너가 경로 CSV를 다시 내보냄** → (tool 1을 쓸 거면) `set_tool_tcp.py` | arm_node |
+| `T_ee2tip` 재측정 | `basler_tip_calib` → `tf_chain_tool.py set T_ee2tip --t-mm x y z` (또는 `use …`) → `check` → **`tf_chain_tool.py urdf --apply`** (`vision_tip_joint` 줄 제자리 치환) → 플래너 PC에 복사 → **플래너가 경로 CSV를 다시 내보냄** → (tool 1을 쓸 거면) `set_tool_tcp.py` | arm_node |
 | `T_mb2fc` (front_cam 재장착·재피팅) | `robot.yaml`의 `camera_offset` / `ground_plane.front_cam` 수정 → `tf_chain_tool.py front-cam --apply` | mobile_node, robot_camera_node, 캘리브레이션 노드 |
 | 맵 | `map_calibrator` 세션 → `map.yaml` + `map_world_<ts>.yaml` 자동 | mobile_node |
 | 조인트 영점 | `chain_calib/arm_offsets.py` → `tf_chain_tool.py joint-offsets --apply <session>/arm_offsets.npz` | arm_node, 캘리브레이션 노드 |
-| **설계값 ↔ 측정값 전환** (예: tip) | `tf_chain_tool.py use T_ee2tip measured_2026_09_22` (또는 `… use T_ee2tip design`) — 그 하위 블록의 값을 적용값으로 복사하고 `kind`를 맞춤 → `check` → URDF 줄 → 재시작 | 해당 소비자 |
+| **설계값 ↔ 측정값 전환** (예: tip) | `tf_chain_tool.py use T_ee2tip measured_2026_09_22` (또는 `… use T_ee2tip design`) — 그 하위 블록의 값을 적용값으로 복사하고 `kind`를 맞춤 → `check` → `urdf --apply` → 재시작 | 해당 소비자 |
 | **새 고정 변환 추가** (예: side_cam) | `tf_chain_tool.py set T_mb2sc --new --kind calibrated --t-mm x y z --rpy-deg r p y --source "…"` — 블록이 파일 끝에 생기고 로더가 자동으로 읽는다 (코드 수정 없음; `NAMES`는 필수 코어 4개일 뿐) | — |
 
 `tf_chain.yaml` 블록 규칙 (2026-10-13):

@@ -20,8 +20,11 @@ tf_chain_tool.py — look at, check and update config/tf/tf_chain.yaml.
                                                         re-apply one of a block's sub-block poses
                                                         (design / measured_<date> / ...) as the value
     python3 tools/tf_chain_tool.py export-npz           rewrite every npz from the yaml
-    python3 tools/tf_chain_tool.py urdf                 the mobile_to_base / vision_tip_joint
-                                                        lines the planner URDF must hold
+    python3 tools/tf_chain_tool.py urdf [--apply]       the mobile_to_base / vision_tip_joint
+                                                        lines the planner URDF must hold; --apply
+                                                        rewrites them IN PLACE (everything else
+                                                        byte-identical), then copy the URDF to
+                                                        the planner PC yourself
     python3 tools/tf_chain_tool.py joint-offsets        the arm joint zero offsets in use
     python3 tools/tf_chain_tool.py joint-offsets --apply <session>/arm_offsets.npz --source "..."
                                                         write config/tf/arm_joint_offsets.yaml (+ npz)
@@ -69,13 +72,8 @@ def _ang_deg(A, B):
     return math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(A[:3, :3].T @ B[:3, :3]) - 1) / 2))))
 
 
-def _urdf_joint(name):
-    import xml.etree.ElementTree as ET
-    joints = {j.get('name'): j for j in ET.parse(URDF).getroot().findall('joint')}
-    o = joints[name].find('origin')
-    xyz = [float(v) for v in (o.get('xyz') or '0 0 0').split()]
-    rpy = [float(v) for v in (o.get('rpy') or '0 0 0').split()]
-    return xyz, rpy
+def _urdf_joint(name, urdf=None):
+    return TC.read_urdf_joint(urdf or URDF, name)
 
 
 def cmd_show(args):
@@ -101,7 +99,7 @@ def cmd_show(args):
         print('  %-18s %+.6f m' % (k, c[k]))
     for k in ('arm_mount_yaw', 'arm_tilt_x', 'arm_tilt_y'):
         print('  %-18s %+.9f rad = %+.3f deg' % (k, c[k], math.degrees(c[k])))
-    _print_urdf(chain)
+    _print_urdf(chain, args.urdf)
     jo = os.path.join(os.path.dirname(args.tf_yaml), 'arm_joint_offsets.yaml')
     if os.path.exists(jo):
         e = TC.load_joint_offsets_entry(jo)
@@ -112,18 +110,29 @@ def cmd_show(args):
         print('\narm joint zero offsets: none (dq = 0)')
 
 
-def _print_urdf(chain):
-    xyz, rpy = TC.urdf_mobile_to_base(chain['T_ab2mb'])
-    tip = chain['T_ee2tip'][:3, 3]
-    print('\nplanner URDF (%s) must hold:' % URDF)
-    print('  <joint name="mobile_to_base"> <origin xyz="%.6f %.6f %.6f" rpy="%.9f %.9f %.9f"/>'
-          % (xyz[0], xyz[1], xyz[2], rpy[0], rpy[1], rpy[2]))
-    print('  <joint name="vision_tip_joint"> <origin xyz="%.4f %.4f %.4f" rpy="0 0 0"/>  (+ vision_fixed at 0)'
-          % (tip[0], tip[1], tip[2]))
+def _print_urdf(chain, urdf=None):
+    print('\nplanner URDF (%s) must hold:' % (urdf or URDF))
+    for joint, line in TC.urdf_joint_lines(chain['T_ab2mb'], chain['T_ee2tip']).items():
+        print('  <joint name="%s"> %s%s' % (joint, line, '  (+ vision_fixed at 0)' if joint == 'vision_tip_joint' else ''))
 
 
 def cmd_urdf(args):
-    _print_urdf(TC.load_tf_chain(args.tf_yaml))
+    chain = TC.load_tf_chain(args.tf_yaml)
+    _print_urdf(chain, args.urdf)
+    if not os.path.isfile(args.urdf):
+        sys.exit('planner URDF not found: %s' % args.urdf)
+    rows = TC.write_urdf_joints(args.urdf, chain['T_ab2mb'], chain['T_ee2tip'], dry_run=not args.apply)
+    changed = [r for r in rows if r[3]]
+    if not changed:
+        print('-- %s already holds them' % args.urdf)
+        return 0
+    for joint, old, new, _ in changed:
+        print('-- %s %s:\n     was %s\n     now %s' % ('rewrote' if args.apply else 'would rewrite', joint, old, new))
+    if not args.apply:
+        print('   run with --apply to rewrite them in place (nothing else in the file changes)')
+    else:
+        print('-- wrote %s — copy it to the planner PC and re-export the paths' % args.urdf)
+    return 0
 
 
 def cmd_check(args):
@@ -161,17 +170,17 @@ def cmd_check(args):
     check(_ang_deg(chain['T_ab2mb'], D) < 3.0 and np.linalg.norm(chain['T_ab2mb'][:3, 3] - D[:3, 3]) < 0.05,
           'T_ab2mb within 3 deg / 50 mm of the design (%.2f deg, %.1f mm)'
           % (_ang_deg(chain['T_ab2mb'], D), 1e3 * np.linalg.norm(chain['T_ab2mb'][:3, 3] - D[:3, 3])))
-    if os.path.isfile(URDF):
+    if os.path.isfile(args.urdf):
         xyz, rpy = TC.urdf_mobile_to_base(chain['T_ab2mb'])
-        uxyz, urpy = _urdf_joint('mobile_to_base')
+        uxyz, urpy = _urdf_joint('mobile_to_base', args.urdf)
         check(np.abs(np.array(uxyz) - xyz).max() < 1e-5 and np.abs(np.array(urpy) - rpy).max() < 1e-6,
               'planner URDF mobile_to_base == T_ab2mb (urdf %s / %s)' % (_fmt(uxyz, 6), _fmt(urpy, 9)))
-        txyz, _ = _urdf_joint('vision_tip_joint')
-        fxyz, _ = _urdf_joint('vision_fixed')
+        txyz, _ = _urdf_joint('vision_tip_joint', args.urdf)
+        fxyz, _ = _urdf_joint('vision_fixed', args.urdf)
         check(np.abs(np.array(txyz) + np.array(fxyz) - chain['T_ee2tip'][:3, 3]).max() < 5e-5,
               'planner URDF vision_fixed + vision_tip_joint == T_ee2tip (urdf %s m)' % _fmt(np.array(txyz) + np.array(fxyz), 4))
     else:
-        print('  [skip] planner URDF not found: %s' % URDF)
+        print('  [skip] planner URDF not found: %s' % args.urdf)
     ok, why = TC.check_joint_offsets(os.path.join(os.path.dirname(args.tf_yaml), 'arm_joint_offsets.yaml'))
     check(ok, 'arm_joint_offsets.yaml: %s' % why)
     print('%d failed' % bad)
@@ -298,10 +307,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--tf-yaml', default=TC.TF_CHAIN_PATH)
     ap.add_argument('--robot-yaml', default=CONFIG_PATH)
+    ap.add_argument('--urdf', default=URDF, help='the planner URDF (check / urdf / show)')
     sp = ap.add_subparsers(dest='cmd')
     sp.add_parser('show')
     sp.add_parser('check')
-    sp.add_parser('urdf')
+    p = sp.add_parser('urdf'); p.add_argument('--apply', action='store_true', help='rewrite the two joint lines in place')
     sp.add_parser('export-npz')
     p = sp.add_parser('front-cam'); p.add_argument('--apply', action='store_true')
     p = sp.add_parser('joint-offsets')
