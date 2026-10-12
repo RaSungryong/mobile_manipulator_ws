@@ -34,6 +34,7 @@
          the site LAN. Owns no device, needs no display; see the include at
          the end. -->
     <arg name="use_web_ui"     default="true"/>
+    <arg name="use_tf_publish" default="false"/>   <!-- tf_chain_publisher.py: the tf_chain.yaml chain on /tf for rviz; a viewer, nothing depends on it -->
     <arg name="web_ui_port"    default="8080"/>
 
     <!-- front_cam colour resolution. The Femto Bolt's default (0 = let the
@@ -318,6 +319,18 @@
              Written on every run so a `true` from an earlier session cannot
              linger on the master and silently re-open the channel. -->
         <param name="debug_mode" value="$(arg debug_mode)"/>
+    </node>
+
+    <!-- TF viewer (2026-10-13, config stage 2) — OFF by default. Publishes the
+         fixed transforms of config/tf/tf_chain.yaml plus the live lift,
+         /robot_pose and the arm FK as /tf, /tf_static, so rviz can show the
+         chain exactly as the code believes it (docs/FRAMES_kr.md). Owns no
+         device, and nothing in the stack subscribes to it: use_tf_publish:=true
+         adds frames, never changes behaviour. rviz -d config/tf_chain.rviz -->
+    <node name="tf_chain_publisher" pkg="apriltag_nav" type="tf_chain_publisher.py" output="screen"
+          if="$(arg use_tf_publish)">
+        <param name="rate_hz"         value="10.0"/>
+        <param name="publish_ee_ctrl" value="true"/>
     </node>
 
     <!-- rosbridge_websocket (+ its rosapi helper) — the external interface.

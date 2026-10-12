@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/robot_camera_node.py
   scripts/camera_viewer_node.py
   scripts/inference_node.py
+  scripts/tf_chain_publisher.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

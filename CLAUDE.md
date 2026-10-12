@@ -583,6 +583,7 @@ owner node per device, other nodes reach it over topics/services.
 | `lifter_node.py` | manipulator base lift (**sole writer** of `/lift/*`) | `/lifter/height_cmd`, `/lifter/{home,stop,reset,goto_scan_height}` (srv), `/lifter/state` |
 | `camera_viewer_node.py` | RViz debug window (owns no device). **Not in the launch since 2026-09-04** — `rosrun` it for a UI-less debug session | `/camera_viewer/set_enabled` (srv) |
 | `inference_node.py` | the resident ONNX Ra model(s) — on-demand prediction for one frame (owns no device) | `/inference/predict` (srv, `robot_msgs/PredictRa`) |
+| `tf_chain_publisher.py` | **viewer, OFF by default** (`use_tf_publish:=true`, 2026-10-13): the `tf_chain.yaml` chain + live lift / `/robot_pose` / arm FK on `/tf`, `/tf_static` for rviz (`config/tf_chain.rviz`, `docs/FRAMES_kr.md` §6). Owns no device; nothing subscribes to it | `/tf`, `/tf_static` (publish-only) |
 
 `mobile_manipulator.launch` starts eight of them (the RViz
 `camera_viewer_node` was dropped from it 2026-09-04 — robot_ui shows the
@@ -2404,6 +2405,42 @@ Undock → Collect mode + Mode mark → Groups all → Run name
 → Send TASK (not Resume — a NEW run over the whole path); tomorrow
 `RESUME` with that name in the Resume run field; the finishing mould the
 same with `…_finishing_ra_map_20261015-1016`.
+### 2026-10-13 — Config stage 2: `tf_chain_publisher.py`, the tf_chain chain on /tf for rviz (off by default)
+
+Stage 2 of the config plan (stage 1 = the same day, below). The chain
+existed only as numpy matrices, so "what does the robot believe the
+frames are" could not be looked at; now `use_tf_publish:=true` (or
+`rosrun apriltag_nav tf_chain_publisher.py` beside a running stack) puts it
+on TF and `rviz -d config/tf_chain.rviz` shows it. Additive only: a new
+node that owns no device and that nothing subscribes to; the launch arg
+defaults to false, so a stack started as before is byte-for-byte the same.
+
+- `apriltag_nav/tf_chain_frames.py` (pure numpy): the frames, built from
+  the loaders the runtime uses — `load_tf_chain`, `physical_T_mb2fc` (+
+  `T_tilted_to_level` → `fc_level`), `arm_flange_T` (FK(q + dq) with the
+  locator's guard), the `/robot_pose` axis rule of `transform_world_to_arm`
+  (`world_x = −y`, `world_y = −x`, floor at `world_floor_z_m`), and the lift
+  rule of `chain.compensate_T_ab2mb` (copied: path_tag_locator depends on
+  apriltag_nav, not the reverse). Frame names = the yaml's short names:
+  world, mb, ab, ee, ee_ctrl, tip, hc, fc, fc_level, mobile_base_urdf.
+- `scripts/tf_chain_publisher.py`: static frames once (latched), dynamic
+  ones at `~rate_hz` 10 from the latest `/robot_pose`, `/lifter/state`
+  `height_mm`, `/arm/state` (joints + tcp_pose, `pose_valid`). `ee_ctrl`
+  (the controller's pose) is published beside `ee` only while the joint
+  offsets are applied, so the dq effect is visible (11 mm at the test
+  pose). Callbacks never raise. `tf2_ros` added to package.xml, the script
+  to CMakeLists install(PROGRAMS).
+- `tools/check_tf_chain_publisher.py` — 27 checks, every frame against the
+  function the stack itself uses; the strongest one: a world point through
+  world→mb→ab lands at the same arm-frame mm as `transform_world_to_arm`
+  (4 headings × 2 lifts × 3 floors, 6.6e-7 mm).
+
+Verified offline only: the 27 checks, `py_compile` of the node, launch /
+package xml well-formed; stage-1 checks unchanged. **Not run on the robot
+(no ROS here)** — first use: `use_tf_publish:=true`, then
+`rostopic echo /tf_static` should list the five static frames and rviz
+`mb` as fixed frame shows ab / ee / tip moving with the arm.
+
 ### 2026-10-13 — Config stage 1: one place for the tip offset, `kind:` markers in tf_chain.yaml, `docs/FRAMES_kr.md`
 
 Follow-up of the 2026-10-11/12 vision-system work (new case mesh

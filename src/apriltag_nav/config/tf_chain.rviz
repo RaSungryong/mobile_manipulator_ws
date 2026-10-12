@@ -1,0 +1,51 @@
+# rviz (ROS 1) view of the tf_chain_publisher frames — fixed frame mb.
+#   roslaunch apriltag_nav mobile_manipulator.launch use_tf_publish:=true
+#   rviz -d $(rospack find apriltag_nav)/config/tf_chain.rviz
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.25
+      Plane Cell Count: 24
+      Reference Frame: mb
+    - Class: rviz/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: true
+      Marker Scale: 0.4
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+  Enabled: true
+  Global Options:
+    Background Color: 40; 40; 40
+    Fixed Frame: mb
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Name: Current View
+      Distance: 3.0
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.6
+      Pitch: 0.45
+      Yaw: 0.8
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1400

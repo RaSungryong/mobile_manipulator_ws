@@ -78,7 +78,29 @@ mb   대차 몸체.  x 앞, y 왼쪽, z 위, 원점은 섀시 중심 아래 바�
 
 `tf_chain.yaml` 블록의 `kind:` 는 `calibrated` / `generated` / `design` 중 하나 — **generated 블록은 손으로 고치지 않는다** (다음 `front-cam --apply`가 덮어쓴다).
 
-## 6. 확인 도구
+## 6. rviz로 보기 (2026-10-13, config 2단계)
+
+`tf_chain_publisher.py`가 위 체인을 그대로 `/tf`, `/tf_static`으로 내보낸다 — **기본은 꺼져 있고**, 켜도 프레임이 추가될 뿐 스택의 동작은 바뀌지 않는다 (아무 노드도 구독하지 않음).
+
+```bash
+roslaunch apriltag_nav mobile_manipulator.launch use_tf_publish:=true   # 또는 스택 옆에서
+rosrun apriltag_nav tf_chain_publisher.py
+rviz -d $(rospack find apriltag_nav)/config/tf_chain.rviz               # 고정 프레임 mb
+```
+
+| TF 프레임 | 출처 | 갱신 |
+|---|---|---|
+| `world → mb` | `/robot_pose` (x, y, theta; `world_x = −y`, `world_y = −x`, mb 원점 z = `world_floor_z_m`) | 10 Hz |
+| `mb → ab` | `inv(T_ab2mb)` + `/lifter/state`의 `height_mm` (리프트만큼 ab가 mb z로 올라감) | 10 Hz |
+| `ab → ee` | `/arm/state`의 joints로 `FK(q + dq)` (locator 체인과 같은 `arm_flange_T`; joints와 pose가 안 맞으면 컨트롤러 pose로) | 10 Hz |
+| `ab → ee_ctrl` | 컨트롤러가 보고한 TCP pose — dq가 적용 중일 때만, `ee`와 나란히 (둘의 차이 = 영점 보정 효과) | 10 Hz |
+| `mb → fc`, `mb → fc_level` | `T_mb2fc`, 그리고 ground-plane 기울기를 뺀 수평 가상 카메라 | static |
+| `mb → mobile_base_urdf` | Rz(180°) — 플래너 URDF의 대차 프레임 | static |
+| `ee → tip`, `ee → hc` | `T_ee2tip`, `inv(T_hc2ee)` | static |
+
+수학은 `apriltag_nav/tf_chain_frames.py`(순수 numpy), 노드는 `scripts/tf_chain_publisher.py`, 오프라인 검증은 `tools/check_tf_chain_publisher.py` (런타임이 쓰는 로더·함수와 프레임마다 대조: 27 checks).
+
+## 7. 확인 도구
 
 ```bash
 python3 src/apriltag_nav/tools/tf_chain_tool.py show      # 현재 값, 설계 대비, URDF가 가져야 할 줄
@@ -86,6 +108,7 @@ python3 src/apriltag_nav/tools/tf_chain_tool.py check     # yaml↔npz, robot.ya
 python3 src/apriltag_nav/tools/check_pose_vs_joint.py     # 경로 CSV의 pose 행 ↔ joint 행 (FK), URDF 오프셋
 python3 src/apriltag_nav/tools/check_joint_offsets.py     # 영점 보정 체인
 python3 src/path_tag_locator/scripts/check_handeye_sweep.py
+python3 src/apriltag_nav/tools/check_tf_chain_publisher.py   # TF 뷰어의 프레임 == 런타임 로더
 ```
 
 관련: `tf_chain.yaml` 헤더(규약 원문), CLAUDE.md "Coordinate Frames" / "Transform Parameters", `docs/TF_CHAIN_CALIBRATION_STATUS_kr.md`, `src/path_tag_locator/docs/CALIBRATION_GUIDE_kr.md`.
