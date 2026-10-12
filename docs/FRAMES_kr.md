@@ -74,9 +74,13 @@ mb   대차 몸체.  x 앞, y 왼쪽, z 위, 원점은 섀시 중심 아래 바�
 | `T_mb2fc` (front_cam 재장착·재피팅) | `robot.yaml`의 `camera_offset` / `ground_plane.front_cam` 수정 → `tf_chain_tool.py front-cam --apply` | mobile_node, robot_camera_node, 캘리브레이션 노드 |
 | 맵 | `map_calibrator` 세션 → `map.yaml` + `map_world_<ts>.yaml` 자동 | mobile_node |
 | 조인트 영점 | `chain_calib/arm_offsets.py` → `tf_chain_tool.py joint-offsets --apply <session>/arm_offsets.npz` | arm_node, 캘리브레이션 노드 |
-| **새 고정 변환 추가** (예: side_cam) | ① `tf_chain.yaml`에 블록을 한 번 손으로 만든다 (`kind`, `source`, `t_mm`, `rpy_deg_xyz`, `matrix` 줄 — 기존 블록 복사) ② `apriltag_nav/tf_chain.py`의 `NAMES`에 이름 추가 ③ 그 뒤로는 `set`으로 갱신 | — |
+| **설계값 ↔ 측정값 전환** (예: tip) | `tf_chain_tool.py use T_ee2tip measured_2026_09_22` (또는 `… use T_ee2tip design`) — 그 하위 블록의 값을 적용값으로 복사하고 `kind`를 맞춤 → `check` → URDF 줄 → 재시작 | 해당 소비자 |
+| **새 고정 변환 추가** (예: side_cam) | `tf_chain_tool.py set T_mb2sc --new --kind calibrated --t-mm x y z --rpy-deg r p y --source "…"` — 블록이 파일 끝에 생기고 로더가 자동으로 읽는다 (코드 수정 없음; `NAMES`는 필수 코어 4개일 뿐) | — |
 
-`tf_chain.yaml` 블록의 `kind:` 는 `calibrated` / `generated` / `design` 중 하나 — **generated 블록은 손으로 고치지 않는다** (다음 `front-cam --apply`가 덮어쓴다).
+`tf_chain.yaml` 블록 규칙 (2026-10-13):
+- `kind:` 는 `calibrated` / `generated` / `design` 중 하나 — 적용값이 **무엇인지**. **generated 블록은 손으로 고치지 않는다** (다음 `front-cam --apply`가 덮어쓴다).
+- `source:` 는 **한 줄** (무엇을, 언제, 어느 도구로). 긴 이야기는 CLAUDE.md Work Log에; 2026-10-13 이전의 긴 원문은 `config/tf/HISTORY.md`.
+- `design:`, `measured_<날짜>:` 같은 하위 블록은 **대안값** — `show`가 적용값과의 차이를 같이 보여 주고, `use`로 다시 적용할 수 있다. 코드는 언제나 `matrix:`만 읽는다.
 
 ## 6. rviz로 보기 (2026-10-13, config 2단계)
 
@@ -109,6 +113,7 @@ python3 src/apriltag_nav/tools/check_pose_vs_joint.py     # 경로 CSV의 pose �
 python3 src/apriltag_nav/tools/check_joint_offsets.py     # 영점 보정 체인
 python3 src/path_tag_locator/scripts/check_handeye_sweep.py
 python3 src/apriltag_nav/tools/check_tf_chain_publisher.py   # TF 뷰어의 프레임 == 런타임 로더
+python3 src/apriltag_nav/tools/check_tf_chain_yaml.py        # set / use / set --new / check 가 파일을 올바르게 다루는지 (임시 복사본에서)
 ```
 
 관련: `tf_chain.yaml` 헤더(규약 원문), CLAUDE.md "Coordinate Frames" / "Transform Parameters", `docs/TF_CHAIN_CALIBRATION_STATUS_kr.md`, `src/path_tag_locator/docs/CALIBRATION_GUIDE_kr.md`.

@@ -12,7 +12,13 @@ tf_chain_tool.py — look at, check and update config/tf/tf_chain.yaml.
                                                         (after a front_cam re-fit / remount)
     python3 tools/tf_chain_tool.py set T_hc2ee --npz F --source "..."
     python3 tools/tf_chain_tool.py set T_ee2tip --t-mm -2.0 -245.2 214.4 --rpy-deg 0 0 0 --source "..."
-                                                        write one block + its npz
+                                                        write one block + its npz  [--kind calibrated|design]
+    python3 tools/tf_chain_tool.py set T_mb2sc --new --kind calibrated --t-mm ... --source "..."
+                                                        ADD a block (any T_x2y name; the loader picks
+                                                        it up, NAMES stays the required core)
+    python3 tools/tf_chain_tool.py use T_ee2tip measured_2026_09_22
+                                                        re-apply one of a block's sub-block poses
+                                                        (design / measured_<date> / ...) as the value
     python3 tools/tf_chain_tool.py export-npz           rewrite every npz from the yaml
     python3 tools/tf_chain_tool.py urdf                 the mobile_to_base / vision_tip_joint
                                                         lines the planner URDF must hold
@@ -22,8 +28,11 @@ tf_chain_tool.py — look at, check and update config/tf/tf_chain.yaml.
                                                         from an arm_offsets.py result
     python3 tools/tf_chain_tool.py joint-offsets --disable | --enable
 
-`set` and `front-cam --apply` rewrite the block's source / t_mm / rpy /
-matrix lines in place; comments and the `design` block stay. Restart
+`set`, `use` and `front-cam --apply` rewrite the block's source / t_mm /
+rpy / matrix (and `kind`) lines in place; comments and every sub-block
+(`design`, `measured_<date>`, ...) stay. `source` is ONE line — what, when,
+by which tool; the long story goes to CLAUDE.md's Work Log (the pre-2026-10-13
+texts are in config/tf/HISTORY.md). Restart
 arm_node (T_ab2mb, T_ee2tip) and the calibration nodes (all four) after a
 change — they read the file at start.
 """
@@ -73,18 +82,19 @@ def cmd_show(args):
     chain = TC.load_tf_chain(args.tf_yaml)
     raw = yaml.safe_load(open(args.tf_yaml))
     print('%s\n' % args.tf_yaml)
-    for name in TC.NAMES:
+    for name in TC.block_names(args.tf_yaml):
         T = chain[name]
-        print('%-9s %s' % (name, TC.describe(T)))
+        print('%-9s %-11s %s' % (name, '[%s]' % raw[name].get('kind', '?'), TC.describe(T)))
         print('          source: %s' % raw[name].get('source', ''))
-        D = _design_T(raw[name])
-        if D is not None:
-            dt = (T[:3, 3] - D[:3, 3]) * 1e3
-            print('          vs design %s mm / rpy %s deg: dt %s mm, %.3f deg'
-                  % (_fmt(raw[name]['design']['t_mm'], 1), _fmt(raw[name]['design']['rpy_deg_xyz'], 2),
-                     _fmt(dt, 2), _ang_deg(T, D)))
-        else:
+        alts = TC.alternatives(raw[name])
+        if not alts:
             print('          design: none (%s)' % ((raw[name].get('design') or {}).get('note', '')))
+        for key, (t, r) in alts.items():
+            A = TC.matrix_from_pose(np.asarray(t) / 1000.0, r)
+            dt = (T[:3, 3] - A[:3, 3]) * 1e3
+            same = np.abs(dt).max() < 1e-6 and _ang_deg(T, A) < 1e-6
+            print('          %-22s %s mm / rpy %s deg%s' % (key + ':', _fmt(t, 2), _fmt(r, 2),
+                  '  = applied' if same else '  (applied - this: dt %s mm, %.3f deg)' % (_fmt(dt, 2), _ang_deg(T, A))))
     c = TC.arm_calibration_from_T_ab2mb(chain['T_ab2mb'])
     print('\narm_transform parametrisation of T_ab2mb (inv, body frame):')
     for k in ('arm_body_offset_x', 'arm_body_offset_y', 'arm_base_z'):
@@ -125,7 +135,9 @@ def cmd_check(args):
         print('  [%s] %s' % ('ok ' if ok else 'FAIL', msg))
 
     chain = TC.load_tf_chain(args.tf_yaml)
-    for name in TC.NAMES:
+    names = TC.block_names(args.tf_yaml)
+    check(all(n in names for n in TC.NAMES), 'required blocks present: %s' % ', '.join(TC.NAMES))
+    for name in names:
         try:
             TC.assert_rigid(chain[name], name)
             check(True, '%s rigid' % name)
@@ -133,6 +145,15 @@ def cmd_check(args):
             check(False, str(e))
     for name, ok, d in TC.check_npz_agree(args.tf_yaml):
         check(ok, '%s.npz == yaml block (%s)' % (name, ('%.1e' % d) if isinstance(d, float) else d))
+    for name, ok, d in TC.check_readouts(args.tf_yaml):
+        check(ok, '%s t_mm / rpy_deg_xyz readouts == matrix (%s)' % (name, d))
+    raw0 = yaml.safe_load(open(args.tf_yaml))
+    for name in names:
+        k = raw0[name].get('kind')
+        check(k in TC.KINDS, '%s kind: %s' % (name, k if k in TC.KINDS else '%r (must be %s)' % (k, ' | '.join(TC.KINDS))))
+        src = str(raw0[name].get('source', ''))
+        if len(src) > 240:          # the generated T_mb2fc line (front_cam_source_line) is ~225
+            print('  [warn] %s source is %d chars — one line please, the story goes to the Work Log' % (name, len(src)))
     ok, d, params = TC.check_front_cam(args.tf_yaml, args.robot_yaml)
     check(ok, 'T_mb2fc == generator(robot.yaml) (max diff %.1e) — else `front-cam --apply`' % d)
     raw = yaml.safe_load(open(args.tf_yaml))
@@ -222,12 +243,47 @@ def cmd_set(args):
     else:
         sys.exit('give --npz, --matrix (16 numbers) or --t-mm x y z [--rpy-deg r p y]')
     TC.assert_rigid(T, args.name)
+    if args.new:
+        if args.name in TC.block_names(args.tf_yaml):
+            sys.exit('%s already exists — drop --new to update it' % args.name)
+        if not args.source:
+            sys.exit('--source is required')
+        print('%s: NEW block, kind %s\n  %s' % (args.name, args.kind or 'calibrated', TC.describe(T)))
+        for p in TC.write_transform(args.name, T, args.source, path=args.tf_yaml, kind=args.kind, create=True):
+            print('-- wrote %s' % p)
+        return 0
+    if args.name not in TC.block_names(args.tf_yaml):
+        sys.exit('no block %s in %s (add it with --new)' % (args.name, args.tf_yaml))
     old = TC.load_transform(args.name, args.tf_yaml)
     print('%s\n  old: %s\n  new: %s\n  change: dt %s mm, %.3f deg'
           % (args.name, TC.describe(old), TC.describe(T), _fmt((T[:3, 3] - old[:3, 3]) * 1e3, 2), _ang_deg(T, old)))
     if not args.source:
         sys.exit('--source is required: say how this value was measured (it is written into the yaml)')
-    for p in TC.write_transform(args.name, T, args.source, path=args.tf_yaml):
+    for p in TC.write_transform(args.name, T, args.source, path=args.tf_yaml, kind=args.kind, create=args.new):
+        print('-- wrote %s' % p)
+    return 0
+
+
+def cmd_use(args):
+    """Re-apply a block's sub-block pose (design / measured_<date> / ...)."""
+    import time
+    raw = yaml.safe_load(open(args.tf_yaml))
+    if args.name not in raw:
+        sys.exit('no block %s in %s' % (args.name, args.tf_yaml))
+    alts = TC.alternatives(raw[args.name])
+    if args.key not in alts:
+        sys.exit('%s has no sub-block %r with t_mm / rpy_deg_xyz (have: %s)'
+                 % (args.name, args.key, ', '.join(alts) or 'none'))
+    t, r = alts[args.key]
+    T = TC.matrix_from_pose(np.asarray(t) / 1000.0, r)
+    old = TC.load_transform(args.name, args.tf_yaml)
+    kind = args.kind or ('design' if args.key == 'design' else 'calibrated')
+    note = (raw[args.name][args.key] or {}).get('note', '')
+    src = args.source or ('%s %s applied %s by tf_chain_tool.py use%s'
+                          % (kind.upper(), args.key, time.strftime('%Y-%m-%d'), (' — ' + note) if note else ''))
+    print('%s <- %s\n  old: %s\n  new: %s\n  change: dt %s mm, %.3f deg\n  kind: %s'
+          % (args.name, args.key, TC.describe(old), TC.describe(T), _fmt((T[:3, 3] - old[:3, 3]) * 1e3, 2), _ang_deg(T, old), kind))
+    for p in TC.write_transform(args.name, T, src, path=args.tf_yaml, kind=kind):
         print('-- wrote %s' % p)
     return 0
 
@@ -254,18 +310,25 @@ def main():
     p.add_argument('--note', default='')
     p.add_argument('--disable', action='store_true'); p.add_argument('--enable', action='store_true')
     p = sp.add_parser('set')
-    p.add_argument('name', choices=TC.NAMES)
+    p.add_argument('name', help='a block of the yaml (%s, or any T_x2y with --new)' % ', '.join(TC.NAMES))
     p.add_argument('--npz')
     p.add_argument('--matrix', nargs=16, type=float)
     p.add_argument('--t-mm', nargs=3, type=float)
     p.add_argument('--rpy-deg', nargs=3, type=float, help="scipy extrinsic 'xyz' euler, degrees")
+    p.add_argument('--source', default='', help='ONE line: what, when, by which tool')
+    p.add_argument('--kind', choices=TC.KINDS, default=None, help='rewrite the kind: line too')
+    p.add_argument('--new', action='store_true', help='append a new block (the loader picks it up)')
+    p = sp.add_parser('use')
+    p.add_argument('name')
+    p.add_argument('key', help='sub-block to apply: design, measured_<date>, ...')
+    p.add_argument('--kind', choices=TC.KINDS, default=None, help='default: design for `design`, else calibrated')
     p.add_argument('--source', default='')
     args = ap.parse_args()
     if not args.cmd:
         ap.print_help()
         return 2
     return {'show': cmd_show, 'check': cmd_check, 'urdf': cmd_urdf, 'front-cam': cmd_front_cam,
-            'set': cmd_set, 'export-npz': cmd_export, 'joint-offsets': cmd_joint_offsets}[args.cmd](args) or 0
+            'set': cmd_set, 'use': cmd_use, 'export-npz': cmd_export, 'joint-offsets': cmd_joint_offsets}[args.cmd](args) or 0
 
 
 if __name__ == '__main__':

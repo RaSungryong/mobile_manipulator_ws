@@ -79,10 +79,39 @@ _RIGID_ATOL = 1e-6
 
 # ---------------------------------------------------------------- basics
 def npz_path(name, tf_dir=None):
-    """<tf_dir>/<name>.npz — the npz twin of a yaml block."""
-    if name not in NAMES:
-        raise KeyError('unknown transform %r (known: %s)' % (name, ', '.join(NAMES)))
+    """<tf_dir>/<name>.npz — the npz twin of a yaml block (any block, not only
+    NAMES: `tf_chain_tool.py set --new` adds blocks; a typo is caught by the
+    loader, not here)."""
+    if not re.match(r'^T_\w+$', str(name)):
+        raise KeyError('transform name must look like T_x2y, got %r' % (name,))
     return os.path.join(tf_dir or TF_DIR, name + '.npz')
+
+
+# What a block's `kind:` may say (2026-10-13). calibrated = measured on the
+# robot and written by a tool; generated = derived from other config
+# (T_mb2fc from robot.yaml) and never hand-edited; design = a drawing / CAD
+# value applied on purpose, not a measurement.
+KINDS = ('calibrated', 'generated', 'design')
+
+
+def block_names(path=None):
+    """Every block of the yaml that carries a `matrix` — NAMES plus any added
+    with `set --new` — in file order."""
+    import yaml
+    with open(path or TF_CHAIN_PATH, 'r') as fh:
+        d = yaml.safe_load(fh) or {}
+    return [k for k, v in d.items() if isinstance(v, dict) and 'matrix' in v]
+
+
+def alternatives(entry):
+    """{key: (t_mm, rpy_deg_xyz)} of a block's sub-blocks that hold a full pose
+    (`design`, `measured_<date>`, ...) — what `tf_chain_tool.py use NAME KEY`
+    can re-apply. Sub-blocks with null values (T_hc2ee's design) are left out."""
+    out = {}
+    for k, v in (entry or {}).items():
+        if isinstance(v, dict) and v.get('t_mm') is not None and v.get('rpy_deg_xyz') is not None:
+            out[k] = ([float(x) for x in v['t_mm']], [float(x) for x in v['rpy_deg_xyz']])
+    return out
 
 
 def invert_T(T):
@@ -430,6 +459,7 @@ def _yaml_str(s):
 
 
 _KEY_LINE = {
+    'kind': re.compile(r'^  kind:[^\n]*\n', re.MULTILINE),
     'source': re.compile(r'^  source:[^\n]*\n', re.MULTILINE),
     't_mm': re.compile(r'^  t_mm:[^\n]*\n', re.MULTILINE),
     'rpy_deg_xyz': re.compile(r'^  rpy_deg_xyz:[^\n]*\n', re.MULTILINE),
@@ -460,26 +490,46 @@ def render_block_values(T, source):
     }
 
 
-def write_transform(name, T, source, path=None, tf_dir=None, write_npz=True):
+def write_transform(name, T, source, path=None, tf_dir=None, write_npz=True, kind=None, create=False):
     """Replace one block's source / t_mm / rpy_deg_xyz / matrix in tf_chain.yaml
-    (text-level: comments and the design block stay) and rewrite <name>.npz.
+    (text-level: comments, `kind`, `design` and every other sub-block stay) and
+    rewrite <name>.npz. `kind` (calibrated / generated / design) rewrites the
+    block's `kind:` line too; `create=True` appends a NEW block when `name` is
+    not in the file yet (2026-10-13, `tf_chain_tool.py set --new`).
     Returns the paths written."""
     T = np.asarray(T, dtype=np.float64)
     assert_rigid(T, name)
+    if kind is not None and kind not in KINDS:
+        raise ValueError('kind must be one of %s, got %r' % (', '.join(KINDS), kind))
     path = path or TF_CHAIN_PATH
     tf_dir = tf_dir or os.path.dirname(path)
     with open(path, 'r') as fh:
         text = fh.read()
-    start, body, end = _block_span(text, name)
-    block = text[body:end]
     vals = render_block_values(T, source)
-    for key in ('source', 't_mm', 'rpy_deg_xyz', 'matrix'):
-        rx = _KEY_LINE[key]
-        m = rx.search(block)
-        if not m:
-            raise ValueError('%s: block %s has no `%s` line to replace' % (path, name, key))
-        block = block[:m.start()] + vals[key] + block[m.end():]
-    new_text = text[:body] + block + text[end:]
+    try:
+        start, body, end = _block_span(text, name)
+    except KeyError:
+        if not create:
+            raise
+        if not re.match(r'^T_\w+$', str(name)):
+            raise KeyError('transform name must look like T_x2y, got %r' % (name,))
+        block = ('  kind: %s\n' % (kind or 'calibrated')) + vals['source'] + vals['t_mm'] + vals['rpy_deg_xyz'] \
+            + vals['matrix'] + '  design:\n    t_mm: null\n    rpy_deg_xyz: null\n    note: ""\n'
+        new_text = text.rstrip('\n') + '\n\n\n%s:\n' % name + block
+        start = body = end = None
+    else:
+        block = text[body:end]
+        for key in ('source', 't_mm', 'rpy_deg_xyz', 'matrix'):
+            rx = _KEY_LINE[key]
+            m = rx.search(block)
+            if not m:
+                raise ValueError('%s: block %s has no `%s` line to replace' % (path, name, key))
+            block = block[:m.start()] + vals[key] + block[m.end():]
+        if kind is not None:
+            m = _KEY_LINE['kind'].search(block)
+            line = '  kind: %s\n' % kind
+            block = (block[:m.start()] + line + block[m.end():]) if m else (line + block)
+        new_text = text[:body] + block + text[end:]
     with open(path, 'w') as fh:
         fh.write(new_text)
     written = [path]
@@ -502,7 +552,7 @@ def export_npz(path=None, tf_dir=None):
     tf_dir = tf_dir or os.path.dirname(path)
     chain = load_tf_chain(path)
     out = []
-    for name in NAMES:
+    for name in block_names(path):
         p = os.path.join(tf_dir, name + '.npz')
         np.savez(p, chain[name])
         out.append(p)
@@ -516,13 +566,34 @@ def check_npz_agree(path=None, tf_dir=None, atol=1e-8):
     tf_dir = tf_dir or os.path.dirname(path)
     chain = load_tf_chain(path)
     out = []
-    for name in NAMES:
+    for name in block_names(path):
         p = os.path.join(tf_dir, name + '.npz')
         try:
             d = float(np.abs(load_npz(p) - chain[name]).max())
             out.append((name, d <= atol, d))
         except Exception as e:                        # noqa: BLE001
             out.append((name, False, str(e)))
+    return out
+
+
+def check_readouts(path=None, atol_mm=0.001, atol_deg=0.0001):
+    """[(name, ok, detail)] — each block's human readouts `t_mm` / `rpy_deg_xyz`
+    agree with its `matrix` (both come from `set`; a hand edit of one line
+    desyncs them and the code would silently follow the matrix)."""
+    import yaml
+    path = path or TF_CHAIN_PATH
+    with open(path, 'r') as fh:
+        d = yaml.safe_load(fh) or {}
+    out = []
+    for name in block_names(path):
+        e = d[name]
+        try:
+            T = _matrix_from_entry(name, e)
+            dt = float(np.abs(np.asarray(e['t_mm'], float) - np.asarray(t_mm(T))).max())
+            dr = float(np.abs(np.asarray(e['rpy_deg_xyz'], float) - np.asarray(rpy_deg_xyz(T))).max())
+            out.append((name, dt <= atol_mm and dr <= atol_deg, '%.4f mm / %.5f deg' % (dt, dr)))
+        except Exception as ex:                      # noqa: BLE001
+            out.append((name, False, str(ex)))
     return out
 
 

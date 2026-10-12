@@ -2405,6 +2405,53 @@ Undock → Collect mode + Mode mark → Groups all → Run name
 → Send TASK (not Resume — a NEW run over the whole path); tomorrow
 `RESUME` with that name in the Resume run field; the finishing mould the
 same with `…_finishing_ra_map_20261015-1016`.
+### 2026-10-13 — Config stage 3: tf_chain.yaml blocks tidied — `kind` / one-line `source` / sub-block alternatives, `tf_chain_tool.py use` and `set --new`
+
+Stage 3 of the config plan. The file's VALUES did not change (every
+`matrix` byte-identical; `check` 0 failed before and after), only how it
+reads and how it is edited:
+
+- **Block layout** (header comment of the yaml): `kind:` calibrated /
+  generated / design (stage 1); `source:` is ONE line — what, when, by
+  which tool — the three long texts (T_ab2mb, T_hc2ee, T_ee2tip) went
+  verbatim to `config/tf/HISTORY.md`; `design:` / `measured_<date>:` /
+  ... sub-blocks are the ALTERNATIVES: `show` lists each against the
+  applied value (dt / angle, "= applied" when equal) and `use NAME KEY`
+  re-applies one. `design:` keeps its key and place — `retarget_joint_
+  paths.py`, `make_plate2_paths.py`, `chain_calib.py` and `check_retarget_
+  joint_paths.py` read `load_entry(NAME)['design']` and still do.
+- **`tf_chain_tool.py use T_ee2tip measured_2026_09_22`** (or `... design`):
+  copies that sub-block's t_mm / rpy into the applied lines through
+  `write_transform`, sets `kind` (design → design, else calibrated), source
+  "<KIND> <key> applied <date> by tf_chain_tool.py use — <note>". Switching
+  the tip between the measured and the design value is now one command and
+  an audit line instead of a hand edit.
+- **`set NAME --new --kind ... --t-mm ...`** appends a block (any `T_x2y`
+  name); the loader reads every block with a `matrix` (it always did),
+  `export-npz` / `check` / `show` iterate `block_names()` instead of the
+  hard-coded tuple, `npz_path` accepts any `T_x2y`. `NAMES` is now only
+  the REQUIRED core (`load_tf_chain` still refuses a file missing one).
+  `set` on a missing name without `--new` and `set --new` on an existing
+  name are refused. `set --kind` rewrites the kind line.
+- **`check`** gained: required blocks present; `t_mm` / `rpy_deg_xyz`
+  readouts == `matrix` per block (a hand edit of one line would desync
+  them and the code would silently follow the matrix); `kind` valid;
+  `[warn]` on a `source` over 240 chars (the generated T_mb2fc line is 225).
+- `write_transform(name, T, source, ..., kind=None, create=False)` —
+  callers (handeye_calib_node, front-cam, set) unchanged.
+- `tools/check_tf_chain_yaml.py` — 40 checks on a temp COPY of the file:
+  the convention of the committed file, `use` round trip (measured → design
+  restores the matrix, every value-free line byte-identical), `set --new`
+  (+ loader / npz / `check` / `show` with the extra block, the refusals),
+  `set` keeping kind and sub-blocks, and that the real file is untouched.
+- `docs/FRAMES_kr.md` §5: the switch and the add-a-transform recipes are
+  now the two commands.
+
+Verified offline: `check` 0 failed (21 lines), `check_tf_chain_yaml` 40,
+`check_tf_chain_publisher` 27, stage-1 checks unchanged (22 / 15 / 28 / 9 /
+74). Not run on the robot — nothing here runs on the robot: the runtime
+loader is untouched and the values are identical.
+
 ### 2026-10-13 — Config stage 2: `tf_chain_publisher.py`, the tf_chain chain on /tf for rviz (off by default)
 
 Stage 2 of the config plan (stage 1 = the same day, below). The chain
