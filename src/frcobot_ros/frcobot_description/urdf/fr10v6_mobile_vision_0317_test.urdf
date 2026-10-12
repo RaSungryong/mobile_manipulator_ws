@@ -277,30 +277,39 @@
     <origin rpy="0 0 0" xyz="0 0 0" />
   </joint>
 
+  <!-- visionsystem_final.stl (2026-10-11, replaces vision_system_total_DF_1031.stl):
+       the CAD export is NOT in the flange frame - its flange plate (the 63 x 80 mm
+       face, 144 tris, identical to the old mesh's z=0 face) lies on y = -20.6 mm,
+       centred at x = -117.6, z = -7.15; flange axis = mesh -y, case length = mesh +z.
+       The origin below maps mesh -> flange, p = R p_mesh + t with
+       R = rpy(-90 deg, 0, 180 deg) = [[-1,0,0],[0,0,-1],[0,-1,0]], t = (-117.6,
+       -7.15, -20.6) mm; after it the plate sits at z = 0 (x +-31.5, y +-40) and the
+       case spans y -354 .. +40, z -1 .. 206 (old mesh: y -303 .. +40, z 0 .. 216). -->
   <link name="vision">
     <visual>
-      <origin rpy="0 0 0" xyz="0 0 0" />
+      <origin rpy="-1.5708 0 3.1416" xyz="-0.1176 -0.00715 -0.0206" />
       <geometry>
-        <mesh filename="../../meshes/fr10v6_meshes_0126/fr10v6/visual/vision_system_total_DF_1031.stl" scale="0.001 0.001 0.001" />
+        <mesh filename="../../meshes/fr10v6_meshes_0126/fr10v6/visual/visionsystem_final.stl" scale="0.001 0.001 0.001" />
       </geometry>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0" />
+      <origin rpy="-1.5708 0 3.1416" xyz="-0.1176 -0.00715 -0.0206" />
       <geometry>
-        <mesh filename="../../meshes/fr10v6_meshes_0126/fr10v6/visual/vision_system_total_DF_1031.stl" scale="0.001 0.001 0.001" />
+        <mesh filename="../../meshes/fr10v6_meshes_0126/fr10v6/visual/visionsystem_final.stl" scale="0.001 0.001 0.001" />
       </geometry>
     </collision>
   </link>
 
-  <!-- vision_tip = the Basler's frame centre on the surface at the 16.5 mm
-       Keyence standoff, MEASURED 2026-09-21 (chain_calib basler_tip_calib,
-       A4 tag sheet) — the same numbers as robot.yaml vision_tip_offset_mm
-       and tools/set_tool_tcp.py; design was 0 -0.25299 0.2252. Re-export the
-       RRT CSVs from this file: the ones in task/csv carry the design tip. -->
+  <!-- vision_tip = DESIGN 2026-10-12: the lens axis of visionsystem_final.stl,
+       16 mm below the lowest end of the case (z 206.0 + 16) — must equal
+       tf_chain.yaml T_ee2tip (tf_chain_tool.py check asserts it). Was the
+       2026-09-21/22 MEASURED (-0.0020 -0.2452 0.2144) until 2026-10-12; the
+       old-case design was 0 -0.25299 0.2252. Re-export the RRT CSVs from this
+       file: the ones in task/csv carry an older tip. -->
   <joint name="vision_tip_joint" type="fixed">
     <parent link="vision" />
     <child link="vision_tip" />
-    <origin xyz="-0.0020 -0.2452 0.2144" rpy="0 0 0" />
+    <origin xyz="0.00012 -0.25196 0.2220" rpy="0 0 0" />
   </joint>
 
   <link name="vision_tip">

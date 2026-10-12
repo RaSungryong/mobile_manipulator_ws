@@ -92,6 +92,13 @@ from .align import (alignment_metrics, clamp_step, compute_target_ee_pose,
 from .geometry import invert_T, matrix_m_to_pose_fr5, pose_fr5_to_matrix_m
 
 
+
+def _default_tool_points_mm():
+    """[flange origin, vision tip] in the flange frame, mm — the tip from
+    apriltag_nav/config/tf/tf_chain.yaml T_ee2tip (the one place it lives)."""
+    from apriltag_nav.tf_chain import tip_offset_mm
+    return [[0.0, 0.0, 0.0], [float(v) for v in tip_offset_mm()]]
+
 @dataclass
 class SweepCfg:
     distances_m: List[float] = field(default_factory=lambda: [0.35, 0.45, 0.55])
@@ -100,9 +107,10 @@ class SweepCfg:
     spins_deg: List[float] = field(default_factory=lambda: [-30.0, 0.0, 30.0])
     max_samples: int = 24
     # Flange-frame points (mm) that must clear the plate: the flange
-    # itself and the vision tip (apriltag_nav/config/tf/tf_chain.yaml T_ee2tip).
-    tool_points_mm: List[List[float]] = field(
-        default_factory=lambda: [[0.0, 0.0, 0.0], [-2.0, -245.2, 214.4]])
+    # itself and the vision tip. The tip is READ from tf_chain.yaml T_ee2tip
+    # (2026-10-13; it was a hard-coded copy before) — leave the key out of
+    # handeye_calib.yaml `auto:` unless a different point set is wanted.
+    tool_points_mm: List[List[float]] = field(default_factory=lambda: _default_tool_points_mm())
     min_clearance_m: float = 0.12
     max_xy_from_start_m: float = 0.30
     max_flange_reach_m: float = 1.25

@@ -41,6 +41,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from apriltag_nav.tf_chain import tip_offset_mm
 from path_tag_locator.calibration.view_pose import compute_view_tcp
 from path_tag_locator.chain import compensate_T_ab2mb
 from path_tag_locator.constants import load_extrinsics
@@ -54,11 +55,13 @@ CFG = PKG / "config"
 
 CAMERA_OFFSET_M = 0.55
 FLOOR_Z_M = -0.080          # floor (= mb origin height) in the world frame
-# vision_tip TCP offset from the FLANGE, tool frame mm (set_tool_tcp.py /
-# fr10v6_visionDF_addtip.urdf). Reach is a FLANGE constraint: the added
-# link extends the TCP ~339 mm beyond it, and the camera yaw about the
-# tag normal is free, so the overhang can be swung toward the arm base.
-TOOL_OFFSET_MM = np.array([-2.0, -245.2, 214.4])   # vision tip, measured 2026-09-21, re-solved 2026-09-22 (tf_chain.yaml T_ee2tip)
+# vision_tip TCP offset from the FLANGE, tool frame mm — read from
+# apriltag_nav/config/tf/tf_chain.yaml T_ee2tip (the ONE place it lives;
+# arm_controller and set_tool_tcp.py read the same block), not hard-coded
+# here any more (2026-10-13). Reach is a FLANGE constraint: the added link
+# extends the TCP ~339 mm beyond it, and the camera yaw about the tag
+# normal is free, so the overhang can be swung toward the arm base.
+TOOL_OFFSET_MM = tip_offset_mm()
 FLANGE_REACH_M = 1.40       # FR10 nominal reach (to wrist/flange)
 REACH_MARGIN_M = 0.05       # keep diagnostic poses this far inside it
 

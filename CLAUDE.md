@@ -1789,6 +1789,9 @@ to stop on; do not test on hardware with a guessed ID.
 
 ## Coordinate Frames
 
+> One-page map of every frame, convention and where each number lives:
+> **`docs/FRAMES_kr.md`** (2026-10-13).
+
 ```
 World Frame (CSV poses; origin at the polishing cell)
   │  world_x = -msg.y, world_y = -msg.x
@@ -2401,6 +2404,48 @@ Undock → Collect mode + Mode mark → Groups all → Run name
 → Send TASK (not Resume — a NEW run over the whole path); tomorrow
 `RESUME` with that name in the Resume run field; the finishing mould the
 same with `…_finishing_ra_map_20261015-1016`.
+### 2026-10-13 — Config stage 1: one place for the tip offset, `kind:` markers in tf_chain.yaml, `docs/FRAMES_kr.md`
+
+Follow-up of the 2026-10-11/12 vision-system work (new case mesh
+`visionsystem_final.stl`, `T_ee2tip` set to the DESIGN value (0.12,
+−251.96, 222.0) mm — lens axis of the new mesh, 16 mm below the case end;
+see the `T_ee2tip` block's `source`). The user asked for the config to be
+easier to read and safer to change; this is the first, behaviour-neutral
+step of the plan agreed on 2026-10-13 (stages 2–4: a TF publisher node,
+`design`/`measured`/`use` sub-blocks, `tf_chain_tool.py urdf --apply`;
+splitting robot.yaml and merging the map files were REJECTED — 114 and 12
+readers respectively, no chokepoint).
+
+- **Tip offset copies removed.** `path_tag_locator/scripts/generate_
+  calibration_artifacts.py` `TOOL_OFFSET_MM` and `handeye_sweep.SweepCfg.
+  tool_points_mm` (+ the `auto.tool_points_mm` line of `handeye_calib.yaml`)
+  held the 09-22 measured tip by hand; both now read
+  `apriltag_nav.tf_chain.tip_offset_mm()` (= `T_ee2tip`). The yaml key is
+  gone; set it only to override the point set.
+- **`tf_chain.yaml`: `kind:` per block** — `calibrated` (T_ab2mb, T_hc2ee),
+  `generated` (T_mb2fc — from robot.yaml, never hand-edit), `design`
+  (T_ee2tip). The loader reads `matrix` only and `set` rewrites only the
+  four value lines, so extra keys are inert (checked on a copy: `set`
+  leaves every non-numeric line byte-identical). The old measured tip is
+  kept as the `measured_2026_09_22` sub-block.
+- `config/tf/arm_joint_offsets.yaml`: the three `/home/abc/...` paths
+  (informational `hand_eye` / `urdf` / `session`) → `${MM_WS}/...`.
+- **`docs/FRAMES_kr.md`** — one page: frame tree, frame definitions, the
+  `T_X2Y` / 180°-mobile_base / world-axis conventions, where every number
+  lives (original, kind, writer, readers, generated copies) and the
+  recalibration recipes incl. "adding a new fixed transform" (block by hand
+  + `NAMES` in tf_chain.py — `set` cannot create a block).
+
+Verified offline (dev machine, no ROS): `tf_chain_tool.py check` 13 ok /
+0 failed; `check_joint_offsets` 22, `check_ground_plane` 15,
+`check_front_cam_pose_calib` 28, `check_lift_compensation` 9,
+`check_handeye_sweep` 74 — all 0 failed; `SweepCfg().tool_points_mm` and
+`generate_calibration_artifacts.TOOL_OFFSET_MM` both read (0.12, −251.96,
+222.0). `check_pose_vs_joint` / `check_joint_offset_cmd` need pandas /
+ROS (robot PC). Not run on the robot. ⚠️ Still open from 10-12: `arm_node`
+restart for the new `T_ee2tip`, the planner must re-export task/csv from
+the updated URDF, the tip is a design value until `basler_tip_calib` is
+run on the new case, and the planner PC needs `visionsystem_final.stl`.
 
 ### 2026-10-07 (17:46) — offset50mm group 120 at lift 0 too
 
