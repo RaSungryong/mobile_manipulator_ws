@@ -151,6 +151,7 @@ class MobileManipulatorTaskExecutor:
         # ---------- Thread sync for scan completion ----------
         # _scan_done_cb fires in ROS callback thread; run-loop waits in another.
         self._scan_done_event = threading.Event()
+        self._scan_aborted = False
 
         # ---------- ROS ----------
         rospy.Subscriber("/scan_finished", Bool, self._scan_done_cb, queue_size=1)
@@ -1070,9 +1071,13 @@ class MobileManipulatorTaskExecutor:
     # SCAN FINISHED CALLBACK
     # ==========================================================
     def _scan_done_cb(self, msg: Bool):
-        if msg.data:
-            self.scan_done = True
-            self._scan_done_event.set()
+        # True = the scan ended (finished, or cancelled by STOP); False =
+        # arm_node ABORTED it itself (2026-10-13: consecutive captures with
+        # no frames — a dead camera). Either way the wait is released; the
+        # flag decides whether the task goes on to the next group.
+        self.scan_done = True
+        self._scan_aborted = not bool(msg.data)
+        self._scan_done_event.set()
 
 
     # ==========================================================
@@ -1113,7 +1118,6 @@ class MobileManipulatorTaskExecutor:
             self._pending_task_name = None
             self._pending_resume = None
             self._pending_groups = None
-            self._pending_run = None
             self._pending_run = None
 
         if self._current_task is None:
@@ -1311,6 +1315,7 @@ class MobileManipulatorTaskExecutor:
                     )
 
                 self.scan_done = False
+                self._scan_aborted = False
                 self._scan_done_event.clear()
                 self.arm.execute_scan_points(scan_points)
 
@@ -1321,6 +1326,14 @@ class MobileManipulatorTaskExecutor:
 
                 if self._stop_requested:
                     rospy.logwarn("[TASK] Scan interrupted")
+                    return
+                if getattr(self, '_scan_aborted', False):
+                    rospy.logerr(f"[TASK] Scan at tag {tag_id} ABORTED by arm_node "
+                                 "(camera returned no frames) — task aborted, the base "
+                                 "stays here; fix the camera (restart basler_camera_node) "
+                                 "and RESUME the run")
+                    self.state = MobileManipulatorState.ERROR
+                    self._publish_task_state(note=f"scan aborted at tag {tag_id}: no frames")
                     return
 
                 self.state = MobileManipulatorState.SCAN_DONE

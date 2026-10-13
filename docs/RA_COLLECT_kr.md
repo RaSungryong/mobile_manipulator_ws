@@ -71,6 +71,9 @@ robot.yaml: `collect.wait_timeout_s` (0 = 입력 올 때까지 대기; >0이면 
 - 그때까지 찍은 점은 모두 디스크에 있다(사진, Ra map 행, 수기 CSV 행). B는
   번호를 쓴 순간 CSV에 "대기 행"(번호 + 사진, Ra 빈칸)이 남으므로 사진과
   번호가 살아 있다.
+- **스캔이 혼자 멈추는 경우(2026-10-13):** 촬영이 2점 연속 실패하면(사진 0장)
+  팔이 그 자리에 서고 task가 끝난다 (로그 `SCAN ABORTED — camera`, 칩 노트
+  `scan aborted at tag N: no frames`). 카메라를 살린 뒤 §6대로 Resume.
 
 ## 6. 이어하기 (Resume)
 
@@ -126,6 +129,7 @@ python3 src/apriltag_nav/tools/merge_ra_dataset.py <run>     # → results/ra_da
 | Record & next 안 됨 | 빈 행 있음(로그 `type the Ra or tick skip`) → 값 또는 skip |
 | Skip all을 잘못 눌러 입력 못 한 행이 skip으로 적힘 | CSV에서 그 행을 대기 행으로 되돌리고(ra/readings/measured_at 빈칸, skipped False, note `pending: Ra at the group entry stop`; 백업 먼저) Groups에 그 그룹만 체크해 Resume → 입력 정지가 그 행들로 다시 열린다 (10-07 g119 #337–#589) |
 | 한 점에서 10초 넘게 정지 | 팔 이더넷 링크 드롭 — 스스로 이어감. 안 되면 §6 |
+| 번호 정지 없이 점을 그냥 지나감, 로그 `no frames captured` | Basler 촬영 실패. 사진 없는 점은 멈추지 않는다(번호도 안 붙음). 2026-10-13부터 그 점은 Ra map에 **실패**로 적히고, 2점 연속이면 스캔이 스스로 멈추며(`/scan_finished` False, 팔은 그 자리) task가 끝난다 → 카메라 복구(보통 `systemctl restart mobile-manipulator`) 후 **Resume**: 실패한 점부터 다시 찍고 번호도 이어진다. 10-13 원인은 Basler 노드의 파일 디스크립터 고갈(pylon 누수, 고침) |
 | 표에 dx, dy 없음 | joint 전용 task. 정상 (B면 번호로 찾음) |
 
 토픽(스크립트용): `/arm/collect_mode` Bool, `/arm/collect_config` JSON

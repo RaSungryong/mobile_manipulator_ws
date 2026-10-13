@@ -40,7 +40,13 @@ everything they listed as open is either done or restated below.
   folder, `_ra_measured.csv`), so one task scans into separate sets —
   `…offset50mm_roughing_ra_map_20261013-1014` (황삭) and
   `…_finishing_ra_map_20261015-1016` (정삭), folders pre-made; continue one
-  with `RESUME <that name>`. `task_executor` restart. **Method B
+  with `RESUME <that name>`. `task_executor` restart. **Basler descriptor
+  leak (2026-10-13 evening):** pylon leaks 5 fds per device open; the node
+  hit 1024 after 180 points and the scan walked 27 points without frames or
+  a marking stop. `camera_interface` reuses one device + raises the limit;
+  a frameless point is FAILED and 2 in a row abort the scan (`/scan_finished`
+  False → task ends). `basler_camera_node` + `arm_node` + `task_executor`
+  restart. **Method B
   (`mark`) redone the same day:** capture + numbered marking stop per
   point + one Ra entry stop per group, rows in `_ra_measured.csv` with
   `mark_no` — no template any more; `arm_node` restart. **Since the

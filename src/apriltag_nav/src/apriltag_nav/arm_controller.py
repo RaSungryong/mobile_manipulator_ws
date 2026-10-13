@@ -365,6 +365,12 @@ class ArmController:
         # the vision tip is a virtual point and nobody can find it under a
         # tool 80 mm up (user, 2026-10-06 evening).
         self.collect_premark = bool(_cp('premark', 'premark', False))
+        # Consecutive scanned points whose capture returned NO frames before
+        # the scan aborts itself (2026-10-13: the Basler node ran out of file
+        # descriptors and the scan walked 27 points without a photo or a
+        # marking stop). 0 = never abort (the old behaviour).
+        self.capture_fail_abort = int(rospy.get_param('~capture_fail_abort', 2))
+        self._scan_aborted = None        # reason string while a scan self-aborts
         self.collect_mark_retreat_mm = float(_cp('mark_retreat_mm', 'mark_retreat_mm', 30.0))
         self.collect_mark_dwell_s = float(_cp('mark_dwell_s', 'mark_dwell_s', 0.0))
         self.collect_retreat_mm = float(_cp('retreat_mm', 'retreat_mm', 80.0))
@@ -743,6 +749,8 @@ class ArmController:
         self._collect_run_stem = (os.path.splitext(os.path.basename(run_csv))[0]
                                   if run_csv else time.strftime('collect_%Y%m%d_%H%M%S'))
         self._collect_batch = []
+        capture_fails = 0
+        self._scan_aborted = None
         mark_pass = bool(self.collect_enabled and self.collect_mode == 'mark')
         if mark_pass:
             # the running number continues across the task's groups (one
@@ -912,8 +920,37 @@ class ArmController:
                         point_id=pid,
                         cancelled=lambda: self.cancel_requested,
                     )
+                if not frames and not self.cancel_requested:
+                    # A point without a photo is NOT measured: the row says so
+                    # (success False — RESUME re-shoots it), the event is
+                    # `failed`, and a run of them ends the scan instead of
+                    # driving the whole path past a dead camera.
+                    entry["success"] = False
+                    entry["execution_message"] += " (no frames captured)"
+                    n_fail += 1
+                    capture_fails += 1
+                    self._refresh_live_pose()
+                    self._progress('failed', index=i + 1, total=n_total, point_id=pid,
+                                   group_id=gid, scan=True,
+                                   message=entry["execution_message"],
+                                   n_ok=n_ok, n_fail=n_fail)
+                    with self._results_lock:
+                        results.append(entry)
+                        self._save_results(current_csv_path, results)
+                    rospy.logerr(f"[Arm REAL] point {pid} (g{gid}): no frames captured "
+                                 f"({capture_fails} in a row)")
+                    if self.capture_fail_abort > 0 and capture_fails >= self.capture_fail_abort:
+                        self._scan_aborted = (f"camera: {capture_fails} consecutive captures "
+                                              f"returned no frames (last point {pid}, g{gid})")
+                        rospy.logerr(f"[Arm REAL] SCAN ABORTED — {self._scan_aborted}; the "
+                                     "arm stays here, task_executor is told the scan failed")
+                        self.cancel_requested = True
+                    continue
                 if not frames:
                     entry["execution_message"] += " (no frames captured)"
+                    capture_fails = 0
+                else:
+                    capture_fails = 0
 
                 n_ok += 1
                 self._refresh_live_pose()
@@ -1006,9 +1043,12 @@ class ArmController:
             worker.join()
             self._progress('finished', index=len(results), total=n_total,
                            n_ok=n_ok, n_fail=n_fail,
-                           cancelled=bool(self.cancel_requested))
-            # Always publish done so task_executor never hangs
-            self.publish_done()
+                           cancelled=bool(self.cancel_requested),
+                           aborted=self._scan_aborted)
+            # Always publish done so task_executor never hangs; False tells
+            # it the scan aborted itself (camera dead) — the task then stops
+            # instead of driving on to the next group.
+            self.publish_done(self._scan_aborted is None)
             self.busy = False
 
     # --------------------------------------------------
@@ -2438,11 +2478,14 @@ class ArmController:
     # --------------------------------------------------
     # PUBLISH / STATUS
     # --------------------------------------------------
-    def publish_done(self):
+    def publish_done(self, ok=True):
+        """/scan_finished: True = the scan ended (finished or cancelled by the
+        operator), False = it ABORTED ITSELF (2026-10-13: consecutive
+        captures without frames) — task_executor aborts the task on False."""
         msg = Bool()
-        msg.data = True
+        msg.data = bool(ok)
         self.done_pub.publish(msg)
-        rospy.loginfo("[Arm REAL] scan_finished published")
+        rospy.loginfo(f"[Arm REAL] scan_finished published ({'ok' if ok else 'ABORTED'})")
 
     def shutdown(self):
         rospy.loginfo("[Arm REAL] Shutting down...")

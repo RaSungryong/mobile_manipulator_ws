@@ -462,6 +462,28 @@ def main():
           'plain TASK: fresh csv_path stamp, every work point scanned')
     check(not any(s.get('resume_run') for s in states), 'resume_run None on a plain task')
 
+    print('== 5c2. a scan that aborts itself (/scan_finished False, 2026-10-13) aborts the task')
+
+    class AbortingArm(Arm):
+        def execute_scan_points(self, pts):
+            self.points.append(list(pts)); self.calls.append(('scan', len(pts)))
+            self.ex._scan_done_cb(H._Msg(False))      # arm_node: camera dead, scan aborted
+    ex = fresh(); ex.arm = AbortingArm(ex)
+    ex._command_cb(H._Msg(f'TASK {jt}'))
+    H.ticks(ex, 4)
+    gotos = [c for c in ex.mobile.calls if c[0] == 'goto']
+    check(gotos == [('goto', 105)] and len(ex.arm.points) == 1,
+          f'after the aborted scan at the first group the base does NOT drive on to 106 / 107: {gotos}')
+    check(not ex._task_completed and any('scan aborted at tag 105' in (s.get('note') or '') for s in states),
+          f'the task is NOT completed and /task_state carries the note: {[s.get("note") for s in states][-3:]}')
+    check(any('ABORTED by arm_node' in l for l in H.LOG) and ex.state.name == 'IDLE' and ex._current_task is None,
+          f'log line names the abort; the executor is back to IDLE like after a navigation failure: {ex.state.name}')
+    ex = fresh()                                     # the plain fake publishes True -> unchanged
+    ex._command_cb(H._Msg(f'TASK {jt}'))
+    H.ticks(ex, 4)
+    check([c for c in ex.mobile.calls if c[0] == 'goto'] == [('goto', 105), ('goto', 106), ('goto', 107)] and ex._task_completed,
+          'a normally finished scan (True) still runs every group')
+
     print('== 5c. lift per group (2026-10-07): differing groups load, one group disagreeing refuses')
     lift_dir = os.path.join(tmp, 'lift_csv'); os.makedirs(lift_dir)
     rows_l = joint_rows(groups)

@@ -207,6 +207,8 @@ def make_controller(robot):
     ac._collect = {'waiting': False, 'n_recorded': 0, 'n_skipped': 0, 'record_csv': '', 'saved': {}}
     ac.homed = []
     ac.move_to_home = lambda: ac.homed.append(1)
+    ac.capture_fail_abort = 2          # 2026-10-13: consecutive frameless points -> abort
+    ac._scan_aborted = None
     ac.last_results = None
     def _remember(csv_path, results, _ac=ac):
         _ac.last_results = results
@@ -711,12 +713,54 @@ check(ac.pipeline.prefixes == ['g106_p8_i0001'], 'frames are still named g<group
 ok, msg = ac.set_collect_mode(True)
 check(ok and ac.collect_enabled and collect_states()[-1]['enabled'] is True, 'set_collect_mode publishes the state')
 
-# (g) a point whose move failed or captured nothing does not pause
+# (g) a point whose capture returned nothing does not pause — and since
+# 2026-10-13 it is a FAILED point (row success False, event `failed`), and a
+# run of them aborts the scan instead of walking the path past a dead camera
 ac.pipeline.capture = lambda point_id, cancelled: []
-PUBLISHED.clear(); robot.calls.clear()
+PUBLISHED.clear(); robot.calls.clear(); ac.homed.clear()
 ac.execute_scan_points([pose_pt(9, -1.30, 0.20)])
 check(not [e for e in events() if e['phase'] == 'wait'] and not [c for c in robot.calls if c[0] == 'MoveL'],
       'no frames captured -> no pause')
+ev = events()
+check([e['phase'] for e in ev if e.get('point_id') == 9 and e['phase'] in ('done', 'failed')] == ['failed']
+      and 'no frames' in [e for e in ev if e['phase'] == 'failed'][0]['message'],
+      f'a frameless point is published as FAILED, not done: {[(e["phase"], e.get("message")) for e in ev]}')
+check(ac.last_results and ac.last_results[-1]['success'] is False and 'no frames' in ac.last_results[-1]['execution_message'],
+      f"the Ra map row says success False + no frames: {ac.last_results and ac.last_results[-1]}")
+check([d for t, d in PUBLISHED if t == '/scan_finished'] == [True] and ac.homed == [1]
+      and ev[-1]['phase'] == 'finished' and ev[-1].get('aborted') is None and ev[-1]['n_fail'] == 1,
+      'ONE frameless point (abort threshold 2): the scan still finishes normally, done True, home move')
+# (g2) two in a row -> the scan aborts itself: cancel path, no home move,
+# /scan_finished False, the third point never captured
+calls = []
+ac.pipeline.capture = lambda point_id, cancelled: calls.append(point_id) or []
+PUBLISHED.clear(); robot.calls.clear(); ac.homed.clear(); ac.cancel_requested = False
+ac.execute_scan_points([pose_pt(10, -1.30, 0.20), pose_pt(11, -1.30, 0.25), pose_pt(12, -1.30, 0.30)])
+ev = events()
+check(calls == [10, 11] and ac.cancel_requested and ac.homed == [],
+      f'2 consecutive frameless points abort the scan: point 12 never captured, arm left in place: {calls}')
+check([d for t, d in PUBLISHED if t == '/scan_finished'] == [False]
+      and ev[-1]['phase'] == 'finished' and 'consecutive' in str(ev[-1].get('aborted')) and ev[-1]['n_fail'] == 2,
+      f"/scan_finished False and the finished event names the abort: {ev[-1]}")
+check(len([r for r in ac.last_results if r['success'] is False]) == 2 and len(ac.last_results) == 2,
+      'both failed points are in the Ra map rows, nothing for the third')
+# (g3) a success in between resets the count; abort 0 = never abort
+# (collect mode OFF here — a good capture would otherwise open a pause stop)
+ac.collect_enabled = False
+seq = iter([[], [np.zeros((4, 4), dtype=np.uint8)], [], []])
+ac.pipeline.capture = lambda point_id, cancelled: next(seq)
+PUBLISHED.clear(); ac.homed.clear(); ac.cancel_requested = False
+ac.execute_scan_points([pose_pt(13, -1.30, 0.20), pose_pt(14, -1.30, 0.25), pose_pt(15, -1.30, 0.30), pose_pt(16, -1.30, 0.35)])
+check([d for t, d in PUBLISHED if t == '/scan_finished'] == [False] and [r['success'] for r in ac.last_results] == [False, True, False, False],
+      'a good capture resets the run; the next two frameless points abort again')
+ac.capture_fail_abort = 0
+ac.pipeline.capture = lambda point_id, cancelled: []
+PUBLISHED.clear(); ac.homed.clear(); ac.cancel_requested = False
+ac.execute_scan_points([pose_pt(17, -1.30, 0.20), pose_pt(18, -1.30, 0.25), pose_pt(19, -1.30, 0.30)])
+check([d for t, d in PUBLISHED if t == '/scan_finished'] == [True] and len(ac.last_results) == 3 and ac.homed == [1]
+      and all(r['success'] is False for r in ac.last_results),
+      'capture_fail_abort 0: every frameless point is walked (rows False), the scan finishes, done True')
+ac.capture_fail_abort = 2
 
 # (h) the image naming helper itself
 from apriltag_nav.arm_controller import image_file_name as _ifn, image_name_prefix as _inp

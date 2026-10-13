@@ -567,7 +567,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `results/scan_images/<run>/<run>_ra_measured.csv`; `mark` (method B, redone 2026-10-07) captures as usual, stops at every scanned point at the standoff with a running number to write beside the case — the number goes into `_ra_measured.csv` right there as a PENDING row (Ra blank; same evening) — and after the GROUP's last point retreats once for the whole group's Ra entry, which REPLACES the pending rows in place (`mark_no` filled, numbers continuing across groups and a RESUME; an interrupted group's captured points are not re-shot, see RESUME); until 2026-10-07 it captured nothing and wrote `<run>_mark_template.csv`; `scan_progress` gains `wait` / `resume`; **`/arm/collect_save`** (JSON `{points:[…]}`, 2026-10-07 evening): write the rows typed so far at an entry stop into the CSV WITHOUT releasing it (web Save button / Enter on a row; `collect_state` carries `saved` / `n_saved`; the release takes the saved value for any point it does not name); `docs/RA_COLLECT_kr.md` |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `results/scan_images/<run>/<run>_ra_measured.csv`; `mark` (method B, redone 2026-10-07) captures as usual, stops at every scanned point at the standoff with a running number to write beside the case — the number goes into `_ra_measured.csv` right there as a PENDING row (Ra blank; same evening) — and after the GROUP's last point retreats once for the whole group's Ra entry, which REPLACES the pending rows in place (`mark_no` filled, numbers continuing across groups and a RESUME; an interrupted group's captured points are not re-shot, see RESUME); until 2026-10-07 it captured nothing and wrote `<run>_mark_template.csv`; `scan_progress` gains `wait` / `resume`; **a frameless scanned point is `failed` and `~capture_fail_abort` (2) consecutive ones abort the scan with `/scan_finished` False (2026-10-13, camera-lifecycle section)**; **`/arm/collect_save`** (JSON `{points:[…]}`, 2026-10-07 evening): write the rows typed so far at an entry stop into the CSV WITHOUT releasing it (web Save button / Enter on a row; `collect_state` carries `saved` / `n_saved`; the release takes the saved value for any point it does not name); `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -1497,6 +1497,27 @@ shutter is open. So:
   the other — mean ~90, passes a whole-frame threshold. With flush 1 that
   straddling frame is the NEXT one about a quarter of the time; the band
   check re-grabs it.
+- ⚠️ **pylon LEAKS file descriptors (2026-10-13): 4 per
+  `TlFactory.CreateDevice` + `InstantCamera` (never returned, `DestroyDevice`
+  or not) and 1 per `Open()`; grabbing leaks nothing.** `camera_interface`
+  used to enumerate + create + open at EVERY scan point (pre-open, idle
+  close 5 s later while the operator wrote the number), i.e. ~5 descriptors
+  per point against a 1024 soft limit: on the 10-13 roughing run the
+  node hit it after ~180 points (`WaitObject duplicate failed: Too many
+  open files`), every grab failed, and the scan walked 27 points (g119
+  sp128–154) without a photo or a marking stop. Now the device object is
+  created ONCE and reused (Open/Close only — 1 descriptor per cycle,
+  measured on the real camera; a stale device is recreated once when
+  Open() raises), `ensure_fd_headroom()` raises the process's soft
+  RLIMIT_NOFILE to the hard limit (524288 on the robot PC) at
+  construction, and a warning fires at 90 % of the soft limit.
+  `tools/check_camera_interface.py` (12). **And a scanned point whose
+  capture returned no frames is a FAILED point since the same day**
+  (`success` False, event `failed`, RESUME re-shoots it); after
+  `~capture_fail_abort` (launch: 2) consecutive ones the arm ABORTS the
+  scan where it stands, `/scan_finished` carries **False** and
+  `task_executor` ends the task (note `scan aborted at tag N: no frames`)
+  instead of driving on to the next group. 0 = never abort.
 - **CAPTURE works during the live preview (2026-09-15).** It used to be
   greyed out whenever any pooled call was in flight, which at 5 Hz is
   almost always; preview grabs are now counted separately
@@ -2195,6 +2216,68 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-13 (evening) — "sp128부터 허락 없이 넘어감": the Basler node ran out of file descriptors (pylon leaks 5 per device open); frameless points are FAILED now and a run of them aborts the scan
+
+User: during the roughing run's group 119 the arm stopped waiting for
+Next from source point 128 on and walked point after point. The arm_node
+log of the 20:17 scan: 127 marking stops (#673–#799, every one released
+by a `scan_continue`), then from Point 163 (= sp128) on `Camera capture
+unsuccessful: no frames captured` at every point until the operator's
+STOP at 20:51 — 27 points (sp128–154). A point without frames never
+entered the collect branch (`if frames and self.collect_enabled`), so no
+marking stop, no number, no row: the arm simply moved on. The Basler
+node's log has the cause at 20:49:29: `grab error: WaitObject duplicate
+failed (0): Too many open files` — the process held **1008 of 1024
+descriptors, 900 of them `/proc/<self>/status`**, after 180 open/close
+cycles today. Reproduced against the idle camera: pylon 3.0.1 leaks **4
+descriptors per `CreateDevice` + `InstantCamera`** (DestroyDevice does not
+return them) and **1 per `Open()`**; StartGrabbing / RetrieveResult leak
+nothing. `camera_interface` enumerated + created + opened at every scan
+point (pre-open, idle close after 5 s — longer than a marking stop), so
+~5 per point; 1008 ≈ 110 base + 5 × 180.
+
+Fixed three ways (standing text in the camera-lifecycle section):
+- `camera_interface`: the device object is created once and REUSED across
+  close() (Open/Close only; a stale device whose Open() raises is destroyed
+  and recreated once); `ensure_fd_headroom()` raises the soft RLIMIT_NOFILE
+  to the hard limit at construction (524288 here — no sudo needed, the hard
+  limit allows it); a warning at 90 % of the soft limit. Measured on the
+  real camera afterwards: 1 descriptor per cycle, limit 1048576.
+- `arm_controller`: a scanned point whose capture returned no frames is
+  `success` False with `failed` progress (it was `success` True "(no frames
+  captured)" — a row RESUME would have counted done without collect mode),
+  and after `~capture_fail_abort` (launch: 2) consecutive ones the scan
+  aborts itself: the arm stays where it is, `finished` carries `aborted`,
+  `publish_done(False)`.
+- `task_executor`: `/scan_finished` False ends the task (log `Scan at tag N
+  ABORTED by arm_node`, note `scan aborted at tag N: no frames`, back to
+  IDLE like after a navigation failure) instead of driving to the next
+  group and failing there too.
+- Today's run: the 27 rows' `success` flipped to False in the Ra map
+  (backup `…before_noframes_success_fix_20261013.csv.bak`); RESUME already
+  planned them as open (no collect row), 799 done / 127 pending unchanged.
+
+Verified offline: new `tools/check_camera_interface.py` **12** (fake
+pypylon: one CreateDevice over five cycles, recreate on a failed Open,
+limit raised, warning once), `check_scan_progress.py` 204 → **212** (a
+frameless point → `failed` + row False, one of them still finishes with
+done True; two in a row abort with no home move, done False, the third
+point never captured; a good capture resets the count; threshold 0 walks
+them all), `check_scan_resume.py` 124 → **128** (an arm publishing False →
+no drive to the next groups, note + log line, task not completed),
+`check_charging_manager` 37, `check_basler_lamp` 20, pyflakes clean.
+**Not run on the robot: `basler_camera_node` (the leak fix — it is at 1008
+descriptors NOW and the next scan's captures will fail within a few
+points), `arm_node` and `task_executor` all need the service restart**
+(`sudo systemctl restart mobile-manipulator`); then Collect mode + mark +
+Groups 119 (and 120) + `RESUME scan_joint_hoodouter_lower_plate1_
+offset50mm_roughing_ra_map_20261013-1014` — sp1–127 are driven through,
+sp128 onward captured and numbered from #800. Seen on the way, not
+changed: every group entry stop today was released with **Skip all**
+(748 rows skipped, 0 Ra) — those rows count as DONE for RESUME; if the Ra
+is to be typed in later, those rows must be set back to pending first
+(the 10-07 §8 procedure).
 
 ### 2026-10-13 — A run's result set can be NAMED: `TASK <name> run=<stem>` / Task tab "Run name"; roughing and finishing folders pre-made
 
