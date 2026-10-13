@@ -54,6 +54,7 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'src'))
 from apriltag_nav import paths as _paths   # noqa: E402
+from apriltag_nav import scan_resume as _scan_resume   # noqa: E402
 
 NEW_RE = re.compile(r'^g(?P<g>-?\d+)_p(?P<p>\d+)(?:_sp(?P<sp>-?\d+))?_i(?P<i>\d+)_s(?P<s>\d+)\.png$')
 OLD_RE = re.compile(r'^point_(?P<p>\d+)_sample_(?P<s>\d+)(?:_ra_[-\d.]+)?\.png$')
@@ -98,10 +99,28 @@ def list_frames(image_dir):
     return out
 
 
-def task_of(stem):
-    """`<task>` of a `<task>_ra_map_<ts>` stem (the stem itself otherwise)."""
-    m = re.match(r'^(?P<task>.+)_ra_map_\d{8}_\d{6}$', stem)
-    return m['task'] if m else stem
+def _task_names(task_dir=None):
+    """The task names task/csv would register: joint_<key>.csv -> scan_joint_<key>,
+    pose_<key>.csv -> scan_pose_<key> (the TaskManager rule, read off the files
+    so this tool needs no ROS)."""
+    names = []
+    for path in glob.glob(os.path.join(task_dir or _paths.TASK_DIR, '*.csv')):
+        base = os.path.splitext(os.path.basename(path))[0]
+        for prefix in ('joint_', 'pose_'):
+            if base.startswith(prefix):
+                names.append('scan_' + base)
+    return names
+
+
+def task_of(stem, task_dir=None):
+    """`<task>` of a run stem, or the stem itself when it is not one. A stem
+    is `<task>[_<label>]_ra_map_<stamp>` (the label since 2026-10-13, `TASK …
+    run=<stem>`): the task is the longest task/csv name the head starts
+    with; a head that matches no file is returned whole (the pre-label rule)."""
+    head = _scan_resume.run_head_of(stem)
+    if head is None:
+        return stem
+    return _scan_resume.task_of(stem, _task_names(task_dir)) or head
 
 
 def find_measured(stem, measured_dir, override=None):
@@ -130,7 +149,7 @@ def find_measured(stem, measured_dir, override=None):
 def source_point_map(stem, task_dir=None):
     """{(group_id, path_index): source_point_id} from the task's joint CSV,
     or None when the run is not a joint task / the file is missing."""
-    task = task_of(stem)
+    task = task_of(stem, task_dir)
     if not task or not task.startswith('scan_joint_'):
         return None
     path = os.path.join(task_dir or _paths.TASK_DIR, 'joint_' + task[len('scan_joint_'):] + '.csv')

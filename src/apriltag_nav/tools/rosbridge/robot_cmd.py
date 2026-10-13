@@ -12,6 +12,9 @@ port-forwarded to the robot PC's 192.168.1.100:9090.
 USAGE
     python robot_cmd.py "GOTO 105"                       task command (TASK/GOTO/STOP/STATE/CHARGE/UNDOCK/RELOAD_TASKS/RESUME)
     python robot_cmd.py "TASK scan_joint_x groups=105,106"   only those groups (the task's tags); same on RESUME
+    python robot_cmd.py "TASK scan_joint_x run=scan_joint_x_roughing_ra_map_20261013-1014"
+                                                      name this run's result set (Ra map, frame folder,
+                                                      measured CSV = that stem); "RESUME <stem>" continues it
     python robot_cmd.py state [seconds]                  watch /task_state
     python robot_cmd.py topics | services                list what exists
     python robot_cmd.py type /bms/state                  message type of a topic

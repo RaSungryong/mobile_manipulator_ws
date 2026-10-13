@@ -83,6 +83,10 @@ class MobileManipulatorTaskExecutor:
         # group selection of the pending / running command (sorted list or None)
         self._pending_groups: Optional[list] = None
         self._current_groups: Optional[list] = None
+        # the run stem of the command (TASK run=<stem>, or the RESUMEd run);
+        # None = the executor stamps <task>_ra_map_<YYYYMMDD_HHMMSS> itself
+        self._pending_run: Optional[str] = None
+        self._current_run: Optional[str] = None
 
         self._pending_task_name: Optional[str] = None
         self._pending_task: Optional[List[dict]] = None
@@ -225,6 +229,9 @@ class MobileManipulatorTaskExecutor:
                               if getattr(self, '_current_resume', None) else None,
                 # the `groups=` selection of the running command, else None
                 'groups_filter': getattr(self, '_current_groups', None),
+                # the result set of the running command: the RESUMEd run, or
+                # the run= name of a fresh TASK (None = the executor's own stamp)
+                'run_stem': getattr(self, '_current_run', None),
                 # Charging manager (2026-09-14, for robot_ui's CHARGE chip):
                 # phase is the manager's own word, `charging` is the BMS's.
                 'charge_phase': self._charge_phase,
@@ -450,6 +457,7 @@ class MobileManipulatorTaskExecutor:
         self._pending_task = items
         self._pending_resume = None
         self._pending_groups = None
+        self._pending_run = None
         if self._task_running:
             rospy.logwarn(f"[Charge] preempting '{self._current_task_name}' for '{name}'")
             self._stop_requested = True
@@ -845,6 +853,7 @@ class MobileManipulatorTaskExecutor:
             self._pending_task_name = None
             self._pending_resume = None
             self._pending_groups = None
+            self._pending_run = None
 
             try:
                 self.mobile.emergency_stop_robot()
@@ -892,6 +901,7 @@ class MobileManipulatorTaskExecutor:
                                     'summary': plan.summary(),
                                     'groups': plan.groups_filter}
             self._pending_groups = plan.groups_filter
+            self._pending_run = plan.run_stem
             self._stop_requested = True
             try:
                 self.mobile.preempt_stop_robot()
@@ -908,8 +918,16 @@ class MobileManipulatorTaskExecutor:
             if err:
                 rospy.logerr(f"[TASK] {err}")
                 return
+            # `run=<stem>` (2026-10-13): the operator's own name for this
+            # run's result set — Ra map, frame folder and collect CSV are all
+            # `<stem>`; a later `RESUME <stem>` continues it. Without it the
+            # executor stamps <task>_ra_map_<YYYYMMDD_HHMMSS> as before.
+            parts, run_stem, err = scan_resume.parse_run_arg(parts)
+            if err:
+                rospy.logerr(f"[TASK] {err}")
+                return
             if len(parts) != 2:
-                rospy.logerr("[TASK] Usage: TASK <task_name> [groups=104,105]")
+                rospy.logerr("[TASK] Usage: TASK <task_name> [groups=104,105] [run=<task>[_<label>]_ra_map_<stamp>]")
                 return
 
             task_name = parts[1]
@@ -917,6 +935,17 @@ class MobileManipulatorTaskExecutor:
             if not task:
                 rospy.logerr(f"[TASK] Unknown task '{task_name}'")
                 return
+            if run_stem:
+                why = scan_resume.check_run_stem(run_stem, task_name, self.task_mgr.tasks.keys())
+                if why:
+                    rospy.logerr(f"[TASK] '{task_name}': {why}")
+                    return
+                existing = os.path.join(RA_MAP_DIR, run_stem + '.csv')
+                if os.path.exists(existing):
+                    rospy.logerr(f"[TASK] run '{run_stem}' already exists ({existing}) — "
+                                 f"a fresh TASK would scan it from the first point over again; "
+                                 f"use 'RESUME {run_stem}' to continue it, or another run name")
+                    return
             why = scan_resume.check_groups(task, groups)
             if why:
                 rospy.logerr(f"[TASK] '{task_name}': {why}")
@@ -926,12 +955,14 @@ class MobileManipulatorTaskExecutor:
                 rospy.logwarn(f"[TASK] '{task_name}': groups {sorted(groups)} only — "
                               f"{len(task)} of {len(self.task_mgr.get_task(task_name))} steps")
 
-            rospy.logwarn(f"[TASK] Preempt → pending '{task_name}'")
+            rospy.logwarn(f"[TASK] Preempt → pending '{task_name}'"
+                          + (f" (run {run_stem})" if run_stem else ""))
 
             self._pending_task_name = task_name
             self._pending_task = task
             self._pending_resume = None
             self._pending_groups = sorted(groups) if groups else None
+            self._pending_run = run_stem
 
             self._stop_requested = True
 
@@ -963,6 +994,7 @@ class MobileManipulatorTaskExecutor:
             self._pending_task = task
             self._pending_resume = None
             self._pending_groups = None
+            self._pending_run = None
             self._stop_requested = True
 
             try:
@@ -989,7 +1021,7 @@ class MobileManipulatorTaskExecutor:
         """ResumePlan for one run stem, or None when its task is not
         registered or a selected group is not the task's (logged). Pure
         bookkeeping — nothing moves."""
-        task_name = scan_resume.task_of(stem)
+        task_name = scan_resume.task_of(stem, self.task_mgr.tasks.keys())
         steps = self.task_mgr.get_task(task_name) if task_name else []
         if not steps:
             rospy.logerr(f"[RESUME] run '{stem}' belongs to no registered task "
@@ -1076,10 +1108,13 @@ class MobileManipulatorTaskExecutor:
             self._current_task_name = self._pending_task_name
             self._current_resume = getattr(self, '_pending_resume', None)
             self._current_groups = getattr(self, '_pending_groups', None)
+            self._current_run = getattr(self, '_pending_run', None)
             self._pending_task = None
             self._pending_task_name = None
             self._pending_resume = None
             self._pending_groups = None
+            self._pending_run = None
+            self._pending_run = None
 
         if self._current_task is None:
             return
@@ -1115,6 +1150,7 @@ class MobileManipulatorTaskExecutor:
         self._current_task_name = None
         self._current_resume = None
         self._current_groups = None
+        self._current_run = None
         self._task_running = False
         self.state = MobileManipulatorState.IDLE
 
@@ -1153,6 +1189,10 @@ class MobileManipulatorTaskExecutor:
         # execution produces a uniquely named result file. A RESUME keeps the
         # interrupted run's own csv_path (already set on its planned points)
         # so every writer appends to that run's files.
+        # `TASK … run=<stem>` (2026-10-13) names the whole result set instead:
+        # every point's csv_path becomes <result_dir>/<stem>.csv, and the
+        # frame folder / collect CSV follow that stem in arm_node.
+        run_stem = None if resume else getattr(self, '_current_run', None)
         if not resume:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             for tag_points in self.task_mgr.scan_points.get(task_name, {}).values():
@@ -1160,10 +1200,22 @@ class MobileManipulatorTaskExecutor:
                     orig = sp.get("csv_path", "")
                     if orig:
                         base, ext = os.path.splitext(orig)
-                        # Strip any previously injected timestamp suffix of the
-                        # form _YYYYMMDD_HHMMSS (15 digits separated by '_').
-                        base = re.sub(r'_\d{8}_\d{6}$', '', base)
+                        if run_stem:
+                            sp["csv_path"] = os.path.join(os.path.dirname(base), run_stem + ext)
+                            continue
+                        # Back to TaskManager's <result_dir>/<task>_ra_map: an
+                        # earlier run of the same points left its own stamp
+                        # (`_YYYYMMDD_HHMMSS`) or a `run=` label + stamp
+                        # (`_roughing_ra_map_20261013-1014`) in csv_path, and
+                        # neither may be carried into the next plain TASK.
+                        if '_ra_map' in os.path.basename(base):
+                            base = os.path.join(os.path.dirname(base), task_name + '_ra_map')
+                        else:
+                            base = re.sub(r'_\d{8}_\d{6}$', '', base)
                         sp["csv_path"] = f"{base}_{ts}{ext}"
+            if run_stem:
+                rospy.logwarn(f"[TASK] run name '{run_stem}': Ra map, frames and the collect CSV "
+                              f"go under that stem (RESUME {run_stem} continues it)")
 
         # Height from the CSV's lift_height column; None means this task does
         # not command the lift at all. Per GROUP since 2026-10-07: the lift is
@@ -1177,7 +1229,8 @@ class MobileManipulatorTaskExecutor:
         self._progress_total = len(task_items)
         self._progress_tag = -1
         groups = getattr(self, '_current_groups', None)
-        note = f"resumed {resume['stem']}" if resume else 'task started'
+        note = f"resumed {resume['stem']}" if resume else (
+            f"task started, run {run_stem}" if run_stem else 'task started')
         if groups:
             note += f" (groups {','.join(str(g) for g in groups)})"
             rospy.logwarn(f"[TASK] groups {groups} only — the other groups are skipped, not done")

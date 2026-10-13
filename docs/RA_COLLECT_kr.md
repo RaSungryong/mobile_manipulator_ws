@@ -24,6 +24,7 @@ Ra 모델 학습 데이터 = 스캔 TASK가 찍은 Basler 사진 + 같은 자리
 | **mark spot before retreat** | A: 촬영 직후 공구가 내려간 채 한 번 더 멈춤 → 케이스 옆에 점 표시 후 Next. A에서는 켜는 게 기본 (tip은 가상점이라 80 mm 위에선 못 찾음) |
 | **mark dwell [s]** | B: 번호 정지를 몇 초 뒤 자동 진행. 0 = Next 누를 때까지 |
 | **Groups** (위쪽 줄) | 오늘 할 그룹(=태그)만 체크. 안 한 그룹은 주행 안 하고 다음에 다시 고를 수 있음 |
+| **Run name** (위쪽 줄, 2026-10-13) | 이번 run의 **결과 묶음 이름**. 사진 폴더 `results/scan_images/<이름>/`, 수기 CSV `<이름>_ra_measured.csv`, Ra map `log/apriltag_nav/ra_maps/<이름>.csv`가 전부 이 이름을 쓴다 → 같은 task를 황삭 / 정삭 금형처럼 **별도 묶음으로 분리**할 때. 비우면 `<task>_ra_map_<지금시각>`; 라벨만 쓰면(`roughing`) `<task>_roughing_ra_map_<오늘날짜>`; `_ra_map_`이 든 전체 이름(`<task>_roughing_ra_map_20261013-1014`)은 그대로. 영문·숫자·`.`·`_`·`-`만. 이미 Ra map이 있는 이름은 거부됨 — 그 run은 **Resume run** 칸에 이름을 넣어 이어간다 |
 
 robot.yaml: `collect.wait_timeout_s` (0 = 입력 올 때까지 대기; >0이면 그 시간
 뒤 skip으로 기록하고 진행), `keyence.require_converged: true` 권장(거리 보정
@@ -80,7 +81,9 @@ robot.yaml: `collect.wait_timeout_s` (0 = 입력 올 때까지 대기; >0이면 
 2. §2 설정 재확인 (재시작했으면 Collect mode·Mode가 풀려 있음)
 3. Task 탭: 같은 task 선택 → Groups 체크 → **Resume run** 칸은 비워 두고
    (= 남은 점 있는 가장 최근 run) → **Resume interrupted run**
-   (원문: `RESUME [<run>] groups=119`)
+   (원문: `RESUME [<run>] groups=119`). Run name을 따로 준 run(황삭 /
+   정삭 묶음)을 이어갈 때는 그 이름을 Resume run 칸에 넣는다 — 비워 두면
+   이름순으로 가장 최근 run이 잡히므로 다른 묶음일 수 있다
 4. 로그 `[RESUME] … N of M done, K left; … await their Ra entry` 확인.
    B면 `numbers continue from #<다음 번호>`가 떠야 함(#1이면 잘못 잡힌 것)
 
@@ -100,7 +103,10 @@ Resume이 하는 일: 끝난 그룹은 안 간다. 일부만 한 그룹은 가�
 | `results/scan_images/<run>/g<g>_p<p>_sp<s>_i<i>_s1.png` | 사진 |
 | `results/scan_images/<run>/<run>_ra_measured.csv` | 수기 Ra (mark_no, group, point, 사진 이름, ra_measured, ra_readings, note, skipped …) |
 
-`<run>` = `<task>_ra_map_<시각>`. 끝났는지: `grep -c "pending: Ra" <수기 CSV>`
+`<run>` = `<task>_ra_map_<시각>`, Run name을 준 run은 그 이름 그대로
+(`<task>_<라벨>_ra_map_<표기>` — 예: 황삭 `scan_joint_hoodouter_lower_plate1_
+offset50mm_roughing_ra_map_20261013-1014`, 정삭 `…_finishing_ra_map_20261015-1016`;
+폴더는 미리 만들어 둠, 2026-10-13). 끝났는지: `grep -c "pending: Ra" <수기 CSV>`
 가 0.
 
 ```

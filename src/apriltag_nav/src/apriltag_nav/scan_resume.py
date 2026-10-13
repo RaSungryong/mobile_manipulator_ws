@@ -70,14 +70,98 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 Key = Tuple[int, int]
 
-_RUN_RE = re.compile(r'^(?P<task>.+)_ra_map_(?P<ts>\d{8}_\d{6})$')
+# A run stem is `<task>_ra_map_<stamp>` (task_executor's own stamp is
+# `YYYYMMDD_HHMMSS`), or — since 2026-10-13, `TASK <name> run=<stem>` — any
+# `<task>[_<label>]_ra_map_<text>` the operator chose (e.g.
+# `..._offset50mm_roughing_ra_map_20261013-1014`): the stem names the Ra map,
+# the frame folder and the collect CSV, so one task can be scanned into
+# separate result sets (roughing / finishing mould). The split is at the LAST
+# `_ra_map_`; the head is the task name, possibly followed by a label.
+_RUN_RE = re.compile(r'^(?P<head>.+)_ra_map_(?P<ts>[^/\s]+)$')
+_RUN_STEM_CHARS = re.compile(r'^[A-Za-z0-9._-]+$')
 
 
-def task_of(run_stem: str) -> Optional[str]:
-    """`scan_joint_x_ra_map_20261006_175616` -> `scan_joint_x`; None if the
-    stem is not a run name."""
+def run_head_of(run_stem: str) -> Optional[str]:
+    """Everything before the last `_ra_map_`, or None if the stem is not a
+    run name. `scan_joint_x_roughing_ra_map_20261013-1014` -> `scan_joint_x_roughing`."""
     m = _RUN_RE.match(run_stem)
-    return m['task'] if m else None
+    return m['head'] if m else None
+
+
+def task_of(run_stem: str, tasks: Optional[Iterable[str]] = None) -> Optional[str]:
+    """The task a run stem belongs to; None if the stem is not a run name.
+
+    `scan_joint_x_ra_map_20261006_175616` -> `scan_joint_x`. With `tasks`
+    (the registered task names) a LABELLED stem resolves too: the longest
+    registered name that is the head itself or a `_`-separated prefix of it
+    (`scan_joint_x_roughing_ra_map_20261013-1014` -> `scan_joint_x`), None
+    when no registered task matches. Without `tasks` the whole head is
+    returned (the pre-label convention, which every stem the executor
+    stamped itself still follows)."""
+    head = run_head_of(run_stem)
+    if head is None:
+        return None
+    if tasks is None:
+        return head
+    best = None
+    for t in tasks:
+        if head == t or head.startswith(t + '_'):
+            if best is None or len(t) > len(best):
+                best = t
+    return best
+
+
+def parse_run_arg(parts: List[str]) -> Tuple[List[str], Optional[str], Optional[str]]:
+    """Split a `run=<stem>` token (any position, case-insensitive key) out of
+    a command's words — the operator's own name for the result set of a
+    fresh TASK. Returns (other words, the stem or None, an error or None).
+    The stem may carry `.csv`, which is dropped; it must be one word of
+    `[A-Za-z0-9._-]` containing `_ra_map_` (what every reader splits on)."""
+    rest: List[str] = []
+    stem: Optional[str] = None
+    i = 0
+    while i < len(parts):
+        w = parts[i]
+        low = w.lower()
+        if low.startswith('run=') or low.startswith('run_name=') or low.startswith('name='):
+            text = w.split('=', 1)[1].strip()
+            if text == '' and i + 1 < len(parts):
+                i += 1
+                text = parts[i].strip()
+            if text.lower().endswith('.csv'):
+                text = text[:-4]
+            if text == '':
+                return rest, None, f"'{w}' names no run (want run=<task>[_<label>]_ra_map_<stamp>)"
+            if not _RUN_STEM_CHARS.match(text):
+                return rest, None, (f"run name '{text}' may only use letters, digits, '.', '_', '-' "
+                                    "(no spaces, no '/')")
+            if run_head_of(text) is None:
+                return rest, None, f"run name '{text}' must contain '_ra_map_' (<task>[_<label>]_ra_map_<stamp>)"
+            if stem is not None and stem != text:
+                return rest, None, f"two run names given ('{stem}', '{text}')"
+            stem = text
+        else:
+            rest.append(w)
+        i += 1
+    return rest, stem, None
+
+
+def check_run_stem(stem: str, task_name: str, tasks: Iterable[str]) -> Optional[str]:
+    """Why `stem` cannot be the run name of a fresh `task_name` TASK, or
+    None when it can: it must resolve (task_of with the registered names)
+    to exactly that task — i.e. `<task_name>_ra_map_…` or
+    `<task_name>_<label>_ra_map_…`, and not to a longer registered name."""
+    head = run_head_of(stem)
+    if head is None:
+        return f"run name '{stem}' must contain '_ra_map_'"
+    if not (head == task_name or head.startswith(task_name + '_')):
+        return (f"run name '{stem}' does not start with the task name — want "
+                f"'{task_name}_ra_map_<stamp>' or '{task_name}_<label>_ra_map_<stamp>'")
+    owner = task_of(stem, tasks)
+    if owner != task_name:
+        return (f"run name '{stem}' would belong to task '{owner}' (a longer registered name) "
+                f"— a later RESUME would run that task's path; choose another label")
+    return None
 
 
 def run_stem_of(path: str) -> str:

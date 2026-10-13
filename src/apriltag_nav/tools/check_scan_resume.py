@@ -132,6 +132,25 @@ def main():
     check(done_nomeas == set(j_keys[105]) | {j_keys[106][0]}, 'without a measured CSV the Ra map row alone makes a point done')
     check(SR.done_points(os.path.join(tmp, 'missing.csv')) == set(), 'missing Ra map -> nothing done')
     check(SR.task_of(stem) == jt and SR.task_of('go_home_result_1') is None, 'task_of parses the run stem only')
+    # run names with a label (2026-10-13): <task>_<label>_ra_map_<stamp>
+    lab = f'{jt}_roughing_ra_map_20261013-1014'
+    check(SR.task_of(lab) == f'{jt}_roughing' and SR.task_of(lab, tm.tasks.keys()) == jt
+          and SR.task_of(stem, tm.tasks.keys()) == jt and SR.task_of('scan_joint_other_ra_map_1', tm.tasks.keys()) is None,
+          'task_of: a labelled stem resolves to the registered task (longest prefix), an unknown one to None')
+    check(SR.task_of(f'{jt}_b_ra_map_1', [jt, f'{jt}_b']) == f'{jt}_b', 'task_of prefers the longest registered name')
+    rest, rs, err = SR.parse_run_arg(f'TASK {jt} run={lab}.csv groups=106'.split())
+    check(rest == ['TASK', jt, 'groups=106'] and rs == lab and err is None, f'parse_run_arg lifts run=<stem>.csv out: {rest} {rs} {err}')
+    check(SR.parse_run_arg(['TASK', jt])[1] is None and SR.parse_run_arg(['TASK', jt])[2] is None, 'no run= -> None, no error')
+    check(SR.parse_run_arg(['TASK', jt, 'run=no_map_here'])[2] and 'ra_map' in SR.parse_run_arg(['TASK', jt, 'run=no_map_here'])[2],
+          'a run name without _ra_map_ is an error')
+    check(SR.parse_run_arg(['TASK', jt, 'run=a/b_ra_map_1'])[2] is not None and SR.parse_run_arg(['TASK', jt, 'run='])[2] is not None,
+          'a slash or an empty name is an error')
+    check(SR.check_run_stem(lab, jt, tm.tasks.keys()) is None and SR.check_run_stem(f'{jt}_ra_map_x', jt, tm.tasks.keys()) is None,
+          'check_run_stem accepts <task>_ra_map_… and <task>_<label>_ra_map_…')
+    check('does not start with the task name' in (SR.check_run_stem('scan_joint_zz_ra_map_1', jt, tm.tasks.keys()) or '')
+          and 'longer registered name' in (SR.check_run_stem(f'{jt}_b_ra_map_1', jt, [jt, f'{jt}_b']) or ''),
+          'check_run_stem refuses another task\'s stem and a stem a longer task name would claim')
+    check(SR.run_head_of('x_ra_map_1_ra_map_2') == 'x_ra_map_1' and SR.run_head_of('plain') is None, 'run_head_of splits at the LAST _ra_map_')
 
     print('== 2. plan_resume, joint mode')
     plan = SR.plan_resume(stem, jt, tm.get_task(jt), tm.scan_points[jt], done, ra_map)
@@ -381,6 +400,51 @@ def main():
     ex = fresh()
     ex._command_cb(H._Msg(f'TASK {jt} groups=106,107')); ex._command_cb(H._Msg('GOTO 105'))
     check(ex._pending_groups is None and ex._pending_task_name == 'goto_105', 'GOTO after a grouped TASK drops the selection')
+
+    print('== 5c. task_executor TASK run=<stem> (2026-10-13)')
+    run_lab = f'{jt}_roughing_ra_map_20261013-1014'
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} run={run_lab} groups=106'))
+    check(ex._pending_task_name == jt and ex._pending_run == run_lab and ex._pending_groups == [106]
+          and ex._pending_resume is None, f'TASK run=<stem> queues with the run name: {ex._pending_run}')
+    H.ticks(ex, 4)
+    want_csv = os.path.join(ra_dir, run_lab + '.csv')
+    check(len(ex.arm.points) == 1 and all(p['csv_path'] == want_csv for p in ex.arm.points[0]),
+          f"every point's csv_path is <result_dir>/<run>.csv: {ex.arm.points and ex.arm.points[0][0]['csv_path']}")
+    check(any(s.get('run_stem') == run_lab and s.get('note', '').startswith(f'task started, run {run_lab}') for s in states),
+          '/task_state carries run_stem and the note names the run')
+    check(ex._current_run is None and ex._pending_run is None, 'run name cleared after the run')
+    check(any(f"run name '{run_lab}'" in l for l in H.LOG), 'log line names the run')
+    # the same name again: refused once its Ra map exists (RESUME continues it)
+    write_ra_map(want_csv, [j_keys[106][0]])
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} run={run_lab}'))
+    check(ex._pending_task is None and any('already exists' in l and f'RESUME {run_lab}' in l for l in H.LOG),
+          'a run name whose Ra map exists is refused, pointing at RESUME')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'RESUME {run_lab}'))
+    check(ex._pending_task_name == jt and ex._pending_resume and ex._pending_resume['stem'] == run_lab and ex._pending_run == run_lab,
+          f'RESUME of a labelled run resolves its task: {ex._pending_task_name}')
+    H.ticks(ex, 4)
+    check(len(ex.arm.points) >= 1 and all(p['csv_path'] == want_csv for pts in ex.arm.points for p in pts),
+          'the labelled run is resumed into its own csv_path')
+    check(any(s.get('run_stem') == run_lab and s.get('resume_run') == run_lab for s in states), '/task_state run_stem on a RESUME')
+    os.remove(want_csv)
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} run=scan_joint_other_ra_map_1'))
+    check(ex._pending_task is None and any('does not start with the task name' in l for l in H.LOG), "another task's stem refused")
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} run=nope'))
+    check(ex._pending_task is None and any('_ra_map_' in l for l in H.LOG), 'a name without _ra_map_ refused')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} run={run_lab}')); ex._command_cb(H._Msg('GOTO 105'))
+    check(ex._pending_run is None and ex._pending_task_name == 'goto_105', 'GOTO after a named TASK drops the run name')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt}'))
+    H.ticks(ex, 4)
+    check(all('_ra_map_' in p['csv_path'] and p['csv_path'] != want_csv and p['csv_path'].split('_ra_map_')[0].endswith(jt)
+              for pts in ex.arm.points for p in pts) and any(s.get('run_stem') is None and s.get('note') == 'task started' for s in states),
+          'plain TASK still stamps <task>_ra_map_<now> with run_stem None')
     ex = fresh()
     ex._command_cb(H._Msg(f'TASK {jt}'))
     check(ex._pending_groups is None and [st['tag'] for st in ex._pending_task] == [105, 106, 107], 'plain TASK: no selection, all steps')

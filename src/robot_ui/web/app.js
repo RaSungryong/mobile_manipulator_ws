@@ -713,6 +713,25 @@ function setAllGroups(checked) {
   for (const b of $('task-groups').querySelectorAll('input[type=checkbox]')) b.checked = checked;
 }
 
+// ---- Run name (2026-10-13) ----
+// Send TASK appends ` run=<stem>` from the Run name field: blank = none
+// (task_executor stamps <task>_ra_map_<now>); a name containing `_ra_map_`
+// is used as typed; anything else is a LABEL and becomes
+// <task>_<label>_ra_map_<YYYYMMDD> (local date). null = a name the executor
+// would refuse (spaces, '/', other characters) — the caller does not send.
+function runNameArg(taskName, text, now) {
+  const t = (text || '').trim();
+  if (!t) return '';
+  let stem = t.replace(/\.csv$/i, '');
+  if (!stem.includes('_ra_map_')) {
+    const d = now || new Date();
+    const ymd = String(d.getFullYear()) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+    stem = taskName + '_' + stem.replace(/^_+|_+$/g, '') + '_ra_map_' + ymd;
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(stem)) return null;
+  return ' run=' + stem;
+}
+
 // ------------------------------------------------------------------
 // Camera views
 // ------------------------------------------------------------------
@@ -1137,7 +1156,11 @@ function init() {
   $('btn-task').addEventListener('click', () => {
     const groups = selectedGroupsArg();
     if (groups === null) { appendLog('[task] no group ticked — tick at least one group (or all)'); return; }
-    call('task_command', ['TASK ' + $('txt-task').value.trim() + groups]).catch(() => {});
+    const taskName = $('txt-task').value.trim();
+    const run = runNameArg(taskName, $('txt-run').value);
+    if (run === null) { appendLog('[task] run name may only use letters, digits, ".", "_", "-" (no spaces)'); return; }
+    if (run) appendLog('[task] run name' + run.replace(' run=', ': '));
+    call('task_command', ['TASK ' + taskName + groups + run]).catch(() => {});
   });
   $('btn-reload-tasks').addEventListener('click', () => call('task_command', ['RELOAD_TASKS']).catch(() => {}));
   $('btn-groups-all').addEventListener('click', () => setAllGroups(true));

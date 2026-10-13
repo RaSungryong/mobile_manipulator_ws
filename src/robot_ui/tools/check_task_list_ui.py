@@ -230,6 +230,30 @@ def main():
     bridge.calls.clear()
     click(tab, 'Send TASK')
     check(('send_task_command', f'TASK {names[0]}') in bridge.calls, 'blank groups field -> plain TASK')
+    # run name (2026-10-13): a label expands to <task>_<label>_ra_map_<YYYYMMDD>,
+    # a full name with _ra_map_ is sent as typed, a bad name is refused locally
+    import datetime as _dt
+    today = _dt.datetime.now().strftime('%Y%m%d')
+    win.txt_run.setText(' roughing ')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(('send_task_command', f'TASK {names[0]} run={names[0]}_roughing_ra_map_{today}') in bridge.calls,
+          f'run-name label -> run=<task>_roughing_ra_map_<today>: {bridge.calls}')
+    win.txt_run.setText(f'{names[0]}_finishing_ra_map_20261015-1016.csv')
+    win.txt_groups.setText('106')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(('send_task_command', f'TASK {names[0]} groups=106 run={names[0]}_finishing_ra_map_20261015-1016') in bridge.calls,
+          f'a full run name is sent as typed (.csv dropped), after groups=: {bridge.calls}')
+    win.txt_run.setText('bad name/x')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(not bridge.calls, 'a run name with a space or slash is refused before sending')
+    win.txt_run.setText('')
+    win.txt_groups.setText('')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(('send_task_command', f'TASK {names[0]}') in bridge.calls, 'blank run name -> plain TASK')
 
     print('== dock & charge buttons + CHARGE chip')
     check(click(tab, 'Dock && charge (tag 500)') and ('send_task_command', 'CHARGE') in bridge.calls,

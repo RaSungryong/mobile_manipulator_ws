@@ -24,6 +24,7 @@ as Qt signals on the GUI thread.
 
 import html
 import os
+import re
 import time
 from datetime import datetime
 
@@ -740,10 +741,7 @@ class MainWindow(QMainWindow):
         self.combo_task.currentTextChanged.connect(self._update_task_detail)
         row.addWidget(self.combo_task, 1)
         btn_task = QPushButton('Send TASK')
-        btn_task.clicked.connect(
-            lambda: self.bridge.send_task_command(
-                f'TASK {self.combo_task.currentText().strip()}'
-                + self._groups_arg()))
+        btn_task.clicked.connect(self._send_task)
         row.addWidget(btn_task)
         btn_reload = QPushButton('Reload tasks')
         btn_reload.setToolTip(
@@ -779,6 +777,28 @@ class MainWindow(QMainWindow):
             'to, and stay unfinished — a later Resume offers them again. A '
             'group the task does not have is refused by task_executor.')
         row.addWidget(self.txt_groups, 1)
+        task_layout.addLayout(row)
+
+        # Run name (2026-10-13): the result set of a fresh TASK — Ra map,
+        # frame folder and the hand-measured CSV are all named after it, so
+        # one task can be scanned into separate sets (roughing / finishing
+        # mould). Blank = task_executor's own <task>_ra_map_<now> stamp; a
+        # label alone becomes <task>_<label>_ra_map_<YYYYMMDD>; a name with
+        # `_ra_map_` in it is sent as typed (`run=<name>`).
+        row = QHBoxLayout()
+        row.addWidget(QLabel('run name'))
+        self.txt_run = QLineEdit()
+        self.txt_run.setPlaceholderText(
+            'blank = <task>_ra_map_<now>; a label (roughing) = <task>_roughing_ra_map_<today>; '
+            'or a full <task>_<label>_ra_map_<stamp>')
+        self.txt_run.setToolTip(
+            'Send TASK adds run=<name>: log/apriltag_nav/ra_maps/<name>.csv, '
+            'results/scan_images/<name>/ and the hand-measured CSV in it. A '
+            'label alone is expanded to <task>_<label>_ra_map_<YYYYMMDD>. '
+            'Letters, digits, ".", "_", "-" only. A name whose Ra map already '
+            'exists is refused by task_executor — continue it with '
+            '"RESUME <name>" (raw command field).')
+        row.addWidget(self.txt_run, 1)
         task_layout.addLayout(row)
 
         # What the selected task is: mode, tags in order, point counts, lift
@@ -1866,6 +1886,30 @@ class MainWindow(QMainWindow):
         """` groups=105,106` from the groups field, '' when it is blank."""
         text = self.txt_groups.text().strip().replace(' ', '') if hasattr(self, 'txt_groups') else ''
         return f' groups={text}' if text else ''
+
+    def _run_arg(self, task_name):
+        """` run=<stem>` from the run-name field: '' when blank, the text as
+        typed when it holds `_ra_map_`, else `<task>_<label>_ra_map_<YYYYMMDD>`.
+        None when the name holds characters task_executor refuses."""
+        text = self.txt_run.text().strip() if hasattr(self, 'txt_run') else ''
+        if not text:
+            return ''
+        stem = re.sub(r'\.csv$', '', text, flags=re.IGNORECASE)
+        if '_ra_map_' not in stem:
+            stem = f"{task_name}_{stem.strip('_')}_ra_map_{datetime.now().strftime('%Y%m%d')}"
+        if not re.match(r'^[A-Za-z0-9._-]+$', stem):
+            return None
+        return f' run={stem}'
+
+    def _send_task(self):
+        name = self.combo_task.currentText().strip()
+        run = self._run_arg(name)
+        if run is None:
+            self.append_log('[task] run name may only use letters, digits, ".", "_", "-" (no spaces)')
+            return
+        if run:
+            self.append_log(f'[task] run name: {run[len(" run="):]}')
+        self.bridge.send_task_command(f'TASK {name}' + self._groups_arg() + run)
 
     def _update_task_detail(self, text):
         name = (text or '').strip()

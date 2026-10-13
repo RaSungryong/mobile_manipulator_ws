@@ -171,9 +171,13 @@
                 <button id="btn-groups-all" class="small" title="tick every group">all</button>
                 <button id="btn-groups-none" class="small" title="untick every group">none</button>
               </div>
+              <label>Run name</label>
+              <div class="row">
+                <input type="text" id="txt-run" class="grow" autocomplete="off" placeholder="blank = <task>_ra_map_<now>; a label (roughing) = <task>_roughing_ra_map_<today>; or a full name (<task>_roughing_ra_map_20261013-1014)" title="Send TASK adds run=<name>: the Ra map (log/apriltag_nav/ra_maps/<name>.csv), the frame folder (results/scan_images/<name>/) and the hand-measured CSV in it are all named <name>, so one task can be scanned into separate result sets (e.g. a roughing and a finishing mould). Type a label alone and the page builds <task>_<label>_ra_map_<YYYYMMDD>; type a name containing _ra_map_ to use it as is. Letters, digits, '.', '_', '-' only. A name whose Ra map already exists is refused — continue it with Resume run below. Blank = task_executor's own <task>_ra_map_<YYYYMMDD_HHMMSS> stamp.">
+              </div>
               <label>Resume run</label>
               <div class="row">
-                <input type="text" id="txt-resume" class="grow" autocomplete="off" placeholder="run name (<task>_ra_map_<ts>) — blank = the newest interrupted run">
+                <input type="text" id="txt-resume" class="grow" autocomplete="off" placeholder="run name (<task>[_<label>]_ra_map_<stamp>) — blank = the newest interrupted run">
                 <button id="btn-resume" title="RESUME [run] [groups=…]: continue an interrupted run in its own result files — the points already finished (Ra map row, and the hand-measured row in Collect mode) are left out, the rest is scanned into the same Ra map / frame folder / measured CSV. Finished groups are not driven to; in a joint path the finished points are driven through without a stop. Blank = the newest Ra map with points left. The Groups row above narrows it to the ticked groups (they must be groups of the run's task).">Resume interrupted run</button>
               </div>
               <label>GOTO tag</label>

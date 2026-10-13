@@ -114,7 +114,9 @@ keeping was deleted (see the Work Log entry).
 
 ```
 <ws>/log/apriltag_nav/ra_maps/<task>_ra_map_<ts>.csv task_manager result_dir  (versioned)
-<ws>/results/scan_images/<task>_ra_map_<ts>/*.png  arm_node output_dir, ONE FOLDER PER RUN (ignored);
+<ws>/results/scan_images/<run>/*.png                 arm_node output_dir, ONE FOLDER PER RUN (ignored); <run> =
+                                                    <task>_ra_map_<ts>, or the `TASK … run=<stem>` name
+                                                    (<task>_<label>_ra_map_<text>, 2026-10-13 — Task Commands);
                                                     g<group>_p<point>_sp<source>_i<index>_s<n>.png since 2026-10-07
                                                     (p = the joint file's point_id = PATH row; sp = its
                                                     source_point_id = the WORK POINT, user rule 2026-10-07:
@@ -255,6 +257,29 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            # ⚠️ scan_joint_* replays a planned trajectory with
                            #    no reach/collision check; only safe if the base
                            #    is at the planned stop of every group tag.
+                           # ⚠️ RUN NAME (2026-10-13): `TASK <name> run=<stem>`
+                           # names this run's RESULT SET — the Ra map
+                           # (ra_maps/<stem>.csv), the frame folder
+                           # (results/scan_images/<stem>/) and the collect CSV
+                           # (<stem>_ra_measured.csv) all take <stem>, which
+                           # must be <name>_ra_map_<text> or <name>_<label>_
+                           # ra_map_<text> ([A-Za-z0-9._-], `.csv` dropped);
+                           # the executor's own stamp is <name>_ra_map_
+                           # <YYYYMMDD_HHMMSS> when no run= is given. Why: the
+                           # user scans the SAME path over different moulds
+                           # (황삭 roughing 2026-10-13/14, 정삭 finishing 10-15/16)
+                           # and wants each in its own folder / CSVs. A stem
+                           # whose Ra map exists is refused (RESUME it). The
+                           # Task tab "Run name" field: a label alone →
+                           # <task>_<label>_ra_map_<today>; a name with
+                           # `_ra_map_` → as typed. `scan_resume.task_of(stem,
+                           # tasks)` resolves a labelled stem to the LONGEST
+                           # registered task name (so RESUME / merge find the
+                           # path file); `check_run_stem` refuses a stem a
+                           # longer task name would claim. /task_state
+                           # `run_stem`. Pre-made folders: …offset50mm_
+                           # roughing_ra_map_20261013-1014, …_finishing_ra_map_
+                           # 20261015-1016 (the 17:56 run stays as it is).
 RELOAD_TASKS               # Re-scan task/csv without a restart (refused while
                            # a task runs); republishes /task_list (latched)
 RESUME [<run>]             # Continue an INTERRUPTED run in its own result files
@@ -2170,6 +2195,74 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-13 — A run's result set can be NAMED: `TASK <name> run=<stem>` / Task tab "Run name"; roughing and finishing folders pre-made
+
+User, about to scan the same `scan_joint_hoodouter_lower_plate1_offset50mm`
+path again on a ROUGHING-machined mould (황삭) and later on a FINISHING one
+(정삭): today's frames must not land in the 10-06 run's folder but in
+`results/scan_images/scan_joint_hoodouter_lower_plate1_offset50mm_roughing_
+ra_map_20261013-1014/`, the next scan in `…_finishing_ra_map_20261015-1016/`,
+and the hand-measured CSV / dataset must split the same way. Until now the
+run stem was always the executor's `<task>_ra_map_<YYYYMMDD_HHMMSS>` and
+nothing let the operator choose it; the frame folder, the collect CSV and
+the Ra map all derive from that one stem, so naming the stem is the whole
+change. Built (standing text in the Task Commands block):
+- `scan_resume`: `_RUN_RE` splits at the LAST `_ra_map_` and takes any
+  stamp text; `run_head_of`, `task_of(stem, tasks=None)` (with the
+  registered names a labelled stem resolves to the LONGEST task that is
+  the head or a `_`-prefix of it; without, the whole head as before),
+  `parse_run_arg` (`run=<stem>`, `.csv` dropped, `[A-Za-z0-9._-]`, must
+  hold `_ra_map_`), `check_run_stem` (must start with the task name; a
+  stem a longer registered name would claim is refused, since a later
+  RESUME would run that task's path).
+- `task_executor`: TASK takes the token, refuses a stem whose Ra map
+  already exists (→ `RESUME <stem>`), keeps `_pending_run` /
+  `_current_run` beside the groups (cleared by GOTO / STOP / e-stop /
+  the charging manager's tasks / the end of the run), stamps every
+  point's csv_path `<result_dir>/<stem>.csv`, publishes `run_stem` on
+  `/task_state` (the RESUMEd stem too) and notes `task started, run …`;
+  `_resume_plan_for` resolves with the registered names. **Found on the
+  way:** the plain-TASK stamping stripped only `_YYYYMMDD_HHMMSS` from
+  the csv_path an earlier run left on the shared scan points, so after a
+  named run the next plain TASK would have carried the label
+  (`…_roughing_ra_map_20261013-1014_20261013_104745.csv`); it rebuilds
+  `<result_dir>/<task>_ra_map` from the task name now.
+- UI: web Task tab "Run name" row (`txt-run`; `runNameArg`: blank →
+  nothing, a label → `<task>_<label>_ra_map_<YYYYMMDD>`, a name with
+  `_ra_map_` → as typed, bad characters refused with a log line) feeding
+  Send TASK after `groups=`; Qt window the same (`txt_run`, `_run_arg`,
+  `_send_task`); `robot_cmd.py` help. `merge_ra_dataset.task_of` resolves
+  a labelled stem against the task/csv file names (no ROS), so the
+  dataset / `source_point_id` lookup works for the new runs. Docs:
+  RA_COLLECT_kr §2 / §6 / §7, ROSBRIDGE_kr, ROBOT_UI_WEB_kr, HANDOVER.
+- Folders pre-made (empty; `scan_pipeline` uses `makedirs(exist_ok)`):
+  the roughing and finishing names above. The 10-06 run is untouched:
+  748 of 1271 done (105 / 118 / 119 / 120 complete, 106 / 107 open).
+
+Verified offline: `check_scan_resume.py` 102 → **124** (labelled stems
+resolve, longest-prefix rule, parser forms and refusals, `check_run_stem`
+three ways, `run_head_of` at the last `_ra_map_`; the real executor:
+`TASK … run=<stem> groups=106` → every point csv_path `<dir>/<stem>.csv`,
+`/task_state` `run_stem` + note, cleared after the run; the same name
+again refused with the RESUME hint once its Ra map exists; `RESUME
+<labelled stem>` resolves the task and runs into that csv_path; another
+task's stem and a name without `_ra_map_` refused; GOTO drops it; a plain
+TASK afterwards stamps `<task>_ra_map_<now>` with `run_stem` None),
+`check_task_list_ui.py` 113 → **117** (label → today's stem, full name
+as typed after `groups=`, bad name refused locally, blank → plain TASK),
+`check_web_ui.py` 149, `runNameArg` evaluated in headless Chrome (the
+five forms), the page loads with no JS error, `merge_ra_dataset.task_of`
+on the roughing stem → the offset50mm task with its joint file found,
+pyflakes clean. **Not run on the robot: `task_executor` restart required
+(`sudo systemctl restart mobile-manipulator` — sudo needs a password in
+this session; the robot is charging on 500, the relay drops, CHARGE
+afterwards); the web page reloads from source.** Procedure for today:
+Undock → Collect mode + Mode mark → Groups all → Run name
+`scan_joint_hoodouter_lower_plate1_offset50mm_roughing_ra_map_20261013-1014`
+→ Send TASK (not Resume — a NEW run over the whole path); tomorrow
+`RESUME` with that name in the Resume run field; the finishing mould the
+same with `…_finishing_ra_map_20261015-1016`.
 
 ### 2026-10-07 (17:46) — offset50mm group 120 at lift 0 too
 

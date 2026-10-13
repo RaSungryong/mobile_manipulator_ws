@@ -34,7 +34,13 @@ everything they listed as open is either done or restated below.
   same restart. The 17:56 `offset50mm` run (group 105 done) is the first
   candidate. **Group selection (2026-10-07, also not yet run):** `TASK
   <name> groups=105,106` / `RESUME [<run>] groups=…` — the Task tab's
-  Groups checkboxes; unticked groups are skipped, not done. **Method B
+  Groups checkboxes; unticked groups are skipped, not done. **Run name
+  (2026-10-13):** `TASK <name> run=<name>[_<label>]_ra_map_<stamp>` / the
+  Task tab's Run name field names the whole result set (Ra map, frame
+  folder, `_ra_measured.csv`), so one task scans into separate sets —
+  `…offset50mm_roughing_ra_map_20261013-1014` (황삭) and
+  `…_finishing_ra_map_20261015-1016` (정삭), folders pre-made; continue one
+  with `RESUME <that name>`. `task_executor` restart. **Method B
   (`mark`) redone the same day:** capture + numbered marking stop per
   point + one Ra entry stop per group, rows in `_ra_measured.csv` with
   `mark_no` — no template any more; `arm_node` restart. **Since the
