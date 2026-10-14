@@ -60,9 +60,9 @@ debug_mode:=true                                              # EXEC / EVAL 허�
 재생은 검사 없이 움직인다).
 
 ```bash
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset0mm"   # 2026-10-06 기준, 조인트 파일만
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset10mm"  # … offset20mm / 30mm / 40mm
-# 파일 이름 규칙 (2026-10-06): <joint|pose>_<제품>_<상하형>_<정반>_<오프셋>.csv, 예 joint_hoodouter_lower_plate1_offset0mm.csv
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_HOOD-OTR_LWR-DIE_plate1_offset0mm"   # 2026-10-06 기준, 조인트 파일만
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_HOOD-OTR_LWR-DIE_plate1_offset10mm"  # … offset20mm / 30mm / 40mm
+# 파일 이름 규칙: docs/경로데이터 CSV 파일명 작성 규칙.pdf (2026-10-14) — [joint|pose]_[금형]_[UPR-DIE|LWR-DIE]_[plate1|plate2]_[자유…].csv, 예 joint_HOOD-OTR_LWR-DIE_plate1_offset0mm.csv
 #   joint_ / pose_ 가 곧 디스커버리 접두사 (rrt_final_path_ / assigned_workpoints_ 는 더 이상 안 읽음). ASCII만.
 rostopic pub -1 /task_command std_msgs/String "TASK go_home"
 rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # task/csv 다시 읽기

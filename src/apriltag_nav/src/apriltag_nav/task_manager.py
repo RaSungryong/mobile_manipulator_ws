@@ -109,7 +109,7 @@ class TaskManager:
     #                                   (`is_task_waypoint`, see helpers
     #                                   above).           -> task scan_joint_<key>
     #
-    # e.g. joint_hoodouter_lower_plate1_offset0mm.csv -> scan_joint_hoodouter_
+    # e.g. joint_HOOD-OTR_LWR-DIE_plate1_offset0mm.csv -> scan_joint_hoodouter_
     # lower_plate1_offset0mm. The planner exports assigned_workpoints_<x>.csv
     # / rrt_final_path_<x>.csv (joint_path_<x>.csv since 10-06): rename them
     # to the rule before dropping them in — the old prefixes are NOT aliases.

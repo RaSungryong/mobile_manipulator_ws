@@ -67,8 +67,8 @@ everything they listed as open is either done or restated below.
   `<kind>_<product>_<mold>_<plate>_<offset>.csv` (kind = joint | pose IS
   the discovery prefix now — `TaskManager` reads `joint_` / `pose_`, the
   old `rrt_final_path_` / `assigned_workpoints_` are gone, not aliased):
-  `joint_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv`
-  → `scan_joint_hoodouter_lower_plate1_offset<N>mm` (1267 work points
+  `joint_HOOD-OTR_LWR-DIE_plate1_offset{0,10,20,30,40}mm.csv`
+  → `scan_joint_HOOD-OTR_LWR-DIE_plate1_offset<N>mm` (1267 work points
   each, groups 104–107 / 118–120, standoff 17, planner speeds 10–30,
   `lift_mm` set to 0 in ALL FIVE for a test — the exported 0 / 10 / 20 /
   30 / 40 originals are in `task/csv/task_csv_backup/20261006_base_

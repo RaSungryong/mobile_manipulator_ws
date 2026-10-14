@@ -531,15 +531,17 @@ def main():
     H.ticks(ex, 4)
     check(ex.lift.calls == [('goto', 10.0), 'home'], f'groups=106 alone: lift 10 at 106, homing at the end: {ex.lift.calls}')
 
-    print('== 6. the real 2026-10-06 17:56 run (read-only, if present)')
+    print('== 6. the real 2026-10-06 17:56 run, renamed `…offset50mm_nc_ra_map_…` on 2026-10-14 (read-only, if present)')
     real_dir = os.path.join(PKG, 'task', 'csv')
-    real_stem = 'scan_joint_hoodouter_lower_plate1_offset50mm_ra_map_20261006_175616'
+    real_stem = 'scan_joint_HOOD-OTR_LWR-DIE_plate1_offset50mm_nc_ra_map_20261006_175616'
     ws = os.path.dirname(os.path.dirname(PKG))
     real_map = os.path.join(ws, 'log', 'apriltag_nav', 'ra_maps', real_stem + '.csv')
     real_meas = os.path.join(ws, 'results', 'scan_images', real_stem, real_stem + '_ra_measured.csv')
-    if os.path.isfile(real_map) and os.path.isfile(os.path.join(real_dir, 'joint_hoodouter_lower_plate1_offset50mm.csv')):
+    if os.path.isfile(real_map) and os.path.isfile(os.path.join(real_dir, 'joint_HOOD-OTR_LWR-DIE_plate1_offset50mm.csv')):
         rtm = TaskManager(real_dir, result_dir=os.path.dirname(real_map))
-        t = SR.task_of(real_stem)
+        # a labelled stem resolves only against the REGISTERED names (what
+        # task_executor._resume_plan_for does)
+        t = SR.task_of(real_stem, rtm.scan_points.keys())
         d = SR.done_points(real_map, real_meas)
         rplan = SR.plan_resume(real_stem, t, rtm.get_task(t), rtm.scan_points[t], d, real_map)
         print('     ' + rplan.summary())

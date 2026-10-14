@@ -21,11 +21,11 @@ Task names are derived from the path-data files in task/csv
   joint_<key>.csv -> scan_joint_<key>  (joint-angle path, MoveJ replay)
   (assigned_workpoints_ / rrt_final_path_ until 2026-10-06 — rename an export)
 File naming rule (user, 2026-10-06): <joint|pose>_<product>_<mold>_<plate>_<offset>.csv,
-e.g. joint_hoodouter_lower_plate1_offset0mm.csv -> scan_joint_hoodouter_lower_plate1_offset0mm
+e.g. joint_HOOD-OTR_LWR-DIE_plate1_offset0mm.csv -> scan_joint_HOOD-OTR_LWR-DIE_plate1_offset0mm
 (ASCII only). Today (2026-10-06) the files are five joint-only paths,
-joint_hoodouter_lower_plate1_offset{0,10,20,30,40}mm.csv (no pose twin, so no scan_pose_* task):
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset0mm"
-rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_hoodouter_lower_plate1_offset10mm"
+joint_HOOD-OTR_LWR-DIE_plate1_offset{0,10,20,30,40}mm.csv (no pose twin, so no scan_pose_* task):
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_HOOD-OTR_LWR-DIE_plate1_offset0mm"
+rostopic pub -1 /task_command std_msgs/String "TASK scan_joint_HOOD-OTR_LWR-DIE_plate1_offset10mm"
 rostopic pub -1 /task_command std_msgs/String "RELOAD_TASKS"   # re-scan task/csv
 
 Dock and charge / undock (the charger only starts on /crevis/charging true after docking)

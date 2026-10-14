@@ -107,7 +107,7 @@ Resume이 하는 일: 끝난 그룹은 안 간다. 일부만 한 그룹은 가�
 | `results/scan_images/<run>/<run>_ra_measured.csv` | 수기 Ra (mark_no, group, point, 사진 이름, ra_measured, ra_readings, note, skipped …) |
 
 `<run>` = `<task>_ra_map_<시각>`, Run name을 준 run은 그 이름 그대로
-(`<task>_<라벨>_ra_map_<표기>` — 예: 황삭 `scan_joint_hoodouter_lower_plate1_
+(`<task>_<라벨>_ra_map_<표기>` — 예: 황삭 `scan_joint_HOOD-OTR_LWR-DIE_plate1_
 offset50mm_roughing_ra_map_20261013-1014`, 정삭 `…_finishing_ra_map_20261015-1016`;
 폴더는 미리 만들어 둠, 2026-10-13). 끝났는지: `grep -c "pending: Ra" <수기 CSV>`
 가 0.

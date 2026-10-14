@@ -188,29 +188,38 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            #       scanned; world x y z from the paired file
                            # other: go_home            → <task>_ra_map_<ts>.csv
                            #
-                           # ⚠️ FILE NAME RULE (user, 2026-10-06 evening): a path
-                           # file is <kind>_<product>_<mold>_<plate>_<offset>.csv —
-                           #   kind     joint | pose         (조인트 | 포즈 — FIRST,
-                           #                                 user: "제일 앞에"; it IS
-                           #                                 the discovery prefix
-                           #                                 since "rrt_final_path 제거")
-                           #   product  hoodouter            (후드 아우터)
-                           #   mold     lower | upper        (하형 | 상형)
-                           #   plate    plate1 | plate2      (정반 1 | 2)
-                           #   offset   offset<N>mm          (planner offset)
-                           # The key (everything after kind_) pairs a joint file
-                           # with its pose twin (IK seed / world xyz), so a pair
-                           # has the same <product>_<mold>_<plate>_<offset>.
-                           # ASCII only — the task name is typed on the Windows
-                           # PC. Planner exports arrive as joint_path_<x>.csv /
-                           # assigned_workpoints_<x>.csv: rename them to this
-                           # rule (originals too) before dropping in; the tools
-                           # (retarget, slow_task_entry, make_plate2) read the
-                           # same prefixes from TaskManager, so an old backup
-                           # set must be renamed before a tool reads it.
+                           # ⚠️ FILE NAME RULE — `docs/경로데이터 CSV 파일명 작성 규칙.pdf`
+                           # (the official rule since 2026-10-14; the planner side
+                           # delivers files named this way from now on):
+                           #   [제어방식]_[금형종류]_[상형/하형]_[정반]_[선택1]_[선택2]….csv
+                           #   1 joint | pose      REQUIRED — IS the discovery prefix
+                           #   2 die name          e.g. HOOD-OTR, FRT-DR-OTR-RH (the
+                           #                       Silla naming; spaces → `-`)
+                           #   3 UPR-DIE | LWR-DIE 상형 | 하형
+                           #   4 plate1 | plate2   정반 1 (left) | 2 (right)
+                           #   5… free text        offset40mm, lift30mm, a date, final…
+                           #                       any number, any order
+                           # e.g. joint_HOOD-OTR_LWR-DIE_plate1_offset40mm_lift30mm_
+                           # 20261008_final.csv → task scan_joint_HOOD-OTR_LWR-DIE_
+                           # plate1_offset40mm_lift30mm_20261008_final. Args 2–4 are
+                           # "준필수" — TaskManager does not check them, the key is
+                           # simply everything after the prefix, case and hyphens
+                           # kept (verified 2026-10-14 with the real TaskManager and
+                           # scan_resume.task_of on a labelled run stem). ⚠️ A joint
+                           # file pairs with its pose twin ONLY when the WHOLE key
+                           # matches, free args included — a date or version that
+                           # differs between the two files leaves them unpaired (no
+                           # IK seed / no world xyz) — the user's decision 2026-10-14,
+                           # not a limitation to fix. ASCII only — the task name is
+                           # typed on the Windows PC; case-sensitive. The 2026-10-06
+                           # form <kind>_<product>_<mold>_<plate>_<offset> (today's
+                           # files, lower-case) is a special case of this rule and
+                           # stays valid; the tools (retarget, slow_task_entry,
+                           # make_plate2) read the same prefixes from TaskManager.
                            #
                            # Today's keys (2026-10-06 15:54 / 16:42, renamed
-                           # 17:30 / 17:45 / 18:00): hoodouter_lower_plate1_offset
+                           # 17:30 / 17:45 / 18:00; renamed to the PDF rule
+                           # 2026-10-14): HOOD-OTR_LWR-DIE_plate1_offset
                            # {0,10,20,30,40}mm — FIVE JOINT-ONLY files (joint_<key>
                            # .csv, 1267 work points each, groups 104–107 /
                            # 118–120, standoff 17, planner speeds 10–30, NO
@@ -279,7 +288,7 @@ TASK <name>                # Names are DERIVED FROM THE FILES in task/csv
                            # longer task name would claim. /task_state
                            # `run_stem`. Pre-made folders: …offset50mm_
                            # roughing_ra_map_20261013-1014, …_finishing_ra_map_
-                           # 20261015-1016 (the 17:56 run stays as it is).
+                           # 20261015-1016 (the 17:56 run was renamed `…offset50mm_nc_ra_map_20261006_175616` on 2026-10-14 — label `nc`).
 RELOAD_TASKS               # Re-scan task/csv without a restart (refused while
                            # a task runs); republishes /task_list (latched)
 RESUME [<run>]             # Continue an INTERRUPTED run in its own result files
@@ -406,7 +415,7 @@ has no `source_point_id` at all: there, `point_id` IS the work-point id.
 ### The joint files in task/csv are RETARGETED to the calibrated robot (2026-09-29)
 
 ⚠️ **Status 2026-10-06: the five joint files in task/csv (`joint_
-hoodouter_lower_plate1_offset{0..40}mm.csv`) are planner ORIGINALS with NO
+HOOD-OTR_LWR-DIE_plate1_offset{0..40}mm.csv`, `hoodouter_lower` until 2026-10-14) are planner ORIGINALS with NO
 pose twin — the tool cannot classify or correct them (it settles a file by
 FK against its pose rows), and the speed-10 boundary rule
 (`tools/slow_task_entry.py`) is not applied either.** `check_retarget_joint_
@@ -2216,6 +2225,52 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-14 — The 17:56 run renamed with the label `nc`; then EVERY path file and result set renamed to the PDF naming rule (`hoodouter_lower` → `HOOD-OTR_LWR-DIE`)
+
+User: rename the run folder `results/scan_images/…offset50mm_ra_map_20261006_
+175616` to `…offset50mm_nc_ra_map_20261006_175616` "UI에도 반영". The web
+UI's Resume field names a run by its Ra map stem (no list of its own), so
+the rename has to reach everything the stem names: the frame folder (748
+frames, names untouched — `g…_p…_sp…` carry no stem), the eight collect
+CSVs inside it (live + backups; their `run` and `image_dir` cells rewritten),
+the Ra map + its `.bak` under `log/apriltag_nav/ra_maps/`, the dataset CSV
+under `results/ra_dataset/` (run column + image paths), and the real-run
+fixture in `check_scan_resume.py`. The stem fits the 10-13 run-name rule
+(`<task>_<label>_ra_map_<text>`, label `nc`), so `task_of(stem, tasks)`
+resolves it to the offset50mm task; the check's section 6 resolved the
+stem WITHOUT the registered names (the executor passes them) and failed on
+the label — fixed the same way as `_resume_plan_for`. Verified:
+`check_scan_resume.py` 128 (the renamed run plans 748 of 1271 done, 523
+left, groups 106 / 107 to scan; g120 p13 #591 is the one row whose frame is
+not on disk — pre-existing), no reference to the old stem left outside the
+png names. The running stack needs nothing: RESUME builds its plan per
+command from `ra_maps/`, so `RESUME scan_joint_hoodouter_lower_plate1_
+offset50mm_nc_ra_map_20261006_175616` (web: the Resume run field) continues
+it. git sees the tracked Ra map / collect CSVs as deleted + untracked
+(not committed here).
+
+**Then (user: the official rule `docs/경로데이터 CSV 파일명 작성 규칙.pdf`,
+"기존 파일 이름도 새 규칙에 맞추어 바꿔주고 … 안전할 때까지 계속 검증"):**
+`hoodouter_lower` → `HOOD-OTR_LWR-DIE` everywhere the key appears —
+the six path files in task/csv (`joint_HOOD-OTR_LWR-DIE_plate1_offset
+{0..50}mm.csv` → tasks `scan_joint_HOOD-OTR_LWR-DIE_plate1_offset<N>mm`),
+the four backup sets under `task_csv_backup/` (+ their SHA256SUMS names;
+`sha256sum -c` OK, contents untouched), all nine Ra maps under `ra_maps/`
+(the five 10-06 / 10-13 stamp runs, the nc run, the roughing run, their
+`.bak`), the three result folders under `results/scan_images/` with every
+CSV inside (names + `run` / `image_dir` cells), the dataset CSV, and the
+literals in `task_manager.py`'s docstring, `check_scan_resume.py`, README,
+readme.txt, HANDOVER, RA_COLLECT_kr. `git mv` for the tracked files. The
+`nav_log/` records keep the command text they were written with (history,
+read by nothing). `LWR-DIE` carries the 10-06 "lower" INFERENCE — the user
+has still not said which die it is. Verified: see the reply of the day —
+real `TaskManager` six tasks + go_home, `check_scan_resume` 128,
+`check_retarget_joint_paths` 19 ok / 6 unpaired as before,
+`merge_ra_dataset.task_of` on the three labelled stems, `RELOAD_TASKS` on
+the running stack → `/task_list` with the six new names (the executor
+re-reads the directory; no restart), no reference to the old key left
+outside `nav_log/` and the Work Log.
 
 ### 2026-10-13 (evening) — "sp128부터 허락 없이 넘어감": the Basler node ran out of file descriptors (pylon leaks 5 per device open); frameless points are FAILED now and a run of them aborts the scan
 
