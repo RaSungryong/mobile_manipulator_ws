@@ -119,6 +119,15 @@ python3 src/apriltag_nav/tools/merge_ra_dataset.py <run>     # → results/ra_da
 요약의 `frames unmeasured`(Ra 없음) / `rows standoff NOT ok`(초점 안 맞음 →
 제외)를 본다.
 
+**Skip all로 끝내고 엑셀에 적은 경우 (2026-10-14):** 측정구역(= 그룹 순서) /
+번호(= source_point_id, 사진 이름의 `_sp`) / 조도값 세 열의 xlsx를 수기 CSV에
+써 넣는다 — 빈칸·`x`·표에 없는 점은 skip, 원본은 `.before_xlsx_<시각>.csv.bak`:
+```
+python3 src/apriltag_nav/tools/import_ra_xlsx.py "docs/금형 데이터(2026.10.13).xlsx" <run> \
+    --zones 1:105,2:106,3:107,4:118,5:119 [--set 119:450=0.863] --apply   # --apply 없이 먼저 요약 확인
+```
+그 다음 위의 merge. 황삭 run(10-13)은 이렇게 967점 기록 / 155점 skip.
+
 ## 8. 자주 겪는 것
 
 | 증상 | 조치 |
