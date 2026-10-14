@@ -2217,36 +2217,6 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
-### 2026-10-14 — The roughing run's hand-measured Ra imported from the operator's spreadsheet: `tools/import_ra_xlsx.py`
-
-User: the 10-13 roughing run (`…offset50mm_roughing_ra_map_20261013-1014`,
-1122 frames) had every group entry stop released with Skip all, and the
-Ra values were typed by hand into `docs/금형 데이터(2026.10.13).xlsx`
-instead — 측정구역 1..5 = groups 105 / 106 / 107 / 118 / 119, 번호 =
-`source_point_id` (the frame name's `_sp`), 조도값 = Ra, blank or `x` =
-not usable; "반영해줘". The collect CSV held 672 skipped rows (105–118)
-and 450 PENDING rows (119, whose entry stop never came). Built
-`tools/import_ra_xlsx.py`: stdlib xlsx reader (no openpyxl on the robot
-PC), zone → group map on the command line, dry run by default, backup
-beside the CSV (`.before_xlsx_<ts>.csv.bak`), only `ra_measured` /
-`ra_readings` / `skipped` / `note` / `measured_at` change, a sheet row
-without a CSV row refuses the import, `--set g:sp=ra` for a confirmed
-typo (written into the note). Asked the user before writing: zone 3 is
-one `x x` row → all 8 points of 107 skipped; zone 4 holds 1..23 of 118's
-36 → 24..36 skipped; zone 5 #450 reads 863 → 0.863; the sheet's D column
-(2 / 3 / x on 106 #274+) ignored. Result: **967 recorded** (105: 112,
-106: 417, 118: 22, 119: 416), 155 skipped (48 x, 86 blank, 21 no entry),
-**0 pending**; Ra 0.129–1.999, median 0.52. Dataset
-`results/ra_dataset/<run>_dataset.csv` 967 rows (ignored dir); one of
-them, 119 sp302, has an unconverged standoff (+0.33 mm) — drop or keep
-at training time. Consequence: every point of the run is DONE for
-RESUME (nothing left to re-shoot; `RESUME` is refused as complete).
-Verified: cell-by-cell diff against the backup (five columns, same keys
-/ frames / mark numbers), every row against the sheet (1122 / 1122),
-`check_scan_resume` 128. The finishing mould next week: same command
-with its xlsx and run stem (same zones if the groups repeat).
-RA_COLLECT_kr §7 has the command.
-
 ### 2026-10-13 (evening) — "sp128부터 허락 없이 넘어감": the Basler node ran out of file descriptors (pylon leaks 5 per device open); frameless points are FAILED now and a run of them aborts the scan
 
 User: during the roughing run's group 119 the arm stopped waiting for
