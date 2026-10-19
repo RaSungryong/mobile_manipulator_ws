@@ -2230,6 +2230,19 @@ Record the *reasoning* and what was *verified*, not a file diff — the diff is 
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
 
+### 2026-10-19 — Design tip z 222.0 → 223.0 mm: the case end-to-tip distance is 17 mm, not 16
+
+User: "vision_tip과 비전시스템 최하단부 사이의 거리가 16mm 가 아닌 17mm 였어". The
+design tip of 2026-10-12 was the lens axis (0.12, −251.96) at case end z 206.0
++ 16 mm; with 17 mm it is **(0.12, −251.96, 223.0) mm**. Applied with
+`tf_chain_tool.py set T_ee2tip --kind design`, the `design:` sub-block and
+its note updated, `urdf --apply` rewrote `vision_tip_joint` in
+`fr10v6_mobile_visionsystem_final.urdf`, `docs/FRAMES_kr.md` and the
+sections above follow. Still a design value (not measured); the measured
+tip stays in `measured_2026_09_22`. Verified: `check` 0 failed,
+`check_tf_chain_yaml` 52, `check_tf_chain_publisher` 27. Same open items
+as 10-12: `arm_node` restart, planner re-export, re-measure on the new case.
+
 ### 2026-10-19 — Planner URDF renamed: `fr10v6_mobile_vision_0317_test.urdf` → `fr10v6_mobile_visionsystem_final.urdf`
 
 User: "urdf 이름도 visionsystem_final로 바꿔줘" — the file carries the

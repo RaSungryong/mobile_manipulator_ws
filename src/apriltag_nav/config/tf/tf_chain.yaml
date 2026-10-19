@@ -290,19 +290,19 @@ T_hc2ee:
 # flange until the planner re-exports them from the updated URDF.
 # -----------------------------------------------------------------------------
 T_ee2tip:
-  kind: design       # NOT measured on the robot (2026-10-12); measured_2026_09_22 below is the last measurement
-  source: "DESIGN 2026-10-12 — visionsystem_final.stl lens axis, 16 mm below the case end; NOT measured on the robot (last measurement: measured_2026_09_22) — Work Log 2026-10-13, config/tf/HISTORY.md"
-  t_mm: [0.120, -251.960, 222.000]
+  kind: design
+  source: "DESIGN 2026-10-19 — visionsystem_final.stl lens axis, 17 mm below the case end (z 206.0 + 17; 16 mm on 10-12); NOT measured on the robot (last: measured_2026_09_22) — Work Log 2026-10-19, HISTORY.md"
+  t_mm: [0.120, -251.960, 223.000]
   rpy_deg_xyz: [0.0000, 0.0000, 0.0000]
   matrix:   # row-major 4x4, metres
     [ 1.000000000,  0.000000000,  0.000000000,  0.000120000,
       0.000000000,  1.000000000,  0.000000000, -0.251960000,
-      0.000000000,  0.000000000,  1.000000000,  0.222000000,
+      0.000000000,  0.000000000,  1.000000000,  0.223000000,
       0.000000000,  0.000000000,  0.000000000,  1.000000000 ]
   design:
-    t_mm: [0.12, -251.96, 222.0]
+    t_mm: [0.12, -251.96, 223.0]
     rpy_deg_xyz: [0.0, 0.0, 0.0]
-    note: "visionsystem_final.stl (2026-10-11): lens axis, 16 mm below the case end — the APPLIED value since 2026-10-12. Previous design (0, -253.0, 225.2) was fr10v6_visionDF_addtip.urdf, the old case as drawn (shortened 2026-09-18, Keyence zero 10 -> 16.5 mm)"
+    note: "visionsystem_final.stl (2026-10-11): lens axis, 17 mm below the case end (z 206.0 + 17; the 10-12 value used 16 mm = 222.0, corrected 2026-10-19) — the APPLIED value since 2026-10-12. Previous design (0, -253.0, 225.2) was fr10v6_visionDF_addtip.urdf, the old case as drawn (shortened 2026-09-18, Keyence zero 10 -> 16.5 mm)"
   measured_2026_09_22:
     t_mm: [-2.0, -245.2, 214.4]
     rpy_deg_xyz: [0.0, 0.0, 0.0]
