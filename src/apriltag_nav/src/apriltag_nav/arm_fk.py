@@ -8,7 +8,7 @@ controller's own TCP, which is FK(q) with dq = 0). Lives in apriltag_nav so
 that path_tag_locator and chain_calib share ONE kinematic model;
 `chain_calib.arm_fk` re-exports it.
 
-The chain is read from frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf
+The chain is read from frcobot_description/urdf/fr10v6_mobile_visionsystem_final.urdf
 (joints j1..j6 + the fixed `tool` joint = the FLANGE the controller reports
 at tool offset 0). tools/check_pose_vs_joint.py showed this FK reproduces
 the controller's own TCP at the home pose to 0.0 mm (2026-09-14), so it is
@@ -49,7 +49,7 @@ def default_urdf_path():
     package in the source space."""
     from apriltag_nav.paths import SRC_SPACE
     return os.path.join(SRC_SPACE, "frcobot_ros", "frcobot_description", "urdf",
-                        "fr10v6_mobile_vision_0317_test.urdf")
+                        "fr10v6_mobile_visionsystem_final.urdf")
 
 
 class ArmChain:

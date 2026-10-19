@@ -54,7 +54,7 @@ from apriltag_nav import tf_chain as TC                     # noqa: E402
 from apriltag_nav.paths import CONFIG_PATH, SRC_SPACE      # noqa: E402
 
 URDF = os.path.join(SRC_SPACE, 'frcobot_ros', 'frcobot_description', 'urdf',
-                    'fr10v6_mobile_vision_0317_test.urdf')
+                    'fr10v6_mobile_visionsystem_final.urdf')
 
 
 def _fmt(v, n=3):

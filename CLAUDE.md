@@ -2002,7 +2002,7 @@ value is the planar one above: tilt 0, lift purely along arm z, URDF xyz
 `tf_chain.yaml T_ab2mb` at call time — offsets (−0.013008, −0.120318,
 0.629002), mount_yaw 3.166578737 rad (181.43°), tilt_x/y 0.005927 /
 0.013580 rad (`arm_node` restart) — and the planner URDF
-`frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`
+`frcobot_description/urdf/fr10v6_mobile_visionsystem_final.urdf`
 `mobile_to_base` xyz (0.013008, 0.120318, 0.629002) rpy (0.005927,
 0.013580, 0.024986) is the same transform seen from its 180°-yawed
 `mobile_base`. `check_pose_vs_joint.py` asserts the URDF and the
@@ -2229,6 +2229,19 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-19 — Planner URDF renamed: `fr10v6_mobile_vision_0317_test.urdf` → `fr10v6_mobile_visionsystem_final.urdf`
+
+User: "urdf 이름도 visionsystem_final로 바꿔줘" — the file carries the
+`visionsystem_final.stl` case since 2026-10-11, so its name follows. `git mv`
+plus every current reference: `arm_fk.default_urdf_path`, `tf_chain_tool.py`
+URDF, `check_pose_vs_joint.py`, `tf_chain.yaml` header comment,
+`arm_joint_offsets.yaml` `urdf:` field, `docs/FRAMES_kr.md`, the sections
+above. Work Log entries and `docs/WORKLOG_ARCHIVE.md` keep the old name as
+history. ⚠️ The planner PC holds its own copy under the OLD name — rename
+it there too (or keep both; the content is what matters). Verified:
+`tf_chain_tool.py check` 0 failed, `check_tf_chain_yaml` 52,
+`check_tf_chain_publisher` 27, `check_joint_offsets` 22.
 
 ### 2026-10-14 — The 17:56 run renamed with the label `nc`; then EVERY path file and result set renamed to the PDF naming rule (`hoodouter_lower` → `HOOD-OTR_LWR-DIE`)
 

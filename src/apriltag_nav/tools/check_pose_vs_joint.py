@@ -83,12 +83,12 @@ def check(cond, what):
 
 # ---------------------------------------------------------------- URDF FK
 # The planner's URDF (user, 2026-09-14: "이것이 현재 사용하는 urdf"):
-# frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf. Chain
+# frcobot_description/urdf/fr10v6_mobile_visionsystem_final.urdf. Chain
 # base_link -> j1..j6 -> tool_Link (the flange the controller reports at tool
 # offset 0) -> vision -> vision_tip (= tool 1's offset). Read from the file
 # so the check follows it; the embedded copy is the fallback.
 URDF = os.path.join(os.path.dirname(PKG), 'frcobot_ros',
-                    'frcobot_description', 'urdf', 'fr10v6_mobile_vision_0317_test.urdf')
+                    'frcobot_description', 'urdf', 'fr10v6_mobile_visionsystem_final.urdf')
 
 
 def _T(xyz, rpy=(0, 0, 0)):

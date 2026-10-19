@@ -60,7 +60,7 @@ mb   대차 몸체.  x 앞, y 왼쪽, z 위, 원점은 섀시 중심 아래 바�
 | 태그 크기·두께, 바닥 z | `robot.yaml` (`tag_size`, `robot_camera.tag_size`, `tag_thickness`, `arm_calibration.world_floor_z_m`) | design | 손 | 주행, 검출, locator | `locator.yaml tag.*`, `handeye_calib.yaml tag.*` (같은 값을 따로 들고 있음) |
 | 스탠드오프 | `robot.yaml keyence.sensor_zero_mm` (16.5) | design | 손 | Keyence 루프 | `T_ee2tip` 설계값의 "케이스 끝 + 16 mm"가 이 값에 기댐 |
 
-플래너 URDF = `src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf`. 런타임 노드는 읽지 않는다 — Windows 플래너와 오프라인 도구만. 두 조인트 줄은 `tf_chain_tool.py urdf --apply`가 yaml에서 써 넣고 `check`가 감시한다; **플래너 PC의 복사본은 손으로 옮긴다.**
+플래너 URDF = `src/frcobot_ros/frcobot_description/urdf/fr10v6_mobile_visionsystem_final.urdf`. 런타임 노드는 읽지 않는다 — Windows 플래너와 오프라인 도구만. 두 조인트 줄은 `tf_chain_tool.py urdf --apply`가 yaml에서 써 넣고 `check`가 감시한다; **플래너 PC의 복사본은 손으로 옮긴다.**
 
 ## 5. 바꿀 때의 절차
 

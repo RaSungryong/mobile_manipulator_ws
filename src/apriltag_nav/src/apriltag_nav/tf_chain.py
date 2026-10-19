@@ -397,7 +397,7 @@ def tip_offset_mm(path=None):
 
 
 def planner_urdf_path():
-    """The planner URDF (frcobot_description/urdf/fr10v6_mobile_vision_0317_test.urdf)."""
+    """The planner URDF (frcobot_description/urdf/fr10v6_mobile_visionsystem_final.urdf)."""
     from apriltag_nav.arm_fk import default_urdf_path
     return default_urdf_path()
 
