@@ -53,12 +53,15 @@ EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
 # position it was trained at — see ra_predictor.py; the .onnx is not versioned.
 MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D_multi.onnx')
 
-# inference_node's secondary slot: a different architecture over the same input,
-# so it is a cross-check rather than a replicate. Optional — a missing file
-# costs the comparison, not the primary prediction.
-RA_MODEL_SECONDARY = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D_gray.onnx')
+# inference_node's secondary (cross-check) slot. EMPTY since 2026-10-27: it
+# was the 2025 resnet3D_gray.onnx, deleted together with resnet3D.onnx when
+# resnet3D_multi replaced them (user). Set a path (or the node's
+# ~model_secondary) to run a second model beside the primary again.
+RA_MODEL_SECONDARY = ''
 
-# Both are gitignored (*.onnx), so a fresh clone has to copy them in.
+# resnet3D_multi.onnx is versioned through Git LFS (.gitattributes): a clone
+# needs `git lfs install` once, or the file is a 130-byte pointer and the slot
+# fails to load ("INVALID_PROTOBUF").
 
 # The Fairino SDK is a sibling package in the catkin source space, not part of
 # apriltag_nav, so it is resolved relative to the source space rather than the

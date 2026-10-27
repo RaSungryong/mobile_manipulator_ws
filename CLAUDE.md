@@ -68,10 +68,15 @@ detail and the reasoning; HANDOVER.md holds the checklist.
   900 px window at **(2200, 1834)** of the full 5472x3648 frame — where it was
   trained, left of the Keyence laser spot (~2971, 1834) — not the frame
   centre; the position rides in its versioned sidecar
-  `resnet3D_multi.json` (`crop_center_xy`, `frame_size`). The `.onnx` is NOT
-  versioned (`*.onnx` ignored): copy it to the robot PC by hand.
-  inference_node's secondary slot is still the 2025 `resnet3D_gray.onnx`
-  (centre crop). Work Log 2026-10-27
+  `resnet3D_multi.json` (`crop_center_xy`, `frame_size`). ⚠️ **The `.onnx`
+  (133 MB) is in Git LFS** (`.gitattributes`; GitHub refuses files over
+  100 MB): every machine needs `sudo apt install git-lfs && git lfs install`
+  once, else a pull leaves a ~130-byte pointer and the slot refuses to load
+  ("Git LFS pointer"). The 2025 `resnet3D.onnx` / `resnet3D_gray.onnx` and
+  their `model/resnet3D*_ra/` records are deleted (copies in
+  `machine_vision/exported/` and `work_dir/…drak_field_silla/` on the dev
+  machine); inference_node runs the primary slot only
+  (`RA_MODEL_SECONDARY` ''). Work Log 2026-10-27
 - **Transforms:** scipy, numpy
 
 ## Build & Run
@@ -2231,6 +2236,7 @@ of editing the guide.
 | Wherever `extrinsics.yaml`, `hand_eye/T_hc2ee.npz`, `arm_calibration` numbers or `vision_tip_offset_mm` appear | **every fixed transform lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ a `<name>.npz` per transform) since 2026-09-21**, with design values and provenance in its comments; `tools/tf_chain_tool.py` shows / checks / sets them. The old files are deleted. |
 | Wherever the stop offset appears | the keys are now **`center_x_stop_offset`** (0 since 2026-09-02, forward), `center_x_stop_offset_reverse` (+400 px) and `stop_offset_skip_tag_ranges` (`[[500, 599]]` stop on the crosshair both ways); the fore/aft image axis moved from rows to columns 2026-08-13. |
 | Missing entirely (2026-09 … 10) | rosbridge :9090 / web UI :8080 / the systemd service / `stop_stack.sh`; CHARGE / UNDOCK and the charging manager; the RRT path dialect, retargeting, `csv_euler`, the tip → flange conversion; Keyence 37.1° / 16.5 mm zero / direct mode / seek off; the front_cam ground-plane correction and liveness guard; aim-and-drive, mandatory align, re-seat rules; pose-mode lift compensation; map.yaml x / y / yaw calibration; the live `/robot_pose`; joint offsets on the command side; the Basler dark-frame fix; Ra collect mode. The guide PDF named in the heading (`docs/mobile_manipulator_guide_kr.pdf`) does not exist on disk — `docs/build_guide_pdf.py` makes it. |
+| lines 856–857 (model files) | name `model/exported/resnet3D.onnx` / `resnet3D_gray.onnx`. Both were **deleted 2026-10-27**; the scan model is `resnet3D_multi.onnx` (+ its `.json` sidecar with the crop position), versioned in **Git LFS** — `git lfs install` on every machine. |
 
 ## Work Log
 
@@ -2291,6 +2297,23 @@ now on comes from the new model and is NOT comparable with earlier runs.
 The predicted Ra maps of the plate-1 runs drawn with it are in
 `/media/lcl/SSD2/machine_vision_data/ra_maps/` (dev machine, not in the
 workspace).
+
+**Then the same evening (user: "把模型文件也提交，把原模型删了"):** the
+`.onnx` itself is versioned now, through **Git LFS** (`.gitattributes`
+`src/apriltag_nav/model/exported/*.onnx`, `.gitignore` exception) — at
+133 MB it is over GitHub's 100 MB per-file limit, so plain git would have
+been refused on push (user's choice over fp16 / a Release asset). Deleted:
+`model/exported/resnet3D.onnx` and `resnet3D_gray.onnx` (unversioned;
+byte-identical copies in `/media/lcl/SSD2/machine_vision/exported/`), the
+tracked `model/resnet3D_ra/` + `model/resnet3D_gray_ra/` records (git has
+them) and the two unversioned `best_model.pt` in them (identical copies in
+`machine_vision/work_dir/machine_vision_best_epoch_drak_field_silla/`).
+`paths.RA_MODEL_SECONDARY` is '' so inference_node runs the primary slot
+only, without a missing-file warning. `RaPredictor` refuses a Git LFS
+pointer file with the fix in the message (a clone without git-lfs);
+`check_ra_predictor_crop.py` 17. **Robot PC, once:** `sudo apt install
+git-lfs && git lfs install`, then `git pull` (or `git lfs pull` if pulled
+before installing).
 
 ### 2026-10-19 — Design tip z 222.0 → 223.0 mm: the case end-to-tip distance is 17 mm, not 16
 

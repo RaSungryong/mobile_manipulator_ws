@@ -135,6 +135,14 @@ class ModelSlot:
             self.error = f'file not found: {self.path}'
             log(f"[RaPredictor] slot '{self.name}': {self.error}")
             return False
+        if os.path.getsize(self.path) < 1024:
+            with open(self.path, 'rb') as f:
+                head = f.read(64)
+            if head.startswith(b'version https://git-lfs'):
+                self.error = (f'{self.path} is a Git LFS pointer, not the model — '
+                              'run `git lfs install && git lfs pull` in the workspace')
+                log(f"[RaPredictor] slot '{self.name}': {self.error}")
+                return False
         try:
             self._read_sidecar(log)
             import onnxruntime as ort

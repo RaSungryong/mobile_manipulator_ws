@@ -9,8 +9,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Large model files and rendered documents
+# Large model files and rendered documents. The deployed scan model is the
+# exception, versioned through Git LFS (.gitattributes) since 2026-10-27.
 *.onnx
+!src/apriltag_nav/model/exported/*.onnx
 *.pt
 *.pth
 *.pdf

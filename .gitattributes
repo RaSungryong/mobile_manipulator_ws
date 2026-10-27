@@ -1,0 +1,4 @@
+# The deployed Ra scan model (~133 MB, above GitHub's 100 MB file limit) is
+# stored in Git LFS. Run `git lfs install` once per machine before cloning or
+# pulling, or the .onnx checks out as a small text pointer.
+src/apriltag_nav/model/exported/*.onnx filter=lfs diff=lfs merge=lfs -text

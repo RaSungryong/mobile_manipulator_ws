@@ -34,7 +34,8 @@ ROS parameters
   ~model_primary    .onnx for the primary slot   (default paths.MODEL_PATH,
                     i.e. the same graph the scan pipeline uses)
   ~model_secondary  .onnx for the cross-check    (default
-                    paths.RA_MODEL_SECONDARY; set '' to run one model only)
+                    paths.RA_MODEL_SECONDARY, '' since 2026-10-27 = primary
+                    only; give a path to run a second model again)
   ~require_all      refuse to start unless every configured slot loads
                     (default false)
 

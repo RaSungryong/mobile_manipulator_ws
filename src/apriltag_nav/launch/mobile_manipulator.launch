@@ -258,13 +258,12 @@
          want to score one frame on request, chiefly the operator UI, which
          must not load a model of its own (two resident copies is ~250 MB
          duplicated and two answers that drift apart).
-         The primary slot defaults to the SAME graph the scan pipeline uses, so
-         an on-demand number is comparable with the scan CSVs.
-         ⚠️ It centre-crops 900x900 where inference_interface.py resizes — see
-         the node docstring and CLAUDE.md before making the two agree; changing
-         the scan path moves every Ra value already recorded.
-         Loading two graphs costs ~4 s at startup; set model_secondary to ''
-         to run only the primary. -->
+         The primary slot defaults to the SAME graph the scan pipeline uses
+         (paths.MODEL_PATH = resnet3D_multi.onnx since 2026-10-27), and both
+         go through RaPredictor, so an on-demand number is comparable with the
+         scan CSVs (same 900x900 window, from the model's sidecar .json).
+         No secondary slot since 2026-10-27 (the 2025 resnet3D_gray.onnx was
+         deleted); set ~model_secondary to a path to add one. -->
     <node name="inference_node" pkg="apriltag_nav" type="inference_node.py" output="screen">
         <param name="require_all" value="false"/>
     </node>

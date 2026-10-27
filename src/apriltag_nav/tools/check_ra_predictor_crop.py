@@ -63,7 +63,8 @@ class FakeSession:
 
 def make_slot(tmp, name, sidecar, outputs=('output',)):
     path = os.path.join(tmp, name + '.onnx')
-    open(path, 'wb').close()
+    with open(path, 'wb') as f:
+        f.write(b'\0' * 2048)          # not an LFS pointer (those are < 1 KB of text)
     if sidecar is not None:
         json.dump(sidecar, open(os.path.join(tmp, name + '.json'), 'w'))
     return path
@@ -153,6 +154,13 @@ def main():
             q = rp.RaPredictor([('b', pth)], log=lambda s: None)
             check(q.load() == 0 and why in q.failures()['b'], 'refused: %s' % why)
 
+        # a clone without git-lfs checks the model out as a pointer file
+        ptr = os.path.join(tmp, 'ptr.onnx')
+        with open(ptr, 'w') as f:
+            f.write('version https://git-lfs.github.com/spec/v1\noid sha256:7440d5ca\nsize 132830111\n')
+        q = rp.RaPredictor([('p', ptr)], log=lambda s: None)
+        check(q.load() == 0 and 'Git LFS pointer' in q.failures()['p'], 'LFS pointer refused with the fix in the message')
+
         deployed = os.path.splitext(paths.MODEL_PATH)[0] + '.json'
         if os.path.exists(deployed):
             meta = json.load(open(deployed))
@@ -162,7 +170,7 @@ def main():
             check(False, 'sidecar of paths.MODEL_PATH exists: %s' % deployed)
         print('  [info] paths.MODEL_PATH = %s (%s)' % (
             os.path.relpath(paths.MODEL_PATH, paths.WS_DIR),
-            'present' if os.path.exists(paths.MODEL_PATH) else 'NOT on disk — copy it in, *.onnx is not versioned'))
+            'present' if os.path.exists(paths.MODEL_PATH) else 'NOT on disk — git lfs install && git lfs pull'))
     finally:
         shutil.rmtree(tmp)
     print('%d ok, %d failed' % (n_ok, n_fail))
