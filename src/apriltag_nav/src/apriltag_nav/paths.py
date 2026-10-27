@@ -46,7 +46,12 @@ EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
 # The graph the scan pipeline runs, and inference_node's primary slot — the same
 # file on purpose, so an on-demand Ra from the UI is comparable with the numbers
 # in the scan CSVs rather than being a second opinion nobody can reconcile.
-MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D.onnx')
+#
+# resnet3D_multi since 2026-10-27 (was the 2025 resnet3D.onnx): trained on the
+# robot's own scan_plate1 frames, RMSE 0.31 um vs 0.79 for the old one on the
+# same test split. Its sidecar resnet3D_multi.json (versioned) carries the crop
+# position it was trained at — see ra_predictor.py; the .onnx is not versioned.
+MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D_multi.onnx')
 
 # inference_node's secondary slot: a different architecture over the same input,
 # so it is a cross-check rather than a replicate. Optional — a missing file

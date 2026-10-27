@@ -61,8 +61,17 @@ detail and the reasoning; HANDOVER.md holds the checklist.
   `autoremove` leaves it alone — reinstalling alone does not fix that, it goes
   back to "automatic" every time.
 - **Sensor:** Keyence DL-EN1 (TCP)
-- **Inference:** ONNX Runtime (CPU), ResNet3D; preprocessing uses
-  `torchvision.transforms` + PIL (also hard runtime deps)
+- **Inference:** ONNX Runtime (CPU), `RaPredictor` (`ra_predictor.py`, numpy +
+  cv2 preprocessing, no torch). **Scan model since 2026-10-27:
+  `model/exported/resnet3D_multi.onnx`** (machine_vision, trained on this
+  robot's plate-1 scans; `paths.MODEL_PATH`). ⚠️ It must be scored on the
+  900 px window at **(2200, 1834)** of the full 5472x3648 frame — where it was
+  trained, left of the Keyence laser spot (~2971, 1834) — not the frame
+  centre; the position rides in its versioned sidecar
+  `resnet3D_multi.json` (`crop_center_xy`, `frame_size`). The `.onnx` is NOT
+  versioned (`*.onnx` ignored): copy it to the robot PC by hand.
+  inference_node's secondary slot is still the 2025 `resnet3D_gray.onnx`
+  (centre crop). Work Log 2026-10-27
 - **Transforms:** scipy, numpy
 
 ## Build & Run
@@ -2229,6 +2238,59 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-10-27 — Scan Ra model replaced: resnet3D_multi (machine_vision 2026-10-27); scored where it was trained, LEFT of the laser spot
+
+User: "这个是最新模型 … 更换 ws 的在线模型为这个" — the package
+`machine_vision_best_model_20261027.tar.gz` (NAS, sha256 OK):
+`resnet3D_multi_s15_best_epoch114.pt` + the code it was trained with
+(identical to `RaSungryong/machine_vision` master `ab0001c`). Image-only
+model, outputs Ra (softplus) + stage logits; test split (737 tiles of the
+plate-1 scans): RMSE 0.306 µm, R² 0.852 (finishing 0.198 / roughing 0.244 /
+nc 0.464), stage accuracy 93.2 %. The model it replaces (2025
+`resnet3D.onnx`, trained on another session's images) scores 0.79 on the
+same split and is ~1.25 µm too low over the whole nc plate.
+
+**The crop was the part that mattered.** machine_vision cuts each training
+tile 1100 px at (2200, 1834) and centre-crops 900 of it, i.e. the window
+(1750..2650, 1384..2284) — deliberately LEFT of the Keyence laser spot at
+~(2971, 1834) (halo ≤ 200 px). `RaPredictor` centre-cropped the frame,
+(2286..3186, 1374..2274), a window that holds the laser spot. Deployed with
+the old crop the new model would have scored a region it never saw.
+Now the crop is PER MODEL, from the model's sidecar `<model>.json`
+(`crop_center_xy`, `frame_size`): used only when the input IS a full
+5472x3648 frame (a robot_ui ROI crop has its own coordinates → centre crop,
+logged once per slot); a model without the keys (the 2025 graphs, still
+inference_node's secondary slot) is untouched bit for bit; a stage model
+without the keys warns; a window that does not fit, or a crop without
+frame_size, refuses the slot. Ra is taken from the output NAMED `output`
+(the multi graph also returns `stage_logits`). The stage output is not
+used yet.
+
+Done: ONNX export with machine_vision's `export_onnx.py` (onnxruntime vs
+torch on CPU 3e-6), `model/exported/resnet3D_multi.onnx` (sha256 7440d5ca…,
+in the sidecar), `resnet3D_multi.json` (versioned: crop, frame size,
+checkpoint + package sha, test scores, stage Ra ranges), `paths.MODEL_PATH`
+→ it (arm_node's scan path and inference_node's primary both follow).
+
+Verified: new `tools/check_ra_predictor_crop.py` (16 — fake ONNX session
+returning the input mean, so the scored window is read back: full frame at
+(2200, 1834), old slot at the centre, ROI fallback logged once, output by
+name, shared preprocessing, both refusals, the deployed sidecar; preprocess
+of the frame == the 1100 training tile centre-cropped, bit for bit). On the
+dev machine against the real data: 24 full scan frames (8 per stage)
+through the robot's `RaPredictor` vs machine_vision's PyTorch prediction of
+the same frames' tiles — input bit-identical, Ra within 1.9e-3 µm (that is
+the GPU's TF32 convolutions; ONNX vs torch on CPU ≤ 3e-4); old slot output
+unchanged. **Not run on the robot.** To deploy there: `git pull`, copy
+`resnet3D_multi.onnx` into `src/apriltag_nav/model/exported/` (check the
+sha256 against the sidecar), `sudo systemctl restart mobile-manipulator`;
+arm_node's log should show `slot 'scan': crop at (2200, 1834) of a
+5472x3648 frame`. Consequence: `model_ra_mean` in Ra maps / collect CSVs from
+now on comes from the new model and is NOT comparable with earlier runs.
+The predicted Ra maps of the plate-1 runs drawn with it are in
+`/media/lcl/SSD2/machine_vision_data/ra_maps/` (dev machine, not in the
+workspace).
 
 ### 2026-10-19 — Design tip z 222.0 → 223.0 mm: the case end-to-tip distance is 17 mm, not 16
 

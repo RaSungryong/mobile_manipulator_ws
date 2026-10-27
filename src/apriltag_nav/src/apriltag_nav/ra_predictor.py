@@ -39,8 +39,20 @@ while the on-demand path cropped.
 ⚠️ The scan pipeline was switched from Resize to CenterCrop on 2026-08-12, so
 Ra values recorded before that date came out of a different transform and are
 not comparable with new ones. See CLAUDE.md.
+
+⚠️ CROP POSITION IS PER MODEL since 2026-10-27, read from the model's sidecar
+`<model>.json` (written next to the .onnx by machine_vision's export_onnx.py):
+`crop_center_xy` [x, y] px and `frame_size` [w, h]. The scan_plate1 models
+(resnet3D_multi onwards) were trained on a 900x900 window centred at
+(2200, 1834) of the 5472x3648 Basler frame — LEFT of the standoff laser spot at
+~(2971, 1834), whose halo reaches ~200 px — while the frame centre (2736, 1824)
+puts the spot inside the window. The window is taken there only when the input
+IS a full frame of `frame_size` (a robot_ui ROI crop has its own coordinates
+and falls back to the centre crop, logged once); a model without the keys (the
+2025 resnet3D / resnet3D_gray) keeps the centre crop, bit for bit as before.
 """
 
+import json
 import os
 import time
 
@@ -63,11 +75,52 @@ class ModelSlot:
         self.path = path
         self.session = None
         self.input_name = None
+        self.output_index = 0
         self.error = None
+        self.crop_center = None     # (x, y) px of the 900 window in a full frame; None = centre
+        self.frame_size = None      # (w, h) the crop_center refers to
+        self._warned_fallback = False
 
     @property
     def loaded(self):
         return self.session is not None
+
+    def _read_sidecar(self, log):
+        """crop_center_xy / frame_size from `<model>.json`, if it has them."""
+        side = os.path.splitext(self.path)[0] + '.json'
+        if not os.path.exists(side):
+            return
+        with open(side) as f:
+            meta = json.load(f)
+        cc, fs = meta.get('crop_center_xy'), meta.get('frame_size')
+        if cc is None:
+            return
+        if fs is None or len(cc) != 2 or len(fs) != 2:
+            raise ValueError(f'{side}: crop_center_xy needs frame_size, both [x, y]')
+        self.crop_center = (int(cc[0]), int(cc[1]))
+        self.frame_size = (int(fs[0]), int(fs[1]))
+        half = CROP_SIZE // 2
+        x, y = self.crop_center
+        w, h = self.frame_size
+        if not (half <= x <= w - half and half <= y <= h - half):
+            raise ValueError(f'{side}: a {CROP_SIZE} window at {self.crop_center} '
+                             f'does not fit a {w}x{h} frame')
+        log(f"[RaPredictor] slot '{self.name}': crop at {self.crop_center} "
+            f"of a {w}x{h} frame ({side})")
+
+    def crop_for(self, shape, log=print):
+        """The crop centre to use for an image of `shape`, or None = centre."""
+        if self.crop_center is None:
+            return None
+        h, w = shape[:2]
+        if (w, h) == self.frame_size:
+            return self.crop_center
+        if not self._warned_fallback:
+            log(f"[RaPredictor] slot '{self.name}': input {w}x{h} is not a "
+                f"{self.frame_size[0]}x{self.frame_size[1]} frame — centre crop "
+                f"instead of {self.crop_center} (logged once)")
+            self._warned_fallback = True
+        return None
 
     def load(self, log=print):
         if not self.path:
@@ -83,6 +136,7 @@ class ModelSlot:
             log(f"[RaPredictor] slot '{self.name}': {self.error}")
             return False
         try:
+            self._read_sidecar(log)
             import onnxruntime as ort
 
             opts = ort.SessionOptions()
@@ -93,6 +147,16 @@ class ModelSlot:
                 self.path, sess_options=opts,
                 providers=['CPUExecutionProvider'])
             self.input_name = self.session.get_inputs()[0].name
+            # Stage models (resnet3D_multi) also return `stage_logits`; Ra is
+            # the output named `output` (the first one in every graph so far).
+            outs = [o.name for o in self.session.get_outputs()]
+            self.output_index = outs.index('output') if 'output' in outs else 0
+            if 'stage_logits' in outs and self.crop_center is None:
+                # every stage model so far is a scan_plate1 model, trained left
+                # of the laser spot: without the sidecar it scores the wrong place
+                log(f"[RaPredictor] slot '{self.name}': WARNING stage model "
+                    f"without crop_center_xy in its .json — centre crop, which "
+                    f"is NOT where it was trained")
 
             # Warm up. The first run pays graph-optimisation cost that would
             # otherwise land on the operator's first capture and read as a hang.
@@ -110,7 +174,7 @@ class ModelSlot:
 
     def run(self, chw_float32):
         """chw_float32: (1, 3, 900, 900) normalised float32. Returns a float."""
-        out = self.session.run(None, {self.input_name: chw_float32})[0]
+        out = self.session.run(None, {self.input_name: chw_float32})[self.output_index]
         return float(np.squeeze(out))
 
 
@@ -140,7 +204,7 @@ class RaPredictor:
         return {s.name: s.error for s in self.slots if not s.loaded}
 
     @staticmethod
-    def preprocess(bgr):
+    def preprocess(bgr, crop_center=None):
         """BGR uint8 (any size) -> (1, 3, 900, 900) float32 in [-1, 1].
 
         Mirrors torchvision's
@@ -148,7 +212,18 @@ class RaPredictor:
         done with numpy so the ROS node needs neither torch nor torchvision.
         Verified bit-exact against that chain (max |diff| = 0.0) for full-frame,
         720p, straddling and undersized inputs.
+
+        crop_center (x, y): take the 900 window centred there instead of at the
+        image centre (the caller has checked it fits — ModelSlot.crop_for).
+        That equals machine_vision's training path for a full frame: tile
+        1100 at (x, y) (prepare_scan_dataset.py) -> CenterCrop(900).
         """
+        if crop_center is not None:
+            if bgr is None:
+                raise ValueError('no image')
+            x, y = crop_center
+            half = CROP_SIZE // 2
+            bgr = bgr[y - half:y - half + CROP_SIZE, x - half:x - half + CROP_SIZE]
         if bgr is None:
             raise ValueError('no image')
         if cv2 is None:
@@ -189,14 +264,19 @@ class RaPredictor:
         real measurement.
         """
         started = time.time()
-        chw = self.preprocess(bgr)
+        if bgr is None:
+            raise ValueError('no image')
+        chw_by_crop = {}            # slots sharing a crop share one preprocessing
         results = []
         for slot in self.slots:
             if not slot.loaded:
                 results.append((slot.name, None))
                 continue
+            crop = slot.crop_for(bgr.shape, self.log)
+            if crop not in chw_by_crop:
+                chw_by_crop[crop] = self.preprocess(bgr, crop)
             try:
-                value = slot.run(chw)
+                value = slot.run(chw_by_crop[crop])
             except Exception as e:
                 self.log(f"[RaPredictor] slot '{slot.name}' inference failed: {e}")
                 results.append((slot.name, None))

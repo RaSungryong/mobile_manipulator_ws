@@ -1,0 +1,36 @@
+{
+  "model": "resnet3D_multi",
+  "checkpoint": "resnet3D_multi_s15_best_epoch114.pt (machine_vision_best_model_20261027.tar.gz, sha256 8592e10d3be436ae8e4995dddeb67f3db335a5492f0a39b33d12b19c2baac0d2)",
+  "trained": "2026-10-27, scan_plate1 (1728 train / 737 test, 159 bright finishing tiles excluded), seed 15, epoch 114 of 150",
+  "test_split": "RMSE 0.306 um, R2 0.852; finishing 0.198 / roughing 0.244 / nc 0.464; stage accuracy 93.2 %",
+  "onnx_sha256": "7440d5ca9a051b179800b63882c90eb314f915e8afc39bbd130a6dc56133eadf",
+  "outputs": "output = Ra [um] (softplus, > 0); stage_logits = [finishing, roughing, nc]",
+  "crop_center_xy": [
+    2200,
+    1834
+  ],
+  "frame_size": [
+    5472,
+    3648
+  ],
+  "crop_note": "machine_vision prepare_scan_dataset.py cuts a 1100 tile at (2200, 1834), left of the standoff laser spot ~(2971, 1834); the test transform centre-crops 900 of it",
+  "stages": [
+    "finishing",
+    "roughing",
+    "nc"
+  ],
+  "stage_ra_range": {
+    "finishing": [
+      0.123,
+      1.429
+    ],
+    "roughing": [
+      0.1288,
+      1.999
+    ],
+    "nc": [
+      0.572,
+      4.542
+    ]
+  }
+}
