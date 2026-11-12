@@ -326,6 +326,62 @@ robot:
   aim_drive_speed: 0.03
   aim_measure_frames: 5
   aim_heading_gain: 1.0
+  # ---- via tags (2026-11-11, user: stopping and aligning at EVERY tag
+  # takes too long — a 0.40 m hop was 23 s, of which ~4 s the aim stop +
+  # pivot and ~3 s the arrival align) ----
+  # A VIA tag is an intermediate tag the base merely passes: the hop into
+  # it and the hop out of it are both `move` edges in the SAME direction.
+  # NEVER via: the command's last tag (arm work), a tag before / after a
+  # pivot, a tag where the direction flips, and exclude_tag_ranges (the
+  # 500-series dock / pivot tags) — those keep the full aim + stop + align.
+  # At a via tag:
+  #   aim    decided ON THE MOVE from the filtered tag view (median of
+  #          aim_decide_frames 20 Hz ticks): base centre within
+  #          aim_skip_offset_mm of the tag's line -> no stop, no pivot, the
+  #          heading is held square to the tag to the stop column. Outside
+  #          it the normal aim runs, so the lateral error is a deadband.
+  #          Records 2026-10-15..30 (every hop aimed): |offset| after ONE
+  #          hop median 2 mm, p90 5-10 mm. Offline plant, 12 noisy 5-hop
+  #          lanes (tags laid +-3 mm / +-0.7 deg): 3 mm -> 36 of 48 via tags
+  #          still aim, 5 mm -> 27, 8 mm -> 8, 10 mm -> 5; the base's largest
+  #          excursion from the lane (~15 mm) and the last tag's accuracy
+  #          (< 5 mm) are the same for all of them and for `enabled: false`.
+  #          Lower it for a tighter lane, at the cost of more stops.
+  #   align  skipped when the heading at the stop column AND the heading
+  #          predicted after the pending rotation are inside align_skip_deg
+  #          (an arrival that needed an aim is yawed by it -> aligned as
+  #          before). 0.5 deg over the next hop's ~0.15 m blind stretch is
+  #          1.3 mm, and the launch yaw hold steers on the tag meanwhile.
+  #   speed  approach_speed (m/s, same day, user: release the low-speed
+  #          caps on that stretch only): once the aim has been skipped the
+  #          base holds this speed to the stop column, instead of the
+  #          profile decel x tag_visible_speed_factor (0.03 -> 0.007), the
+  #          blind_approach crawl (0.02) and the final approach (0.015) —
+  #          those exist for an exact stop, which a via tag does not need.
+  #          Before the aim decision nothing changes (plan_prepare still
+  #          brakes to aim_drive_speed 0.03 by first sight, so a needed aim
+  #          starts from a slow base). 0.03 = aim_drive_speed, the speed the
+  #          heading hold and the stop column are already driven at today;
+  #          raise it only together with a look at the first sight (the tag
+  #          appears ~0.2 m out). 0 = keep the normal caps.
+  #   stop   pass_without_stop: at the stop column of a via tag with the
+  #          aim skipped and the heading inside align_skip_deg NO zero
+  #          command is sent — the hop ends there and the next hop's profile
+  #          continues from the speed the base is doing. false = a zero
+  #          command at every column and a relaunch (stop-and-go; each
+  #          launch of this base costs a little heading). A via tag that
+  #          needed an aim, or whose heading is out of the band, stops and
+  #          aligns as before either way.
+  # enabled: false = every hop aims and aligns (the 2026-09-04 rule).
+  # tools/check_via_tags.py.
+  via_tag:
+    enabled: true
+    aim_skip_offset_mm: 8.0
+    aim_decide_frames: 5
+    align_skip_deg: 0.5
+    approach_speed: 0.03
+    pass_without_stop: true
+    exclude_tag_ranges: [[500, 599]]
   # ---- tag_line_plan: the smooth-path alternative (selectable) ----
   plan_min_horizon_m: 0.08
   plan_heading_gain: 1.0

@@ -254,6 +254,19 @@ def main():
     bridge.calls.clear()
     click(tab, 'Send TASK')
     check(('send_task_command', f'TASK {names[0]}') in bridge.calls, 'blank run name -> plain TASK')
+    # start point (2026-11-12): start=<group>:<source_point_id> on TASK and RESUME
+    win.txt_start.setText(' 106 / 651 ')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    click(tab, 'Resume run')
+    check(('send_task_command', f'TASK {names[0]} start=106:651') in bridge.calls
+          and ('send_task_command', 'RESUME start=106:651') in bridge.calls,
+          f'start-point field -> start=106:651 on TASK and RESUME: {bridge.calls}')
+    win.txt_start.setText('106')
+    bridge.calls.clear()
+    click(tab, 'Send TASK')
+    check(not bridge.calls, 'a start point without both numbers is refused before sending')
+    win.txt_start.setText('')
 
     print('== dock & charge buttons + CHARGE chip')
     check(click(tab, 'Dock && charge (tag 500)') and ('send_task_command', 'CHARGE') in bridge.calls,

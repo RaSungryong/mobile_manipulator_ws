@@ -789,7 +789,10 @@ class UiController:
         parts = ' | '.join(
             f'{name}={value:.4f}' if not np.isnan(value) else f'{name}=NaN'
             for name, value in result['models'])
-        self._patch_ui({'ra_text': f'Ra {result["ra"]:.4f}    ({parts})'})
+        # One slot (ra_standard only, 2026-11-12): just the number.
+        extra = f'    ({parts})' if len(result['models']) > 1 else ''
+        self._patch_ui({'ra_text': f'Ra {result["ra"]:.4f}{extra}'
+                                   f'    inference {result["elapsed_s"]:.2f} s'})
         self.append_log(f'[inference] {parts}  in {result["elapsed_s"]:.2f}s'
                         + (f'  tag={result["tag"]}' if result.get('tag') else ''))
 

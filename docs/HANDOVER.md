@@ -102,7 +102,7 @@ everything they listed as open is either done or restated below.
 
 | Item | State | Evidence |
 |------|-------|----------|
-| Navigation | aim-and-drive arrivals, mandatory align on every hop and on the first hop of every command, delay-led stop, ground-plane-corrected front_cam: 108 hops with lateral +1.9 ± 1.7 mm fwd / −3.3 ± 2.2 mm rev, yaw ±0.2° (09-09); stops on the column within 1 mm both ways (09-15); heading-projected `/robot_pose` and the align's at-rest median pose (09-28, tip tour 3) | Work Log 09-09, 09-15, 09-28 |
+| Navigation | aim-and-drive arrivals, mandatory align on every hop and on the first hop of every command (since 2026-11-11 intermediate VIA tags are passed without the aim stop / align, at 0.03 m/s and without a zero command at the column — `via_tag`, offline-verified only, NOT yet driven), delay-led stop, ground-plane-corrected front_cam: 108 hops with lateral +1.9 ± 1.7 mm fwd / −3.3 ± 2.2 mm rev, yaw ±0.2° (09-09); stops on the column within 1 mm both ways (09-15); heading-projected `/robot_pose` and the align's at-rest median pose (09-28, tip tour 3) | Work Log 09-09, 09-15, 09-28 |
 | `/robot_pose` | live 10 Hz stream (`flag` False) + per-arrival pose (`flag` True); arm_node uses only the arrival pose | Work Log 09-28 (night) |
 | Map calibration | plate 1 measured twice on 09-22 (0.9 mm max session spread) and twice on 09-28, applied to map.yaml; tip tour over all 22 plate-1 stops rms 4.2 mm (3.2 without tag 104, which was then re-laid) | Work Log 09-22, 09-28 |
 | Pose-mode IK | tip → flange conversion (controller's active tool is the FLANGE), `csv_euler ZYX`, live lift compensation, calibrated `T_ab2mb`, tag yaw in theta, joint offsets on the command side xy | Work Log 09-14, 09-21, 09-22, 09-28 |

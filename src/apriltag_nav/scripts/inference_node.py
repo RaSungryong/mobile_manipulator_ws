@@ -22,26 +22,33 @@ Services:
 Publishes:
   /inference/state     std_msgs/String  (latched) which slots came up
 
-⚠️ PREPROCESSING IS CenterCrop(900, 900), NOT Resize.
-Both exported graphs cut their input into a 3x3 grid of native 300x300 tiles fed
-to Conv3d, so a resized 5472x3648 frame presents ~6x the surface per tile at
-~1/6 the detail and the texture scale the model reads is destroyed. The scan
-pipeline resized until 2026-08-12 and now centre-crops too, so Ra values from
-before that date are not comparable with new ones — see CLAUDE.md.
+⚠️ PREPROCESSING IS PER MODEL (its sidecar .json) AND NEVER A RESIZE — native
+Basler pixels in a 900x900 window: around the laser spot for the spot-tile
+models (ra_standard / ra_new, 2026-11-11), a fixed window for resnet3D_multi,
+the centre for a model without a sidecar. See ra_predictor.py. Ra values from
+different models / windows are not comparable with each other — see CLAUDE.md.
 
 ROS parameters
 --------------
   ~model_primary    .onnx for the primary slot   (default paths.MODEL_PATH,
                     i.e. the same graph the scan pipeline uses)
-  ~model_secondary  .onnx for the cross-check    (default
-                    paths.RA_MODEL_SECONDARY, '' since 2026-10-27 = primary
-                    only; give a path to run a second model again)
+  ~model_secondary  .onnx for the second slot    (default
+                    paths.RA_MODEL_SECONDARY = '' since 2026-11-12: primary
+                    (ra_standard) only, so the reply and the UI carry Ra
+                    alone and elapsed_s is Ra's inference time;
+                    paths.RA_NEW_MODEL_PATH brings ra_new back)
   ~require_all      refuse to start unless every configured slot loads
                     (default false)
 
 A slot whose file is missing is skipped with a warning rather than taken as
-fatal: losing the cross-check should not cost the operator the primary model.
+fatal: losing the second model should not cost the operator the primary one.
 Its entry still appears in the reply with NaN, so a caller can see it was tried.
+
+A slot is NAMED after its sidecar's `model` (ra_standard / ra_new), so the
+reply and the UI say which quantity a number is; without a sidecar the names
+are primary / secondary as before. The reply's `message` also carries what a
+spot-tile frame said about itself: the stage seen in the image and any flags
+(spot not found, saturated, ... — ra_predictor.spot_flags).
 """
 
 import math
@@ -53,7 +60,7 @@ from cv_bridge import CvBridge
 from robot_msgs.srv import PredictRa, PredictRaResponse
 
 from apriltag_nav import paths
-from apriltag_nav.ra_predictor import RaPredictor
+from apriltag_nav.ra_predictor import RaPredictor, sidecar_meta
 
 
 class InferenceNode:
@@ -72,9 +79,10 @@ class InferenceNode:
         # Order matters: the first slot is the one the reply's `ra` field
         # carries, and it defaults to the scan pipeline's graph so an on-demand
         # number is comparable with the scan CSVs.
-        slots = [('primary', primary)]
+        slots = [(self._slot_name(primary, 'primary'), primary)]
         if secondary:
-            slots.append(('secondary', secondary))
+            name = self._slot_name(secondary, 'secondary')
+            slots.append((name if name != slots[0][0] else 'secondary', secondary))
 
         self._predictor = RaPredictor(slots=slots, log=rospy.loginfo)
         loaded = self._predictor.load()
@@ -102,6 +110,14 @@ class InferenceNode:
         self._state_pub.publish(String(state))
         rospy.loginfo(f"[Inference] {state} — /inference/predict")
 
+    @staticmethod
+    def _slot_name(path, fallback):
+        """The sidecar's `model` name, so a reply says WHICH Ra a value is."""
+        try:
+            return str(sidecar_meta(path).get('model') or fallback)
+        except Exception:
+            return fallback         # a broken sidecar fails the slot's load, visibly
+
     def _srv_predict(self, req):
         resp = PredictRaResponse()
         resp.tag = req.tag
@@ -127,7 +143,7 @@ class InferenceNode:
             return resp
 
         try:
-            results, elapsed = self._predictor.predict(bgr)
+            results, elapsed, detail = self._predictor.predict_detail(bgr)
         except Exception as e:
             rospy.logerr(f"[Inference] predict failed: {e}")
             resp.success = False
@@ -155,10 +171,17 @@ class InferenceNode:
         else:
             resp.message = 'ok'
 
+        extra = ''
+        if detail.get('stage'):
+            p = (detail.get('stage_probs') or {}).get(detail['stage'])
+            extra += f"; stage {detail['stage']}" + (f' (p {p:.2f})' if p is not None else '')
+        if detail.get('flags'):
+            extra += f"; FLAGS: {';'.join(detail['flags'])}"
         if resp.success:
+            resp.message += extra
             pairs = ' '.join(f'{n}={_fmt(v)}' for n, v in
                              zip(resp.model_names, resp.ra_values))
-            rospy.loginfo(f"[Inference] tag='{req.tag}' {pairs} "
+            rospy.loginfo(f"[Inference] tag='{req.tag}' {pairs}{extra} "
                           f"in {elapsed:.3f}s")
         return resp
 

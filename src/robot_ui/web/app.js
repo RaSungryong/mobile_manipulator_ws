@@ -732,6 +732,17 @@ function runNameArg(taskName, text, now) {
   return ' run=' + stem;
 }
 
+// ---- Start point (2026-11-12) ----
+// ` start=<group>:<source_point_id>` from the Start point field, '' when
+// blank, null when the text is not two numbers (the caller refuses).
+function startPointArg(text) {
+  const t = (text || '').trim();
+  if (!t) return '';
+  const m = t.match(/^(\d+)\s*[:\/,\s]\s*(\d+)$/);
+  if (!m) return null;
+  return ' start=' + m[1] + ':' + m[2];
+}
+
 // ------------------------------------------------------------------
 // Camera views
 // ------------------------------------------------------------------
@@ -1160,7 +1171,10 @@ function init() {
     const run = runNameArg(taskName, $('txt-run').value);
     if (run === null) { appendLog('[task] run name may only use letters, digits, ".", "_", "-" (no spaces)'); return; }
     if (run) appendLog('[task] run name' + run.replace(' run=', ': '));
-    call('task_command', ['TASK ' + taskName + groups + run]).catch(() => {});
+    const start = startPointArg($('txt-start').value);
+    if (start === null) { appendLog('[task] start point: <group>:<source_point_id>, e.g. 106:651'); return; }
+    if (start) appendLog('[task] start at' + start.replace(' start=', ' '));
+    call('task_command', ['TASK ' + taskName + groups + run + start]).catch(() => {});
   });
   $('btn-reload-tasks').addEventListener('click', () => call('task_command', ['RELOAD_TASKS']).catch(() => {}));
   $('btn-groups-all').addEventListener('click', () => setAllGroups(true));
@@ -1169,7 +1183,9 @@ function init() {
     const stem = $('txt-resume').value.trim();
     const groups = selectedGroupsArg();
     if (groups === null) { appendLog('[task] no group ticked — tick at least one group (or all)'); return; }
-    call('task_command', [(stem ? 'RESUME ' + stem : 'RESUME') + groups]).catch(() => {});
+    const start = startPointArg($('txt-start').value);
+    if (start === null) { appendLog('[task] start point: <group>:<source_point_id>, e.g. 106:651'); return; }
+    call('task_command', [(stem ? 'RESUME ' + stem : 'RESUME') + groups + start]).catch(() => {});
   });
   $('btn-goto').addEventListener('click', () => call('task_command', ['GOTO ' + parseInt($('num-goto').value, 10)]).catch(() => {}));
   $('btn-charge').addEventListener('click', () => call('task_command', ['CHARGE']).catch(() => {}));

@@ -227,7 +227,11 @@ class MobileManipulatorTaskExecutor:
                 'stop_requested': bool(self._stop_requested),
                 # the run being RESUMED (its <task>_ra_map_<ts> stem), else None
                 'resume_run': (self._current_resume or {}).get('stem')
-                              if getattr(self, '_current_resume', None) else None,
+                              if getattr(self, '_current_resume', None)
+                              and not self._current_resume.get('start') else None,
+                # `TASK … start=g:p` (2026-11-12): [group, source_point_id]
+                'start_point': (self._current_resume or {}).get('start')
+                               if getattr(self, '_current_resume', None) else None,
                 # the `groups=` selection of the running command, else None
                 'groups_filter': getattr(self, '_current_groups', None),
                 # the result set of the running command: the RESUMEd run, or
@@ -887,10 +891,14 @@ class MobileManipulatorTaskExecutor:
             if err:
                 rospy.logerr(f"[RESUME] {err}")
                 return
-            if len(parts) > 2:
-                rospy.logerr("[RESUME] Usage: RESUME [<run stem>] [groups=104,105]")
+            parts, start, err = scan_resume.parse_start_arg(parts)
+            if err:
+                rospy.logerr(f"[RESUME] {err}")
                 return
-            plan = self._plan_resume(parts[1] if len(parts) == 2 else None, groups)
+            if len(parts) > 2:
+                rospy.logerr("[RESUME] Usage: RESUME [<run stem>] [groups=104,105] [start=<group>:<source_point_id>]")
+                return
+            plan = self._plan_resume(parts[1] if len(parts) == 2 else None, groups, start)
             if plan is None:
                 return
             rospy.logwarn(f"[RESUME] Preempt → pending '{plan.task_name}' "
@@ -927,8 +935,15 @@ class MobileManipulatorTaskExecutor:
             if err:
                 rospy.logerr(f"[TASK] {err}")
                 return
+            # `start=<group>:<source_point_id>` (2026-11-12): begin a fresh
+            # run at that work point — see _plan_start.
+            parts, start, err = scan_resume.parse_start_arg(parts)
+            if err:
+                rospy.logerr(f"[TASK] {err}")
+                return
             if len(parts) != 2:
-                rospy.logerr("[TASK] Usage: TASK <task_name> [groups=104,105] [run=<task>[_<label>]_ra_map_<stamp>]")
+                rospy.logerr("[TASK] Usage: TASK <task_name> [groups=104,105] "
+                             "[run=<task>[_<label>]_ra_map_<stamp>] [start=<group>:<source_point_id>]")
                 return
 
             task_name = parts[1]
@@ -950,6 +965,31 @@ class MobileManipulatorTaskExecutor:
             why = scan_resume.check_groups(task, groups)
             if why:
                 rospy.logerr(f"[TASK] '{task_name}': {why}")
+                return
+            if start:
+                plan = self._plan_start(task_name, task, groups, start, run_stem)
+                if plan is None:
+                    return
+                rospy.logwarn(f"[TASK] Preempt → pending '{task_name}' from group {start[0]} "
+                              f"point {start[1]} ({plan.summary()})")
+                self._pending_task_name = task_name
+                self._pending_task = plan.steps
+                self._pending_resume = {'stem': plan.run_stem, 'csv_path': plan.csv_path,
+                                        'points': plan.points_by_tag,
+                                        'summary': plan.summary(),
+                                        'groups': plan.groups_filter,
+                                        'start': list(start)}
+                self._pending_groups = plan.groups_filter
+                self._pending_run = plan.run_stem
+                self._stop_requested = True
+                try:
+                    self.mobile.preempt_stop_robot()
+                except Exception:
+                    pass
+                try:
+                    self.arm.cancel()
+                except Exception:
+                    pass
                 return
             if groups:
                 task = scan_resume.filter_steps(task, groups)
@@ -1018,7 +1058,44 @@ class MobileManipulatorTaskExecutor:
     # ==========================================================
     # RESUME (2026-10-06)
     # ==========================================================
-    def _resume_plan_for(self, stem, groups=None):
+    def _plan_start(self, task_name, steps, groups, start, run_stem=None):
+        """A fresh run of `task_name` that begins at work point `start` =
+        (group, source_point_id): the points before it count as done
+        (scan_resume.start_done_points) and plan_resume builds the steps —
+        earlier groups not driven to, earlier points of the start group
+        replaced by a straight approach (joint) / left out (pose). New run stem: `run_stem`
+        or <task>_ra_map_<now>. In a joint path the start group goes STRAIGHT
+        to the start point (home row -> joint-linear approach), the rows
+        before it are dropped. None (logged) when refused."""
+        if groups and int(start[0]) not in groups:
+            rospy.logerr(f"[TASK] start group {start[0]} is not among the selected groups {sorted(groups)}")
+            return None
+        points = self.task_mgr.scan_points.get(task_name, {})
+        done, why = scan_resume.start_done_points(steps, points, start)
+        if why:
+            rospy.logerr(f"[TASK] '{task_name}': {why}")
+            return None
+        stem = run_stem or f"{task_name}_ra_map_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        csv_path = os.path.join(RA_MAP_DIR, stem + '.csv')
+        if os.path.exists(csv_path):
+            rospy.logerr(f"[TASK] run '{stem}' already exists — use 'RESUME {stem}'")
+            return None
+        plan = scan_resume.plan_resume(stem, task_name, steps, points, done, csv_path, groups)
+        if plan.nothing_left:
+            rospy.logerr(f"[TASK] nothing to scan from group {start[0]} point {start[1]} — {plan.summary()}")
+            return None
+        # joint path: go STRAIGHT from the group's home row to the start point
+        # instead of driving through the rows before it (scan_resume.direct_start)
+        g0 = int(start[0])
+        if g0 in plan.points_by_tag:
+            pts, dropped, added = scan_resume.direct_start(plan.points_by_tag[g0], start[1])
+            if dropped:
+                plan.points_by_tag[g0] = pts
+                rospy.logwarn(f"[TASK] start g{g0} sp{start[1]}: straight approach from home "
+                              f"({added} rows), the {dropped} rows before it are not driven")
+        return plan
+
+    def _resume_plan_for(self, stem, groups=None, start=None):
         """ResumePlan for one run stem, or None when its task is not
         registered or a selected group is not the task's (logged). Pure
         bookkeeping — nothing moves."""
@@ -1034,13 +1111,23 @@ class MobileManipulatorTaskExecutor:
             return None
         csv_path = os.path.join(RA_MAP_DIR, stem + '.csv')
         done = scan_resume.done_points(csv_path, ra_measured_path(stem))
+        if start:
+            if groups and int(start[0]) not in groups:
+                rospy.logerr(f"[RESUME] start group {start[0]} is not among the selected groups {sorted(groups)}")
+                return None
+            before, why = scan_resume.start_done_points(
+                steps, self.task_mgr.scan_points.get(task_name, {}), start)
+            if why:
+                rospy.logerr(f"[RESUME] run '{stem}' ({task_name}): {why}")
+                return None
+            done = done | before
         pending = scan_resume.pending_points(ra_measured_path(stem))
         return scan_resume.plan_resume(
             stem, task_name, steps,
             self.task_mgr.scan_points.get(task_name, {}), done, csv_path, groups,
             pending=pending)
 
-    def _plan_resume(self, stem=None, groups=None):
+    def _plan_resume(self, stem=None, groups=None, start=None):
         """The plan for `stem`, or for the newest run with points left.
         With `groups`, the newest run is still chosen by ALL its points
         (a run whose selected groups are done is refused, not skipped —
@@ -1050,7 +1137,7 @@ class MobileManipulatorTaskExecutor:
             if not os.path.isfile(os.path.join(RA_MAP_DIR, stem + '.csv')):
                 rospy.logerr(f"[RESUME] no Ra map {stem}.csv under {RA_MAP_DIR}")
                 return None
-            plan = self._resume_plan_for(stem, groups)
+            plan = self._resume_plan_for(stem, groups, start)
             if plan is not None and plan.nothing_left:
                 rospy.logerr(f"[RESUME] nothing left to scan — {plan.summary()}")
                 return None
@@ -1060,8 +1147,8 @@ class MobileManipulatorTaskExecutor:
             rospy.logerr("[RESUME] no interrupted run found among the newest "
                          f"Ra maps under {RA_MAP_DIR}")
             return None
-        if groups:
-            plan = self._resume_plan_for(plan.run_stem, groups)
+        if groups or start:
+            plan = self._resume_plan_for(plan.run_stem, groups, start)
             if plan is not None and plan.nothing_left:
                 rospy.logerr(f"[RESUME] nothing left in the selected groups — {plan.summary()}")
                 return None
@@ -1184,7 +1271,10 @@ class MobileManipulatorTaskExecutor:
     def _run_task(self, task_name: str, task_items: List[dict]):
 
         resume = getattr(self, '_current_resume', None)
-        if resume:
+        if resume and resume.get('start'):
+            rospy.logwarn(f"[TASK] Start task '{task_name}' at group {resume['start'][0]} "
+                          f"point {resume['start'][1]} — {resume.get('summary')}")
+        elif resume:
             rospy.logwarn(f"[TASK] RESUME '{task_name}' — {resume.get('summary')}")
         else:
             rospy.loginfo(f"[TASK] Start task '{task_name}'")
@@ -1233,7 +1323,9 @@ class MobileManipulatorTaskExecutor:
         self._progress_total = len(task_items)
         self._progress_tag = -1
         groups = getattr(self, '_current_groups', None)
-        note = f"resumed {resume['stem']}" if resume else (
+        note = (f"task started at g{resume['start'][0]} sp{resume['start'][1]}, run {resume['stem']}"
+                if resume and resume.get('start') else
+                f"resumed {resume['stem']}") if resume else (
             f"task started, run {run_stem}" if run_stem else 'task started')
         if groups:
             note += f" (groups {','.join(str(g) for g in groups)})"

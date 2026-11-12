@@ -259,11 +259,11 @@
          must not load a model of its own (two resident copies is ~250 MB
          duplicated and two answers that drift apart).
          The primary slot defaults to the SAME graph the scan pipeline uses
-         (paths.MODEL_PATH = resnet3D_multi.onnx since 2026-10-27), and both
+         (paths.MODEL_PATH = ra_standard.onnx since 2026-11-11), and both
          go through RaPredictor, so an on-demand number is comparable with the
-         scan CSVs (same 900x900 window, from the model's sidecar .json).
-         No secondary slot since 2026-10-27 (the 2025 resnet3D_gray.onnx was
-         deleted); set ~model_secondary to a path to add one. -->
+         scan CSVs (same spot-centred 900x900 window, from the model's sidecar
+         .json). Primary only since 2026-11-12 (paths.RA_MODEL_SECONDARY ''):
+         the UI shows Ra alone, not ra_new, and the time is Ra's inference. -->
     <node name="inference_node" pkg="apriltag_nav" type="inference_node.py" output="screen">
         <param name="require_all" value="false"/>
     </node>

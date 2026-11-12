@@ -1,0 +1,42 @@
+{
+  "model": "ra_new",
+  "label": "new Ra (legacy New Sum(Ra), deep valleys limited)",
+  "package": "UPR_Ra_inference_ko.zip (version 2026-11-10, sha256 7feca4c551fefd9c307f835b2d5d3ef779ada6160314616c82b3c37724d52ec0)",
+  "checkpoint": "ra_new_best_epoch118.pt",
+  "architecture": "mil2d_multi (ImageNet ResNet-18 over 9 patches) + relative-error loss, 61 outlier tiles excluded",
+  "onnx_sha256": "17fbb9decfe3db31f633b71d782f7972b922e6a55d31f15d01eb5a1d40d18a1f",
+  "outputs": "output = Ra [um], shape (N, 1); stage_logits = [finishing, roughing, nc] (nc not trained)",
+  "preprocess": "spot_tile",
+  "nominal_spot_xy": [
+    2813,
+    1906
+  ],
+  "frame_size": [
+    5472,
+    3648
+  ],
+  "preprocess_note": "ra_predictor.spot_crop (= the package predict.py = machine_vision prepare_spot_tiles.py): 1100 px square centred on the laser spot found within 300 px of nominal_spot_xy, spot filled with the ring median, centre 900, grey copied to 3 channels, (x/255-0.5)/0.5",
+  "stages": [
+    "finishing",
+    "roughing",
+    "nc"
+  ],
+  "train_ra_range": {
+    "finishing": [
+      0.0789087,
+      0.579677
+    ],
+    "roughing": [
+      0.0648388,
+      1.50895
+    ]
+  },
+  "test_mean_accuracy_pct": {
+    "all_250": 67.2,
+    "finishing_129": 72.2,
+    "roughing_121": 61.9,
+    "holdout_71": 62.8
+  },
+  "median_pred_over_true": 0.88,
+  "scope": "UPR die finishing / roughing surfaces, same camera / lighting / spot layout as the training frames; NC surfaces not trained; predictions run ~12 % low (median pred/true 0.88)"
+}

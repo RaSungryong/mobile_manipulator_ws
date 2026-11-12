@@ -449,6 +449,79 @@ def main():
     ex._command_cb(H._Msg(f'TASK {jt}'))
     check(ex._pending_groups is None and [st['tag'] for st in ex._pending_task] == [105, 106, 107], 'plain TASK: no selection, all steps')
 
+    print('== 5d. task_executor TASK / RESUME start=<group>:<point> (2026-11-12)')
+    rest, st_, err = SR.parse_start_arg(f'TASK {jt} start=106:2 groups=106'.split())
+    check(rest == ['TASK', jt, 'groups=106'] and st_ == (106, 2) and err is None, f'parse_start_arg: {rest} {st_} {err}')
+    check(SR.parse_start_arg(['TASK', jt, 'start=106/2'])[1] == (106, 2) and SR.parse_start_arg(['TASK', jt, 'START=106,2'])[1] == (106, 2),
+          'start= takes : / , and any case')
+    check(SR.parse_start_arg(['TASK', jt, 'start=106'])[2] and SR.parse_start_arg(['TASK', jt, 'start=a:b'])[2],
+          'start= without both numbers is an error')
+    sd, why = SR.start_done_points(tm.get_task(jt), tm.scan_points[jt], (106, 2))
+    check(why is None and sd == set(j_keys[105]) | {j_keys[106][0]}, f'start_done_points = all of 105 + 106 sp1: {sorted(sd)}')
+    check(SR.start_done_points(tm.get_task(jt), tm.scan_points[jt], (105, 1))[0] == set(), 'start at the first point -> nothing done')
+    check('not in this task' in (SR.start_done_points(tm.get_task(jt), tm.scan_points[jt], (104, 1))[1] or '')
+          and 'no scanned work point 9' in (SR.start_done_points(tm.get_task(jt), tm.scan_points[jt], (106, 9))[1] or ''),
+          'unknown group / point refused with the reason')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} start=106:2'))
+    check(ex._pending_task_name == jt and ex._pending_resume and ex._pending_resume.get('start') == [106, 2]
+          and [st['tag'] for st in ex._pending_task] == [106, 107], f'TASK start=106:2 queues steps 106, 107: {ex._pending_task and [st.get("tag") for st in ex._pending_task]}')
+    start_stem = ex._pending_resume['stem']
+    check(start_stem.startswith(jt + '_ra_map_') and not os.path.exists(os.path.join(ra_dir, start_stem + '.csv')),
+          f'a fresh run stem: {start_stem}')
+    H.ticks(ex, 4)
+    gotos = [c for c in ex.mobile.calls if c[0] == 'goto']
+    check(gotos == [('goto', 106), ('goto', 107)], f'base skips group 105: {gotos}')
+    p106 = ex.arm.points[0] if ex.arm.points else []
+    full106 = tm.get_scan_points(jt, 106)
+    i2 = [k for k, p in enumerate(full106) if p.get('source_point_id') == 2][0]
+    check(p106 and p106[0]['joints'] == full106[0]['joints'] and p106[0]['scan'] is False
+          and [p['source_point_id'] for p in p106 if p['scan']] == [2, 3]
+          and not any(p.get('source_point_id') == 1 for p in p106)
+          and p106[[p.get('source_point_id') for p in p106].index(2)]['speed'] == 10.0
+          and len(p106) == 1 + (len(full106) - i2),
+          'joint: group 106 = its home row, then STRAIGHT to sp2 (sp1 and its rows not driven), start speed 10')
+    check(any('straight approach from home' in l for l in H.LOG), 'log names the straight approach')
+    # direct_start on its own: a 0.35 rad move is cut into 0.1 rad pieces
+    home = {'mode': 'joint', 'joints': [0.0] * 6, 'scan': False, 'source_point_id': None, 'point_id': 1, 'speed': 10.0}
+    mk = lambda pid, sp, q, scan=True: {'mode': 'joint', 'joints': q, 'scan': scan, 'source_point_id': sp if scan else None,
+                                        'point_id': pid, 'speed': 30.0, 'x': 1.0, 'y': 2.0, 'z': 3.0}
+    lst = [home, mk(2, None, [0.05] * 6, False), mk(3, 1, [0.1] * 6), mk(4, 2, [0.35, 0, 0, 0, 0, -0.2]), mk(5, 3, [0.36] * 6)]
+    out, dropped, added = SR.direct_start(lst, 2)
+    steps = [max(abs(b - a) for a, b in zip(u['joints'], v['joints'])) for u, v in zip(out, out[1:])]
+    check(dropped == 2 and added == 3 and len(out) == 1 + 3 + 2 and out[4]['source_point_id'] == 2 and out[4]['speed'] == 10.0
+          and all(p['scan'] is False and 'x' not in p for p in out[1:4]) and max(steps[:4]) <= 0.1 + 1e-12
+          and abs(out[3]['joints'][0] - 0.2625) < 1e-12 and lst[3]['speed'] == 30.0,
+          f'direct_start: 2 rows dropped, 3 approach rows of <= 0.1 rad, input untouched ({dropped}, {added}, {steps[:4]})')
+    out2, d2, a2 = SR.direct_start(lst, 1)
+    check(d2 == 0 and a2 == 0 and len(out2) == len(lst), 'start at the first scanned point: list unchanged')
+    pose_l = [dict(p, mode='pose') for p in lst]
+    check(SR.direct_start(pose_l, 2)[1] == 0, 'pose list: unchanged (direct_start is joint only)')
+    check(all(p['csv_path'] == os.path.join(ra_dir, start_stem + '.csv') for pts in ex.arm.points for p in pts),
+          'every point carries the new run csv_path')
+    check(any(s.get('start_point') == [106, 2] and s.get('resume_run') is None
+              and s.get('note', '').startswith('task started at g106 sp2') for s in states),
+          '/task_state: start_point, no resume_run, note names the start')
+    check(ex._current_resume is None, 'start plan cleared after the run')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {pt} start=106:2'))
+    H.ticks(ex, 4)
+    check(ex.arm.points and [p['point_id'] for p in ex.arm.points[0]] == [2, 3], 'pose: the points before the start are left out')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'TASK {jt} start=106:2 run={run_lab}'))
+    check(ex._pending_resume and ex._pending_resume['stem'] == run_lab and ex._pending_run == run_lab, 'start= with run= uses the run name')
+    for bad, why_ in ((f'TASK {jt} start=104:1', 'not in this task'), (f'TASK {jt} start=106:9', 'no scanned work point'),
+                      (f'TASK {jt} start=106:2 groups=107', 'not among the selected groups'), (f'TASK {jt} start=x', 'bad')):
+        ex = fresh()
+        ex._command_cb(H._Msg(bad))
+        check(ex._pending_task is None and any(why_ in l for l in H.LOG), f'refused: {bad}')
+    ex = fresh()
+    ex._command_cb(H._Msg(f'RESUME {stem} start=106:3'))
+    rp = (ex._pending_resume or {}).get('points', {})
+    check(ex._pending_resume and ex._pending_resume['stem'] == stem and 'start' not in ex._pending_resume
+          and [p['source_point_id'] for p in rp.get(106, []) if p['scan']] == [3],
+          'RESUME <run> start=106:3: the run\'s own done set + the points before the start')
+
     # a plain TASK after a pending RESUME drops the resume and runs the whole task on a NEW csv_path
     ex = fresh()
     ex._command_cb(H._Msg('RESUME')); ex._command_cb(H._Msg(f'TASK {jt}'))

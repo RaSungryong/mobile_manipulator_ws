@@ -47,21 +47,29 @@ EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
 # file on purpose, so an on-demand Ra from the UI is comparable with the numbers
 # in the scan CSVs rather than being a second opinion nobody can reconcile.
 #
-# resnet3D_multi since 2026-10-27 (was the 2025 resnet3D.onnx): trained on the
-# robot's own scan_plate1 frames, RMSE 0.31 um vs 0.79 for the old one on the
-# same test split. Its sidecar resnet3D_multi.json (versioned) carries the crop
-# position it was trained at — see ra_predictor.py; the .onnx is not versioned.
-MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'resnet3D_multi.onnx')
+# ra_standard since 2026-11-11 (the UPR_Ra_inference package of 2026-11-10):
+# standard (ISO) Ra of UPR-die finishing / roughing surfaces, a 2D ResNet-18
+# over 9 patches, scored on a 900 px window that FOLLOWS the standoff laser
+# spot (spot filled in) — its sidecar ra_standard.json says
+# `"preprocess": "spot_tile"`, see ra_predictor.py. Before it: resnet3D_multi
+# (2026-10-27, fixed window left of the spot; its sidecar and LFS pointer are
+# still in model/exported), and the 2025 resnet3D.onnx before that.
+MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_standard.onnx')
 
-# inference_node's secondary (cross-check) slot. EMPTY since 2026-10-27: it
-# was the 2025 resnet3D_gray.onnx, deleted together with resnet3D.onnx when
-# resnet3D_multi replaced them (user). Set a path (or the node's
-# ~model_secondary) to run a second model beside the primary again.
+# The package's second model, the "new Ra" (legacy New Sum(Ra), deep valleys
+# limited) of the SAME frame — a second quantity, not a cross-check of the
+# first. Kept on disk and in the offline check, but NOT loaded anywhere.
+RA_NEW_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_new.onnx')
+
+# inference_node's secondary slot. '' since 2026-11-12 (user: the UI shows
+# only Ra, not the new Ra, and the inference time is Ra's alone), so the node
+# runs ra_standard only. RA_NEW_MODEL_PATH here (or the node's
+# ~model_secondary) brings the second slot back.
 RA_MODEL_SECONDARY = ''
 
-# resnet3D_multi.onnx is versioned through Git LFS (.gitattributes): a clone
-# needs `git lfs install` once, or the file is a 130-byte pointer and the slot
-# fails to load ("INVALID_PROTOBUF").
+# model/exported/*.onnx is routed to Git LFS by .gitattributes: commit a model
+# only from a machine with git-lfs installed (`git lfs install`), and a clone
+# without it gets ~130-byte pointers, which RaPredictor refuses to load.
 
 # The Fairino SDK is a sibling package in the catkin source space, not part of
 # apriltag_nav, so it is resolved relative to the source space rather than the

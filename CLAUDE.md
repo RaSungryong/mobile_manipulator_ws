@@ -62,21 +62,32 @@ detail and the reasoning; HANDOVER.md holds the checklist.
   back to "automatic" every time.
 - **Sensor:** Keyence DL-EN1 (TCP)
 - **Inference:** ONNX Runtime (CPU), `RaPredictor` (`ra_predictor.py`, numpy +
-  cv2 preprocessing, no torch). **Scan model since 2026-10-27:
-  `model/exported/resnet3D_multi.onnx`** (machine_vision, trained on this
-  robot's plate-1 scans; `paths.MODEL_PATH`). ⚠️ It must be scored on the
-  900 px window at **(2200, 1834)** of the full 5472x3648 frame — where it was
-  trained, left of the Keyence laser spot (~2971, 1834) — not the frame
-  centre; the position rides in its versioned sidecar
-  `resnet3D_multi.json` (`crop_center_xy`, `frame_size`). ⚠️ **The `.onnx`
-  (133 MB) is in Git LFS** (`.gitattributes`; GitHub refuses files over
-  100 MB): every machine needs `sudo apt install git-lfs && git lfs install`
-  once, else a pull leaves a ~130-byte pointer and the slot refuses to load
-  ("Git LFS pointer"). The 2025 `resnet3D.onnx` / `resnet3D_gray.onnx` and
-  their `model/resnet3D*_ra/` records are deleted (copies in
-  `machine_vision/exported/` and `work_dir/…drak_field_silla/` on the dev
-  machine); inference_node runs the primary slot only
-  (`RA_MODEL_SECONDARY` ''). Work Log 2026-10-27
+  cv2 preprocessing, no torch). **Scan model since 2026-11-11:
+  `model/exported/ra_standard.onnx`** (`paths.MODEL_PATH`; the
+  `UPR_Ra_inference` package of 2026-11-10 — standard / ISO Ra of UPR-die
+  finishing and roughing surfaces, 2D ResNet-18 over 9 patches, 45 MB), and
+  inference_node runs **`ra_standard` only since 2026-11-12** (user: the UI
+  shows Ra, not the new Ra, and the time is Ra's alone — `paths.
+  RA_MODEL_SECONDARY` ''; the package's `ra_new.onnx` stays on disk as
+  `paths.RA_NEW_MODEL_PATH`, set it back there to re-enable the second slot). ⚠️ **Spot-tile preprocessing** (sidecar `"preprocess": "spot_tile"`,
+  `nominal_spot_xy` (2813, 1906), `frame_size`): the 900 px window FOLLOWS
+  the Keyence laser spot — found within 300 px of nominal in the full grey
+  frame, 1100 px square on it, spot filled with the ring median, centre 900
+  (`ra_predictor.spot_crop`, copied from the package; do not change it). A
+  frame the package would flag (spot not found / weak / far, saturated,
+  underexposed, Ra outside the stage's training range) is LOGGED
+  (`WARNING frame flagged`) and its value kept. Scope, from the package:
+  UPR die finishing / roughing only (NC not trained), predictions ~12 % low
+  (median pred/true 0.88), accuracy 65 %. The previous model
+  `resnet3D_multi.onnx` (2026-10-27, fixed window at (2200, 1834) LEFT of
+  the spot, `crop_center_xy` sidecar — that path still works) stays in
+  `model/exported` as its sidecar + Git LFS entry. ⚠️ **`model/exported/*.onnx`
+  is routed to Git LFS** (`.gitattributes`): commit a model only from a
+  machine with git-lfs (`sudo apt install git-lfs && git lfs install`); a
+  pull without it leaves ~130-byte pointers, which the slot refuses to load.
+  **The robot PC has no git-lfs (2026-11-11), so `ra_standard.onnx` /
+  `ra_new.onnx` are on disk there but NOT committed.** Work Log 2026-11-11,
+  2026-10-27
 - **Transforms:** scipy, numpy
 
 ## Build & Run
@@ -759,6 +770,25 @@ Status: the first (`align_to_tag` waiting forever) was fixed 2026-09-02 —
 `align_timeout_s`, and every hop aligns (see below). The second, the frozen
 `/odom` deadlock (next ⚠️), still has no guard in `execute_pure_pursuit`;
 only the manual `/mobile/move_cmd` moves check that odom advances.
+
+⚠️ **VIA tags since 2026-11-11 (`robot.yaml via_tag`, NOT YET DRIVEN): the
+"aim and align at EVERY tag" rule below no longer holds for intermediate
+tags.** A tag whose inbound and outbound hops are both `move` edges in the
+same direction — and which is not the command's last tag and not in
+`exclude_tag_ranges` (`[[500, 599]]`) — is passed: the aim is decided on
+the move (base within `aim_skip_offset_mm` 8 of the tag's line → no stop,
+no pivot, heading held square) and the arrival align is skipped when the
+heading at the stop column is inside `align_skip_deg` 0.5. **And the
+low-speed caps are released on that stretch only** (`approach_speed` 0.03:
+once the aim is skipped the base holds it to the stop column — no profile
+decel x tag factor, no `blind_approach` crawl, no final approach), **and
+the column is crossed without a zero command** (`pass_without_stop`: the
+next hop's profile continues from the rolling base; an aim that was
+needed or a heading out of the band stops and aligns as before). The last
+tag, pivot tags, direction changes, the first-hop align and every re-seat
+are unchanged; `via_tag.enabled: false` restores the 2026-09-04 rule,
+`approach_speed: 0` + `pass_without_stop: false` the stops-only step.
+`tools/check_via_tags.py` (38); Work Log 2026-11-11 (two entries).
 
 ✅ **`align_to_tag()` is bounded since 2026-09-02** — `align_timeout_s`
 (20 s, `<= 0` disables) fails the hop with a logged reason (tag not visible /
@@ -2236,7 +2266,7 @@ of editing the guide.
 | Wherever `extrinsics.yaml`, `hand_eye/T_hc2ee.npz`, `arm_calibration` numbers or `vision_tip_offset_mm` appear | **every fixed transform lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ a `<name>.npz` per transform) since 2026-09-21**, with design values and provenance in its comments; `tools/tf_chain_tool.py` shows / checks / sets them. The old files are deleted. |
 | Wherever the stop offset appears | the keys are now **`center_x_stop_offset`** (0 since 2026-09-02, forward), `center_x_stop_offset_reverse` (+400 px) and `stop_offset_skip_tag_ranges` (`[[500, 599]]` stop on the crosshair both ways); the fore/aft image axis moved from rows to columns 2026-08-13. |
 | Missing entirely (2026-09 … 10) | rosbridge :9090 / web UI :8080 / the systemd service / `stop_stack.sh`; CHARGE / UNDOCK and the charging manager; the RRT path dialect, retargeting, `csv_euler`, the tip → flange conversion; Keyence 37.1° / 16.5 mm zero / direct mode / seek off; the front_cam ground-plane correction and liveness guard; aim-and-drive, mandatory align, re-seat rules; pose-mode lift compensation; map.yaml x / y / yaw calibration; the live `/robot_pose`; joint offsets on the command side; the Basler dark-frame fix; Ra collect mode. The guide PDF named in the heading (`docs/mobile_manipulator_guide_kr.pdf`) does not exist on disk — `docs/build_guide_pdf.py` makes it. |
-| lines 856–857 (model files) | name `model/exported/resnet3D.onnx` / `resnet3D_gray.onnx`. Both were **deleted 2026-10-27**; the scan model is `resnet3D_multi.onnx` (+ its `.json` sidecar with the crop position), versioned in **Git LFS** — `git lfs install` on every machine. |
+| lines 856–857 (model files) | name `model/exported/resnet3D.onnx` / `resnet3D_gray.onnx`. Both were **deleted 2026-10-27**; the scan model is `ra_standard.onnx` since 2026-11-11 (+ `ra_new.onnx` in inference_node's second slot, each with a `.json` sidecar saying `spot_tile`; `resnet3D_multi.onnx` 10-27 … 11-11), `model/exported/*.onnx` goes through **Git LFS** — `git lfs install` on every machine. |
 
 ## Work Log
 
@@ -2244,6 +2274,409 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-11-13 — Three mid20mm_sidetrim runs zipped as 곡면정삭
+
+User: label `…_mid20mm_sidetrim_ra_map_20261112_213747` and `…_215254`
+**곡면정삭** (first written 곡면정상 by mistake, renamed) and zip. Both were already clean: every measured row had a
+hand Ra, nothing pending / skipped, one PNG per row (50 / 247 rows; Ra
+0.35–0.92 / 0.19–0.95 µm; 0 / 3 rows noted `CHECK`, kept). Nothing was
+deleted. The zips have the same layout as the 11-12 ones
+(`results/scan_images/곡면정삭_<stem>.zip`, stored, 0.42 / 2.02 GB): the
+measured CSV and the Ra-map rows of the measured points, each with a
+`surface` column, plus a README.txt. `testzip` reports no errors.
+Then `…_225848` (40 rows, Ra 0.26–0.71 µm, 1 CHECK row kept; already clean) the same
+way, 0.33 GB.
+
+### 2026-11-12 (night) — Three UPR-DIE runs cleaned and zipped with a surface label (평면황삭 / 평면정삭 / 곡면황삭)
+
+User: delete the samples without Ra, label and zip. Run `…20261111_ra_map_
+20261111_192006` (평면황삭) had 166 pending rows (marked, Ra never entered):
+rows and their 166 PNGs DELETED (CSV backup `…_ra_measured.before_drop_no_
+ra_20261112.csv.bak` beside it) — 199 kept. `…_20261112_153441` (평면정삭,
+219) and `…_mid20mm_sidetrim_ra_map_20261112_184642` (labelled 곡면황삭 —
+the user wrote "공면", read as 곡면; rename the zip if not) had none. Zips
+in `results/scan_images/<label>_<stem>.zip` (stored, 1.7–1.8 GB, ignored
+by git): PNGs + the measured CSV and the Ra-map rows of the kept points,
+each with a `surface` column, + README.txt; `testzip` clean. Rows noted
+`CHECK` on the hand sheet (3 / 3 / 7) were kept. A RESUME of the 192006
+run would now re-shoot the deleted points.
+
+### 2026-11-12 — `start=` in a joint path goes STRAIGHT to the start point; `tools/check_direct_start.py`
+
+User, after `start=106:703` would have driven through 737 rows of group 106
+first: add a direct path to the start point that ignores the rows before
+it. (A first attempt re-ordered group 106 of the mid20mm_sidetrim task
+— middle part first — and was rejected by the user: "이거 아니고"; the task
+files were restored byte-for-byte, the reorder tool deleted.) Now
+`scan_resume.direct_start` replaces, for the START GROUP of a JOINT task,
+every row between the group's home row and the start point with a
+joint-linear approach home → start point, cut into 0.1 rad pieces (speed
+10, not scanned; the start point's own speed 10) — the shape the planner
+gives every approach / retreat of this export (all are straight joint
+lines from / to home, checked). Only `TASK … start=`; a RESUME still
+drives through. Unchanged when the start point is the group's first work
+point or the group's first row is not a home / transition row; pose tasks
+unchanged (earlier points dropped). `tools/check_direct_start.py <task>
+<g>:<p> [--surface POSE…]` rebuilds the executor's plan and follows the
+vision tip + 17 mm case along the approach (URDF FK, arm→world fitted on
+the group's work points): for mid20mm_sidetrim `106:703` — 736 rows
+skipped, 15 approach rows, near-vertical descent, tip 19 / 48 / 96 mm above
+the planner-original surface (5907 points) at 20 / 50 / 100 mm before the
+target, lowest 20.6 mm beyond the last 20 mm, OK (exit 1 below 15 mm).
+Only the tip / case is checked — no link model; check any other start
+point before using it. `check_scan_resume.py` 145 → **149**. UI tooltips
+say so. **`task_executor` restart required.**
+
+### 2026-11-12 — Start a run at a chosen work point: `TASK <name> start=<group>:<source_point_id>`, Task tab "Start point"
+
+User: "ui에 어느 point부터 시작하는 기능 추가". Built on the RESUME
+machinery: `scan_resume.parse_start_arg` / `start_done_points` mark every
+scanned point before the start (all of the earlier groups, the start
+group's earlier points by source_point_id) as done, `plan_resume` builds
+the steps — earlier groups not driven to; in a JOINT path the start group's
+earlier points are driven THROUGH (scan False, planned route intact — it
+costs the MoveJs: for the mid20mm_sidetrim task `start=106:703` drives
+through 737 rows of group 106 first) — **superseded the same day: a joint start
+goes STRAIGHT to the start point, entry above**, in a pose task they are left out. A
+fresh run stem (`run=` honoured, an existing Ra map refused), `/task_state`
+`start_point` [g, p] and note `task started at g106 sp703, run …`,
+`resume_run` None. `RESUME [<run>] start=g:p` adds the same set to the
+run's own done set (so a run started at a point is not offered the points
+before it). Refused: a group the task lacks, a source_point_id not scanned
+in that group, a start group outside `groups=`, a malformed token. UI: web
+Task tab "Start point" field (`startPointArg`: `106:651`, `106/651`,
+`106,651`, `106 651`) feeding Send TASK and Resume; Qt `txt_start` the same.
+Verified offline: `check_scan_resume.py` 128 → **145**,
+`check_task_list_ui.py` 117 → **119**, `check_web_ui.py` 149,
+`startPointArg` in headless Chrome (`check_web_ui_browser.py` still dies
+at `Page.navigate` here). **`task_executor` restart required** (`sudo
+systemctl restart mobile-manipulator`); browsers reload the page.
+Middle block of the mid20mm_sidetrim task starts at **g106 sp703**
+(path point_id 738; (−2, −170) mm); groups 119 / 120 / 121 are all middle,
+122 all side.
+
+### 2026-11-12 — New task `…offset-m30mm_standoff0mm_20261111_mid20mm_sidetrim`: middle block on a 20 mm grid (1/4), side patches one ring trimmed, ids renumbered: `tools/grid_task_points.py`
+
+User: shrink the middle samples of the 20261111 UPR-DIE path, "이동 간격은 x,y
+2cm", middle total 1/4, as a NEW task with recomputed ids; on the two side
+patches remove only the outer edge. Read as: middle = |world x| < 650 mm
+(groups 106-middle / 119 / 120 / 121), 20 × 20 mm grid = the 1/4; NOT an
+extra crop. Built from the planner ORIGINAL in `task_csv_backup/20261111_…_original/`
+(not yesterday's half-photographed file). Unlike `thin_scan_points.py`, the
+dropped points are REMOVED from the path, not driven through: every second
+y line (global parity, y ≡ 10 mod 20) and on it every second point (one
+lattice per line across all groups, kept x within 7 mm of the 20 mm
+multiples; the planner's 0–6 mm duplicate points at the block's left edge
+dropped), kept lines re-chained serpentine (each oriented to start next to
+the previous end). Sides: first / last of each line and points with no
+neighbour above / below removed, order kept. Home rows and the non-straight
+transition runs (approach, side→middle route, group-120's 41° branch
+change) are kept verbatim; the planner's straight intra-region transitions
+are dropped and every new connection over 0.1 rad is re-cut joint-linearly
+(speed 10) — same geometry as one MoveJ. Speeds: line start / after a
+transition 10, rest 30. Ids per group: point_id 1..N, source_point_id 1..M,
+pose point_id = that; pose rows copied, is_discontinuous moved to the
+stretch's first kept point.
+
+Result: middle 4289 → 1080 (0.252), sides 1618 → 1405, work points 5907 →
+2485, rows 6076 → 2724 (106: 1212, 119: 71, 120: 414, 121: 85, 122: 703).
+Verified: middle nearest neighbour 16.4–20.0 mm (median 20), sides 10;
+largest joint step 5.70°; URDF FK of all 1236 new joint-linear connections:
+tip ≤ 1.43 mm off the straight chord, ≤ 0.38 mm toward the surface; every
+work row traces to its original row with q and the pose row unchanged; real
+`TaskManager` registers both tasks (2485 scan points, all with world xyz,
+lift 0); transition → task boundaries all 10/10; long work-to-work moves
+only at the kept verbatim routes plus two re-chained line changes (69 /
+160 mm, FK-checked). `RELOAD_TASKS` sent, `/task_list` lists it. **Not run on
+the robot.** Usual joint-replay hazard; the line-change moves are now ~20 mm
+instead of 10.
+
+**Then (user: "중간부 주변 2cm 를 더 삭제") the same files re-made with
+`--mid-trim 2`:** two 10 mm rings removed around the outline of the WHOLE
+middle block (all four groups together, the borders between groups
+untouched) before the grid, so the outermost kept row / column sits ~20 mm
+inside the planned outline instead of 0–10. Middle 1080 → 957 (0.223 of
+4289), work points 2485 → 2362 (106: 1159, 119: 65, 120: 367, 121: 68,
+122: 703), rows 2605; middle spacing 19.9–20.0 mm, joint step ≤ 5.70°, new
+connections ≤ 1.40 mm off chord / ≤ 0.36 mm toward the surface; real
+`TaskManager` 2362 scan points all with world xyz; the files under the same
+name overwritten (no run of it existed), `RELOAD_TASKS` → `/task_list`
+points 2362. Sides unchanged.
+
+**Then (user: "현재 상태에서 중간 주변 2cm 더 지워주") `--mid-trim 4`** (4 cm
+around the middle block, re-made from the planner original, same name
+overwritten): middle 957 → 830 (0.194 of 4289; 106: 396, 119: 59, 120:
+322, 121: 53), work points 2235, rows 2466, traverse 231; middle block now
+x −424…465, y −150…210 mm, spacing 19.9–20.0 mm, joint step ≤ 5.70°, new
+connections ≤ 0.36 mm toward the surface. The middle still starts at
+**106:703** ((−1, −150) mm); `check_direct_start.py … 106:703` OK (735 rows
+skipped, 15 approach rows, lowest tip 20.6 mm). ⚠️ The 17:50 test run
+`…_mid20mm_sidetrim_ra_map_20261112_175042` (ONE point, g106 sp703 of the
+2 cm version) was made on the old ids — its Ra map / frame stay as a
+record, but it cannot be RESUMEd against the new file. `RELOAD_TASKS`
+sent.
+
+### 2026-11-12 — robot_ui's on-demand Ra shows ra_standard only; ra_new no longer loaded
+
+User: when the UI shows the inference result, show only Ra, not the new Ra,
+and the time shown should be Ra's inference alone. `paths.RA_MODEL_SECONDARY`
+'' (the ra_new path kept as `RA_NEW_MODEL_PATH`), so inference_node loads the
+primary slot only — the reply carries one value and `elapsed_s` is that one
+model (~0.8 s instead of ~1.4 s for both). Both UI fronts drop the
+`(name=value)` suffix when only one model answers (`Ra 0.1234`; the log line
+still names `ra_standard=… in N s`); the label also shows the inference
+time (`Ra 0.1234    inference 0.88 s`, user's follow-up). Scan path unchanged (it always scored
+ra_standard only). Verified: `check_ra_predictor_crop` 40 (its real-sample
+part is skipped — `model/UPR_Ra_inference_ko.zip` is no longer on disk),
+`check_web_ui` 149, `check_task_list_ui` 117. **`inference_node` and
+`robot_ui_web_node` restart required** (`sudo systemctl restart
+mobile-manipulator`).
+
+### 2026-11-11 (night) — New UPR-DIE offset-m30mm path (20261111) installed; half of its work points photographed, all driven through: `tools/thin_scan_points.py`
+
+User dropped `task/HOOD-OTR_UPR-DIE_plate1_offset-m30mm_standoff0mm_10mm_20261111.zip`
+(joint + pose `…_offset-m30mm_standoff0mm_20261111.csv` and a NOTICE png: the
+planner moved 11 points of group 121 to group 120 for this export only, J1
+would have needed ~184° there): unzip into task/csv, the png may go, and
+"source_point 개수를 1/2로 — 모든 점을 다 거치며 이동하긴 하지만 사진찍는
+포인트만 절반". The file: 6076 rows, 5907 work points (groups 106 2846 / 119
+286 / 120 1642 / 121 324 / 122 809), raster lines of constant world y 10 mm
+apart, 10 mm pitch along a line, lift 0, standoff 0, planner speeds kept
+(its transition → task boundaries are already 10/10 or 30/30).
+
+`tools/thin_scan_points.py JOINT POSE [--keep 2] [--apply]` sets
+`is_task_waypoint` 0 on the dropped work points — `_is_scan_row` then makes
+them `scan: False`: MoveJ through, no standoff loop, no capture, no Ra-map
+row. `waypoint_kind` stays `task` and `source_point_id` stays (the row is
+still a surface point; `slow_task_entry.py`'s boundary rule does not fire on
+it), speeds untouched. Selection is STAGGERED, not every other row in path
+order: per y line (from the pose twin) every second point, the phase of each
+group's segment chosen so its points sit between the previous line's kept
+points. Result **5907 → 2967** (106 1433 / 119 143 / 120 817 / 121 162 / 122
+412), nearest photographed neighbour 10 → 12.4 mm median (13.7 p95, 16.1 max).
+The POSE file is unchanged (pose mode has no drive-through, so
+`scan_pose_…_20261111` still scans all 5907 — use the joint task); it only
+supplies the joint task's world xyz. Verified: byte diff = 2940
+`is_task_waypoint` cells 1 → 0 and nothing else, real `TaskManager` 2967 scan
+/ 3109 traverse rows, all 2967 with world xyz; `RELOAD_TASKS` on the running
+stack lists the task. Originals + SHA256SUMS in
+`task/csv/task_csv_backup/20261111_HOOD-OTR_UPR-DIE_offset-m30mm_original/`;
+the zip was left in task/ (it still holds the png). Not run on the robot.
+
+### 2026-11-11 (evening) — VIA tags, second step: the low-speed caps released on the via approach, and the column crossed without a zero command — not yet driven
+
+User, on the first step's report (what B leaves is the ~10 s crawl before
+every stop column, which a passed tag does not need): "그렇게 하자. 그
+구간에서만 저속 캡을 풀게." Two keys in `via_tag`, both acting ONLY after
+the on-the-move decision has skipped the aim, with the tag in view
+(`via_fast`, evaluated per tick — a lost tag falls back to the normal caps):
+
+- **`approach_speed` 0.03** (= `aim_drive_speed`, the speed the heading
+  hold and the column test already run at for the first half of every
+  approach). What bound the last 0.14 m, read off the 10-30 log of hop
+  110 → 109: the s-curve decel x `tag_visible_speed_factor` (0.030 →
+  0.007), `blind_approach` 0.02 inside 0.10 m, and the final approach
+  holding its ≤ 0.015 entry speed. `via_fast` overrides the tick's speed
+  after all of them and never latches the final approach. Nothing before
+  the decision changes: `plan_prepare_dist` still brakes to 0.03 by first
+  sight, so an aim that IS needed starts from a slow base.
+- **`pass_without_stop` true** — my call, said to the user: with the caps
+  released, the `stop()` at the column is a zero command followed 10 ms
+  later by a relaunch, i.e. a stop-and-go at every tag, and every launch
+  of this skid-steer base twists it (what the launch yaw hold and the
+  backlash feed-forward exist for). So when the tag crosses the column
+  with the aim skipped and the heading inside `align_skip_deg`, no zero
+  is sent; the next hop's profile ramps from the speed the base has. The
+  decision is made at the column inside `execute_pure_pursuit` (same test
+  as `_via_align_skippable`), so a tag that needs its align is stopped
+  there, not rolled past. Because a hop can now START with the base
+  moving, `move_to_tag` calls `stop()` when a hop fails or a stop request
+  is seen between hops. `false` keeps a zero command at every column.
+
+Arrival record: `via_passed`, `via_fast`; log `[VIA]` instead of `[TAG]`
+/ `[FINAL]`, `[Via] tag N passed without stopping`.
+
+Verified offline only: `check_via_tags.py` 29 → **38** (the four via
+columns crossed at 0.030 m/s and the last tag at 0.015; one final
+approach latched, at the last tag; four `passed without stopping`; the
+plant's executed speed never under 0.0225 m/s between the launch and the
+last hop; `approach_speed 0` + `pass_without_stop false` reproduces the
+first step — crawl at every column, four more zero commands; `pass_
+without_stop false` alone keeps the speed with the zero commands; reverse
+the same; band 0 → nothing passed; a hop failing after a passed tag
+leaves the base at rest), the other six navigation checks unchanged
+(20 / 20 / 31 / 30 / 37 / 42), pyflakes clean. Plant, 5-hop lane with 4
+via tags: forward 84 → 72 (first step) → **60 s**, reverse 99 → 88 →
+**73 s**; 12 noisy lanes 113 → 90 → **81 s**, 9 of 48 via tags aiming,
+largest excursion 15 mm, last tag < 5 mm as before. **Not driven;
+`mobile_node` restart required.** Expected on the robot, from the
+medians: a passed via hop ~11 s instead of 23, 500 → 105 about 230 →
+140–160 s — an estimate. First drive: a hand on the e-stop, watch
+`[VIA] … spd ±0.030` to the column and `passed without stopping`, the
+heading at each `[Via]` line (a growing value means the hold is not
+keeping up at 0.03), and the last tag's `aligned` record. Not verified
+on hardware: the base's response to the next hop's profile starting at
+0.03 m/s (the plant dips to 0.0225), and the stop from 0.03 at a via
+column that turns out to need its align (2.4 mm of roll by the 0.08 s
+model). Raising `approach_speed` further is the next lever; the limit is
+the ~0.2 m at which the tag first appears.
+
+### 2026-11-11 (later) — Navigation too slow: where a hop's 23 s goes, and VIA tags (intermediate tags passed without the aim stop and the align) — not yet driven
+
+User: stopping and aligning at every tag takes too long; analyse the
+front_cam navigation first, then (offered A = pass intermediate tags
+without stopping, B = keep the structure and drop the stops, C = relax
+speed caps only) chose **B**, on the grounds that reversing is frequent
+and the bumper shows a tag late in reverse.
+
+**Measured (235 hops of 2026-10-15..30, `mobile_node` logs + nav_log):** a
+0.40 m hop takes 22.9 s forward / 24.1 s reverse (median), a pivot hop
+11.3 s; 500 → 105 (10 hops, ~3.6 m) 228–238 s every time. Per forward hop:
+launch to first sight 5.5 s (reaches 0.09 m/s for an instant, then
+`plan_prepare_dist` 0.28 caps the last 0.28 m at 0.03; includes the ~1.2 s
+aim stop + settle + 5-frame measure), aim pivot 3.1 s (skipped under 0.3°
+on 26 %, two or more passes on half), aim drive 10.1 s (0.18 m at 0.03 →
+0.02 → 0.015), arrival align 3.1 s (1.1 s minimum even inside the band;
+two or more passes on 31 %). What the aim corrects is small: base offset
+from the tag's line median 1.9 / 2.1 mm (fwd / rev), p90 9.7 / 4.9; aim
+angle median 0.63 / 0.87°. Heading held on the move matches its target to
+0.02–0.04° (median), so a heading read while driving can be trusted.
+
+**The reverse premise does not hold for work tags, said to the user:** a
+reverse hop stops its tag on the REV column, 0.16 m ahead of the lens, so
+the target is in view for ~0.18 m before the stop exactly as in a forward
+hop (first sight at rest: fore +0.205 m forward, −0.02 m reverse, both
+"stop pose 0.18–0.20 m away"). The late case is a reverse hop INTO a
+500-series tag (crosshair stop, ~3 cm of view) — those are not via.
+
+**Built (B):** `via_tag` block, `_is_via_hop` (move_to_tag classifies each
+hop from the path), `execute_pure_pursuit(via=)` — base offset from the
+tag line estimated every tick from the filtered view (`_aim_geometry`, the
+aim's own geometry factored out), median of `aim_decide_frames` 5; inside
+`aim_skip_offset_mm` the aim dict is `{'skipped': True, target 0}` and the
+existing aim-drive law holds the heading square; outside, the unchanged
+`_aim_at_stop_pose` — and `_via_align_skippable` after the stop (heading
+now and heading predicted after the pending rotation both inside
+`align_skip_deg`; clears `_last_align_turn_sign` so no backlash
+feed-forward follows a launch without an in-place turn). The arrival
+record gains `via`; a passed via tag writes no `aligned` record. Speeds
+are NOT changed: the base still decelerates to every stop column.
+Threshold 8 mm, not 5, from the plant (12 noisy 5-hop lanes, tags laid
+±3 mm / ±0.7°, 0.3 px corner noise): via tags still aiming 36 / 27 / 8 / 5
+of 48 at 3 / 5 / 8 / 10 mm, mean lane time 107 / 102 / 90 / 88 s against
+113 s off; largest excursion from the lane (~15 mm) and last-tag accuracy
+(< 5 mm) identical for all, off included.
+
+Verified offline only: new `tools/check_via_tags.py` **29** (forward and
+reverse 5-hop lanes: one align at the last tag, no aim at rest at the
+four via tags, last tag within 5 mm / 0.2°, reverse still re-seats at the
+end; 12 mm beside the lane → aim + align at the first via tag, the rest
+passed; 8 noisy lanes inside 15 mm; classification incl. pivot, direction
+flip, 500-series, last tag, other steer modes; band 0 → every tag aligned;
+offset 0 → every tag aimed; preempt mid-hop), `check_nav_sequencing` 20,
+`check_robot_pose_heading` 20, `check_front_cam_guard` 31,
+`check_robot_pose_live` 30, `check_charging_manager` 37,
+`check_calibrated_tag_z_yaw` 42, pyflakes clean. Real map: 500 → 105 has
+7 via tags of 10 hops, 500 → 119 12 of 16. **Not driven; `mobile_node`
+restart required** (`sudo systemctl restart mobile-manipulator`).
+Expected from the medians: ~6 s per via tag, 500 → 105 about 230 → 190 s
+— an estimate. Watch for `[Via] tag N: base +x mm off the line … no stop,
+no pivot` and `[Via] tag N passed … align skipped`, and the lateral in
+the last tag's `aligned` record. What B leaves: the 10 s approach crawl
+per hop, which a via tag does not need (no exact stop) — the next lever,
+not touched here.
+
+### 2026-11-11 — `origin/real` pulled onto the robot PC; scan Ra model → `ra_standard.onnx` (+ `ra_new.onnx`), scored on a tile that follows the laser spot
+
+User: "git에 있는 real branch에 있는 것을 로컬로 가져와줘", then
+"src/apriltag_nav/model 위치에 UPR_Ra_inference_ko.zip 옮겨놓았어. 모델
+이걸로 바꿔줘".
+
+**Pull.** Local `real` was 8 commits behind (`d07e855` → `ff3fdbf`: the
+config stages 1–4, the URDF rename, the design tip z 223.0, resnet3D_multi
++ Git LFS), no local commits — fast-forward, the uncommitted local state
+(five deleted `joint_…offset{0..40}mm.csv`, untracked records and new path
+files) untouched. `tf_chain_tool.py check` 0 failed afterwards. **git-lfs
+is not installed on the robot PC** (sudo needs a password; a user-local
+install was not permitted in the session), so `resnet3D_multi.onnx` checked
+out as a 134-byte pointer — moot for running since the model changed the
+same hour, but it still blocks COMMITTING any `.onnx` from this machine.
+
+**The package** (`UPR_Ra_inference_ko.zip`, version 2026-11-10, sha256
+7feca4c5…, left where the user put it, untracked): `ra_standard.onnx`
+(ISO Ra) and `ra_new.onnx` ("new Ra", deep valleys limited), 45 MB each,
+`mil2d_multi` = ImageNet ResNet-18 over 9 patches, relative-error loss,
+outputs `output` + `stage_logits` [finishing, roughing, nc — nc not
+trained]; its `predict.py` and README. What makes it more than a file
+swap is the input: the training tiles are cut AROUND the standoff laser
+spot — spot found within 300 px of (2813, 1906), 1100 px square on it,
+the spot filled with the median of a ring, centre 900 — where
+resnet3D_multi's window sat beside the spot at a fixed (2200, 1834). So
+`RaPredictor` gained a second sidecar dialect, `"preprocess":
+"spot_tile"` + `nominal_spot_xy` + `frame_size` (`spot_crop` copied from
+the package with the nominal as an argument; `prep_for` chooses spot tile
+/ fixed window / centre per slot; slots with the same preprocessing share
+it; a non-frame input such as a robot_ui ROI falls back to the centre
+crop, logged once; bad spot sidecars refuse the slot). The fixed-window
+and centre paths are unchanged.
+
+Decisions made without asking, both reversible in `paths.py`: (1)
+**`MODEL_PATH` = `ra_standard`** — the scan path and so the Ra map carry
+the standard (ISO) Ra; `RA_MODEL_SECONDARY` = `ra_new`, so robot_ui's on-demand Ra shows
+both. inference_node names its slots after the sidecar's `model`
+(`ra_standard` / `ra_new` instead of primary / secondary) and appends the
+stage seen in the image and any flags to the reply's `message`. (2) **The
+package's flags are logged, not acted on** (`predict_detail` →
+`WARNING frame flagged: …`, value kept): its README says not to use a
+`spot_not_found` / `saturated` / `underexposed` result, but in a scan a
+discarded value fails the point and drops its frame
+(`RaScanPipeline.process` saves only scored frames), and during Ra data
+collection the frame is the record. The flags are not in the Ra map
+either — `execution_message` would be the place if wanted.
+
+Done: the two `.onnx` + sidecars `ra_standard.json` / `ra_new.json`
+(package sha, checkpoint, onnx sha256, spot-tile keys, stage names,
+training Ra ranges per stage, test accuracy, scope) in `model/exported/`;
+`paths.py`, `ra_predictor.py`, `inference_node.py`, the launch comment,
+`check_ra_predictor_crop.py`. `resnet3D_multi.json` and its LFS pointer
+were left in place (nobody asked for their deletion); the 2025
+`resnet3D.onnx` / `resnet3D_gray.onnx` are still on this PC, untracked
+since the pulled `.gitignore` stopped ignoring `exported/*.onnx`.
+
+Verified on the robot PC (cv2 4.2 / onnxruntime 1.19.2 / Python 3.8 — the
+package asks for cv2 ≥ 4.8 and Python ≥ 3.10, so this was the thing to
+check): the workspace `RaPredictor` on the package's two sample frames,
+mono and bgr8 — Ra within **0.00004 µm** of `expected_output.csv`
+(tolerance 0.001), spot position, filled area, peak, mean, sat and stage
+probabilities identical. `check_ra_predictor_crop.py` 17 → **45** (the
+real models on the zip's samples when zip + models are on disk; against
+the fake session: window follows a synthetic spot and the disc is gone,
+one `spot_crop` for two slots, fixed-window slot beside them unchanged,
+stage from the logits, each flag, flagged value kept and logged once, ROI
+fallback, three sidecar refusals, both deployed sidecars). The scan
+path's own `InferenceInterface` on 24 frames of the 10-28 / 10-29 UPR
+runs: spot found within ±30 px of nominal on every one, 23 clean / 1
+`spot_weak`, **0.82 s per frame** (one model; ~1.4 s for both in
+inference_node). A temporary `inference_node` under remapped names
+(`/inference_test/…`, the stack's own node untouched): slots `ra_standard`
+/ `ra_new`, the sample values, `ok; stage finishing (p 0.94)`, ROI
+fallback logged once. `check_scan_progress` 212, `check_scan_resume` 128,
+`check_web_ui` 149, `check_camera_interface` 12. **Not live: the running
+stack (started 14:28, before the pull) still holds the pre-pull code and
+the 2025 model — `sudo systemctl restart mobile-manipulator`**; arm_node
+must then log `slot 'scan': spot tile, laser spot near (2813, 1906)`.
+**Not committed:** the code refers to model files that cannot be
+versioned from here (no git-lfs), and a push would break the dev
+machine's pull. Consequences to remember: Ra maps from now on carry
+`ra_standard` values — not comparable with resnet3D_multi's or the 2025
+model's; the model is for UPR-die finishing / roughing only (the LWR-DIE
+and NC runs are outside its training), reads ~12 % low (median pred/true
+0.88) and is 65 % accurate per point by the package's own test; it
+assumes the laser spot is in the frame near (2813, 1906), i.e. the
+Keyence at its standoff with the laser on — a frame taken out of range
+(`seek` is off) is scored on whatever is brightest there and flagged
+`spot_weak` / `spot_not_found` at best.
 
 ### 2026-10-27 — Scan Ra model replaced: resnet3D_multi (machine_vision 2026-10-27); scored where it was trained, LEFT of the laser spot
 

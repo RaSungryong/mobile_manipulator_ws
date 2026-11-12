@@ -758,7 +758,7 @@ class MainWindow(QMainWindow):
             'send "RESUME <task>_ra_map_<ts>" from the raw command field. '
             'The groups field narrows it to those groups.')
         btn_resume.clicked.connect(
-            lambda: self.bridge.send_task_command('RESUME' + self._groups_arg()))
+            lambda: self._send_resume())
         row.addWidget(btn_resume)
         task_layout.addLayout(row)
 
@@ -799,6 +799,22 @@ class MainWindow(QMainWindow):
             'exists is refused by task_executor — continue it with '
             '"RESUME <name>" (raw command field).')
         row.addWidget(self.txt_run, 1)
+        task_layout.addLayout(row)
+
+        # Start point (2026-11-12): `start=<group>:<source_point_id>` on
+        # Send TASK / Resume run — the run begins at that work point.
+        row = QHBoxLayout()
+        row.addWidget(QLabel('start point'))
+        self.txt_start = QLineEdit()
+        self.txt_start.setPlaceholderText(
+            'blank = from the first point; <group>:<source_point_id>, e.g. 106:651')
+        self.txt_start.setToolTip(
+            'Send TASK / Resume run add start=<group>:<source_point_id>: the run '
+            'begins at that work point. Earlier groups are not driven to; in a '
+            'joint path the arm goes straight from the group\'s home row to the '
+            'start point (the rows before it are not driven), in a pose task '
+            'the earlier points are left out.')
+        row.addWidget(self.txt_start, 1)
         task_layout.addLayout(row)
 
         # What the selected task is: mode, tags in order, point counts, lift
@@ -1901,6 +1917,24 @@ class MainWindow(QMainWindow):
             return None
         return f' run={stem}'
 
+    def _start_arg(self):
+        """` start=<group>:<point>` from the start-point field, '' when blank,
+        None when it is not two numbers."""
+        text = self.txt_start.text().strip() if hasattr(self, 'txt_start') else ''
+        if not text:
+            return ''
+        m = re.match(r'^(\d+)\s*[:/,\s]\s*(\d+)$', text)
+        if not m:
+            return None
+        return f' start={m.group(1)}:{m.group(2)}'
+
+    def _send_resume(self):
+        start = self._start_arg()
+        if start is None:
+            self.append_log('[task] start point: <group>:<source_point_id>, e.g. 106:651')
+            return
+        self.bridge.send_task_command('RESUME' + self._groups_arg() + start)
+
     def _send_task(self):
         name = self.combo_task.currentText().strip()
         run = self._run_arg(name)
@@ -1909,7 +1943,11 @@ class MainWindow(QMainWindow):
             return
         if run:
             self.append_log(f'[task] run name: {run[len(" run="):]}')
-        self.bridge.send_task_command(f'TASK {name}' + self._groups_arg() + run)
+        start = self._start_arg()
+        if start is None:
+            self.append_log('[task] start point: <group>:<source_point_id>, e.g. 106:651')
+            return
+        self.bridge.send_task_command(f'TASK {name}' + self._groups_arg() + run + start)
 
     def _update_task_detail(self, text):
         name = (text or '').strip()
@@ -2347,7 +2385,10 @@ class MainWindow(QMainWindow):
         parts = ' | '.join(
             f'{name}={value:.4f}' if not np.isnan(value) else f'{name}=NaN'
             for name, value in result['models'])
-        self.lbl_ra.setText(f'Ra {result["ra"]:.4f}    ({parts})')
+        # One slot (ra_standard only, 2026-11-12): just the number.
+        extra = f'    ({parts})' if len(result['models']) > 1 else ''
+        self.lbl_ra.setText(f'Ra {result["ra"]:.4f}{extra}'
+                            f'    inference {result["elapsed_s"]:.2f} s')
         self.append_log(f'[inference] {parts}  in {result["elapsed_s"]:.2f}s'
                         + (f'  tag={result["tag"]}' if result['tag'] else ''))
 

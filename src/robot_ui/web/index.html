@@ -175,6 +175,10 @@
               <div class="row">
                 <input type="text" id="txt-run" class="grow" autocomplete="off" placeholder="blank = <task>_ra_map_<now>; a label (roughing) = <task>_roughing_ra_map_<today>; or a full name (<task>_roughing_ra_map_20261013-1014)" title="Send TASK adds run=<name>: the Ra map (log/apriltag_nav/ra_maps/<name>.csv), the frame folder (results/scan_images/<name>/) and the hand-measured CSV in it are all named <name>, so one task can be scanned into separate result sets (e.g. a roughing and a finishing mould). Type a label alone and the page builds <task>_<label>_ra_map_<YYYYMMDD>; type a name containing _ra_map_ to use it as is. Letters, digits, '.', '_', '-' only. A name whose Ra map already exists is refused — continue it with Resume run below. Blank = task_executor's own <task>_ra_map_<YYYYMMDD_HHMMSS> stamp.">
               </div>
+              <label>Start point</label>
+              <div class="row">
+                <input type="text" id="txt-start" class="grow" autocomplete="off" placeholder="blank = from the first point; &lt;group&gt;:&lt;source_point_id&gt;, e.g. 106:651" title="Send TASK and Resume add start=&lt;group&gt;:&lt;source_point_id&gt;: the run begins at that work point (the sp number in the frame names / the Ra map). Groups before it are not driven to. In a joint path the arm goes STRAIGHT from the group's home row to the start point (a joint-linear approach, like the planner's own approaches); the path rows before it are not driven. In a pose task the earlier points are left out. With Resume the points before the start are left out of that run as well (Resume still drives through, it does not go straight). Check a new start point offline first: tools/check_direct_start.py <task> <group>:<point>. The point must be a work point of the task.">
+              </div>
               <label>Resume run</label>
               <div class="row">
                 <input type="text" id="txt-resume" class="grow" autocomplete="off" placeholder="run name (<task>[_<label>]_ra_map_<stamp>) — blank = the newest interrupted run">

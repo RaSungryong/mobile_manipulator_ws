@@ -59,11 +59,23 @@ task does not have is an error (the command is refused, nothing moves).
 In the plan `groups_filter` is the selection and `groups_skipped` the
 dropped unfinished groups; `n_remaining` counts only the selected groups.
 
+START POINT (2026-11-12): `TASK <name> start=<group>:<source_point_id>`
+starts a FRESH run at that work point — `start_done_points` marks every
+scanned point before it as done and the same `plan_resume` does the rest
+(earlier groups not driven to; pose mode: earlier points dropped). In a
+JOINT path the start group then goes STRAIGHT there (`direct_start`): its
+home row, a joint-linear approach home -> start point, the start point and
+the rest — the rows before the start point are not driven. `RESUME … start=g:p` adds
+the same set to the run's own done set, so a run that was started at a
+point is not offered the points before it again (a RESUME still drives
+through, it does not go straight).
+
 Pure python, no ROS: `task_executor` calls `plan_resume`; the check
 script `tools/check_scan_resume.py` drives it offline.
 """
 import csv
 import glob
+import math
 import os
 import re
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -251,6 +263,111 @@ def parse_groups_arg(parts: List[str]) -> Tuple[List[str], Optional[Set[int]], O
             rest.append(w)
         i += 1
     return rest, groups, None
+
+
+def parse_start_arg(parts: List[str]) -> Tuple[List[str], Optional[Tuple[int, int]], Optional[str]]:
+    """Split a `start=<group>:<source_point_id>` token (2026-11-12, user:
+    "어느 point부터 시작하는 기능") out of a command's words. `:` `/` `,`
+    separate the two numbers. Returns (other words, (group, point) or None,
+    error or None)."""
+    rest: List[str] = []
+    start: Optional[Tuple[int, int]] = None
+    for w in parts:
+        if w.lower().startswith('start='):
+            text = w.split('=', 1)[1].strip()
+            m = re.match(r'^(\d+)\s*[:/,]\s*(\d+)$', text)
+            if not m:
+                return rest, None, f"bad '{w}' (want start=<group>:<source_point_id>, e.g. start=106:651)"
+            start = (int(m.group(1)), int(m.group(2)))
+        else:
+            rest.append(w)
+    return rest, start, None
+
+
+def _work_id(p: dict, i: int) -> Optional[int]:
+    """The work-point number of a scan point (joint: source_point_id; pose:
+    point_id, which is the work point)."""
+    v = p.get('source_point_id')
+    if v is None and p.get('mode') == 'pose':
+        v = p.get('point_id', i)
+    try:
+        return None if v is None else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def start_done_points(task_steps: Iterable[dict], points_by_tag: Dict[int, List[dict]],
+                      start: Tuple[int, int]) -> Tuple[Set[Key], Optional[str]]:
+    """The scanned points that come BEFORE `start` = (group, source_point_id)
+    in the task's order, as `plan_resume` done keys: every scanned point of
+    the groups before the start group, and those of the start group listed
+    before the start point. `plan_resume` with this set then skips the
+    earlier groups and, in a joint path, drives THROUGH the earlier points of
+    the start group (scan False, planned route intact). (set, error)."""
+    g0, sp0 = int(start[0]), int(start[1])
+    groups = task_groups(task_steps)
+    if g0 not in groups:
+        return set(), f"start group {g0} is not in this task (its groups: {groups})"
+    done: Set[Key] = set()
+    for tag in groups:
+        pts = points_by_tag.get(tag, [])
+        keys = [((int(p.get('group_id', tag)), int(p.get('point_id', i))), _work_id(p, i))
+                for i, p in enumerate(pts) if p.get('scan', True)]
+        if tag != g0:
+            done.update(k for k, _ in keys)
+            continue
+        ids = [w for _, w in keys]
+        if sp0 not in ids:
+            lo = min((w for w in ids if w is not None), default=None)
+            hi = max((w for w in ids if w is not None), default=None)
+            return set(), (f"group {g0} has no scanned work point {sp0} "
+                           f"(its source_point_id run {lo}..{hi})")
+        for k, w in keys:
+            if w == sp0:
+                break
+            done.add(k)
+        return done, None
+    return done, None
+
+
+def direct_start(points: List[dict], start_sp: int, step_rad: float = 0.1
+                 ) -> Tuple[List[dict], int, int]:
+    """A JOINT group list that goes STRAIGHT to the start point (2026-11-12,
+    user: "앞에 있는 경로 무시하고 직접 가는 추가 경로"): the group's first row
+    (its home row) is kept, every row between it and the start point is
+    dropped, and a joint-linear approach home -> start point is inserted,
+    cut into `step_rad` pieces (speed 10, not scanned) — the same shape the
+    planner gives every approach from home. The start point and everything
+    after it are unchanged (the start point's speed set to 10, it is now the
+    end of an approach). Returns (points, rows dropped, rows inserted); the
+    list unchanged when the group is not joint mode, its first row is a
+    work point, or the start point is already the group's first work point. Copies, never modifies the input."""
+    idx = next((i for i, p in enumerate(points)
+                if p.get('scan', True) and p.get('source_point_id') is not None
+                and int(p['source_point_id']) == int(start_sp)), None)
+    # the group's first WORK point (a plan marks the ones before the start
+    # scan False but keeps their source_point_id)
+    first_scan = next((i for i, p in enumerate(points) if p.get('source_point_id') is not None), None)
+    if (idx is None or not points or points[0].get('mode') != 'joint'
+            or points[0].get('scan', True) or idx == first_scan):
+        return [dict(p) for p in points], 0, 0
+    origin, target = points[0], points[idx]
+    q0 = [float(v) for v in origin['joints']]
+    q1 = [float(v) for v in target['joints']]
+    n = max(1, int(math.ceil(max(abs(b - a) for a, b in zip(q0, q1)) / step_rad - 1e-9)))
+    approach = []
+    for s in range(1, n):
+        p = {k: v for k, v in target.items() if k not in ('x', 'y', 'z')}
+        p['joints'] = [a + (b - a) * s / n for a, b in zip(q0, q1)]
+        p['scan'] = False
+        p['source_point_id'] = None
+        p['point_id'] = origin.get('point_id')
+        p['speed'] = 10.0
+        approach.append(p)
+    tgt = dict(target)
+    tgt['speed'] = 10.0
+    out = [dict(origin)] + approach + [tgt] + [dict(p) for p in points[idx + 1:]]
+    return out, idx - 1, len(approach)
 
 
 def task_groups(task_steps: Iterable[dict]) -> List[int]:

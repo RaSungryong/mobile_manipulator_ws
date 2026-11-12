@@ -203,6 +203,56 @@ class MobileController:
         self.pivot_reseat_enabled = bool(self.cfg['robot'].get('pivot_reseat_enabled', True))
         self.pivot_reseat_tol_m = float(self.cfg['robot'].get('pivot_reseat_tol_m', 0.01))
         self._reseat_active = False
+        # ---- via tags (2026-11-11, user: every-tag stop + align is too slow) ----
+        # A VIA tag is an intermediate tag of a route that the base merely
+        # passes: the hop into it and the hop out of it are both 'move'
+        # edges in the SAME direction, and it is not in exclude_tag_ranges
+        # (the 500-series dock / pivot tags). The command's last tag, a tag
+        # the base pivots on and a tag where the direction of travel flips
+        # are never via — they keep the full aim + stop + align.
+        # On a via hop (see execute_pure_pursuit / go_to_next_tag):
+        #   - the aim is decided ON THE MOVE: the base's offset from the
+        #     target tag's line is estimated from the filtered tag view
+        #     (median of aim_decide_frames control ticks); inside
+        #     aim_skip_offset_mm the base neither stops nor pivots, it holds
+        #     its heading square to the tag to the stop column. Outside it
+        #     the normal aim runs (stop, measure at rest, pivot), so the
+        #     lateral error is a deadband, not a random walk;
+        #   - the arrival align is skipped when the heading read at the stop
+        #     (and the heading predicted after the pending rotation) is
+        #     inside align_skip_deg; the next hop then launches at once.
+        #   - approach_speed > 0 (same day, user: release the low-speed caps
+        #     on that stretch only): once the aim has been skipped, the base
+        #     holds approach_speed to the stop column instead of the profile
+        #     decel x tag_visible_speed_factor, the blind_approach crawl and
+        #     the final approach — a via tag needs no exact stop. 0 keeps the
+        #     normal caps.
+        #   - pass_without_stop: when the tag crosses the stop column with
+        #     the aim skipped and the heading inside align_skip_deg, NO zero
+        #     command is sent: the hop ends there and the next hop's profile
+        #     takes over from the speed the base is doing. (A zero command
+        #     followed at once by a relaunch is a stop-and-go at every tag,
+        #     and every launch of this skid-steer base twists it a little.)
+        #     Anything else at the column — an aim was needed, heading out of
+        #     the band — stops as before.
+        # enabled false / block absent = the 2026-09-04 behaviour, every hop
+        # aims and aligns.
+        via_cfg = self.cfg['robot'].get('via_tag', {}) or {}
+        self.via_enabled = bool(via_cfg.get('enabled', False))
+        self.via_aim_skip_offset_m = float(via_cfg.get('aim_skip_offset_mm', 8.0)) / 1000.0
+        self.via_aim_decide_frames = max(1, int(via_cfg.get('aim_decide_frames', 5)))
+        self.via_align_skip_deg = float(via_cfg.get('align_skip_deg', 0.5))
+        self.via_approach_speed = max(0.0, float(via_cfg.get('approach_speed', 0.0)))
+        self.via_pass_without_stop = bool(via_cfg.get('pass_without_stop', False))
+        self.via_exclude_ranges = []
+        for rng in (via_cfg.get('exclude_tag_ranges', [[500, 599]]) or []):
+            try:
+                lo, hi = int(rng[0]), int(rng[1])
+            except (TypeError, ValueError, IndexError):
+                rospy.logwarn("[Via] bad via_tag.exclude_tag_ranges entry %r", rng)
+                continue
+            self.via_exclude_ranges.append((min(lo, hi), max(lo, hi)))
+        self._via_arrival = None    # what the last via hop read at its stop
         self.camera_params = None
         self.image_center_x_fallback = 0.0
         self.image_center_y_fallback = 0.0
@@ -1406,6 +1456,29 @@ class MobileController:
                 hi = mid
         return lo
 
+    def _aim_geometry(self, tx, ty, edge_deg, direction, target_id):
+        """Where the base is relative to the target tag's line and its stop
+        pose, from one view of the tag (tx fore, ty right, m; edge angle
+        deg) — the geometry of _aim_at_stop_pose, shared with the via-tag
+        decision made on the move. Returns b (m, base centre right of the
+        line +), dist (m, base centre to the stop pose S), dpsi (rad, CCW +,
+        the yaw that points the direction of travel at S) and f (m, the
+        fore distance the stop column leaves the tag ahead of the lens)."""
+        move_dir_sign = -1 if 'backward' in direction else 1
+        th = math.radians(edge_deg)
+        cam = self.camera_offset
+        f = self._stop_target_fore_m(direction, target_id)
+        # line direction in the robot frame (x forward, y RIGHT): +theta
+        dx, dy = math.cos(th), math.sin(th)
+        sx, sy = tx - (cam + f) * dx, ty - (cam + f) * dy      # stop pose of the base
+        vx, vy = sx + cam, sy                                   # from the base centre (-cam, 0)
+        dist = math.hypot(vx, vy)
+        # CCW-positive yaw that points the direction of travel along (vx, vy)
+        dpsi = math.atan2(move_dir_sign * (-vy), move_dir_sign * vx)
+        e_lens = ty * math.cos(th) - tx * math.sin(th)
+        e_base = e_lens - cam * math.sin(th)
+        return {'b': -e_base, 'dist': dist, 'dpsi': dpsi, 'f': f}
+
     def _aim_at_stop_pose(self, target_id, direction, rate):
         """aim_and_drive, step 1 (2026-09-08): the base has just seen its
         target tag. Stop, settle, measure the tag at rest, and pivot so the
@@ -1420,7 +1493,6 @@ class MobileController:
         during the drive) and by the plate wall (_aim_wall_cap_rad); a
         capped aim leaves a residual for the next hop and says so.
         Returns the aim dict, or None (tag lost / pivot failed / preempt)."""
-        move_dir_sign = -1 if 'backward' in direction else 1
         self.stop()
         settle_s = self.stop_latency_s + float(self.cfg['robot'].get('align_settle_s', 0.3))
         t_end = rospy.Time.now() + rospy.Duration(settle_s)
@@ -1432,20 +1504,11 @@ class MobileController:
         if m is None:
             rospy.logwarn("[Aim] tag %s not seen at rest — no aim", target_id)
             return None
-        th = math.radians(m['edge_deg'])
         tx, ty, z = m['x'], m['y'], m['z']
         cam = self.camera_offset
-        f = self._stop_target_fore_m(direction, target_id)
-        # line direction in the robot frame (x forward, y RIGHT): +theta
-        dx, dy = math.cos(th), math.sin(th)
-        sx, sy = tx - (cam + f) * dx, ty - (cam + f) * dy      # stop pose of the base
-        vx, vy = sx + cam, sy                                   # from the base centre (-cam, 0)
-        dist = math.hypot(vx, vy)
-        # CCW-positive yaw that points the direction of travel along (vx, vy)
-        dpsi = math.atan2(move_dir_sign * (-vy), move_dir_sign * vx)
-        e_lens = ty * math.cos(th) - tx * math.sin(th)
-        e_base = e_lens - cam * math.sin(th)
-        b = -e_base                                             # base right of the line
+        g = self._aim_geometry(tx, ty, m['edge_deg'], direction, target_id)
+        f, dist, dpsi = g['f'], g['dist'], g['dpsi']
+        b = g['b']                                              # base right of the line
         if self.aim_wall_side == 'right':
             b_wall = b
         elif self.aim_wall_side == 'left':
@@ -1982,7 +2045,61 @@ class MobileController:
             dist = 0.05
         return dist
 
-    def go_to_next_tag(self, target_id, known_start_id=None, first_hop=False):
+    def _is_via_hop(self, start_id, target_id, after_id):
+        """True when `target_id` is a VIA tag of the route: the hop into
+        it (start_id -> target_id) and the hop out of it (target_id ->
+        after_id) are both 'move' edges in the same direction of travel, and
+        the tag is neither excluded (via_tag.exclude_tag_ranges, the
+        500-series) nor temporarily virtual. `after_id` None = the command
+        ends here, which is never via. aim_and_drive only: the other steer
+        modes have no aim to skip."""
+        if not self.via_enabled or after_id is None or self.steer_mode != 'aim_and_drive':
+            return False
+        try:
+            t = int(target_id)
+        except (TypeError, ValueError):
+            return False
+        if any(lo <= t <= hi for lo, hi in self.via_exclude_ranges):
+            return False
+        if self._is_temp_missing_tag(target_id) or self._is_temp_missing_tag(start_id):
+            return False
+        e_in = self.map_mgr.get_edge(start_id, target_id)
+        e_out = self.map_mgr.get_edge(target_id, after_id)
+        if not e_in or not e_out:
+            return False
+        if e_in.get('type') != 'move' or e_out.get('type') != 'move':
+            return False
+        return (('backward' in str(e_in.get('direction', '')))
+                == ('backward' in str(e_out.get('direction', ''))))
+
+    def _via_align_skippable(self, target_id):
+        """After a via hop's stop: True when the heading it read at the
+        stop column, and the heading predicted once the pending rotation
+        has played out, are both inside via_align_skip_deg — the base is
+        then left as it is and the next hop launches at once. Anything else
+        (no reading, another tag, outside the band — e.g. an aim was needed
+        and the base arrived yawed by it) gets the normal align."""
+        arr = self._via_arrival
+        if not arr or arr.get('tag') != target_id:
+            return False
+        worst = max(abs(arr['yaw_deg']), abs(arr['yaw_settled_deg']))
+        if worst >= self.via_align_skip_deg:      # band 0 = never skip
+            rospy.loginfo(
+                "[Via] tag %s: arrival heading %+.2f deg (settling at %+.2f) is outside "
+                "%.2f deg — aligning", target_id, arr['yaw_deg'], arr['yaw_settled_deg'],
+                self.via_align_skip_deg)
+            return False
+        # No in-place turn precedes the next launch, so there is no wheel
+        # reversal for the launch backlash feed-forward to counter.
+        self._last_align_turn_sign = 0
+        rospy.loginfo(
+            "[Via] tag %s passed%s: arrival heading %+.2f deg (settling at %+.2f, band %.2f), "
+            "lens lateral %+.1f mm — align skipped", target_id,
+            " without stopping" if arr.get('passed') else "", arr['yaw_deg'],
+            arr['yaw_settled_deg'], self.via_align_skip_deg, arr['lateral_m'] * 1000.0)
+        return True
+
+    def go_to_next_tag(self, target_id, known_start_id=None, first_hop=False, via=False):
 
         # ★ NEW: early abort
         if self.stop_requested:
@@ -2082,16 +2199,23 @@ class MobileController:
                 target_id=target_id,
                 direction=direction,
                 total_distance=total_distance,
-                start_id=current_id
+                start_id=current_id,
+                via=via
             )
 
             if not ok:
                 return False
 
+            # A VIA tag (2026-11-11) whose stop read a square heading is not
+            # aligned: nothing is done at it, the next hop steers on it for
+            # its first centimetres anyway (launch yaw hold).
+            if via and self._via_align_skippable(target_id):
+                return True
+
             # The stop has already fired inside execute_pure_pursuit (the tag
-            # crossed the stop line). ALWAYS trim the yaw to the tag now —
-            # every hop ends squared up to its tag, whatever steered it there
-            # (2026-09-02; the two conditional skips that lived here are gone).
+            # crossed the stop line). Trim the yaw to the tag now — every hop
+            # that is not a passed via tag ends squared up to its tag,
+            # whatever steered it there (2026-09-02).
             return self._align_after_arrival(target_id, current_id)
 
         else:
@@ -2263,11 +2387,12 @@ class MobileController:
 
         current_id = start_id
 
-        for next_id in path[1:]:
+        for hop_i, next_id in enumerate(path[1:], start=1):
 
             # ★ NEW: interrupt check
             if self.stop_requested:
                 rospy.logwarn("[Robot] move_to_tag interrupted")
+                self.stop()      # the base may be rolling out of a passed via tag
                 return False
 
             # A camera that died during the previous hop must not start
@@ -2284,16 +2409,21 @@ class MobileController:
 
             rospy.loginfo(f"[Robot] Step {current_id} → {next_id}")
 
+            after_id = path[hop_i + 1] if hop_i + 1 < len(path) else None
             ok = self.go_to_next_tag(
                 target_id=next_id,
                 known_start_id=current_id,
-                first_hop=(next_id == path[1])
+                first_hop=(next_id == path[1]),
+                via=self._is_via_hop(current_id, next_id, after_id)
             )
 
             if not ok:
                 rospy.logerr(
                     f"[Robot] Failed at step {current_id} → {next_id}"
                 )
+                # A via tag passed without stopping leaves the base rolling
+                # into this hop; whatever failed, it must not keep rolling.
+                self.stop()
                 return False
 
             current_id = next_id
@@ -2816,11 +2946,17 @@ class MobileController:
         return min(target, self._fa_v0) if self._fa_v0 > 0 else target
 
     def execute_pure_pursuit(self, target_id, direction, total_distance=1.0,
-                             start_id=None):
+                             start_id=None, via=False):
         """
         Moves towards target_id using Pure Pursuit logic.
         Speed is controlled purely by distance (odom-based), not tag detection.
         Tag detection is only used for steering and final stop condition.
+
+        `via` (2026-11-11): the target is a VIA tag of the route (see
+        __init__). The aim is then decided on the move — no stop and no
+        pivot while the base is within via_aim_skip_offset_m of the tag's
+        line — and what the stop read is left in self._via_arrival for
+        go_to_next_tag's align-skip decision.
         """
 
         
@@ -2869,6 +3005,9 @@ class MobileController:
         self._plan_seen_ticks = 0
         self._aim = None
         aim_target_deg = 0.0                 # heading the aim drive holds
+        self._via_arrival = None
+        via = bool(via) and self.via_enabled and not self._reseat_active
+        via_b = []                           # base-offset estimates on the move (m)
 
         rospy.loginfo(f"[Navigation] Moving {total_distance:.2f}m to tag {target_id}, timeout: {timeout_limit:.1f}s")
 
@@ -2913,6 +3052,12 @@ class MobileController:
             # the last few cm and starts from whatever speed this leaves.
             if tag_visible:
                 target_speed *= self.tag_visible_speed_factor
+
+            # Via tag being passed without an aim, tag in view: the low-speed
+            # caps of the approach do not apply (see __init__). Evaluated per
+            # tick — a lost tag falls back to the normal caps at once.
+            via_fast = bool(via and tag_visible and self.via_approach_speed > 0
+                            and self._aim is not None and self._aim.get('skipped'))
 
             # Apply direction
             speed = target_speed * move_dir_sign
@@ -3025,7 +3170,31 @@ class MobileController:
                 if should_stop:
                     self._final_approach = False   # re-arm for the next move
                     v_at_stop = abs(self.current_linear_vel)
-                    self.stop()
+                    via_passed = False
+                    if via:
+                        # heading now, and where it settles once the angular
+                        # commands still in the pipe have played out
+                        yaw_settled = float(heading_error_deg) + math.degrees(
+                            self._pending_yaw_rad())
+                        aim_skipped = bool(self._aim is not None
+                                           and self._aim.get('skipped'))
+                        # Pass without a zero command only when nothing is
+                        # left to do at this tag: no aim was needed and the
+                        # heading is inside the align-skip band (the same
+                        # test _via_align_skippable applies afterwards).
+                        via_passed = bool(
+                            self.via_pass_without_stop and aim_skipped
+                            and max(abs(float(heading_error_deg)), abs(yaw_settled))
+                            < self.via_align_skip_deg)
+                        self._via_arrival = {
+                            'tag': target_id,
+                            'yaw_deg': float(heading_error_deg),
+                            'yaw_settled_deg': yaw_settled,
+                            'lateral_m': float(lateral),
+                            'aim_skipped': aim_skipped,
+                            'passed': via_passed}
+                    if not via_passed:
+                        self.stop()
                     self._arrival_fore_m = float(tag.get('x', 0.0))
                     self._last_tag_depth_m = float(tag.get('z', 0.0)) or None
                     rospy.loginfo(
@@ -3051,6 +3220,9 @@ class MobileController:
                                'tag_age_raw_s': round(float(tag.get('age_raw_s', 0.0)), 3),
                                'steer_mode': self.steer_mode,
                                'reseat': bool(self._reseat_active),
+                               'via': bool(via),
+                               'via_passed': bool(via_passed),
+                               'via_fast': bool(via_fast),
                                'aim': ({k: (round(v, 3) if isinstance(v, float) else v)
                                         for k, v in self._aim.items()}
                                        if self._aim is not None else None),
@@ -3065,7 +3237,9 @@ class MobileController:
                 # metres-per-pixel on the tag's plane is depth / fx; tag['z'] is
                 # that depth (the ~0.30 m camera height, since the optical axis
                 # points down) and camera_params[0] is fx.
-                if not self._final_approach and remaining_m_to_stop is not None:
+                if via_fast:
+                    pass        # no final approach on a passed via tag
+                elif not self._final_approach and remaining_m_to_stop is not None:
                     # Measured to where the stop ACTUALLY fires, not to the
                     # nominal target_x: should_stop triggers a whole
                     # stop_tolerance early (10 px is ~3 mm at this depth).
@@ -3121,9 +3295,41 @@ class MobileController:
                     aim = self._aim
                     if aim is None:
                         self._plan_seen_ticks += 1
-                        if (self._plan_seen_ticks >= self.plan_settle_frames and
-                                plan_horizon_m is not None and
-                                plan_horizon_m >= self.aim_min_horizon_m):
+                        aim_ready = (self._plan_seen_ticks >= self.plan_settle_frames and
+                                     plan_horizon_m is not None and
+                                     plan_horizon_m >= self.aim_min_horizon_m)
+                        if via:
+                            # ---- via tag: decide the aim ON THE MOVE ----
+                            # Base offset from the tag's line, from the same
+                            # filtered view the steering uses; the median of
+                            # the last via_aim_decide_frames ticks decides.
+                            g_via = self._aim_geometry(float(tag.get('x', 0.0)), lateral,
+                                                       heading_error_deg, direction, target_id)
+                            via_b.append(g_via['b'])
+                            if aim_ready and len(via_b) >= self.via_aim_decide_frames:
+                                b_med = float(np.median(via_b[-self.via_aim_decide_frames:]))
+                                if abs(b_med) <= self.via_aim_skip_offset_m:
+                                    aim = {'skipped': True, 'target_deg': 0.0,
+                                           'stop_offset_px': None,
+                                           'b_mm': b_med * 1000.0, 'dist_m': g_via['dist'],
+                                           'dpsi_deg': 0.0, 'limited': False}
+                                    self._aim = aim
+                                    aim_target_deg = 0.0
+                                    rospy.loginfo(
+                                        "[Via] tag %s: base %+.1f mm off the line (on the move, "
+                                        "median of %d, heading %+.2f deg) — inside %.0f mm: no "
+                                        "stop, no pivot, holding square to the tag",
+                                        target_id, b_med * 1000.0, self.via_aim_decide_frames,
+                                        heading_error_deg, self.via_aim_skip_offset_m * 1000.0)
+                                else:
+                                    rospy.loginfo(
+                                        "[Via] tag %s: base %+.1f mm off the line (on the move) "
+                                        "— outside %.0f mm: aiming at rest",
+                                        target_id, b_med * 1000.0,
+                                        self.via_aim_skip_offset_m * 1000.0)
+                            elif aim_ready:
+                                aim_ready = False        # a few more ticks first
+                        if aim is None and aim_ready:
                             t_aim0 = rospy.Time.now()
                             aim = self._aim_at_stop_pose(target_id, direction, rate)
                             timeout_limit += (rospy.Time.now() - t_aim0).to_sec() + 15.0
@@ -3145,6 +3351,8 @@ class MobileController:
                             self._final_approach = False   # base at rest: re-latch later
                             rate.sleep()
                             continue
+                        # not aimed (yet), or a via tag passed without an aim
+                        # (target 0): hold the heading square to the tag
                         omega = -self.aim_heading_gain * math.radians(heading_pred_deg)
                     else:
                         # drive the straight line: hold the aim heading on the tag
@@ -3157,7 +3365,7 @@ class MobileController:
                         speed = math.copysign(self.aim_drive_speed, speed)
                     rospy.loginfo_throttle(
                         0.5, "[Aim] %s th %+.2f (pred %+.2f) deg target %+.2f omega %+.4f spd %+.3f",
-                        'drive' if aim is not None else 'wait',
+                        ('via' if aim.get('skipped') else 'drive') if aim is not None else 'wait',
                         heading_error_deg, heading_pred_deg, aim_target_deg, omega, speed)
                 elif self.steer_mode == 'tag_line_plan' and plan_horizon_m is not None:
                     # ---- plan to the TARGET TAG'S LINE (2026-09-08) ----
@@ -3475,9 +3683,21 @@ class MobileController:
                 # lag the curve, never improve it.
                 accel_override = float('inf')
 
+            # ===== VIA TAG: hold the approach speed to the stop column =====
+            # Replaces everything above for this tick (profile decel x
+            # tag_visible factor, ApproachBalance, the aim-drive cap, the
+            # odom creep zone, the prepare cap, a latched final approach):
+            # none of them is needed for a tag the base only passes.
+            if via_fast:
+                speed = math.copysign(min(self.via_approach_speed, self.max_linear),
+                                      move_dir_sign)
+                accel_override = None
+
             # Performance logging
             tag_str = "TAG" if tag_visible else "BLIND"
-            if self._final_approach:
+            if via_fast:
+                tag_str = "VIA"
+            elif self._final_approach:
                 tag_str = "FINAL"
             rospy.loginfo_throttle(0.5, f"[{tag_str}] traveled:{traveled_dist:.3f} remain:{remaining_dist:.3f} spd:{speed:+.3f}")
 
