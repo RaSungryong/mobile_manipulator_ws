@@ -185,6 +185,14 @@ class ArmControllerNode:
         # (2026-10-07 evening) — same payload shape as /arm/scan_continue.
         rospy.Subscriber('/arm/collect_save', String, self._cb_collect_save,
                          queue_size=4)
+        # Step evaluation mode (2026-11-13): one work point per Next, capture +
+        # Ra on Estimate. Callback thread, same reason as the collect topics.
+        rospy.Subscriber('/arm/step_mode', Bool, self._cb_step_mode, queue_size=1)
+        rospy.Subscriber('/arm/step_cmd', String, self._cb_step_cmd, queue_size=4)
+        # Ra model choice (2026-11-13): "auto" | "flat" | "curved" (or JSON
+        # {"choice": ...}) — which model scores the frames; state on the
+        # latched /arm/ra_model_state. Callback thread: it loads the model.
+        rospy.Subscriber('/arm/ra_model', String, self._cb_ra_model, queue_size=1)
         rospy.Service('/arm/move_home', Trigger, self._srv_move_home)
         rospy.Service('/arm/reset_error', Trigger, self._srv_reset_error)
 
@@ -194,7 +202,8 @@ class ArmControllerNode:
 
         rospy.loginfo("[ArmNode] Ready — /arm/scan_command, /arm/cancel, "
                       "/arm/move_cart, /arm/jog_cmd, /arm/move_joint, /arm/jog_joint, /arm/move_home, "
-                      "/arm/reset_error, /arm/collect_mode, /arm/collect_config, /arm/scan_continue, /arm/collect_save; "
+                      "/arm/reset_error, /arm/collect_mode, /arm/collect_config, /arm/scan_continue, /arm/collect_save, "
+                      "/arm/step_mode, /arm/step_cmd, /arm/ra_model; "
                       "state on /arm/state")
 
     # ==========================================================
@@ -525,6 +534,50 @@ class ArmControllerNode:
             (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] collect_save: {message}")
         except Exception as e:
             rospy.logerr(f"[ArmNode] collect_save failed: {e}")
+
+    # ==========================================================
+    # STEP EVALUATION MODE
+    # ==========================================================
+    def _cb_step_mode(self, msg):
+        try:
+            ok, message = self.arm.set_step_mode(bool(msg.data))
+            rospy.loginfo(f"[ArmNode] {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] step_mode failed: {e}")
+
+    def _cb_step_cmd(self, msg):
+        """{"cmd": "next" | "estimate"} (a bare word works too). Refused
+        (logged) when no step stop waits."""
+        text = (msg.data or '').strip()
+        try:
+            payload = json.loads(text) if text.startswith('{') else {'cmd': text}
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] bad /arm/step_cmd JSON: {e}")
+            return
+        try:
+            ok, message = self.arm.step_command(payload)
+            (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] step_cmd: {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] step_cmd failed: {e}")
+
+    # ==========================================================
+    # RA MODEL CHOICE
+    # ==========================================================
+    def _cb_ra_model(self, msg):
+        """"auto" | "flat" | "curved" (a bare word, or {"choice": ...}). An
+        unknown name or a model that does not load is refused and logged; the
+        truth is on /arm/ra_model_state."""
+        text = (msg.data or '').strip()
+        try:
+            choice = (json.loads(text).get('choice', '') if text.startswith('{') else text)
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] bad /arm/ra_model JSON: {e}")
+            return
+        try:
+            ok, message = self.arm.set_ra_model(choice)
+            (rospy.loginfo if ok else rospy.logwarn)(f"[ArmNode] ra_model: {message}")
+        except Exception as e:
+            rospy.logerr(f"[ArmNode] ra_model failed: {e}")
 
     # ==========================================================
     # CANCEL

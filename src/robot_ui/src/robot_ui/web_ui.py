@@ -50,6 +50,7 @@ CENTRE_BOX_PX = 900
 # Lift spinbox ceiling in the Qt window (soft_max 6900 * 0.04976077 = 343.35).
 LIFT_MAX_MM = 343.0
 LOG_KEEP = 500
+LOG_SAVE_MAX_BYTES = 8 << 20     # refuse a log text larger than this
 
 # (plan file, ref file, kind). The ref file ALWAYS travels with the plan:
 # both plates carry cross tags with the same ids 0-5, so a mixed pair
@@ -181,7 +182,7 @@ class UiController:
 
     def __init__(self, bridge, sink, plugin_dir=None, save_dir=None,
                  roi_config=None, stream_max_width=1400, stream_fps=10.0,
-                 jpeg_quality=80, calib_poll_s=3.0):
+                 jpeg_quality=80, calib_poll_s=3.0, log_dir=None):
         self.bridge = bridge
         self.sink = sink
         self._pool = ThreadPoolExecutor(max_workers=8,
@@ -193,8 +194,10 @@ class UiController:
         self._roi_config = roi_config or os.path.join(paths.PKG_DIR,
                                                       'roi_config.json')
         self._log_lines = []
+        self._log_dir = log_dir or paths.UI_LOG_DIR
         self._frames = {}           # cam -> newest full-res frame
         self._last_capture = None
+        self._step_shown = set()        # step estimates already put on screen
         self._arm_pose = [0.0] * 6
         self._arm_joints = [0.0] * 6
         self._busy_calls = 0
@@ -302,11 +305,13 @@ class UiController:
         b.scan_progress.connect(self._on_scan_progress)
         b.handeye_progress.connect(self._on_handeye_progress)
         b.tag_ids.connect(self._on_tag_ids)
+        b.step_state.connect(self._on_step_state)
         b.log.connect(self.append_log)
         # Plain state: forwarded as-is; the browser renders the chips.
         for name in ('task_list', 'lift_state', 'mobile_state',
                      'battery_state', 'estop_state', 'camera_state',
-                     'standoff_state', 'collect_state'):
+                     'standoff_state', 'collect_state', 'step_state',
+                     'ra_model_state'):
             getattr(b, name).connect(
                 lambda value, n=name: self.sink.state('state', n, value))
 
@@ -337,6 +342,111 @@ class UiController:
             self.append_log(f'[task] {state.get("state")} — {note}')
         self.sink.state('state', 'task_state', state)
 
+    @staticmethod
+    def _step_pt(ev):
+        sp = ev.get('source_point_id')
+        return (f"g{ev.get('group_id', '?')} sp{sp}" if sp is not None
+                else f"g{ev.get('group_id', '?')} p{ev.get('point_id', '?')}")
+
+    def _on_step_state(self, st):
+        """Step evaluation, shown like a Collect-tab capture: the photo taken
+        on arrival (the PNG arm_node just saved, same PC) goes into the main
+        Basler view as soon as it exists, and the line under it reads
+        'Ra — press Estimate'; when the estimate comes back the same line
+        shows the Ra and the model inference time. The file is read off the
+        ROS thread (a 20 MB PNG)."""
+        try:
+            if not st or st.get('kind') != 'point':
+                return
+            base = (st.get('run'), st.get('group_id'), st.get('point_id'), st.get('index'))
+            # the work point by its SOURCE point id (the planner's number);
+            # the path row only when the file has none
+            sp = st.get('source_point_id')
+            pt = (f"g{st.get('group_id')} sp{sp}" if sp is not None
+                  else f"g{st.get('group_id')} p{st.get('point_id')}")
+            cap = st.get('capture') or {}
+            ckey = base + ('cap', cap.get('stamp'))
+            if cap and ckey not in self._step_shown:
+                self._step_shown.add(ckey)
+                if cap.get('ok'):
+                    self._patch_ui({'ra_text': f'Ra — press Estimate  ({pt})'})
+                    paths_ = [p for p in (cap.get('image_paths') or []) if p]
+                    if paths_:
+                        threading.Thread(target=self._show_step_frame, args=(paths_[-1],),
+                                         name='step-frame', daemon=True).start()
+                    else:
+                        self.append_log(f"[step] {pt}: captured, but no saved frame to show "
+                                        "(arm_node save_images off?)")
+                else:
+                    self._patch_ui({'ra_text': f'capture failed  ({pt})'})
+                    self.append_log(f"[step] {pt}: capture FAILED: {cap.get('message', '')}")
+            ests = st.get('estimates') or []
+            if not ests:
+                return
+            e = ests[-1]
+            ekey = base + ('est', e.get('n'))
+            if ekey in self._step_shown:
+                return
+            self._step_shown.add(ekey)
+        except Exception:               # noqa: BLE001
+            return
+        if not e.get('ok'):
+            self._patch_ui({'ra_text': 'Ra — failed'})
+            self.append_log(f"[step] {pt} estimate FAILED: {e.get('message', '')}")
+            return
+        text = self.step_ra_text(e)
+        self._patch_ui({'ra_text': text})
+        self.append_log(f"[step] {pt}: inference {self.step_infer_text(e)}"
+                        + (f"  -> {e['record_csv']}" if e.get('record_csv') else ''))
+
+    @staticmethod
+    def step_ra_text(e):
+        """The line under the image for a step estimate: every model's Ra
+        (finishing / roughing / A; ✓ = the graph A's stage head selected, the
+        value that goes into the Ra map) and each model's own inference time."""
+        models = e.get('models') or []
+        if not models:
+            t = e.get('infer_s')
+            return (f"Ra {float(e['ra_mean']):.4f}"
+                    + (f"    inference {float(t):.2f} s" if t is not None else ''))
+        ras = '   '.join(f"{m['name']} " + ('—' if m.get('ra') is None else f"{float(m['ra']):.4f}")
+                         + (' ✓' if m.get('selected') and len(models) > 1 else '')
+                         for m in models)
+        times = ' · '.join(f"{m['name']} {float(m['infer_s']):.2f} s"
+                           for m in models if m.get('infer_s') is not None)
+        stage = f"   ({e['stage']})" if e.get('stage') else ''
+        return f"Ra  {ras}{stage}    inference {times}"
+
+    @staticmethod
+    def _infer_time_text(t):
+        return f"{float(t):.2f} s" if t is not None else 'done'
+
+    @classmethod
+    def step_infer_text(cls, e):
+        """The LOG's form of a step estimate: inference time(s) only, no Ra
+        and no stage (the log does not show the model's result)."""
+        times = ' · '.join(f"{m['name']} {float(m['infer_s']):.2f} s"
+                           for m in (e.get('models') or [])
+                           if m.get('infer_s') is not None)
+        return times or cls._infer_time_text(e.get('infer_s'))
+
+    def _show_step_frame(self, path):
+        try:
+            img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        except Exception as ex:         # noqa: BLE001
+            img = None
+            self.append_log(f"[step] cannot read {path}: {ex}")
+        if img is None:
+            self.append_log(f"[step] frame not readable: {path}")
+            return
+        if not self._alive:
+            return
+        with self._lock:
+            self._last_capture = img
+            self._frames['basler'] = img
+        self.encoder.push('basler', img)
+        self.encoder.push('captured', img)
+
     def _on_tag_ids(self, cam, ids):
         self.sink.state('event', 'tag_ids', {'cam': cam, 'ids': list(ids)})
 
@@ -352,16 +462,18 @@ class UiController:
                             f"({ev.get('scan_points', total)} to scan)")
         elif phase == 'done':
             if ev.get('scan', True):
-                ra = ev.get('ra_mean')
-                ra_s = f" ra={float(ra):.4f}" if ra is not None else ''
                 self.append_log(
                     f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
-                    f"g{ev.get('group_id', '?')}: OK{ra_s}  "
+                    f"g{ev.get('group_id', '?')}: OK  "
                     f"{ev.get('message', '')}")
         elif phase == 'result':
-            ra = ev.get('ra_mean')
-            ra_s = (f"ra={float(ra):.4f}" if ra is not None
-                    else f"no Ra  {ev.get('message', '')}")
+            # The LOG never carries the model's Ra (user, 2026-11-16: "只在
+            # log 中不显示" — the inference time only). The value is under
+            # the image / in the Task tab, and in the Ra map and step CSVs.
+            if ev.get('ra_mean') is not None:
+                ra_s = 'inference ' + self._infer_time_text(ev.get('infer_s'))
+            else:
+                ra_s = f"no Ra  {ev.get('message', '')}"
             self.append_log(
                 f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
                 f"g{ev.get('group_id', '?')}: {ra_s}")
@@ -369,6 +481,23 @@ class UiController:
             self.append_log(
                 f"[scan] {idx}/{total} pt {ev.get('point_id', '?')} "
                 f"g{ev.get('group_id', '?')}: FAIL — {ev.get('message', '')}")
+        elif phase == 'wait' and str(ev.get('kind', '')).startswith('step'):
+            kind = ev.get('kind')
+            if kind == 'step_start':
+                self.append_log(f"[step] scan ready — press Next point to move to the first "
+                                f"point ({self._step_pt(ev)})")
+            elif kind == 'step_failed':
+                self.append_log(f"[step] {idx}/{total}: move FAILED — {ev.get('message', '')}; "
+                                "Next point goes on")
+            else:
+                self.append_log(
+                    f"[step] at {self._step_pt(ev)} "
+                    f"(scan point {ev.get('scan_no', '?')}/{ev.get('n_scan', '?')}): "
+                    f"{ev.get('message', '')}")
+        elif phase == 'resume' and str(ev.get('kind', '')).startswith('step'):
+            if ev.get('kind') == 'step':
+                self.append_log(f"[step] {self._step_pt(ev)}: "
+                                f"{ev.get('n_estimates', 0)} estimate(s) — moving on")
         elif phase == 'wait':
             if ev.get('kind') == 'premark':
                 self.append_log(
@@ -789,11 +918,17 @@ class UiController:
         parts = ' | '.join(
             f'{name}={value:.4f}' if not np.isnan(value) else f'{name}=NaN'
             for name, value in result['models'])
-        # One slot (ra_standard only, 2026-11-12): just the number.
-        extra = f'    ({parts})' if len(result['models']) > 1 else ''
+        # One slot (2026-11-12): just the number — unless it is a geometry
+        # model (ra_flat_only / ra_curved_only, 2026-11-13), whose name must
+        # be on screen: on the other geometry its number is nonsense.
+        names = [name for name, _ in result['models']]
+        extra = (f'    ({parts})' if len(names) > 1
+                 else f'    ({names[0]})' if names and str(names[0]).endswith('_only') else '')
         self._patch_ui({'ra_text': f'Ra {result["ra"]:.4f}{extra}'
                                    f'    inference {result["elapsed_s"]:.2f} s'})
-        self.append_log(f'[inference] {parts}  in {result["elapsed_s"]:.2f}s'
+        # log: the model name(s) and the time, not the value
+        self.append_log(f'[inference] {" | ".join(str(n) for n in names) or "done"}'
+                        f'  in {result["elapsed_s"]:.2f}s'
                         + (f'  tag={result["tag"]}' if result.get('tag') else ''))
 
     # ---------- Arm ----------
@@ -985,6 +1120,33 @@ class UiController:
         self.bridge.collect_save(out, note=note)
         n = sum(1 for p in out if not p['skip'])
         return {'ok': True, 'message': f'{n} Ra + {len(out) - n} skip saved (stop still open)'}
+
+    # ---------- Step evaluation ----------
+    def api_set_step_mode(self, on):
+        """One work point per Next, capture + Ra on Estimate, for the next
+        TASK scan (/arm/step_mode). The truth comes back on /arm/step_state."""
+        self.bridge.set_step_mode(bool(on))
+        return {'ok': True, 'message': f'step mode {"on" if on else "off"}'}
+
+    RA_MODEL_CHOICES = ('auto', 'flat', 'curved')
+
+    def api_set_ra_model(self, choice):
+        """Which Ra model scores the frames: auto (split) | flat
+        (ra_flat_only) | curved (ra_curved_only) -> /arm/ra_model. The truth
+        (and a refusal's reason) comes back on /arm/ra_model_state."""
+        choice = str(choice or '').strip().lower()
+        if choice not in self.RA_MODEL_CHOICES:
+            return {'ok': False, 'message': f'unknown Ra model {choice!r} '
+                                            f'({" | ".join(self.RA_MODEL_CHOICES)})'}
+        self.bridge.set_ra_model(choice)
+        return {'ok': True, 'message': f'Ra model {choice}'}
+
+    def api_step_cmd(self, cmd):
+        cmd = str(cmd or '').strip().lower()
+        if cmd not in ('next', 'estimate'):
+            return {'ok': False, 'message': f'unknown step command {cmd!r}'}
+        self.bridge.step_cmd(cmd)
+        return {'ok': True, 'message': cmd}
 
     # ---------- Task / lift ----------
     def api_task_command(self, text):
@@ -1338,13 +1500,65 @@ class UiController:
     # ==========================================================
     def append_log(self, message):
         """Thread-safe: called from rospy threads, the pool, plugins."""
-        stamp = datetime.now().strftime('%H:%M:%S')
+        # Millisecond stamps: the log is read next to the node logs to order
+        # events (a button press vs. the arm's reply), and a second is too
+        # coarse for that.
+        stamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
         line = f'{stamp}  {message}'
         with self._lock:
             self._log_lines.append(line)
             if len(self._log_lines) > LOG_KEEP:
                 del self._log_lines[:len(self._log_lines) - LOG_KEEP]
         self.sink.log(line)
+
+    def api_save_log(self, text=None):
+        """Write the operator log to <ws>/log/robot_ui/web_ui_log_<ts>.log.
+
+        `text` is the log AS THE PAGE SHOWS IT (the browser keeps up to 2000
+        lines, including its own local `[web]` lines, where this object keeps
+        the last LOG_KEEP for late joiners); without it the server's own
+        lines are written. The file lands on the ROBOT PC whichever browser
+        pressed the button — records live in the workspace."""
+        if text is None or not str(text).strip():
+            lines = self.log_lines()
+            source = 'server'
+        else:
+            text = str(text)
+            if len(text.encode('utf-8', 'replace')) > LOG_SAVE_MAX_BYTES:
+                msg = f'log text over {LOG_SAVE_MAX_BYTES >> 20} MB — not saved'
+                self.append_log(f'[log] {msg}')
+                return {'ok': False, 'message': msg}
+            lines = text.splitlines()
+            while lines and not lines[-1].strip():
+                lines.pop()
+            source = 'page'
+        if not lines:
+            self.append_log('[log] nothing to save — the log is empty')
+            return {'ok': False, 'message': 'log is empty'}
+        now = datetime.now()
+        path = os.path.join(self._log_dir,
+                            f"web_ui_log_{now.strftime('%Y%m%d_%H%M%S')}.log")
+        try:
+            os.makedirs(self._log_dir, exist_ok=True)
+            n = 1
+            while os.path.exists(path):         # two saves in one second
+                n += 1
+                path = os.path.join(
+                    self._log_dir,
+                    f"web_ui_log_{now.strftime('%Y%m%d_%H%M%S')}_{n}.log")
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(f"# robot_ui web log, saved "
+                        f"{now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} "
+                        f"({len(lines)} lines, from the {source})\n")
+                f.write('\n'.join(lines) + '\n')
+            os.replace(tmp, path)
+        except Exception as e:
+            msg = f'cannot write {path}: {type(e).__name__}: {e}'
+            self.append_log(f'[log] {msg}')
+            return {'ok': False, 'message': msg}
+        self.append_log(f'[log] saved {len(lines)} lines to {path}')
+        return {'ok': True, 'message': path, 'path': path, 'lines': len(lines)}
 
     def shutdown(self):
         self.append_log('[UI] closing')

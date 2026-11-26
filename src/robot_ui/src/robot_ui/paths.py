@@ -38,3 +38,7 @@ WS_DIR = os.path.abspath(os.environ.get('MM_WS')
 
 # Default place Collect-tab captures land (was /tmp/robot_ui_captures).
 DEFAULT_SAVE_DIR = os.path.join(WS_DIR, 'results', 'captures')
+
+# Where the web UI's "save" button writes the operator log
+# (web_ui_log_<YYYYMMDD_HHMMSS>.log).
+UI_LOG_DIR = os.path.join(WS_DIR, 'log', 'robot_ui')

@@ -172,6 +172,15 @@ class FakeBridge:
     def set_collect_config(self, cfg):
         self.record('set_collect_config', dict(cfg))
 
+    def set_step_mode(self, on):
+        self.record('set_step_mode', bool(on))
+
+    def step_cmd(self, cmd):
+        self.record('step_cmd', cmd)
+
+    def set_ra_model(self, choice):
+        self.record('set_ra_model', choice)
+
     def collect_save(self, points, note=''):
         self.record('collect_save', tuple((p['group_id'], p['point_id'], tuple(p['readings']), p['note'], p['skip']) for p in points), note)
 
@@ -334,7 +343,8 @@ def part_a():
     sink = RecordingSink()
     c = UiController(bridge, sink, plugin_dir=plugin_dir,
                      save_dir=os.path.join(tmp, 'caps'), roi_config=roi_path,
-                     stream_max_width=32, stream_fps=200.0, calib_poll_s=0)
+                     stream_max_width=32, stream_fps=200.0, calib_poll_s=0,
+                     log_dir=os.path.join(tmp, 'uilog'))
     try:
         ui = c.ui()
         check(ui['roi'] == {'x': 10, 'y': 20, 'w': 30, 'h': 12}, 'ROI loaded from roi_config.json into the shared state')
@@ -540,6 +550,114 @@ def part_a():
                                    'ra_measured': 0.4167, 'skipped': False})
         check(any('[collect] 3/9 pt 14 g106: Ra 0.4167 recorded' in l for l in sink.logs()), 'resume event logged')
 
+        # ---- step evaluation (2026-11-13) ----
+        r = c.api_set_step_mode(True)
+        check(r['ok'] and bridge.has('set_step_mode', True), 'step mode switch reaches the bridge')
+        r = c.api_step_cmd('Estimate')
+        check(r['ok'] and bridge.has('step_cmd', 'estimate'), 'Estimate sent (case-folded)')
+        r = c.api_step_cmd('jump')
+        check(not r['ok'] and bridge.count('step_cmd') == 1, 'unknown step command refused, nothing sent')
+        bridge.emit_state('step_state', {'enabled': True, 'waiting': True, 'kind': 'point'})
+        check(sink.of('state', 'step_state'), 'step_state forwarded as plain state for the page')
+        bridge.scan_progress.emit({'phase': 'wait', 'index': 4, 'total': 9, 'point_id': 21, 'group_id': 106,
+                                   'source_point_id': 7, 'kind': 'step', 'scan_no': 2, 'n_scan': 5, 'message': 'Estimate or Next'})
+        bridge.scan_progress.emit({'phase': 'resume', 'index': 4, 'total': 9, 'point_id': 21, 'group_id': 106,
+                                   'kind': 'step', 'n_estimates': 2})
+        # Next = move + capture: the photo goes on screen at once, the Ra line
+        # waits for Estimate; Estimate = the Ra under it, inference time only
+        import tempfile as _tf
+        import cv2 as _cv2
+        _png = os.path.join(_tf.mkdtemp(prefix='step_'), 'g106_p21_i0004_s1.png')
+        _cv2.imwrite(_png, np.full((30, 77), 99, np.uint8))
+        _cap = {'ok': True, 'n_frames': 1, 'images': ['g106_p21_i0004_s1.png'], 'image_paths': [_png], 'stamp': 1.0}
+        _st = {'enabled': True, 'waiting': True, 'kind': 'point', 'run': 'r1', 'group_id': 106,
+               'point_id': 21, 'source_point_id': 7, 'index': 4, 'capture': _cap, 'estimates': []}
+        bridge.emit_state('step_state', _st)
+        check(wait_for(lambda: c.ui()['ra_text'] == 'Ra — press Estimate  (g106 sp7)'),
+              f"step capture: Ra line waits for Estimate: {c.ui()['ra_text']}")
+        check(wait_for(lambda: any(f[0] == 'basler' and f[2]['ow'] == 77 for f in sink.frames))
+              and any(f[0] == 'captured' and f[2]['ow'] == 77 for f in sink.frames),
+              'step capture: the photo is shown in the Basler view before any estimate')
+        n_b = len([f for f in sink.frames if f[0] == 'basler' and f[2]['ow'] == 77])
+        bridge.emit_state('step_state', dict(_st, estimates=[{'n': 1, 'ok': True, 'ra_mean': 0.41234,
+                                                              'infer_s': 0.853, 'elapsed_s': 2.4}]))
+        check(wait_for(lambda: c.ui()['ra_text'] == 'Ra 0.4123    inference 0.85 s'),
+              f"step estimate (one model): Ra under the image, inference time only: {c.ui()['ra_text']}")
+        _three = {'n': 2, 'ok': True, 'ra_mean': 0.3896, 'stage': 'finishing', 'infer_s': 1.7,
+                  'record_csv': '/r/x_step_eval.csv',
+                  'models': [{'name': 'finishing', 'ra': 0.3896, 'infer_s': 0.52, 'selected': True},
+                             {'name': 'roughing', 'ra': 0.6123, 'infer_s': 0.50, 'selected': False},
+                             {'name': 'A', 'ra': 0.4276, 'infer_s': 0.53, 'selected': False}]}
+        bridge.emit_state('step_state', dict(_st, estimates=[{'n': 1, 'ok': True, 'ra_mean': 0.41234}, _three]))
+        _want = ('Ra  finishing 0.3896 ✓   roughing 0.6123   A 0.4276   (finishing)    '
+                 'inference finishing 0.52 s · roughing 0.50 s · A 0.53 s')
+        check(wait_for(lambda: c.ui()['ra_text'] == _want),
+              f"step estimate (three models): every Ra and each model's time: {c.ui()['ra_text']}")
+        check(any('/r/x_step_eval.csv' in l for l in sink.logs()), 'the log line names the step_eval CSV')
+        time.sleep(0.3)
+        check(len([f for f in sink.frames if f[0] == 'basler' and f[2]['ow'] == 77]) == n_b,
+              'the estimate does not reload the photo')
+        bridge.emit_state('step_state', dict(_st, estimates=[{'n': 1, 'ok': True, 'ra_mean': 0.41234, 'infer_s': 0.853},
+                                                             _three, {'n': 3, 'ok': False, 'message': 'x'}]))
+        check(wait_for(lambda: c.ui()['ra_text'] == 'Ra — failed'), 'a failed estimate shows Ra — failed')
+
+        # ---- the LOG shows the inference time, never the model's Ra ----
+        import re as _re2
+        _step_lines = [l for l in sink.logs() if '[step] g106 sp7: inference' in l]
+        check(any(l.endswith('[step] g106 sp7: inference 0.85 s') or '[step] g106 sp7: inference 0.85 s  ->' in l
+                  for l in _step_lines), f'step estimate (one model) logged as its inference time: {_step_lines[:1]}')
+        check(any('inference finishing ' in l and ' · ' in l for l in _step_lines),
+              "step estimate (three models) logged as each model's time")
+        check(not any(_re2.search(r'\d\.\d{4}', l) or '✓' in l for l in _step_lines),
+              'no Ra value (and no selected mark) in a [step] estimate log line')
+        bridge.scan_progress.emit({'phase': 'result', 'index': 4, 'total': 9, 'point_id': 8, 'group_id': 106,
+                              'scan': True, 'ra_mean': 0.4123, 'ra_std': 0.01, 'infer_s': 1.713,
+                              'message': 'standoff ok'})
+        bridge.scan_progress.emit({'phase': 'result', 'index': 5, 'total': 9, 'point_id': 9, 'group_id': 106,
+                              'scan': True, 'ra_mean': 0.5001, 'message': 'standoff ok'})
+        bridge.scan_progress.emit({'phase': 'result', 'index': 6, 'total': 9, 'point_id': 10, 'group_id': 106,
+                              'scan': True, 'ra_mean': None, 'message': 'standoff ok (no Ra)'})
+        bridge.scan_progress.emit({'phase': 'done', 'index': 7, 'total': 9, 'point_id': 11, 'group_id': 106,
+                              'scan': True, 'ra_mean': 0.3777, 'message': 'standoff ok'})
+        check(any(l.endswith('[scan] 4/9 pt 8 g106: inference 1.71 s') for l in sink.logs()),
+              'scan result logged as the inference time')
+        check(any(l.endswith('[scan] 5/9 pt 9 g106: inference done') for l in sink.logs()),
+              'an event without infer_s (older arm_node) logs "inference done"')
+        check(any('[scan] 6/9 pt 10 g106: no Ra  standoff ok (no Ra)' in l for l in sink.logs()),
+              'a point without a Ra still says so')
+        check(any(l.endswith('[scan] 7/9 pt 11 g106: OK  standoff ok') for l in sink.logs()),
+              'a done event carrying a Ra logs OK without it')
+        check(not any(v in l for l in sink.logs() for v in ('0.4123', '0.5001', '0.3777', 'ra=')),
+              'no model Ra anywhere in the log')
+        bridge.emit_state('step_state', dict(_st, index=6, point_id=22, source_point_id=None, estimates=[],
+                                             capture={'ok': False, 'message': 'no frames captured', 'stamp': 2.0}))
+        check(wait_for(lambda: c.ui()['ra_text'] == 'capture failed  (g106 p22)'), 'a failed capture is shown')
+        check(any('[step] at g106 sp7 (scan point 2/5)' in l for l in sink.logs())
+              and any('[step] g106 p21: 2 estimate(s)' in l for l in sink.logs()),
+              'step wait / resume logged (not as a collect stop)')
+
+        # ---- Ra model choice (2026-11-13): auto | flat | curved ----
+        r = c.api_set_ra_model(' Flat ')
+        check(r['ok'] and bridge.has('set_ra_model', 'flat'), 'Ra model flat reaches the bridge (case / space folded)')
+        r = c.api_set_ra_model('banana')
+        check(not r['ok'] and bridge.count('set_ra_model') == 1, 'unknown Ra model refused, nothing sent')
+        bridge.emit_state('ra_model_state', {'choice': 'flat', 'model': 'ra_flat_only', 'in_use': 'auto', 'error': ''})
+        check(sink.of('state', 'ra_model_state'), 'ra_model_state forwarded as plain state for the page')
+        _flat = {'n': 4, 'ok': True, 'ra_mean': 1.2612, 'infer_s': 0.81, 'stage': 'roughing', 'ra_model': 'flat',
+                 'models': [{'name': 'flat_only', 'ra': 1.2612, 'infer_s': 0.61, 'selected': True}]}
+        check(c.step_ra_text(_flat) == 'Ra  flat_only 1.2612   (roughing)    inference flat_only 0.61 s',
+              f"step estimate with a geometry model names it: {c.step_ra_text(_flat)}")
+        c._on_ra({'success': True, 'ra': 1.2612, 'models': [('ra_flat_only', 1.2612)], 'elapsed_s': 0.61, 'tag': ''})
+        check(c.ui()['ra_text'] == 'Ra 1.2612    (ra_flat_only)    inference 0.61 s',
+              f"on-demand Ra from a geometry model carries the model name: {c.ui()['ra_text']}")
+        c._on_ra({'success': True, 'ra': 0.2584, 'models': [('ra_split', 0.2584)], 'elapsed_s': 0.5, 'tag': ''})
+        check(c.ui()['ra_text'] == 'Ra 0.2584    inference 0.50 s', 'the default model: just the number, as before')
+        _inf = [l for l in sink.logs() if '[inference]' in l and 'FAILED' not in l]
+        check(bool(_inf) and all(_re2.search(r'  in \d+\.\d\ds', l) for l in _inf)
+              and not any(v in l for l in _inf for v in ('0.2584', '1.2612'))
+              and not any(_re2.search(r'=\d|NaN', l) for l in _inf),
+              f'[inference] log lines: model name and time, no Ra value: {_inf[-2:]}')
+
         # ---- task / lift ----
         c.api_task_command('TASK scan_pose_x')
         c.api_task_command('GOTO 105')
@@ -673,6 +791,42 @@ def part_a():
         for i in range(600):
             c.append_log(f'fill {i}')
         check(len(c.log_lines()) == 500 and c.log_lines()[-1].endswith('fill 599'), 'log keeps the last 500 lines')
+        import re as _re
+        check(all(_re.match(r'^\d\d:\d\d:\d\d\.\d{3}  ', l) for l in c.log_lines()),
+              f'every log line is stamped HH:MM:SS.mmm ({c.log_lines()[-1][:14]!r})')
+
+        # ---- save the log to a file ----
+        log_dir = os.path.join(tmp, 'uilog')
+        page = '12:00:00.001  [web] page-only line\n12:00:00.250  [task] IDLE\n\n'
+        r = c.api_save_log(page)
+        check(r['ok'] and r['lines'] == 2 and os.path.dirname(r['path']) == log_dir
+              and _re.match(r'^web_ui_log_\d{8}_\d{6}\.log$', os.path.basename(r['path'])),
+              f'save_log writes web_ui_log_<ts>.log into the log dir ({r.get("message")})')
+        body = open(r['path'], encoding='utf-8').read().splitlines()
+        check(body[0].startswith('# robot_ui web log, saved ') and '2 lines, from the page' in body[0]
+              and body[1:] == ['12:00:00.001  [web] page-only line', '12:00:00.250  [task] IDLE'],
+              'the file holds a header line and the page text as sent, trailing blanks dropped')
+        check(any(l.endswith(f'[log] saved 2 lines to {r["path"]}') for l in sink.logs()),
+              'the saved path is reported in the log')
+        r2 = c.api_save_log(page)
+        check(r2['ok'] and r2['path'] != r['path'] and os.path.exists(r['path']),
+              'a second save in the same second gets its own file, nothing overwritten')
+        r3 = c.api_save_log()
+        body3 = open(r3['path'], encoding='utf-8').read().splitlines()
+        check(r3['ok'] and r3['lines'] == 500 and 'from the server' in body3[0]
+              and body3[-1].endswith(f'[log] saved 2 lines to {r2["path"]}'),
+              'without page text the server\'s own 500 lines are written')
+        r4 = c.api_save_log('x' * ((8 << 20) + 1))
+        check(not r4['ok'] and 'not saved' in r4['message'], 'an oversized text is refused')
+        blocker = os.path.join(tmp, 'not_a_dir')
+        open(blocker, 'w').close()
+        c._log_dir = os.path.join(blocker, 'sub')
+        r5 = c.api_save_log(page)
+        check(not r5['ok'] and 'cannot write' in r5['message']
+              and any('[log] cannot write' in l for l in sink.logs()),
+              'an unwritable directory fails with the reason, logged')
+        c._log_dir = log_dir
+        check(not [f for f in os.listdir(log_dir) if f.endswith('.tmp')], 'no .tmp left behind')
     finally:
         c.shutdown()
         check(bridge.has('shutdown'), 'shutdown reaches the bridge')

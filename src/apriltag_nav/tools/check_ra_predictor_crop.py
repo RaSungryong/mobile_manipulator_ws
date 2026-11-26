@@ -15,10 +15,13 @@ refused, an LFS pointer is refused. Spot-tile models (ra_standard / ra_new,
 2026-11-11): the window follows a synthetic laser spot and the spot is filled
 in, two spot slots share one preprocessing, the stage and the flags come out
 of predict_detail, bad spot sidecars are refused, and the deployed sidecar of
-paths.MODEL_PATH is a spot_tile one. FIRST, when the delivery zip
-(model/UPR_Ra_inference_ko.zip) and the real models are on disk, the REAL
-models score the zip's two sample frames and must match its
-expected_output.csv within 0.001 um (skipped with a note otherwise).
+paths.MODEL_PATH is a spot_tile one. Split slots (2026-11-13, v3): the
+router's stage picks the stage graph, only two graphs run per frame, the
+chosen stage's range flags, bad manifests are refused, and paths.MODEL_PATH
+is a split manifest over spot-tile parts. FIRST, when the v3 delivery zip
+(model/exported/UPR_Ra_inference_v3_ko.zip) and the real models are on disk,
+the REAL split / A / B score the zip's four sample frames and must match its
+expected_output.csv within 0.001 um, routed as it says (skipped otherwise).
 """
 import csv
 import io
@@ -57,8 +60,11 @@ class FakeSession:
     calls = 0
     logits = (0.0, 0.0, 0.0)
 
-    def __init__(self, outputs):
+    bias = {}                  # session id -> added to the Ra (tells split parts apart)
+
+    def __init__(self, outputs, bias=0.0):
         self._outs = outputs
+        self._bias = bias
 
     def get_inputs(self):
         return [_Out('input')]
@@ -69,7 +75,7 @@ class FakeSession:
     def run(self, _names, feed):
         FakeSession.calls += 1
         x = feed['input']
-        res = {'output': np.array([[x.mean()]], np.float32),
+        res = {'output': np.array([[x.mean() + self._bias]], np.float32),
                'stage_logits': np.array([FakeSession.logits], np.float32)}
         return [res[n] for n in self._outs]
 
@@ -83,7 +89,7 @@ def make_slot(tmp, name, sidecar, outputs=('output',)):
     return path
 
 
-def install_fake(outputs_by_path):
+def install_fake(outputs_by_path, bias_by_path=None):
     import types
     ort = types.ModuleType('onnxruntime')
 
@@ -92,7 +98,8 @@ def install_fake(outputs_by_path):
         graph_optimization_level = None
     ort.SessionOptions = SessionOptions
     ort.GraphOptimizationLevel = types.SimpleNamespace(ORT_ENABLE_ALL=None)
-    ort.InferenceSession = lambda path, **kw: FakeSession(outputs_by_path[path])
+    ort.InferenceSession = lambda path, **kw: FakeSession(outputs_by_path[path],
+                                                         (bias_by_path or {}).get(path, 0.0))
     sys.modules['onnxruntime'] = ort
 
 
@@ -104,30 +111,88 @@ def window_value(img, cx, cy):
 
 
 def check_real_samples():
-    """The deployed models on the delivery's own sample frames (real onnxruntime)."""
-    zpath = os.path.join(paths.MODEL_DIR, 'UPR_Ra_inference_ko.zip')
-    models = [('standard', paths.MODEL_PATH), ('new', paths.RA_NEW_MODEL_PATH)]
+    """The deployed v3 models on the delivery's own sample frames (real onnxruntime)."""
+    zpath = os.path.join(paths.EXPORTED_MODEL_DIR, 'UPR_Ra_inference_v3_ko.zip')
+    models = [('split', paths.MODEL_PATH), ('A', paths.RA_A_MODEL_PATH), ('B', paths.RA_B_MODEL_PATH)]
     if not os.path.exists(zpath) or not all(p and os.path.exists(p) for _, p in models):
-        print('  [skip] real-model check: needs %s and both models on disk' % os.path.relpath(zpath, paths.WS_DIR))
+        print('  [skip] real-model check: needs %s and the v3 models on disk' % os.path.relpath(zpath, paths.WS_DIR))
         return
     pred = rp.RaPredictor(models, log=lambda s: None)
-    if not check(pred.load() == 2, 'real ra_standard / ra_new load (%s)' % (pred.failures() or 'ok')):
+    if not check(pred.load() == 3, 'real ra_split / ra_A / ra_B load (%s)' % (pred.failures() or 'ok')):
         return
     with zipfile.ZipFile(zpath) as z:
-        root = 'UPR_Ra_inference/samples/'
-        rows = list(csv.DictReader(io.TextIOWrapper(z.open(root + 'expected_output.csv'), encoding='utf-8-sig')))
+        root = 'UPR_Ra_inference_v3/'
+        rows = list(csv.DictReader(io.TextIOWrapper(z.open(root + 'samples/expected_output.csv'), encoding='utf-8-sig')))
         for e in rows:
             name = os.path.basename(e['image'])
-            im = rp.cv2.imdecode(np.frombuffer(z.read(root + name), np.uint8), rp.cv2.IMREAD_UNCHANGED)
+            im = rp.cv2.imdecode(np.frombuffer(z.read(root + e['image']), np.uint8), rp.cv2.IMREAD_UNCHANGED)
             res, _dt, d = pred.predict_detail(im)
             r, sp = dict(res), d['spot']
-            err = max(abs(r['standard'] - float(e['ra_standard'])), abs(r['new'] - float(e['ra_new'])))
-            check(err < 1e-3, '%s: standard %.4f / new %.4f, %.5f um from expected_output.csv'
-                  % (name, r['standard'], r['new'], err))
+            err = max(abs(r[k] - float(e['ra_' + k])) for k in ('split', 'A', 'B'))
+            check(err < 1e-3 and pred.slots[0].last_route == e['split_model'],
+                  '%s: split %.4f (%s) / A %.4f / B %.4f, %.5f um from expected_output.csv'
+                  % (name, r['split'], pred.slots[0].last_route, r['A'], r['B'], err))
             check((sp['spot_x'], sp['spot_y'], sp['masked_px']) == (int(e['spot_x']), int(e['spot_y']), int(e['masked_px']))
                   and d['stage'] == e['stage'] and not d['flags'],
                   '  spot (%d, %d), %d px filled, stage %s, no flags — as expected'
                   % (sp['spot_x'], sp['spot_y'], sp['masked_px'], d['stage']))
+
+
+def check_split(tmp):
+    """A split manifest: router stage -> one stage graph (fake sessions, biased per part)."""
+    side = {'preprocess': 'spot_tile', 'nominal_spot_xy': [2813, 1906], 'frame_size': [5472, 3648],
+            'stages': ['finishing', 'roughing', 'nc']}
+    p_r = make_slot(tmp, 's_router', dict(side, train_ra_range={'finishing': [0, 1], 'roughing': [0, 1]}))
+    p_f = make_slot(tmp, 's_fin', dict(side, train_ra_range={'finishing': [9.0, 10.0]}))
+    p_g = make_slot(tmp, 's_rough', dict(side, train_ra_range={'roughing': [-1.0, 1.0]}))
+    p_o = make_slot(tmp, 's_other', dict(side, train_ra_range={'finishing': [-1, 1]}))
+    man = os.path.join(tmp, 's_split.json')
+    json.dump({'model': 'ra_split', 'kind': 'split', 'router': 's_router.onnx',
+               'by_stage': {'finishing': 's_fin.onnx', 'roughing': 's_rough.onnx'}}, open(man, 'w'))
+    outs = {p: ['output', 'stage_logits'] for p in (p_r, p_f, p_g, p_o)}
+    install_fake(outs, {p_r: 100.0, p_f: 10.0, p_g: 0.0, p_o: 0.0})
+    pred = rp.RaPredictor([('split', man), ('other', p_o)], log=lambda s: None)
+    check(pred.load() == 2, 'split manifest + a plain spot slot load (%s)' % (pred.failures() or 'ok'))
+    sl = pred.slots[0]
+    check(sl.spot_nominal == (2813, 1906) and sl.ra_range == {'finishing': [9.0, 10.0], 'roughing': [-1.0, 1.0]},
+          'split slot: router preprocessing, the stage graphs\' own ranges')
+    check(rp.sidecar_meta(man).get('model') == 'ra_split', 'sidecar_meta of a manifest = the manifest (slot name)')
+    clean = np.tile((20 + np.arange(5472) * 100 // 5471).astype(np.uint8), (3648, 1))
+    frame = clean.copy()
+    rp.cv2.circle(frame, (2840, 1900), 30, 255, -1)
+    for logits, stage, bias in (((2.0, 0.0, -3.0), 'finishing', 10.0), ((0.0, 2.0, 5.0), 'roughing', 0.0)):
+        FakeSession.logits, FakeSession.calls = logits, 0
+        res, _dt, d = pred.predict_detail(frame)
+        r = dict(res)
+        check(sl.last_route == stage and d['stage'] == stage and abs(r['split'] - (r['other'] + bias)) < 1e-5,
+              '%s logits -> %s graph (split %.4f = plain %.4f + %g), router value not used'
+              % (logits[:2], stage, r['split'], r['other'], bias))
+        check(FakeSession.calls == 3, '  %d graph runs: router + one stage graph + the plain slot' % FakeSession.calls)
+        check(d['flags'] == [], '  in the chosen stage\'s range: no flags (%s)' % d['flags'])
+    # the finishing graph's range [9, 10] holds only router-biased values: route finishing with
+    # a finishing graph returning ~mean -> out of range
+    install_fake(outs, {p_r: 100.0, p_f: 0.0, p_g: 0.0, p_o: 0.0})
+    q = rp.RaPredictor([('split', man)], log=lambda s: None)
+    q.load()
+    FakeSession.logits = (2.0, 0.0, -3.0)
+    _res, _dt, d = q.predict_detail(frame)
+    check(d['flags'] == ['split_ra_out_of_range'], 'out of the chosen stage\'s range flagged: %s' % d['flags'])
+
+    def refused(manifest, why, **extra):
+        pth = os.path.join(tmp, 's_bad.json')
+        json.dump(manifest, open(pth, 'w'))
+        install_fake(dict(outs, **extra))
+        b = rp.RaPredictor([('b', pth)], log=lambda s: None)
+        check(b.load() == 0 and why in b.failures()['b'], 'split refused: %s' % why)
+    base = {'kind': 'split', 'router': 's_router.onnx', 'by_stage': {'finishing': 's_fin.onnx', 'roughing': 's_rough.onnx'}}
+    refused(dict(base, kind='mix'), '"kind": "split"')
+    refused(dict(base, by_stage={'finishing': 's_fin.onnx'}), 'by_stage')
+    refused(dict(base, by_stage={'finishing': 's_fin.onnx', 'roughing': 'nope.onnx'}), 'file not found')
+    p_ns = make_slot(tmp, 's_nostage', side)
+    refused(dict(base, router='s_nostage.onnx'), 'stage head', **{p_ns: ['output']})
+    p_mv = make_slot(tmp, 's_moved', dict(side, nominal_spot_xy=[2900, 1906]))
+    refused(dict(base, by_stage={'finishing': 's_fin.onnx', 'roughing': 's_moved.onnx'}), 'not preprocessed like',
+            **{p_mv: ['output', 'stage_logits']})
 
 
 def check_spot_tiles(tmp):
@@ -280,17 +345,19 @@ def main():
         check(q.load() == 0 and 'Git LFS pointer' in q.failures()['p'], 'LFS pointer refused with the fix in the message')
 
         check_spot_tiles(tmp)
+        check_split(tmp)
 
-        for label, mpath in (('MODEL_PATH', paths.MODEL_PATH), ('RA_NEW_MODEL_PATH', paths.RA_NEW_MODEL_PATH)):
-            if not mpath:
-                continue
+        man = rp.sidecar_meta(paths.MODEL_PATH)
+        check(man.get('kind') == 'split' and set(man.get('by_stage', {})) == {'finishing', 'roughing'},
+              'paths.MODEL_PATH (%s) is a split manifest' % os.path.basename(paths.MODEL_PATH))
+        parts = [man.get('router')] + list(man.get('by_stage', {}).values())
+        parts = [os.path.join(paths.EXPORTED_MODEL_DIR, f) for f in parts if f]
+        for mpath in parts + [paths.RA_A_MODEL_PATH, paths.RA_B_MODEL_PATH]:
             meta = rp.sidecar_meta(mpath)
             check(meta.get('preprocess') == 'spot_tile' and meta.get('nominal_spot_xy') == [2813, 1906]
                   and meta.get('frame_size') == [5472, 3648],
-                  '%s sidecar: spot_tile near (2813, 1906) of 5472x3648' % os.path.basename(mpath))
-            print('  [info] paths.%s = %s (%s)' % (
-                label, os.path.relpath(mpath, paths.WS_DIR),
-                'present' if os.path.exists(mpath) else 'NOT on disk'))
+                  '%s sidecar: spot_tile near (2813, 1906) of 5472x3648 (%s)' % (
+                      os.path.basename(mpath), 'present' if os.path.exists(mpath) else 'NOT on disk'))
     finally:
         shutil.rmtree(tmp)
     print('%d ok, %d failed' % (n_ok, n_fail))

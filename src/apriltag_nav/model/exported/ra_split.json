@@ -1,0 +1,21 @@
+{
+  "model": "ra_split",
+  "kind": "split",
+  "label": "standard Ra (um)",
+  "package": "UPR_Ra_inference_v3_ko.zip (version 2026-11-13 v3, sha256 601a1feebcda19694e04e99fe744ed0fce5fe98d9defd54ab690fbcd9eb20422)",
+  "router": "ra_A.onnx",
+  "by_stage": {
+    "finishing": "ra_finishing.onnx",
+    "roughing": "ra_roughing.onnx"
+  },
+  "note": "the v3 package's recommended model (--models split, no --stage): model A's stage head (argmax of finishing / roughing) picks ra_finishing or ra_roughing per frame; both share A's spot-tile input. Stage head 100 % right on the 295 test frames of 2026-11-11/12.",
+  "estimated_accuracy_pct": {
+    "new_test_295": 84.7,
+    "flat_finishing_65": 79.8,
+    "flat_roughing_60": 86.5,
+    "curved_finishing_100": 83.3,
+    "curved_roughing_70": 89.8,
+    "median_pred_over_true": 0.93
+  },
+  "scope": "UPR die, 2026-11-11/12-type surfaces (flat / curved x finishing / roughing), same camera / lighting / spot layout; for 2026-10-type surfaces use ra_B; NC not trained; predictions ~7 % low; curved roughing frames are ~43 % saturated, per-point differences there are not resolved"
+}

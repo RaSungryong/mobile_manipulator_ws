@@ -49,6 +49,7 @@ from apriltag_nav.scan_pipeline import RaScanPipeline
 from apriltag_nav.arm_link_watch import TimedRPC
 from apriltag_nav.scan_results import ScanResultWriter
 from apriltag_nav import paths as _paths
+from apriltag_nav import ra_model_choice
 from apriltag_nav.keyence_standoff import (StandoffConfig, StandoffController,
                                             MoveReport)
 
@@ -196,6 +197,26 @@ class ArmController:
             output_dir=rospy.get_param('~output_dir', _paths.SCAN_IMAGE_DIR),
             model_path=model_path,
         )
+
+        # ---------- Ra model choice (2026-11-13) ----------
+        # auto (the scan model above: the v3 split manifest) | flat
+        # (ra_flat_only) | curved (ra_curved_only) — ra_model_choice.py. The
+        # geometry is not judged from the image, so the operator says which
+        # surface the tool is over: /arm/ra_model, state on
+        # /arm/ra_model_state (latched). A TASK scan takes the choice at the
+        # start of each group's scan; a step estimate at the moment it runs.
+        # Starts at auto after every restart unless ~ra_model says otherwise.
+        self._ra_model_auto_path = model_path
+        self.ra_model = 'auto'
+        self._ra_model_error = ''
+        self._ra_model_in_use = 'auto'          # what the pipeline scores with now
+        self.ra_model_state_pub = rospy.Publisher("/arm/ra_model_state", String,
+                                                  queue_size=1, latch=True)
+        _want = rospy.get_param('~ra_model', 'auto')
+        if ra_model_choice.normalize(_want) not in (None, 'auto'):
+            ok, msg = self.set_ra_model(_want)
+            (rospy.loginfo if ok else rospy.logerr)(f"[Arm REAL] ~ra_model: {msg}")
+        self._publish_ra_model_state()
 
         # ---------- Result persistence ----------
         self.results_writer = ScanResultWriter()
@@ -394,6 +415,25 @@ class ArmController:
             rospy.logwarn("[Arm REAL] Ra COLLECT mode is ON: every scanned point "
                           "pauses for a hand measurement (/arm/scan_continue)")
         self._publish_collect_state()
+        # ---------- Step evaluation mode (2026-11-13) ----------
+        # With it on, a TASK scan goes ONE WORK POINT PER BUTTON: the scan
+        # waits before its first move; "next" drives the path (transitions
+        # included) to the next scanned point, runs the Keyence standoff,
+        # CAPTURES there (frame saved and shown at once) and stops;
+        # "estimate" runs the model on that capture and shows the Ra;
+        # "next" again moves on (user, 2026-11-13). Switched by /arm/step_mode,
+        # commanded by /arm/step_cmd, state on /arm/step_state (latched).
+        # Applies from the next scan (a running scan keeps the mode it
+        # started with). Collect mode is ignored while it is on.
+        self.step_enabled = bool(rospy.get_param('~step_mode', False))
+        self.step_state_pub = rospy.Publisher("/arm/step_state", String,
+                                              queue_size=1, latch=True)
+        self._step_lock = threading.Lock()
+        self._step_event = threading.Event()
+        self._step_cmd = None
+        self._step = {'waiting': False, 'estimating': False, 'capturing': False,
+                      'n_estimated': 0, 'n_stops': 0}
+        self._publish_step_state()
         # Pose snapshot taken by the WORKER thread between its own RPC calls,
         # so arm_node can keep /arm/state live during a scan (its timer must
         # not touch the single RPC socket while a motion holds it).
@@ -751,7 +791,12 @@ class ArmController:
         self._collect_batch = []
         capture_fails = 0
         self._scan_aborted = None
-        mark_pass = bool(self.collect_enabled and self.collect_mode == 'mark')
+        step_pass = bool(getattr(self, 'step_enabled', False))
+        collect_on = bool(self.collect_enabled and not step_pass)
+        if step_pass and self.collect_enabled:
+            rospy.logwarn("[Arm REAL] STEP evaluation mode is on — collect mode is "
+                          "ignored for this scan")
+        mark_pass = bool(collect_on and self.collect_mode == 'mark')
         if mark_pass:
             # the running number continues across the task's groups (one
             # call per group) and across a RESUME of the same run: on a new
@@ -773,6 +818,9 @@ class ArmController:
         results = []
         current_csv_path = None
         n_total = len(scan_points)
+        # the Ra model of THIS scan call (one call per group): the operator's
+        # choice now; the previous call's inference worker has been joined
+        self._apply_ra_model()
         n_ok = n_fail = 0
         self._progress('start', index=0, total=n_total,
                        scan_points=sum(1 for p in scan_points if p.get("scan", True)))
@@ -793,6 +841,16 @@ class ArmController:
         worker.start()
 
         try:
+            n_scan_total = sum(1 for q in scan_points if q.get("scan", True))
+            if step_pass and n_scan_total:
+                # load the evaluation models while the operator reads the
+                # start stop, so the first Estimate does not pay for it
+                threading.Thread(target=self._step_predictor_get, name='step-models',
+                                 daemon=True).start()
+                # nothing moves until the operator asks for the first point
+                q0 = next(q for q in scan_points if q.get("scan", True))
+                self._step_stop('start', 0, n_total, n_scan_total, q0)
+            n_scan_seen = 0
             for i, p in enumerate(scan_points):
 
                 if self.cancel_requested:
@@ -824,8 +882,10 @@ class ArmController:
                 # device-open latency runs in parallel with motion + Keyence
                 # adjustment instead of serially at capture time. Pointless on
                 # a traverse point — nothing is captured there.
-                if do_scan:
+                if do_scan and not step_pass:
                     self.pipeline.preopen()
+                if do_scan:
+                    n_scan_seen += 1
 
                 entry = {
                     "point_id":          pid,
@@ -860,6 +920,11 @@ class ArmController:
                     with self._results_lock:
                         results.append(entry)
                         self._save_results(current_csv_path, results)
+                    if step_pass:
+                        # one point per button: a failed move must not
+                        # drive on to the next one unasked
+                        self._step_stop('failed', i + 1, n_total, n_scan_total, p,
+                                        scan_no=n_scan_seen, message=str(move_err))
                     continue
 
                 # A traverse point is DONE once the move lands: no settle, no
@@ -890,7 +955,8 @@ class ArmController:
                     if standoff is not None and standoff.travel_mm > 0.0:
                         time.sleep(0.5)
                 if standoff is not None:
-                    if not standoff.converged and self.keyence_require_converged:
+                    if (not standoff.converged and self.keyence_require_converged
+                            and not step_pass):
                         entry["success"] = False
                         entry["execution_message"] = (
                             f"Standoff not corrected: {standoff.reason}")
@@ -907,6 +973,16 @@ class ArmController:
                             self._save_results(current_csv_path, results)
                         continue
                     entry["execution_message"] = f"Success ({standoff.summary()})"
+
+                if step_pass:
+                    # Step evaluation: stop here; the operator estimates
+                    # (capture + Ra, as often as wanted) and asks for the
+                    # next point. The row is written by _step_point.
+                    if not self.cancel_requested:
+                        if self._step_point(i + 1, n_total, n_scan_total, n_scan_seen, p,
+                                            entry, standoff, current_csv_path, results):
+                            n_ok += 1
+                    continue
 
                 if do_scan:
                     self.pipeline.preopen()
@@ -975,7 +1051,7 @@ class ArmController:
                 # is the WHOLE group — one entry stop after its last point.
                 # A cancel during a wait ends the scan at the loop top with
                 # the tool left retreated.
-                if frames and self.collect_enabled:
+                if frames and collect_on:
                     self._collect_batch.append({
                         'index': i + 1, 'group_id': gid, 'point_id': pid,
                         'source_point_id': spid,
@@ -1081,6 +1157,7 @@ class ArmController:
                     entry["ra_min"]      = scan_result["ra_min"]
                     entry["ra_max"]      = scan_result["ra_max"]
                     entry["num_samples"] = scan_result["num_samples"]
+                    entry["execution_message"] += self._ra_model_note()
                 else:
                     entry["execution_message"] += " (no Ra)"
                 self._save_results(csv_path, results)
@@ -1088,6 +1165,9 @@ class ArmController:
                            group_id=gid, scan=True,
                            ra_mean=entry["ra_mean"], ra_std=entry["ra_std"],
                            num_samples=entry["num_samples"],
+                           infer_s=(None if not scan_result
+                                    or scan_result.get("infer_s") is None
+                                    else round(float(scan_result["infer_s"]), 3)),
                            message=entry["execution_message"])
 
     def _save_results(self, csv_path, results):
@@ -1741,6 +1821,564 @@ class ArmController:
             with self._collect_lock:
                 self._collect['waiting'] = False
             self._publish_collect_state()
+
+    # --------------------------------------------------
+    # RA MODEL CHOICE (2026-11-13): auto | flat | curved
+    # --------------------------------------------------
+    def set_ra_model(self, choice):
+        """Choose the model that scores the frames: 'auto' (the scan model —
+        the split manifest), 'flat' (ra_flat_only) or 'curved'
+        (ra_curved_only); aliases in ra_model_choice. Refused — the current
+        choice kept — for an unknown name or a model that does not load. The
+        model is loaded HERE (callback thread), so a missing / broken file is
+        reported at once and the scan start only switches. A TASK scan uses
+        the choice from the next group's scan on; a step estimate at once."""
+        want = ra_model_choice.normalize(choice)
+        if want is None:
+            return False, (f"unknown Ra model {choice!r} "
+                           f"(one of {', '.join(ra_model_choice.CHOICES)})")
+        auto = getattr(self, '_ra_model_auto_path', None)
+        path = ra_model_choice.model_path(want, auto)
+        name = ra_model_choice.model_name(want, auto)
+        err = ''
+        if want != 'auto':
+            if not os.path.isfile(path):
+                err = f"{name}: model file not found ({path})"
+            else:
+                try:
+                    preload = getattr(self.pipeline, 'preload_model', None)
+                    if preload is not None and not preload(path):
+                        err = f"{name}: model did not load (see the arm_node log)"
+                except Exception as e:
+                    err = f"{name}: {type(e).__name__}: {e}"
+        if err:
+            self._ra_model_error = err
+            rospy.logerr(f"[Arm REAL] Ra model NOT changed — {err}; "
+                         f"still {getattr(self, 'ra_model', 'auto')}")
+            self._publish_ra_model_state()
+            return False, err
+        self.ra_model = want
+        self._ra_model_error = ''
+        when = ("from the next group's scan" if getattr(self, 'busy', False)
+                and not getattr(self, 'step_enabled', False) else "from the next estimate / scan")
+        rospy.logwarn(f"[Arm REAL] Ra model <- {want} ({name}) — applies {when}")
+        self._publish_ra_model_state()
+        return True, f"Ra model {want} ({name})"
+
+    def _publish_ra_model_state(self):
+        try:
+            choice = getattr(self, 'ra_model', 'auto')
+            auto = getattr(self, '_ra_model_auto_path', None)
+            st = ra_model_choice.describe(choice, auto)
+            in_use = getattr(self, '_ra_model_in_use', 'auto')
+            st.update({'in_use': in_use,
+                       'in_use_model': ra_model_choice.model_name(in_use, auto),
+                       'error': getattr(self, '_ra_model_error', ''),
+                       'stamp': rospy.get_time()})
+            self.ra_model_state_pub.publish(String(json.dumps(st, default=str)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Arm REAL] Ra model state publish failed: {e}")
+
+    def _apply_ra_model(self):
+        """Make the scan pipeline score with the chosen model. Called at the
+        start of a scan call, when no inference worker runs. A model that
+        cannot be selected leaves the pipeline on what it had (logged, and in
+        the state's `error`) — the rows then say which model scored them."""
+        want = getattr(self, 'ra_model', 'auto')
+        if want == getattr(self, '_ra_model_in_use', 'auto'):
+            return
+        auto = getattr(self, '_ra_model_auto_path', None)
+        select = getattr(self.pipeline, 'select_model', None)
+        path = ra_model_choice.model_path(want, auto)
+        ok = False
+        try:
+            ok = bool(select(path)) if select is not None else False
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] Ra model {want}: {type(e).__name__}: {e}")
+        if ok:
+            self._ra_model_in_use = want
+            self._ra_model_error = ''
+            rospy.logwarn(f"[Arm REAL] this scan is scored with Ra model {want} "
+                          f"({ra_model_choice.model_name(want, auto)})")
+        else:
+            self._ra_model_error = (f"{ra_model_choice.model_name(want, auto)} could not be "
+                                    f"selected — scan scored with "
+                                    f"{getattr(self, '_ra_model_in_use', 'auto')}")
+            rospy.logerr(f"[Arm REAL] {self._ra_model_error}")
+        self._publish_ra_model_state()
+
+    def _ra_model_note(self, choice=None):
+        """' [Ra model ra_flat_only]' for a row scored by a geometry model;
+        '' for auto, so the default rows read as they always did."""
+        choice = choice or getattr(self, '_ra_model_in_use', 'auto')
+        if choice == 'auto':
+            return ''
+        return (f" [Ra model "
+                f"{ra_model_choice.model_name(choice, getattr(self, '_ra_model_auto_path', None))}]")
+
+    # --------------------------------------------------
+    # STEP EVALUATION MODE (2026-11-13)
+    # --------------------------------------------------
+    STEP_CMDS = ('next', 'estimate')
+
+    def set_step_mode(self, on):
+        """Step evaluation on / off. Applies from the next scan; a scan
+        already running keeps the mode it started with (a waiting stop is
+        not released by this — send next, or cancel)."""
+        self.step_enabled = bool(on)
+        rospy.loginfo(f"[Arm REAL] step evaluation mode {'ON' if on else 'OFF'}"
+                      + (" (applies from the next scan)" if self.busy else ""))
+        self._publish_step_state()
+        return True, f"step mode {'on' if on else 'off'}"
+
+    def step_command(self, payload=None):
+        """Release / act on the step stop the scan waits at. Called from the
+        ROS callback thread. payload {cmd: 'next' | 'estimate'}:
+        next — drive to the next scanned point (from the start stop: to the
+        first) and capture it there; estimate — run the model on that
+        capture and show the Ra, the stop stays (only at a point stop, not
+        while a capture / estimate is running)."""
+        payload = dict(payload or {})
+        cmd = str(payload.get('cmd', '') or '').strip().lower()
+        if cmd not in self.STEP_CMDS:
+            return False, f"unknown step command {cmd!r} (next | estimate)"
+        with self._step_lock:
+            waiting = bool(self._step.get('waiting'))
+            kind = self._step.get('kind')
+            busy = bool(self._step.get('estimating') or self._step.get('capturing'))
+            if not waiting:
+                return False, "no step stop is waiting"
+            if busy:
+                return False, "a capture / estimate is running — wait for it"
+            if cmd == 'estimate' and kind != 'point':
+                return False, (f"nothing to estimate at the {kind} stop — "
+                               "press Next to move to a point first")
+            if self._step_cmd is not None:
+                return False, f"'{self._step_cmd}' already pending"
+            self._step_cmd = cmd
+        self._step_event.set()
+        return True, ("moving to the next point" if cmd == 'next' else "estimating")
+
+    def _publish_step_state(self, **extra):
+        try:
+            with self._step_lock:
+                st = dict(self._step)
+            st.update(extra)
+            st['enabled'] = bool(getattr(self, 'step_enabled', False))
+            st['stamp'] = rospy.get_time()
+            self.step_state_pub.publish(String(json.dumps(st, default=str)))
+        except Exception as e:
+            rospy.logwarn_throttle(10.0, f"[Arm REAL] step state publish failed: {e}")
+
+    def _step_wait_cmd(self):
+        """Block until step_command() or cancel. Returns the command or None."""
+        # the command is read under the lock on every tick, so one set while
+        # the worker was between the wait and the clear is never lost
+        while not self.cancel_requested:
+            self._step_event.wait(0.1)
+            with self._step_lock:
+                cmd, self._step_cmd = self._step_cmd, None
+                self._step_event.clear()
+            if cmd:
+                return cmd
+        return None
+
+    @staticmethod
+    def _step_point_info(p, scan_no, n_scan):
+        spid = p.get("source_point_id")
+        return {'group_id': int(p.get("group_id", -1)),
+                'point_id': int(p.get("point_id", -1)),
+                'source_point_id': None if spid is None else int(spid),
+                'scan_no': int(scan_no), 'n_scan': int(n_scan),
+                'x': p.get('x'), 'y': p.get('y'), 'z': p.get('z')}
+
+    def _step_stop(self, kind, index, total, n_scan, p, scan_no=0, message=''):
+        """A stop where only Next is possible: 'start' (before the scan's
+        first move; p = the first scanned point) or 'failed' (a move failed
+        here). Returns the command, None on cancel. Never raises."""
+        try:
+            info = self._step_point_info(p, scan_no, n_scan)
+            with self._step_lock:
+                self._step.update({'waiting': True, 'kind': kind, 'index': index,
+                                   'total': total, 'estimating': False,
+                                   'estimates': [], 'standoff': '', 'message': message,
+                                   'run': self._collect_run_stem, **info})
+                self._step_cmd = None
+            self._step_event.clear()
+            self._publish_step_state()
+            self._progress('wait', index=index, total=total, kind='step_' + kind,
+                           point_id=info['point_id'], group_id=info['group_id'],
+                           source_point_id=info['source_point_id'],
+                           scan=True, message=message or 'press Next')
+            if kind == 'start':
+                rospy.loginfo(f"[Arm REAL] step: scan of {n_scan} point(s) ready — waiting "
+                              f"for Next (first g{info['group_id']} p{info['point_id']} "
+                              f"sp{info['source_point_id']})")
+            else:
+                rospy.logwarn(f"[Arm REAL] step: move failed at {index}/{total} — waiting for Next")
+            cmd = self._step_wait_cmd()
+            self._progress('resume', index=index, total=total, kind='step_' + kind,
+                           point_id=info['point_id'], group_id=info['group_id'], scan=True)
+            return cmd
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] step: {kind} stop failed: {e}")
+            return None
+        finally:
+            with self._step_lock:
+                self._step['waiting'] = False
+            self._publish_step_state()
+
+    # The models a step estimate runs (user, 2026-11-13: B removed, the split
+    # model's two stage graphs shown separately): the UPR_Ra_inference v3
+    # graphs ra_finishing / ra_roughing / ra_A, each scored on its own. A runs
+    # FIRST because its stage head decides the stage, exactly as inside the
+    # split model; the stage's graph is the SELECTED value (= split) and goes
+    # into the Ra map. DISPLAY order is STEP_SHOW.
+    STEP_MODELS = (('A', 'ra_A.onnx'), ('finishing', 'ra_finishing.onnx'),
+                   ('roughing', 'ra_roughing.onnx'))
+    STEP_SHOW = ('finishing', 'roughing', 'A')
+    STEP_CSV_COLUMNS = ['stamp', 'run', 'index', 'group_id', 'point_id',
+                        'source_point_id', 'estimate_no', 'x', 'y', 'z', 'standoff',
+                        'images', 'ok', 'ra_model', 'ra_finishing', 'ra_roughing', 'ra_A',
+                        'ra_flat_only', 'ra_curved_only',
+                        'stage', 'ra_selected', 'p_finishing', 'p_roughing', 'flags',
+                        'infer_finishing_s', 'infer_roughing_s', 'infer_A_s',
+                        'infer_flat_only_s', 'infer_curved_only_s',
+                        'prep_s', 'infer_total_s', 'capture_s', 'message']
+
+    def _step_predictor_get(self, choice=None):
+        """The step-evaluation RaPredictor of a Ra-model choice, loaded once,
+        on first use: auto -> A / finishing / roughing (STEP_MODELS); flat /
+        curved -> that ONE geometry model, slot flat_only / curved_only. None
+        when nothing loads — an auto estimate then falls back to the scan
+        pipeline's single model, a geometry estimate fails (a different
+        model's number under the chosen model's name would be worse than no
+        number)."""
+        choice = choice or getattr(self, 'ra_model', 'auto')
+        lock = self.__dict__.setdefault('_step_pred_lock', threading.Lock())
+        with lock:
+            if choice == 'auto':
+                if '_step_pred' in self.__dict__:
+                    return self._step_pred
+            else:
+                cache = self.__dict__.setdefault('_step_pred_geo', {})
+                if choice in cache:
+                    return cache[choice]
+            pred = None
+            try:
+                from apriltag_nav.ra_predictor import RaPredictor
+                if choice == 'auto':
+                    slots = [(name, os.path.join(paths.EXPORTED_MODEL_DIR, fn))
+                             for name, fn in self.STEP_MODELS]
+                else:
+                    slots = [(ra_model_choice.SLOT_NAME[choice],
+                              ra_model_choice.model_path(choice))]
+                pred = RaPredictor(slots, log=rospy.loginfo)
+                n = pred.load()
+                if n == 0:
+                    rospy.logerr(f"[Arm REAL] step: no evaluation model loaded for "
+                                 f"'{choice}' ({pred.failures()})"
+                                 + (" — falling back to the scan model" if choice == 'auto' else ''))
+                    pred = None
+                else:
+                    rospy.loginfo(f"[Arm REAL] step: evaluation models loaded ({choice}): "
+                                  f"{pred.loaded_names()}"
+                                  + (f", failed {pred.failures()}" if pred.failures() else ''))
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] step: evaluation models failed to load: {e}")
+                pred = None
+            if choice == 'auto':
+                self._step_pred = pred
+            else:
+                self._step_pred_geo[choice] = pred
+            return pred
+
+    def _step_score(self, pid, frames, prefix):
+        """Score the frames with every step model. Returns the scan-result
+        shaped dict (ra_* = the SELECTED value: the finishing or roughing
+        graph, whichever stage A's head reads in the frame — the split model's
+        rule; mean over the frames) plus `models` [{name, ra, ra_std, infer_s,
+        selected}] in display order, stage / stage_probs / flags of the last
+        frame, prep_s, infer_s (= every model run + preprocessing). None when
+        the selected graph produced no value."""
+        choice = getattr(self, 'ra_model', 'auto')
+        geo_slot = ra_model_choice.SLOT_NAME.get(choice)     # None for auto
+        pred = self._step_predictor_get(choice)
+        if pred is None:
+            if geo_slot:
+                raise RuntimeError(
+                    f"Ra model {ra_model_choice.model_name(choice)} is not loaded")
+            res = self.pipeline.process(pid, frames, name_prefix=prefix, save=False)
+            if res:
+                res['models'] = [{'name': 'scan', 'ra': res['ra_mean'], 'selected': True,
+                                  'ra_std': res.get('ra_std'), 'infer_s': res.get('infer_s')}]
+                res['ra_model'] = 'auto'
+            return res
+        names = [sl.name for sl in pred.slots]
+        vals = {nm: [] for nm in names}
+        chosen = []                       # the selected graph's value per frame
+        times = {nm: 0.0 for nm in names}
+        prep = 0.0
+        detail = {}
+        for fr in frames:
+            results, _el, detail = pred.predict_detail(fr)
+            per = dict(results)
+            for nm, v in results:
+                if v is not None:
+                    vals[nm].append(float(v))
+            # auto: the graph of the stage A reads (the split rule);
+            # flat / curved: the chosen geometry model itself
+            sel = per.get(geo_slot or detail.get('stage'))
+            if sel is not None:
+                chosen.append(float(sel))
+            for nm, t in (detail.get('times') or {}).items():
+                times[nm] = times.get(nm, 0.0) + float(t)
+            prep += float(detail.get('prep_s') or 0.0)
+        stage = detail.get('stage')
+        order = ([nm for nm in self.STEP_SHOW if nm in vals]
+                 + [nm for nm in names if nm not in self.STEP_SHOW])
+        models = []
+        for nm in order:
+            v = vals[nm]
+            models.append({'name': nm,
+                           'ra': round(float(np.mean(v)), 4) if v else None,
+                           'ra_std': round(float(np.std(v)), 4) if v else None,
+                           'infer_s': round(times.get(nm, 0.0), 3) if v else None,
+                           'selected': nm == (geo_slot or stage)})
+        if not chosen:
+            return None
+        return {'ra_mean': float(np.mean(chosen)), 'ra_std': float(np.std(chosen)),
+                'ra_min': float(np.min(chosen)), 'ra_max': float(np.max(chosen)),
+                'num_samples': len(chosen), 'models': models, 'ra_model': choice,
+                'stage': stage, 'stage_probs': detail.get('stage_probs'),
+                'flags': list(detail.get('flags') or []), 'prep_s': round(prep, 3),
+                'infer_s': round(prep + sum(times.values()), 3)}
+
+    def _step_record(self, index, p, gid, pid, spid, sto, est, cap):
+        """Append one row per estimate to <frame folder>/<run>_step_eval.csv:
+        the image names, the three models' Ra and their inference times.
+        Never raises."""
+        try:
+            import csv
+            out_dir = getattr(self.pipeline, 'output_dir', '') or ''
+            if not out_dir:
+                return
+            os.makedirs(out_dir, exist_ok=True)
+            stem = self._collect_run_stem or os.path.basename(out_dir.rstrip('/'))
+            path = os.path.join(out_dir, f"{stem}_step_eval.csv")
+            mods = {m['name']: m for m in (est.get('models') or [])}
+            probs = est.get('stage_probs') or {}
+
+            def _m(name, key):
+                v = (mods.get(name) or {}).get(key)
+                return '' if v is None else v
+            row = {'stamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                   'run': stem, 'index': index, 'group_id': gid, 'point_id': pid,
+                   'source_point_id': '' if spid is None else spid,
+                   'estimate_no': est.get('n'),
+                   'x': p.get('x', ''), 'y': p.get('y', ''), 'z': p.get('z', ''),
+                   'standoff': sto, 'images': ' '.join(cap.get('images') or []),
+                   'ok': bool(est.get('ok')),
+                   'ra_model': est.get('ra_model') or '',
+                   'ra_finishing': _m('finishing', 'ra'), 'ra_roughing': _m('roughing', 'ra'),
+                   'ra_A': _m('A', 'ra'),
+                   'ra_flat_only': _m('flat_only', 'ra'),
+                   'ra_curved_only': _m('curved_only', 'ra'),
+                   'stage': est.get('stage') or '',
+                   'ra_selected': ('' if not est.get('ok') or est.get('ra_mean') is None
+                                   else round(float(est['ra_mean']), 4)),
+                   'p_finishing': probs.get('finishing', ''),
+                   'p_roughing': probs.get('roughing', ''),
+                   'flags': ';'.join(est.get('flags') or []),
+                   'infer_finishing_s': _m('finishing', 'infer_s'),
+                   'infer_roughing_s': _m('roughing', 'infer_s'),
+                   'infer_A_s': _m('A', 'infer_s'),
+                   'infer_flat_only_s': _m('flat_only', 'infer_s'),
+                   'infer_curved_only_s': _m('curved_only', 'infer_s'),
+                   'prep_s': '' if est.get('prep_s') is None else est.get('prep_s'),
+                   'infer_total_s': '' if est.get('infer_s') is None else est.get('infer_s'),
+                   'capture_s': '' if cap.get('capture_s') is None else cap.get('capture_s'),
+                   'message': est.get('message') or ''}
+            new = not os.path.isfile(path)
+            if not new:
+                with open(path, newline='') as f:
+                    head = next(csv.reader(f), [])
+                if head != self.STEP_CSV_COLUMNS:      # an older column set: keep it aside
+                    os.replace(path, path[:-4] + time.strftime('_old_%Y%m%d_%H%M%S.csv'))
+                    new = True
+            with open(path, 'a', newline='') as f:
+                w = csv.DictWriter(f, fieldnames=self.STEP_CSV_COLUMNS)
+                if new:
+                    w.writeheader()
+                w.writerow(row)
+            est['record_csv'] = path
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] step: could not record the estimate: {e}")
+
+    def _step_capture(self, pid, prefix):
+        """Capture at the current point and save the frames at once (so the
+        UI can show the photo before any inference). Returns (frames,
+        capture dict for the state)."""
+        t0 = time.time()
+        frames, err = [], ''
+        try:
+            frames = self.pipeline.capture(point_id=pid,
+                                           cancelled=lambda: self.cancel_requested) or []
+            if not frames:
+                err = 'no frames captured'
+        except Exception as e:
+            frames, err = [], f"{type(e).__name__}: {e}"
+        names = []
+        if frames:
+            try:
+                names = list(self.pipeline.save_frames(pid, frames, name_prefix=prefix,
+                                                       force=True) or [])
+            except Exception as e:
+                rospy.logerr(f"[Arm REAL] step: saving the frames of p{pid} failed: {e}")
+        out_dir = getattr(self.pipeline, 'output_dir', '') or ''
+        cap = {'ok': bool(frames), 'n_frames': len(frames), 'message': err,
+               'images': names, 'image_paths': [os.path.join(out_dir, f) for f in names],
+               'capture_s': round(time.time() - t0, 2), 'stamp': time.time()}
+        return frames, cap
+
+    def _step_point(self, index, total, n_scan, scan_no, p, entry, standoff,
+                    csv_path, results):
+        """The step stop at a scanned point (tool at the standoff). The frames
+        are CAPTURED on arrival (the Next that brought the arm here) and
+        saved as <prefix>_s<k>.png; the operator's commands then:
+        estimate = run the model on those frames and show the Ra (a capture
+        that failed is retried first); next = write the row and return.
+        Returns True when the point got a Ra. Never raises into the loop."""
+        info = self._step_point_info(p, scan_no, n_scan)
+        gid, pid, spid = info['group_id'], info['point_id'], info['source_point_id']
+        prefix = image_name_prefix(gid, pid, index, spid)
+        sto = standoff.summary() if standoff is not None else 'no standoff run'
+        sto_ok = None if standoff is None else bool(standoff.converged)
+        estimates = []
+        frames = []
+        try:
+            with self._step_lock:
+                self._step.update({'waiting': False, 'kind': 'point', 'index': index,
+                                   'total': total, 'estimating': False, 'capturing': True,
+                                   'capture': None, 'estimates': [],
+                                   'standoff': sto, 'standoff_ok': sto_ok, 'message': '',
+                                   'run': self._collect_run_stem,
+                                   'image_dir': getattr(self.pipeline, 'output_dir', '') or '',
+                                   **info})
+                self._step['n_stops'] = int(self._step.get('n_stops', 0)) + 1
+                self._step_cmd = None
+            self._step_event.clear()
+            self._publish_step_state()
+            frames, cap = (self._step_capture(pid, prefix) if not self.cancel_requested
+                           else ([], {'ok': False, 'message': 'cancelled', 'images': [],
+                                      'image_paths': []}))
+            if cap['ok']:
+                rospy.loginfo(f"[Arm REAL] step: g{gid} p{pid} captured {cap['n_frames']} "
+                              f"frame(s) {cap['images']}")
+            else:
+                rospy.logerr(f"[Arm REAL] step: g{gid} p{pid} capture failed: {cap['message']}")
+            with self._step_lock:
+                self._step.update({'waiting': True, 'capturing': False, 'capture': cap})
+            self._refresh_live_pose()
+            self._publish_step_state()
+            self._progress('wait', index=index, total=total, kind='step', point_id=pid,
+                           source_point_id=spid,
+                           group_id=gid, scan=True, scan_no=scan_no, n_scan=n_scan,
+                           images=cap.get('images'),
+                           message=(f"captured ({sto}) — Estimate or Next" if cap['ok']
+                                    else f"capture FAILED: {cap['message']} — Estimate retries, Next moves on"))
+            while True:
+                cmd = self._step_wait_cmd()
+                if cmd is None or cmd == 'next':          # cancelled / move on
+                    break
+                # estimate: the model on the frames taken here
+                with self._step_lock:
+                    self._step['estimating'] = True
+                self._publish_step_state()
+                n = len(estimates) + 1
+                res, err = None, ''
+                if not frames:                             # retry the capture first
+                    frames, cap = self._step_capture(pid, prefix)
+                    with self._step_lock:
+                        self._step['capture'] = cap
+                    if not frames:
+                        err = f"capture failed again: {cap['message']}"
+                t0 = time.time()
+                if frames:
+                    try:
+                        res = self._step_score(pid, frames, prefix)
+                        if not res:
+                            err = 'no Ra (inference returned no valid sample)'
+                    except Exception as e:
+                        err = f"{type(e).__name__}: {e}"
+                est = {'n': n, 'elapsed_s': round(time.time() - t0, 2),
+                       'ok': bool(res), 'message': err,
+                       'ra_model': (res or {}).get('ra_model')
+                       or getattr(self, 'ra_model', 'auto'),
+                       'images': list(cap.get('images') or []),
+                       'image_paths': list(cap.get('image_paths') or []),
+                       'capture_s': cap.get('capture_s')}
+                if res:
+                    for k in ('ra_mean', 'ra_std', 'ra_min', 'ra_max', 'num_samples',
+                              'models', 'stage', 'stage_probs', 'flags', 'prep_s'):
+                        est[k] = res.get(k)
+                    est['infer_s'] = (None if res.get('infer_s') is None
+                                      else round(float(res['infer_s']), 3))
+                    rospy.loginfo(f"[Arm REAL] step: g{gid} p{pid} sp{spid} estimate #{n}: "
+                                  + '  '.join(f"{m['name']}{'*' if m.get('selected') else ''} "
+                                              + ('—' if m.get('ra') is None else f"{m['ra']:.4f}")
+                                              + (f" ({m['infer_s']:.2f} s)" if m.get('infer_s') is not None else '')
+                                              for m in (res.get('models') or []))
+                                  + (f"  stage {res.get('stage')}" if res.get('stage') else ''))
+                    with self._results_lock:
+                        for k in ('ra_mean', 'ra_std', 'ra_min', 'ra_max', 'num_samples'):
+                            entry[k] = res.get(k)
+                else:
+                    rospy.logerr(f"[Arm REAL] step: g{gid} p{pid} estimate #{n} failed: {err}")
+                self._step_record(index, p, gid, pid, spid, sto, est, cap)
+                estimates.append(est)
+                with self._step_lock:
+                    self._step['estimating'] = False
+                    self._step['estimates'] = [dict(e) for e in estimates]
+                    if res:
+                        self._step['n_estimated'] = int(self._step.get('n_estimated', 0)) + 1
+                    self._step['last'] = dict(est, group_id=gid, point_id=pid,
+                                              source_point_id=spid)
+                self._publish_step_state()
+                self._progress('result' if res else 'failed', index=index, total=total,
+                               point_id=pid, group_id=gid, scan=True, kind='step',
+                               source_point_id=spid, estimate=n, ra_mean=est.get('ra_mean'),
+                               ra_std=est.get('ra_std'), num_samples=est.get('num_samples'),
+                               infer_s=est.get('infer_s'),
+                               message=err or f"step estimate #{n}")
+        except Exception as e:
+            rospy.logerr(f"[Arm REAL] step: stop failed at point {pid}: {e}")
+        finally:
+            with self._step_lock:
+                self._step['waiting'] = False
+                self._step['estimating'] = False
+                self._step['capturing'] = False
+            self._publish_step_state()
+        good = [e for e in estimates if e.get('ok')]
+        if good:
+            entry["success"] = True
+            entry["execution_message"] += (f" (step: last Ra {float(good[-1]['ra_mean']):.4f}"
+                                           + (f", {len(good)} estimates" if len(good) > 1 else '') + ")"
+                                           + self._ra_model_note(good[-1].get('ra_model')))
+        else:
+            entry["success"] = False
+            entry["execution_message"] += (" (step: no frames)" if not frames
+                                           else " (step: captured, not estimated)"
+                                           if not estimates else " (step: estimate failed)")
+        if not self.cancel_requested or estimates or frames:
+            with self._results_lock:
+                results.append(entry)
+                self._save_results(csv_path, results)
+        self._progress('resume', index=index, total=total, point_id=pid, group_id=gid,
+                       scan=True, kind='step', source_point_id=spid,
+                       n_estimates=len(estimates),
+                       message=entry["execution_message"])
+        return bool(good)
 
     # --------------------------------------------------
     # PROGRESS EVENTS + LIVE POSE (for the operator UI)

@@ -67,6 +67,17 @@ flagged frame is LOGGED and its value still returned — in a scan the frame is
 the record (Ra data collection), so a flag must not cost the point. An input
 that is not a full frame (robot_ui ROI) falls back to the centre crop, logged
 once, as for a fixed-window model.
+
+⚠️ SPLIT SLOTS since 2026-11-13 (UPR_Ra_inference v3: ra_finishing.onnx /
+ra_roughing.onnx + ra_A.onnx). A slot whose path is a `.json` MANIFEST with
+`"kind": "split"` is three graphs behind one name: the `router` (model A,
+a spot-tile model with a stage head) is run first, its stage head picks
+finishing or roughing (argmax of the first two logits, nc never trained),
+and that stage's graph gives the Ra — the package's `--models split`
+without `--stage`. All three must be spot-tile models of the same frame
+layout; they share one preprocessed input. The slot reports the router's
+stage logits and the chosen stage's training Ra range, so predict_detail's
+stage / flags read as for any other slot. Cost: two model runs per frame.
 """
 
 import json
@@ -250,6 +261,8 @@ class ModelSlot:
         if not self.path:
             self.error = 'no path configured'
             return False
+        if os.path.splitext(self.path)[1].lower() == '.json':
+            return self._load_split(log)
         if os.path.splitext(self.path)[1].lower() != '.onnx':
             self.error = (f'not an .onnx file: {self.path} — convert the '
                           'checkpoint before deploying it')
@@ -306,12 +319,64 @@ class ModelSlot:
             log(f"[RaPredictor] slot '{self.name}' failed to load: {self.error}")
             return False
 
+    def _load_split(self, log):
+        """A `"kind": "split"` manifest: router + one graph per stage (see the
+        module docstring). The slot counts as loaded only when all are up."""
+        try:
+            with open(self.path, encoding='utf-8') as f:
+                meta = json.load(f)
+            if meta.get('kind') != 'split':
+                raise ValueError(f'{self.path}: a .json slot must be a '
+                                 f'"kind": "split" manifest')
+            base = os.path.dirname(self.path)
+            by_stage = meta.get('by_stage') or {}
+            if not meta.get('router') or set(by_stage) != {'finishing', 'roughing'}:
+                raise ValueError(f'{self.path}: needs router and by_stage '
+                                 f'{{finishing, roughing}}')
+            router = ModelSlot(f'{self.name}/router', os.path.join(base, meta['router']))
+            subs = {st: ModelSlot(f'{self.name}/{st}', os.path.join(base, fn))
+                    for st, fn in by_stage.items()}
+            for sub in [router] + list(subs.values()):
+                if not sub.load(log):
+                    raise ValueError(f"part '{sub.name}': {sub.error}")
+            if not router.has_stage or not router.stages or router.spot_nominal is None:
+                raise ValueError(f'{self.path}: the router must be a spot-tile '
+                                 f'model with a stage head and stage names')
+            for st, sub in subs.items():
+                if (sub.spot_nominal, sub.frame_size) != (router.spot_nominal, router.frame_size):
+                    raise ValueError(f"{self.path}: '{st}' is not preprocessed like "
+                                     f"the router")
+                if st not in router.stages[:2]:
+                    raise ValueError(f"{self.path}: the router's stage head has no '{st}'")
+        except Exception as e:
+            self.session = None
+            self.error = f'{type(e).__name__}: {e}'
+            log(f"[RaPredictor] slot '{self.name}' failed to load: {self.error}")
+            return False
+        self._router, self._by_stage = router, subs
+        self.spot_nominal, self.frame_size = router.spot_nominal, router.frame_size
+        self.stages = router.stages
+        self.has_stage = True
+        self.ra_range = {st: (sub.ra_range or {}).get(st) for st, sub in subs.items()}
+        self.session = router.session       # `loaded`
+        self.last_route = None
+        log(f"[RaPredictor] slot '{self.name}' loaded (split): router "
+            f"{os.path.basename(router.path)}, " + ', '.join(
+                f'{st} {os.path.basename(sub.path)}' for st, sub in subs.items()))
+        return True
+
     def run(self, chw_float32):
         """chw_float32: (1, 3, 900, 900) normalised float32. Returns a float."""
         return self.run_all(chw_float32)[0]
 
     def run_all(self, chw_float32):
-        """(Ra, stage_logits) — stage_logits is None for a graph without them."""
+        """(Ra, stage_logits) — stage_logits is None for a graph without them.
+        A split slot returns the chosen stage graph's Ra and the ROUTER's logits."""
+        if getattr(self, '_router', None) is not None:
+            _ra, logits = self._router.run_all(chw_float32)
+            stage = self.stages[int(np.argmax(logits[:2]))]
+            self.last_route = stage
+            return self._by_stage[stage].run_all(chw_float32)[0], logits
         outs = self.session.run(None, {self.input_name: chw_float32})
         logits = None
         if self.has_stage:
@@ -446,13 +511,16 @@ class RaPredictor:
         compared, as in the package) and `flags` (the frame's spot_flags plus
         `<slot>_ra_out_of_range` when a value is outside that slot's training
         range for the stage, +-10 %). Flags are logged, never acted on here.
+        Also `times` {slot: s of its model run(s) alone} and `prep_s` (the
+        shared preprocessing: spot search, crop, normalise).
         """
         started = time.time()
         if bgr is None:
             raise ValueError('no image')
         prepared = {}               # slots sharing a preprocessing share its result
         results = []
-        detail = {'spot': None, 'stage': None, 'stage_probs': None, 'flags': []}
+        detail = {'spot': None, 'stage': None, 'stage_probs': None, 'flags': [],
+                  'times': {}, 'prep_s': 0.0}
         for slot in self.slots:
             if not slot.loaded:
                 results.append((slot.name, None))
@@ -460,12 +528,16 @@ class RaPredictor:
             key = slot.prep_for(bgr.shape, self.log)
             try:
                 if key not in prepared:
+                    t_prep = time.time()
                     if key is not None and key[0] == 'spot':
                         prepared[key] = self.preprocess_spot(bgr, key[1])
                     else:
                         prepared[key] = (self.preprocess(bgr, key), None)
+                    detail['prep_s'] += time.time() - t_prep
                 chw, info = prepared[key]
+                t_run = time.time()
                 value, logits = slot.run_all(chw)
+                detail['times'][slot.name] = time.time() - t_run
             except Exception as e:
                 self.log(f"[RaPredictor] slot '{slot.name}' inference failed: {e}")
                 results.append((slot.name, None))

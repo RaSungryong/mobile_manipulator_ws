@@ -30,7 +30,8 @@ different models / windows are not comparable with each other — see CLAUDE.md.
 
 ROS parameters
 --------------
-  ~model_primary    .onnx for the primary slot   (default paths.MODEL_PATH,
+  ~model_primary    .onnx (or a split .json manifest, 2026-11-13) for the
+                    primary slot   (default paths.MODEL_PATH = ra_split.json,
                     i.e. the same graph the scan pipeline uses)
   ~model_secondary  .onnx for the second slot    (default
                     paths.RA_MODEL_SECONDARY = '' since 2026-11-12: primary
@@ -39,6 +40,14 @@ ROS parameters
                     paths.RA_NEW_MODEL_PATH brings ra_new back)
   ~require_all      refuse to start unless every configured slot loads
                     (default false)
+  ~follow_ra_model  follow the operator's Ra model choice (default true):
+                    the node listens to arm_node's latched /arm/ra_model_state
+                    and, for `flat` / `curved`, answers with ra_flat_only /
+                    ra_curved_only INSTEAD of its configured slots (loaded on
+                    first use); `auto` brings the configured slots back. So an
+                    on-demand Ra from the UI is scored by the same model as
+                    the scan (ra_model_choice.py). A geometry model that does
+                    not load leaves the node on what it had, with a warning.
 
 A slot whose file is missing is skipped with a warning rather than taken as
 fatal: losing the second model should not cost the operator the primary one.
@@ -51,7 +60,9 @@ spot-tile frame said about itself: the stage seen in the image and any flags
 (spot not found, saturated, ... — ra_predictor.spot_flags).
 """
 
+import json
 import math
+import threading
 
 import rospy
 from std_msgs.msg import String
@@ -60,6 +71,7 @@ from cv_bridge import CvBridge
 from robot_msgs.srv import PredictRa, PredictRaResponse
 
 from apriltag_nav import paths
+from apriltag_nav import ra_model_choice
 from apriltag_nav.ra_predictor import RaPredictor, sidecar_meta
 
 
@@ -104,11 +116,61 @@ class InferenceNode:
             rospy.logerr("[Inference] No model loaded — /inference/predict will "
                          "answer success=false for every request.")
 
-        rospy.Service('/inference/predict', PredictRa, self._srv_predict)
+        # The operator's Ra model choice (2026-11-13): `auto` = the slots
+        # configured above; flat / curved = that geometry model alone.
+        self._auto_predictor = self._predictor
+        self._geo_predictors = {}
+        self._choice = 'auto'
+        self._choice_lock = threading.Lock()
 
-        state = f"ready slots={self._predictor.loaded_names() or 'none'}"
+        rospy.Service('/inference/predict', PredictRa, self._srv_predict)
+        if bool(rospy.get_param('~follow_ra_model', True)):
+            rospy.Subscriber('/arm/ra_model_state', String, self._cb_ra_model,
+                             queue_size=1)
+
+        self._publish_ready()
+
+    def _publish_ready(self):
+        state = (f"ready slots={self._predictor.loaded_names() or 'none'} "
+                 f"ra_model={self._choice}")
         self._state_pub.publish(String(state))
         rospy.loginfo(f"[Inference] {state} — /inference/predict")
+
+    def _cb_ra_model(self, msg):
+        """arm_node's Ra model state: score with the same model."""
+        try:
+            choice = ra_model_choice.normalize(json.loads(msg.data).get('choice'))
+        except Exception as e:
+            rospy.logwarn(f"[Inference] bad /arm/ra_model_state: {e}")
+            return
+        if choice is None:
+            return
+        ok, message = self.set_ra_model(choice)
+        if message:
+            (rospy.loginfo if ok else rospy.logwarn)(f"[Inference] {message}")
+
+    def set_ra_model(self, choice):
+        """Switch the predictor: 'auto' = the configured slots, 'flat' /
+        'curved' = that geometry model (loaded on first use). (ok, message);
+        message '' when nothing changed."""
+        with self._choice_lock:
+            if choice == self._choice:
+                return True, ''
+            if choice == 'auto':
+                pred = self._auto_predictor
+            else:
+                pred = self._geo_predictors.get(choice)
+                if pred is None:
+                    path = ra_model_choice.model_path(choice)
+                    pred = RaPredictor(slots=[(self._slot_name(path, choice), path)],
+                                       log=rospy.loginfo)
+                    if pred.load() != 1:
+                        return False, (f"Ra model '{choice}' did not load "
+                                       f"({pred.failures()}) — still '{self._choice}'")
+                    self._geo_predictors[choice] = pred
+            self._predictor, self._choice = pred, choice
+        self._publish_ready()
+        return True, f"Ra model <- {choice} ({', '.join(pred.names())})"
 
     @staticmethod
     def _slot_name(path, fallback):
@@ -126,7 +188,8 @@ class InferenceNode:
         resp.ra_values = [float('nan')] * len(resp.model_names)
         resp.elapsed_s = 0.0
 
-        if not self._predictor.loaded_names():
+        predictor = self._predictor      # one predictor for the whole request
+        if not predictor.loaded_names():
             resp.success = False
             resp.message = 'no model loaded'
             return resp
@@ -143,7 +206,7 @@ class InferenceNode:
             return resp
 
         try:
-            results, elapsed, detail = self._predictor.predict_detail(bgr)
+            results, elapsed, detail = predictor.predict_detail(bgr)
         except Exception as e:
             rospy.logerr(f"[Inference] predict failed: {e}")
             resp.success = False

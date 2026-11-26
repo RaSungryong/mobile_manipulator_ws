@@ -82,8 +82,14 @@ class FakePipeline:
         self.captured.append(point_id)
         return [np.zeros((4, 4), dtype=np.uint8)]
 
-    def process(self, point_id, frames, cancelled=None, name_prefix=None):
+    def save_frames(self, point_id, frames, name_prefix=None, force=False):
+        self.save_force = getattr(self, 'save_force', []) + [force]
+        self.saved_frames = getattr(self, 'saved_frames', []) + [name_prefix]
+        return [f'{name_prefix}_s{k + 1}.png' for k in range(len(frames))]
+
+    def process(self, point_id, frames, cancelled=None, name_prefix=None, save=True):
         # Runs on the controller's inference worker thread.
+        self.process_save = getattr(self, 'process_save', []) + [save]
         self.processed_on.append(threading.current_thread().name)
         self.prefixes = getattr(self, 'prefixes', []) + [name_prefix]
         return {'ra_mean': 0.4, 'ra_std': 0.0, 'ra_min': 0.4, 'ra_max': 0.4,
@@ -1277,6 +1283,403 @@ check(st['link_up'] is True and len(LOG['warn']) == 1 and 'cannot read' in LOG['
       'unreadable carrier: warned once, link not flagged down')
 check(LinkMonitor.resolve_iface('256.1.1.1') == '', 'an unroutable address resolves to no interface')
 shutil.rmtree(root, ignore_errors=True)
+
+# ================================================================ scenario: step evaluation (2026-11-13)
+print('== step evaluation: Next = move + capture, Estimate = inference on that capture')
+
+
+def step_states():
+    return [json.loads(d) for t, d in PUBLISHED if t == '/arm/step_state']
+
+
+STEP_DIR = tempfile.mkdtemp(prefix='step_eval_')
+
+
+def run_step(points, script, csv_path='/x/scan_joint_demo_ra_map_20261113_120000.csv', collect=False):
+    """execute_scan_points with step mode ON; script(ac, state, n) is called
+    on a helper thread for every NEW waiting stop (n = 0, 1, ...)."""
+    PUBLISHED.clear(); LOG['err'].clear(); LOG['warn'].clear()
+    robot = FakeRobot(); ac = make_controller(robot)
+    ac.pipeline.output_dir = STEP_DIR
+    ac.step_enabled = True
+    ac._step_pred = getattr(run_step, 'pred', None)   # None = the scan model (fake pipeline)
+    getattr(run_step, 'setup', lambda a: None)(ac)   # e.g. a Ra model choice
+    ac.collect_enabled = collect
+    ac.step_state_pub = _Pub('/arm/step_state')
+    ac._step_lock = threading.Lock(); ac._step_event = threading.Event(); ac._step_cmd = None
+    ac._step = {'waiting': False, 'estimating': False, 'n_estimated': 0, 'n_stops': 0}
+    for q in points:
+        q['csv_path'] = csv_path
+    seen = []; stop = threading.Event()
+
+    def helper():
+        last = None
+        while not stop.is_set():
+            st = [x for x in step_states() if x.get('waiting') and not x.get('estimating')]
+            if st:
+                key = (st[-1]['kind'], st[-1]['index'], len(st[-1].get('estimates') or []))
+                if key != last:
+                    last = key
+                    seen.append(st[-1])
+                    script(ac, st[-1], len(seen) - 1)
+            time.sleep(0.01)
+    th = threading.Thread(target=helper, daemon=True); th.start()
+    ac.execute_scan_points(points)
+    stop.set(); th.join(1.0)
+    return robot, ac, seen
+
+
+def jp(pid, scan=True, spid=None):
+    q = joint_pt(pid, scan=scan)
+    q['source_point_id'] = spid
+    return q
+
+
+# (a) start stop, then point 2 estimated twice, point 4 left without an estimate
+pts = [jp(1, scan=False), jp(2, spid=1), jp(3, scan=False), jp(4, spid=2), jp(5, scan=False)]
+moves_at = []
+
+
+def script_a(a, st, n):
+    moves_at.append(len([c for c in a.robot.calls if c[0] == 'MoveJ']))
+    if st['kind'] == 'start':
+        ok, msg = a.step_command({'cmd': 'estimate'})
+        script_a.refused_start = (ok, msg)
+        a.step_command({'cmd': 'next'})
+    elif st['point_id'] == 2 and len(st['estimates']) < 2:
+        a.step_command({'cmd': 'estimate'})
+    else:
+        a.step_command({'cmd': 'next'})
+robot, ac, seen = run_step(pts, script_a)
+check([s['kind'] for s in seen] == ['start', 'point', 'point', 'point', 'point'],
+      f"stops: start, p2 (x3 states: 0/1/2 estimates), p4: {[(s['kind'], s.get('point_id'), len(s.get('estimates') or [])) for s in seen]}")
+check(moves_at[0] == 0, f'nothing moves before the first Next: {moves_at[0]} MoveJ at the start stop')
+check(moves_at[1] == 2, f'first Next drives the traverse row AND the work point, then stops: {moves_at[1]}')
+check(moves_at[-1] == 4, f'second Next drives through the traverse to point 4 only: {moves_at[-1]}')
+check(script_a.refused_start[0] is False and 'nothing to estimate' in script_a.refused_start[1],
+      f'Estimate refused at the start stop: {script_a.refused_start[1]}')
+check(ac.pipeline.captured == [2, 4], f'captured once on arrival at every point (Next): {ac.pipeline.captured}')
+check(ac.pipeline.saved_frames == ['g106_p2_sp1_i0002', 'g106_p4_sp2_i0004'],
+      f'the photo is saved at capture time, before any inference: {ac.pipeline.saved_frames}')
+check(ac.pipeline.prefixes == ['g106_p2_sp1_i0002', 'g106_p2_sp1_i0002'] and ac.pipeline.process_save == [False, False],
+      f'inference only on Estimate, on the captured frames, without saving them again: {ac.pipeline.prefixes} {ac.pipeline.process_save}')
+p1st = seen[1]
+check(p1st['capture']['ok'] and p1st['capture']['images'] == ['g106_p2_sp1_i0002_s1.png']
+      and p1st['capture']['image_paths'][0].endswith('/g106_p2_sp1_i0002_s1.png') and not p1st['estimates'],
+      f"the point stop opens with the photo already taken: {p1st['capture']}")
+p2 = seen[2]
+check(p2['scan_no'] == 1 and p2['n_scan'] == 2 and p2['source_point_id'] == 1 and len(p2['estimates']) == 1
+      and abs(p2['estimates'][0]['ra_mean'] - 0.4) < 1e-9, f'the state after estimate #1 shows the Ra: {p2["estimates"]}')
+rows = {r['point_id']: r for r in ac.last_results}
+check(set(rows) == {2, 4}, f'one Ra-map row per scanned point: {sorted(rows)}')
+check(rows[2]['success'] and abs(rows[2]['ra_mean'] - 0.4) < 1e-9 and 'step: last Ra 0.4000, 2 estimates' in rows[2]['execution_message'],
+      f"estimated row: {rows[2]['execution_message']}")
+check(not rows[4]['success'] and 'captured, not estimated' in rows[4]['execution_message'],
+      f"row without estimate: {rows[4]['execution_message']}")
+fin = step_states()[-1]
+check(fin['waiting'] is False and fin['n_estimated'] == 2 and fin['n_stops'] == 2, f'final step state: {fin}')
+check(ac.homed == [1] and events()[-1]['phase'] == 'finished', 'scan ends normally (home, finished)')
+ok, msg = ac.step_command({'cmd': 'next'})
+check(not ok and 'no step stop' in msg, f'Next refused when nothing waits: {msg}')
+ok, msg = ac.step_command({'cmd': 'jump'})
+check(not ok and 'unknown' in msg, 'unknown step command refused')
+
+# (b) cancel at a point stop: scan ends there, no home move, nothing more moved
+def script_b(a, st, n):
+    if st['kind'] == 'start':
+        a.step_command({'cmd': 'next'})
+    else:
+        a.cancel_requested = True
+robot, ac, seen = run_step([jp(1), jp(2)], script_b)
+check(len([c for c in robot.calls if c[0] == 'MoveJ']) == 1 and ac.homed == [] and events()[-1]['cancelled'] is True,
+      'cancel at a point stop: one MoveJ, no home, finished cancelled')
+check(ac.pipeline.captured == [1], 'cancel at the stop: only the arrival capture')
+
+# (c) a failed move stops (Next only) instead of driving on; collect mode is ignored
+def script_c(a, st, n):
+    if st['kind'] == 'point' and not st.get('estimates'):
+        a.step_command({'cmd': 'estimate'})
+    else:
+        a.step_command({'cmd': 'next'})
+bad = jp(2, spid=7); bad['joints'] = bad['joints'][:5]           # 5 joints -> move fails
+robot, ac, seen = run_step([jp(1, spid=6), bad, jp(3, spid=8)], script_c, collect=True)
+check([s['kind'] for s in seen].count('failed') == 1 and seen[[s['kind'] for s in seen].index('failed')]['point_id'] == 2,
+      f"failed move -> a 'failed' stop: {[(s['kind'], s.get('point_id')) for s in seen]}")
+check(not [x for x in PUBLISHED if x[0] == '/arm/collect_state'] or all(not json.loads(d).get('waiting') for t, d in PUBLISHED if t == '/arm/collect_state'),
+      'collect mode ignored during a step scan (no collect stop)')
+check(any('collect mode is ignored' in w for w in LOG['warn']), 'a warning says collect mode is ignored')
+check(ac.pipeline.captured == [1, 3] and len(ac.pipeline.prefixes) == 2,
+      f'captures + estimates at the two good points: {ac.pipeline.captured}')
+
+# (c2) the estimate carries the model inference time and the frame's absolute path
+_orig_make = make_controller
+def make_controller(robot):          # noqa: F811
+    a = _orig_make(robot)
+    a.pipeline.process = lambda pid, frames, cancelled=None, name_prefix=None, save=True: {
+        'ra_mean': 0.41, 'ra_std': 0.0, 'ra_min': 0.41, 'ra_max': 0.41, 'num_samples': 1,
+        'infer_s': 0.8531, 'images': []}
+    return a
+robot, ac, seen = run_step([jp(1, spid=3)], script_c)
+make_controller = _orig_make
+e1 = [s_ for s_ in seen if s_.get('estimates')][0]['estimates'][0]
+check(e1['infer_s'] == 0.853 and e1['image_paths'] == [os.path.join(ac.pipeline.output_dir, 'g106_p1_sp3_i0001_s1.png')]
+      and ac.pipeline.save_force == [True],
+      f"estimate: inference time {e1['infer_s']} s, frame path {e1['image_paths']}")
+
+# (c3) a capture that failed on arrival is retried by Estimate
+def script_e(a, st, n):
+    if st['kind'] == 'point' and not st.get('estimates'):
+        a.step_command({'cmd': 'estimate'})
+    else:
+        a.step_command({'cmd': 'next'})
+_caps = [[], [np.zeros((4, 4), dtype=np.uint8)]]
+_orig_make = make_controller
+def make_controller(robot):          # noqa: F811
+    a = _orig_make(robot)
+    def _cap(point_id, cancelled, _a=a):
+        _a.pipeline.captured.append(point_id)
+        return _caps.pop(0) if _caps else []
+    a.pipeline.capture = _cap
+    return a
+robot, ac, seen = run_step([jp(1, spid=3)], script_e)
+make_controller = _orig_make
+pst = [s_ for s_ in seen if s_['kind'] == 'point']
+check(pst[0]['capture']['ok'] is False and pst[-1]['estimates'][0]['ok'] and ac.pipeline.captured == [1, 1],
+      f"failed arrival capture -> Estimate captures again, then infers: {ac.pipeline.captured}")
+
+# (c4) the three evaluation graphs (A / finishing / roughing, shown as
+# finishing / roughing / A): every Ra, every model's own time, the stage A
+# reads selecting the Ra-map value, one CSV row per estimate in the run folder
+class FakePred:
+    def __init__(self):
+        self.slots = [types.SimpleNamespace(name=n) for n in ('A', 'finishing', 'roughing')]
+        self.calls = 0
+
+    def predict_detail(self, frame):
+        self.calls += 1
+        return ([('A', 0.4276), ('finishing', 0.3896), ('roughing', 0.6123)], 1.7,
+                {'stage': 'finishing', 'stage_probs': {'finishing': 0.9966, 'roughing': 0.0029},
+                 'flags': [], 'times': {'A': 0.42, 'finishing': 0.45, 'roughing': 0.43}, 'prep_s': 0.2})
+run_step.pred = FakePred()
+pts = [jp(1, spid=3)]
+pts[0].update({'x': -1.3, 'y': 0.2, 'z': 0.38})
+robot, ac, seen = run_step(pts, script_c, csv_path='/x/scan_joint_three_ra_map_20261113_130000.csv')
+run_step.pred = None
+e3 = [s_ for s_ in seen if s_.get('estimates')][0]['estimates'][0]
+check([(m['name'], m['ra'], m['infer_s'], m['selected']) for m in e3['models']]
+      == [('finishing', 0.3896, 0.45, True), ('roughing', 0.6123, 0.43, False), ('A', 0.4276, 0.42, False)]
+      and e3['stage'] == 'finishing' and e3['infer_s'] == 1.5 and e3['prep_s'] == 0.2,
+      f"estimate carries all three Ra and each model's time: {e3['models']} total {e3['infer_s']}")
+row = {r['point_id']: r for r in ac.last_results}[1]
+check(abs(row['ra_mean'] - 0.3896) < 1e-9, "the Ra map row takes the graph A's stage selected (finishing)")
+ccsv = os.path.join(STEP_DIR, 'scan_joint_three_ra_map_20261113_130000',
+                    'scan_joint_three_ra_map_20261113_130000_step_eval.csv')
+import csv as _csv2
+with open(ccsv) as f:
+    rr = list(_csv2.DictReader(f))
+check(len(rr) == 1 and rr[0]['ra_finishing'] == '0.3896' and rr[0]['ra_roughing'] == '0.6123'
+      and rr[0]['ra_A'] == '0.4276' and rr[0]['ra_selected'] == '0.3896'
+      and rr[0]['infer_finishing_s'] == '0.45' and rr[0]['infer_roughing_s'] == '0.43' and rr[0]['infer_A_s'] == '0.42'
+      and 'ra_B' not in rr[0]
+      and rr[0]['images'] == 'g106_p1_sp3_i0001_s1.png' and rr[0]['source_point_id'] == '3'
+      and rr[0]['stage'] == 'finishing' and rr[0]['p_finishing'] == '0.9966' and rr[0]['x'] == '-1.3',
+      f"step_eval.csv row: {rr[0] if rr else None}")
+check(e3.get('record_csv') == ccsv, 'the estimate names its CSV')
+# a stage A reads as roughing selects the roughing graph
+class FakePredR(FakePred):
+    def predict_detail(self, frame):
+        r, el, d = FakePred.predict_detail(self, frame)
+        return r, el, dict(d, stage='roughing')
+run_step.pred = FakePredR()
+robot, ac, seen = run_step([jp(2, spid=4)], script_c, csv_path='/x/scan_joint_three_ra_map_20261113_130000.csv')
+run_step.pred = None
+e4 = [s_ for s_ in seen if s_.get('estimates')][0]['estimates'][0]
+check(abs(e4['ra_mean'] - 0.6123) < 1e-9 and [m['name'] for m in e4['models'] if m['selected']] == ['roughing'],
+      f"roughing stage selects the roughing graph: {e4['ra_mean']}")
+with open(ccsv) as f:
+    rr = list(_csv2.DictReader(f))
+check(len(rr) == 2 and rr[1]['ra_selected'] == '0.6123', 'second estimate appended to the same CSV')
+
+# (d) step mode off: unchanged behaviour (captured automatically, no step stop)
+PUBLISHED.clear()
+robot = FakeRobot(); ac = make_controller(robot)
+ac.execute_scan_points([jp(1), jp(2)])
+check(ac.pipeline.captured == [1, 2] and not [e for e in events() if str(e.get('kind', '')).startswith('step')],
+      'step mode off: automatic capture, no step events')
+
+
+# ================================================================ Ra model choice
+print('== Ra model choice: auto | flat (ra_flat_only) | curved (ra_curved_only)')
+from apriltag_nav import paths as _P, ra_model_choice as _RMC          # noqa: E402
+_MDIR = tempfile.mkdtemp(prefix='ra_models_')
+_FLAT = os.path.join(_MDIR, 'ra_flat_only.onnx'); open(_FLAT, 'w').write('x')
+_CURV = os.path.join(_MDIR, 'ra_curved_only.onnx'); open(_CURV, 'w').write('x')
+_AUTO = os.path.join(_MDIR, 'ra_split.json'); open(_AUTO, 'w').write('{}')
+_P.RA_FLAT_ONLY_MODEL_PATH, _P.RA_CURVED_ONLY_MODEL_PATH, _P.MODEL_PATH = _FLAT, _CURV, _AUTO
+
+
+class ModelPipeline(FakePipeline):
+    def __init__(self):
+        FakePipeline.__init__(self)
+        self.preloaded = []; self.selected = []; self.preload_ok = True; self.select_ok = True
+        self.selected_at = []           # how many frames had been scored at each switch
+
+    def preload_model(self, path):
+        self.preloaded.append(path); return self.preload_ok
+
+    def select_model(self, path):
+        self.selected.append(path); self.selected_at.append(len(self.processed_on))
+        return self.select_ok
+
+
+def ra_states():
+    return [json.loads(d) for t, d in PUBLISHED if t == '/arm/ra_model_state']
+
+
+def model_controller():
+    PUBLISHED.clear(); LOG['err'].clear(); LOG['warn'].clear()
+    a = make_controller(FakeRobot())
+    a.pipeline = ModelPipeline()
+    a.ra_model_state_pub = _Pub('/arm/ra_model_state')
+    a.ra_model = 'auto'; a._ra_model_in_use = 'auto'; a._ra_model_auto_path = None
+    a._ra_model_error = ''
+    return a
+
+
+check([_RMC.normalize(t) for t in ('flat', ' Flat_Only ', 'ra_flat_only', '평면', 'curved', 'ra_curved_only',
+                                   '곡면', 'auto', 'split', '', None, 'banana')]
+      == ['flat', 'flat', 'flat', 'flat', 'curved', 'curved', 'curved', 'auto', 'auto', 'auto', 'auto', None],
+      'choice names and aliases (an unknown one is None)')
+check(_RMC.model_name('flat') == 'ra_flat_only' and _RMC.model_name('curved') == 'ra_curved_only'
+      and _RMC.model_name('auto') == 'ra_split' and _RMC.model_path('auto', '/m/other.onnx') == '/m/other.onnx',
+      'model names: ra_flat_only / ra_curved_only / the node\'s own scan model for auto')
+
+ac = model_controller()
+ok, msg = ac.set_ra_model('banana')
+check(not ok and ac.ra_model == 'auto' and not ac.pipeline.preloaded, f'unknown choice refused, nothing loaded: {msg}')
+ok, msg = ac.set_ra_model('flat')
+st = ra_states()[-1]
+check(ok and ac.ra_model == 'flat' and ac.pipeline.preloaded == [_FLAT] and not ac.pipeline.selected,
+      f'flat: the model is loaded at the command, not yet switched: {msg}')
+check(st['choice'] == 'flat' and st['model'] == 'ra_flat_only' and st['in_use'] == 'auto'
+      and st['error'] == '' and st['choices'] == ['auto', 'flat', 'curved'],
+      f"state: choice flat / model ra_flat_only, the pipeline still on auto: {st}")
+ac.execute_scan_points([jp(1), jp(2)])
+rows = {r['point_id']: r for r in ac.last_results}
+check(ac.pipeline.selected == [_FLAT] and ac.pipeline.selected_at == [0],
+      f'the scan switches the pipeline once, before any frame is scored: {ac.pipeline.selected} at {ac.pipeline.selected_at}')
+check(all(rows[k]['execution_message'].endswith('[Ra model ra_flat_only]') for k in (1, 2)),
+      f"every scored row names the geometry model: {rows[1]['execution_message']!r}")
+check(ra_states()[-1]['in_use'] == 'flat' and ra_states()[-1]['in_use_model'] == 'ra_flat_only',
+      'state after the scan start: in use = flat')
+ac.execute_scan_points([jp(3)])
+check(ac.pipeline.selected == [_FLAT], 'a second scan with the same choice does not switch again')
+ok, msg = ac.set_ra_model('auto')
+ac.execute_scan_points([jp(4)])
+rows = {r['point_id']: r for r in ac.last_results}
+check(ok and ac.pipeline.selected == [_FLAT, _AUTO] and '[Ra model' not in rows[4]['execution_message'],
+      f"back to auto: the scan model again, rows read as before: {rows[4]['execution_message']!r}")
+
+# refusals keep the current choice
+ac = model_controller()
+ac.pipeline.preload_ok = False
+ok, msg = ac.set_ra_model('curved')
+check(not ok and ac.ra_model == 'auto' and 'did not load' in msg and ra_states()[-1]['error']
+      and ra_states()[-1]['choice'] == 'auto',
+      f'a model that does not load is refused, choice kept, reason in the state: {msg}')
+ac = model_controller()
+os.remove(_CURV)
+ok, msg = ac.set_ra_model('곡면')
+check(not ok and ac.ra_model == 'auto' and 'not found' in msg and not ac.pipeline.preloaded,
+      f'a missing model file is refused before any load: {msg}')
+open(_CURV, 'w').write('x')
+ok, msg = ac.set_ra_model('곡면')
+check(ok and ac.ra_model == 'curved' and ra_states()[-1]['error'] == '', 'the same choice works once the file is there; the error clears')
+
+# the switch failing at the scan start: the scan runs on what it had and says so
+ac = model_controller()
+ac.set_ra_model('flat'); ac.pipeline.select_ok = False
+ac.execute_scan_points([jp(1)])
+rows = {r['point_id']: r for r in ac.last_results}
+check(ac.pipeline.captured == [1] and rows[1]['ra_mean'] == 0.4 and '[Ra model' not in rows[1]['execution_message']
+      and ac._ra_model_in_use == 'auto' and any('could not be selected' in e for e in LOG['err'])
+      and 'could not be selected' in ra_states()[-1]['error'],
+      'switch fails at the scan start: scan still scored (auto), row not labelled flat, error logged + in the state')
+
+# a pipeline without the model methods (the older fake) is untouched on auto
+ac = make_controller(FakeRobot())
+ac.execute_scan_points([jp(1)])
+check(ac.last_results[0]['ra_mean'] == 0.4 and '[Ra model' not in ac.last_results[0]['execution_message'],
+      'no choice ever made: scan unchanged')
+
+print('== step estimate with a geometry model')
+
+
+class FakePredFlat:
+    def __init__(self, name='flat_only', value=1.2612):
+        self.slots = [types.SimpleNamespace(name=name)]; self.name = name; self.value = value; self.calls = 0
+
+    def predict_detail(self, frame):
+        self.calls += 1
+        return ([(self.name, self.value)], 0.8,
+                {'stage': 'roughing', 'stage_probs': {'finishing': 0.03, 'roughing': 0.95},
+                 'flags': [], 'times': {self.name: 0.61}, 'prep_s': 0.2})
+
+
+_flat_pred = FakePredFlat()
+
+
+def _setup_flat(a):
+    a.ra_model = 'flat'; a._step_pred_geo = {'flat': _flat_pred}
+run_step.setup = _setup_flat
+robot, ac, seen = run_step([jp(1, spid=3)], script_c, csv_path='/x/scan_joint_geo_ra_map_20261113_180000.csv')
+ef = [s_ for s_ in seen if s_.get('estimates')][0]['estimates'][0]
+check(ef['ok'] and ef['ra_model'] == 'flat' and abs(ef['ra_mean'] - 1.2612) < 1e-9
+      and [(m['name'], m['ra'], m['selected'], m['infer_s']) for m in ef['models']] == [('flat_only', 1.2612, True, 0.61)]
+      and ef['stage'] == 'roughing' and _flat_pred.calls == 1 and not getattr(ac.pipeline, 'prefixes', []),
+      f"flat: ONE model runs, its value is the estimate, the stage is its own: {ef['models']} {ef['stage']}")
+row = {r['point_id']: r for r in ac.last_results}[1]
+check(abs(row['ra_mean'] - 1.2612) < 1e-9 and row['execution_message'].endswith('[Ra model ra_flat_only]'),
+      f"Ra map row: the flat-only value, labelled: {row['execution_message']!r}")
+gcsv = os.path.join(STEP_DIR, 'scan_joint_geo_ra_map_20261113_180000',
+                    'scan_joint_geo_ra_map_20261113_180000_step_eval.csv')
+with open(gcsv) as f:
+    rr = list(_csv2.DictReader(f))
+check(len(rr) == 1 and rr[0]['ra_model'] == 'flat' and rr[0]['ra_flat_only'] == '1.2612'
+      and rr[0]['ra_selected'] == '1.2612' and rr[0]['infer_flat_only_s'] == '0.61'
+      and rr[0]['ra_finishing'] == '' and rr[0]['ra_A'] == '' and rr[0]['ra_curved_only'] == '',
+      f"step_eval.csv: ra_model flat, ra_flat_only filled, the split columns blank: {rr[0] if rr else None}")
+
+# the geometry model not loaded: the estimate FAILS — no other model's number under its name
+run_step.setup = lambda a: (setattr(a, 'ra_model', 'curved'), setattr(a, '_step_pred_geo', {'curved': None}))
+robot, ac, seen = run_step([jp(1, spid=3)], script_c, csv_path='/x/scan_joint_geo2_ra_map_20261113_180500.csv')
+en = [s_ for s_ in seen if s_.get('estimates')][0]['estimates'][0]
+row = {r['point_id']: r for r in ac.last_results}[1]
+check(not en['ok'] and 'not loaded' in en['message'] and not getattr(ac.pipeline, 'prefixes', [])
+      and row['success'] is False and 'estimate failed' in row['execution_message'],
+      f"curved model not loaded: estimate fails, the scan model is NOT used instead: {en['message']!r}")
+
+
+# the choice changed at a stop: Estimate again scores the same photo with the other model
+def script_sw(a, st, n):
+    k = len(st.get('estimates') or [])
+    if st['kind'] != 'point' or k >= 2:
+        a.step_command({'cmd': 'next'})
+    else:
+        if k == 1:
+            a.ra_model = 'flat'
+        a.step_command({'cmd': 'estimate'})
+run_step.pred = FakePred()
+run_step.setup = lambda a: setattr(a, '_step_pred_geo', {'flat': _flat_pred})
+robot, ac, seen = run_step([jp(1, spid=3)], script_sw, csv_path='/x/scan_joint_geo3_ra_map_20261113_181000.csv')
+run_step.pred = None; run_step.setup = lambda a: None
+es = [s_ for s_ in seen if len(s_.get('estimates') or []) == 2][0]['estimates']
+row = {r['point_id']: r for r in ac.last_results}[1]
+check([e['ra_model'] for e in es] == ['auto', 'flat'] and abs(es[0]['ra_mean'] - 0.3896) < 1e-9
+      and abs(es[1]['ra_mean'] - 1.2612) < 1e-9 and ac.pipeline.captured == [1],
+      f"auto then flat at ONE stop: two estimates of the same photo: {[(e['ra_model'], e['ra_mean']) for e in es]}")
+check(abs(row['ra_mean'] - 1.2612) < 1e-9 and row['execution_message'].endswith('[Ra model ra_flat_only]'),
+      'the Ra map row takes the LAST estimate and names its model')
 
 print(f'\n{N_OK} ok, {N_FAIL} failed')
 sys.exit(1 if N_FAIL else 0)

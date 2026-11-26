@@ -1,0 +1,45 @@
+{
+  "model": "ra_curved_only",
+  "label": "standard Ra (um) - trained on CURVED-surface data ONLY",
+  "geometry": "curved",
+  "package": "UPR_Ra_inference_v3_geo_ko.zip (version 2026-11-13 v3 geometry, sha256 91a15b3faeb3d983f2979956d16718860a75ffcfe3cf1e9a5ba9dea4e73f5d27)",
+  "package_file": "ra_curved.onnx (renamed ra_curved_only.onnx here so the name says what it was trained on)",
+  "checkpoint": "work_dir/new1111/S_curved_full_mil2d_rel_s16/epoch_150.pt",
+  "architecture": "mil2d_multi (ImageNet ResNet-18 over 9 patches) + relative-error loss, 150 epochs, last epoch",
+  "training_data": "2026-11-11/12 curved tiles only (finishing 337 + roughing 236 = 573), all incl. former test split",
+  "onnx_sha256": "3f9c7695dfb04a2d190121ec15110b063de0baaf36dc4044e2b45443b89207cc",
+  "preprocess": "spot_tile",
+  "nominal_spot_xy": [
+    2813,
+    1906
+  ],
+  "frame_size": [
+    5472,
+    3648
+  ],
+  "preprocess_note": "ra_predictor.spot_crop (= the v3 / v3-geo package predict.py, unchanged since 2026-11-10): 1100 px square centred on the laser spot found within 300 px of nominal_spot_xy, spot filled with the ring median, centre 900, grey copied to 3 channels, (x/255-0.5)/0.5",
+  "stages": [
+    "finishing",
+    "roughing",
+    "nc"
+  ],
+  "outputs": "output = Ra [um], shape (N, 1); stage_logits = [finishing, roughing, nc] (nc not trained)",
+  "train_ra_range": {
+    "finishing": [
+      0.191,
+      0.949
+    ],
+    "roughing": [
+      1.51,
+      2.689
+    ]
+  },
+  "estimated_accuracy_pct": {
+    "curved_test_170": 83.0,
+    "curved_finishing_100": 78.5,
+    "curved_roughing_70": 89.4,
+    "median_pred_over_true": 0.89
+  },
+  "accuracy_note": "same recipe trained without the test split, epoch 150; v3 split model on the same frames: flat 83.0, curved 86.0",
+  "use": "for curved surfaces ONLY - the geometry is NOT judged from the image, the operator chooses the model (/arm/ra_model curved; robot_ui Task tab 'Ra model'); flat surfaces were not trained (use ra_flat_only). The default stays the v3 split model, which the package itself recommends."
+}

@@ -82,11 +82,11 @@ PyQt 창과 같은 배치다.
 | Basler 칸 | 드래그로 ROI, 우클릭으로 해제. 초록 사각형 = 추론이 잘라 쓰는 900 px 중앙 영역 |
 | Collect | Live preview, VISION lamp 홀드, 촬영(저장 폴더·접두어·장수·램프·저장·Ra 예측·ROI 사용), **CAPTURE** |
 | Arm | 현재 TCP 자세 + 축별 ± 조그 + 절대 목표를 한 표로(live / jog + / jog − / target 행, step/speed), **Joints (2026-09-21): 현재 관절각 J1..J6, 관절별 ± 조그(deg step), MOVE J 절대 관절 이동(빈 칸 = 현재값 유지, MoveJ 한 번, IK·도달·충돌 검사 없음)**, Keyence 거리 보조(실시간 standoff, Auto standoff), Arm home pose / Cancel arm motion(탭 상단) |
-| Task | `/task_list`의 태스크 선택 + 상세, **Groups** (그룹별 체크박스 — Send TASK / Resume가 체크된 그룹만 `groups=…`로 보냄, 2026-10-07), **Run name** (이번 run의 결과 묶음 이름 — Send TASK가 `run=…`으로 보냄; 라벨만 쓰면 `<task>_<라벨>_ra_map_<오늘>`, 2026-10-13), Send TASK, Reload tasks, Resume interrupted run, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지), **Ra data collection** (Collect 모드, 배치 Ra 입력 / 번호 매기기, 2026-10-06; 입력 중 **Save** / Enter로 CSV에 중간 저장, 2026-10-07 — `docs/RA_COLLECT_kr.md`) |
+| Task | `/task_list`의 태스크 선택 + 상세, **Groups** (그룹별 체크박스 — Send TASK / Resume가 체크된 그룹만 `groups=…`로 보냄, 2026-10-07), **Run name** (이번 run의 결과 묶음 이름 — Send TASK가 `run=…`으로 보냄; 라벨만 쓰면 `<task>_<라벨>_ra_map_<오늘>`, 2026-10-13), Send TASK, Reload tasks, Resume interrupted run, GOTO, Dock & charge / Undock, 원문 명령, 리프트(mm 이동·원점복귀·정지), **Ra data collection** (Collect 모드, 배치 Ra 입력 / 번호 매기기, 2026-10-06; 입력 중 **Save** / Enter로 CSV에 중간 저장, 2026-10-07 — `docs/RA_COLLECT_kr.md`); **Ra model (2026-11-13)**: 사진을 Ra로 바꾸는 모델 선택 — Auto(기본, 정삭/황삭 자동 split) / 평면 전용 `ra_flat_only` / 곡면 전용 `ra_curved_only`. 평면·곡면은 이미지로 판정하지 않으므로 툴 아래 면에 맞게 직접 고른다(반대 모델은 값이 틀림). TASK 스캔은 다음 그룹 스캔부터, Step의 Estimate는 즉시, Collect 탭 Ra도 같은 모델. 상단 칩 `RA MODEL …`에 현재 모델 표시, 재시작하면 Auto로 돌아감 |
 | Mobile | 거리 전진/후진, 각도 회전(속도 지정), Stop base, Clear stop latch, 베이스 상태 |
 | Calibration | 맵 캘리브레이션 세션(플레이트/야우 스윕 선택, dry run, START/Cancel, 진행 카운트), 핸드-아이(auto-sample, capture, compute, load, reset, status), 단일 태그 locate |
 | Scripts | `robot_ui/plugins/*.py` 목록, RUN / Stop (스크립트는 **로봇 PC에서** 실행된다; 어느 브라우저가 눌렀든) |
-| Log | 서버 로그(최근 500줄은 접속 시 받아 온다), Clear log는 내 화면만 지운다 |
+| Log | 서버 로그(최근 500줄은 접속 시 받아 온다), 시각은 `HH:MM:SS.mmm`(ms). 모델이 추정한 Ra 값은 로그에 찍지 않고 추론 시간만 찍는다(값은 이미지 아래 줄·Task 탭·Ra map CSV에 있다). **clear**는 내 화면만 지운다. **save**는 지금 화면에 보이는 로그를 로봇 PC의 `<ws>/log/robot_ui/web_ui_log_<YYYYMMDD_HHMMSS>.log`로 저장하고 경로를 로그에 찍는다(어느 PC에서 눌러도 로봇 PC에 저장). 서버에 연결이 안 되면 브라우저가 같은 이름으로 내려받는다 |
 
 칩 색: 주황 = 동작 중, 초록 = 정상/대기, 빨강 = 오류/E-STOP, 자홍 = 충전 중.
 접속 칩이 빨강(`DISCONNECTED — retrying`)이면 서버가 죽었거나 네트워크가

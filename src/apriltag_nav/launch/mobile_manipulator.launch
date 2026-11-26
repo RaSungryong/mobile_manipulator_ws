@@ -259,7 +259,8 @@
          must not load a model of its own (two resident copies is ~250 MB
          duplicated and two answers that drift apart).
          The primary slot defaults to the SAME graph the scan pipeline uses
-         (paths.MODEL_PATH = ra_standard.onnx since 2026-11-11), and both
+         (paths.MODEL_PATH = ra_split.json since 2026-11-13: v3 split manifest,
+         model A routes each frame to ra_finishing / ra_roughing), and both
          go through RaPredictor, so an on-demand number is comparable with the
          scan CSVs (same spot-centred 900x900 window, from the model's sidecar
          .json). Primary only since 2026-11-12 (paths.RA_MODEL_SECONDARY ''):

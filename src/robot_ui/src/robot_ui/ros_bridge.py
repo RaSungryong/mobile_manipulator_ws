@@ -101,6 +101,8 @@ class RosBridge:
         'scan_progress',    # /arm/scan_progress events (per point)
         'standoff_state',   # /arm/standoff_state: live Keyence standoff
         'collect_state',    # /arm/collect_state: Ra collection mode (latched)
+        'step_state',       # /arm/step_state: step evaluation mode (latched)
+        'ra_model_state',   # /arm/ra_model_state: auto | flat | curved (latched)
         'tag_ids',          # (camera, [tag ids in latest frame])
         'log',
     )
@@ -109,7 +111,8 @@ class RosBridge:
     STATE_SIGNALS = (
         'arm_state', 'task_state', 'task_list', 'lift_state',
         'mobile_state', 'battery_state', 'estop_state', 'camera_state',
-        'lamp_state', 'standoff_state', 'collect_state',
+        'lamp_state', 'standoff_state', 'collect_state', 'step_state',
+        'ra_model_state',
     )
 
     def __init__(self, node_name='robot_ui', init_node=True):
@@ -182,6 +185,11 @@ class RosBridge:
                                                       queue_size=4)
         self._pub_arm_collect_config = rospy.Publisher('/arm/collect_config', String,
                                                        queue_size=1)
+        # Step evaluation mode (2026-11-13): one work point per Next,
+        # capture + Ra on Estimate.
+        self._pub_arm_step_mode = rospy.Publisher('/arm/step_mode', Bool, queue_size=1)
+        self._pub_arm_step_cmd = rospy.Publisher('/arm/step_cmd', String, queue_size=4)
+        self._pub_arm_ra_model = rospy.Publisher('/arm/ra_model', String, queue_size=1)
         self._pub_cam_active = rospy.Publisher('/camera/set_active', Bool,
                                                queue_size=1)
         self._pub_cam_lamp = rospy.Publisher('/camera/set_lamp', Bool,
@@ -246,6 +254,10 @@ class RosBridge:
         # its image names, counts. Cached + replayed like the others.
         self._sub('/arm/collect_state', String, self._cb_json,
                   callback_args=self.collect_state, queue_size=1)
+        self._sub('/arm/step_state', String, self._cb_json,
+                  callback_args=self.step_state, queue_size=1)
+        self._sub('/arm/ra_model_state', String, self._cb_json,
+                  callback_args=self.ra_model_state, queue_size=1)
         # Latest tag detections per camera, for scripts that need to ask
         # "what does the hand cam see right now" (e.g. the cross-tag
         # survey). Snapshot store only — no signal, poll via
@@ -626,6 +638,27 @@ class RosBridge:
         self._pub_arm_scan_continue.publish(String(json.dumps(req)))
         self.log.emit('[UI] scan_continue <- ' + ('skip' if skip else json.dumps(
             {k: v for k, v in req.items() if k in ('ra', 'readings', 'points')})))
+
+    def set_step_mode(self, on):
+        """Step evaluation: the next TASK scan moves one work point per
+        step_cmd('next') and captures + scores only on step_cmd('estimate').
+        /arm/step_state reports the truth back."""
+        self._pub_arm_step_mode.publish(Bool(bool(on)))
+        self.log.emit(f'[UI] step mode <- {"on" if on else "off"}')
+
+    def set_ra_model(self, choice):
+        """'auto' | 'flat' | 'curved' -> /arm/ra_model: which Ra model scores
+        the frames (auto = the split scan model, flat = ra_flat_only, curved =
+        ra_curved_only). arm_node loads it and reports the truth — or why it
+        refused — on /arm/ra_model_state; inference_node follows that."""
+        self._pub_arm_ra_model.publish(String(str(choice)))
+        self.log.emit(f'[UI] Ra model <- {choice}')
+
+    def step_cmd(self, cmd):
+        """'next' | 'estimate' -> /arm/step_cmd. Fire-and-forget; arm_node
+        logs a refusal when no step stop waits."""
+        self._pub_arm_step_cmd.publish(String(json.dumps({'cmd': str(cmd)})))
+        self.log.emit(f'[UI] step <- {cmd}')
 
     def collect_save(self, points, note=''):
         """Write the Ra typed so far at an entry stop into the run's measured

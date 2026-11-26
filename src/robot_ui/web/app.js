@@ -122,6 +122,8 @@ function onState(name, value) {
     case 'lamp_state': tint($('chip-camera'), value ? '#665500' : ''); break;
     case 'standoff_state': renderStandoff(value); break;
     case 'collect_state': renderCollect(value); break;
+    case 'step_state': renderStep(value); break;
+    case 'ra_model_state': renderRaModel(value); break;
   }
 }
 
@@ -266,6 +268,11 @@ function renderScan(ev) {
       tint(chip, '#7a1f1f');
       break;
     case 'wait':
+      if (String(ev.kind || '').startsWith('step')) {
+        chip.textContent = 'SCAN ' + idx + '/' + total + (ev.kind === 'step_start' ? ' STEP ready' : ev.kind === 'step_failed' ? ' STEP move failed' : ' STEP ' + (ev.source_point_id != null ? 'sp' + ev.source_point_id : 'pt ' + ev.point_id));
+        tint(chip, ev.kind === 'step_failed' ? '#7a1f1f' : '#1f4a7a');
+        break;
+      }
       chip.textContent = 'SCAN ' + idx + '/' + total + (ev.kind === 'mark' ? ' MARK #' + ev.mark_no : ev.kind === 'premark' ? ' MARK SPOT pt ' + ev.point_id : ' WAIT Ra ' + ((ev.points || []).length || 1) + ' pt');
       tint(chip, '#1f4a7a');
       break;
@@ -280,6 +287,83 @@ function renderScan(ev) {
       break;
     }
   }
+}
+
+// One step estimate as text: every model's Ra (finishing / roughing / A; ✓ =
+// the graph A's stage head selected, the Ra-map value) and each model's own
+// inference time.
+function stepEstimateText(e) {
+  if (!e.ok) return 'FAILED: ' + (e.message || '');
+  const ms = e.models || [];
+  if (!ms.length) return 'Ra ' + (+e.ra_mean).toFixed(4) + (e.infer_s != null ? '   inference ' + (+e.infer_s).toFixed(2) + ' s' : '');
+  const ras = ms.map((m) => m.name + ' ' + (m.ra == null ? '—' : (+m.ra).toFixed(4)) + (m.selected && ms.length > 1 ? ' ✓' : '')).join('   ');
+  const ts = ms.filter((m) => m.infer_s != null).map((m) => m.name + ' ' + (+m.infer_s).toFixed(2) + ' s').join(' · ');
+  return 'Ra  ' + ras + (e.stage ? '   (' + e.stage + ')' : '') + '\n    inference ' + ts;
+}
+
+// Ra model choice from arm_node (/arm/ra_model_state, latched): auto | flat |
+// curved. The selector and the chip follow arm_node, not the click; a refused
+// choice (model file missing / did not load) shows its reason and the
+// selector goes back to what arm_node really uses.
+function renderRaModel(st) {
+  const choice = st.choice || 'auto';
+  const sel = $('sel-ra-model');
+  if (document.activeElement !== sel || st.error) sel.value = choice;
+  const chip = $('chip-ra-model');
+  chip.textContent = 'RA MODEL ' + (choice === 'auto' ? 'auto' : (st.model || choice));
+  chip.title = (st.label || choice) + (st.error ? ' — ' + st.error : '');
+  tint(chip, st.error ? '#7a1f1f' : choice === 'flat' ? '#1f5a3a' : choice === 'curved' ? '#5a3a7a' : '');
+  let text = 'now: ' + (st.model || choice);
+  if (st.in_use && st.in_use !== choice) text += '   (a TASK scan switches at its next group; last scan used ' + (st.in_use_model || st.in_use) + ')';
+  if (st.error) text += '   ⚠ ' + st.error;
+  $('lbl-ra-model').textContent = text;
+  tint($('lbl-ra-model'), st.error ? '#7a1f1f' : '');
+}
+
+// Step evaluation state from arm_node (/arm/step_state, latched): the box
+// follows arm_node; Next is live at every stop, Estimate only at a point
+// stop and not while an estimate runs.
+function renderStep(st) {
+  const waiting = !!st.waiting, busy = !!st.estimating || !!st.capturing;
+  setChecked($('chk-step'), !!st.enabled);
+  $('lbl-step-count').textContent = 'estimated ' + (st.n_estimated || 0) + ' / stops ' + (st.n_stops || 0);
+  const pt = 'g' + st.group_id + (st.source_point_id != null ? ' sp' + st.source_point_id : ' p' + st.point_id);
+  let text;
+  if (waiting && st.kind === 'start') {
+    text = 'READY  — scan of ' + st.n_scan + ' point(s), arm not moved yet\n→ Next point drives to the first one (' + pt + ')';
+  } else if (waiting && st.kind === 'failed') {
+    text = 'MOVE FAILED at row ' + st.index + '/' + st.total + ' (' + pt + '): ' + (st.message || '') + '\n→ Next point goes on to the next one';
+  } else if (st.capturing) {
+    text = 'CAPTURING at ' + pt + '   scan point ' + st.scan_no + ' / ' + st.n_scan + ' …';
+  } else if (waiting) {
+    const cap = st.capture || {};
+    text = 'AT POINT  ' + pt + '   scan point ' + st.scan_no + ' / ' + st.n_scan + '   (row ' + st.index + '/' + st.total + ')'
+      + '\nstandoff: ' + (st.standoff || '—') + (st.standoff_ok === false ? '   ⚠ NOT converged' : '')
+      + '\nphoto: ' + (cap.ok ? ((cap.images || []).join(' ') || cap.n_frames + ' frame(s), not saved') : 'capture FAILED — ' + (cap.message || '') + ' (Estimate retries)')
+      + (st.estimating ? '\nESTIMATING … (model inference)' : (st.estimates || []).length ? '\n→ Next point' : '\n→ Estimate Ra, or Next point');
+  } else if (st.enabled) {
+    text = 'step mode ON — the next TASK scan waits before its first move';
+  } else {
+    text = 'step mode off';
+  }
+  $('lbl-step').textContent = text;
+  tint($('lbl-step'), waiting ? (st.kind === 'failed' ? '#7a1f1f' : '#1f4a7a') : '');
+  const ests = (waiting && st.kind === 'point') ? (st.estimates || []) : [];
+  const raBox = $('lbl-step-ra');
+  if (ests.length) {
+    raBox.hidden = false;
+    raBox.textContent = ests.map((e) => '#' + e.n + '  ' + stepEstimateText(e)
+      + (e.images && e.images.length ? '\n    ' + e.images.join(' ') : '')
+      + (e.record_csv ? '\n    saved → ' + e.record_csv.split('/').pop() : '')).join('\n');
+  } else if (!waiting && st.last && st.enabled) {
+    raBox.hidden = false;
+    raBox.textContent = 'last: g' + st.last.group_id + (st.last.source_point_id != null ? ' sp' + st.last.source_point_id : ' p' + st.last.point_id) + '  ' + stepEstimateText(st.last);
+  } else {
+    raBox.hidden = true; raBox.textContent = '';
+  }
+  $('btn-step-next').disabled = !waiting || busy;
+  $('btn-step-estimate').disabled = !waiting || busy || st.kind !== 'point';
+  $('btn-step-estimate').textContent = st.estimating ? 'Estimating…' : 'Estimate Ra';
 }
 
 // Ra data collection state from arm_node (/arm/collect_state, latched):
@@ -972,12 +1056,16 @@ function onFrame(buf) {
 // Log
 // ------------------------------------------------------------------
 const LOG_MAX = 2000;
+/** HH:MM:SS.mmm, local time — the same form the server stamps its lines with. */
+function logStamp() {
+  const d = new Date();
+  const p = (n, w) => String(n).padStart(w, '0');
+  return p(d.getHours(), 2) + ':' + p(d.getMinutes(), 2) + ':' + p(d.getSeconds(), 2) +
+    '.' + p(d.getMilliseconds(), 3);
+}
 function appendLog(line, stamped) {
   const pre = $('log');
-  if (!stamped) {
-    const d = new Date();
-    line = d.toTimeString().slice(0, 8) + '  ' + line;
-  }
+  if (!stamped) line = logStamp() + '  ' + line;
   const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
   pre.textContent += line + '\n';
   const lines = pre.textContent.split('\n');
@@ -1079,6 +1167,10 @@ function init() {
 
   // ---- Ra data collection ----
   $('chk-collect').addEventListener('change', (e) => call('set_collect_mode', [e.target.checked]).catch(() => {}));
+  $('sel-ra-model').addEventListener('change', (e) => { call('set_ra_model', [e.target.value]).catch(() => {}); e.target.blur(); });
+  $('chk-step').addEventListener('change', (e) => call('set_step_mode', [e.target.checked]).catch(() => {}));
+  $('btn-step-next').addEventListener('click', () => { $('btn-step-next').disabled = true; call('step_cmd', ['next']).catch(() => {}); });
+  $('btn-step-estimate').addEventListener('click', () => { $('btn-step-estimate').disabled = true; call('step_cmd', ['estimate']).catch(() => {}); });
   $('sel-collect-mode').addEventListener('change', (e) => call('set_collect_config', [{ mode: e.target.value }]).catch(() => {}));
   $('chk-collect-premark').addEventListener('change', (e) => call('set_collect_config', [{ premark: e.target.checked }]).catch(() => {}));
   $('num-collect-batch').addEventListener('change', (e) => call('set_collect_config', [{ batch_size: parseInt(e.target.value, 10) || 1 }]).catch(() => {}));
@@ -1242,6 +1334,29 @@ function init() {
 
   // ---- Log ----
   $('btn-clear-log').addEventListener('click', () => { $('log').textContent = ''; });
+  // The file is written by the server (robot PC, <ws>/log/robot_ui); its
+  // "[log] saved … to <path>" line comes back through the log itself.
+  $('btn-save-log').addEventListener('click', () => {
+    const text = $('log').textContent;
+    if (!text.trim()) { appendLog('[log] nothing to save — the log is empty'); return; }
+    // Fallback: no server to write it (disconnected, or a node older than
+    // this page) — which is when the log matters most — so the browser
+    // downloads the same text instead.
+    call('save_log', [text]).catch(() => {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      const name = 'web_ui_log_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' +
+        p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.log';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      appendLog('[log] not saved on the robot PC — downloaded ' + name + ' in this browser instead');
+    });
+  });
 
   connect();
 }

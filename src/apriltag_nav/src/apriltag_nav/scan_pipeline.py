@@ -99,12 +99,27 @@ class RaScanPipeline:
         self.inference = InferenceInterface()
         if model_path and not self.inference.load_model(model_path):
             rospy.logerr("[Scan] Model loading failed")
+        self.model_path = self.inference.model_path
 
         self.ra_pub     = rospy.Publisher("/scan/ra_value",     Float32, queue_size=10)
         self.result_pub = rospy.Publisher("/scan/point_result", String,  queue_size=10)
         self.image_pub  = rospy.Publisher("/scan/image",        Image,   queue_size=1)
         # Manual open/close override on the camera node (see preopen/release).
         self._active_pub = rospy.Publisher("/camera/set_active", Bool, queue_size=1)
+
+    # --------------------------------------------------
+    # MODEL CHOICE (2026-11-13: auto / flat-only / curved-only per scan)
+    # --------------------------------------------------
+    def preload_model(self, model_path):
+        """Load a model without switching to it (a worker may be scoring)."""
+        return self.inference.preload_model(model_path)
+
+    def select_model(self, model_path):
+        """Score the following frames with this model. False (current model
+        kept) when it cannot be loaded. Call between scans, not during one."""
+        ok = self.inference.select_model(model_path)
+        self.model_path = self.inference.model_path
+        return ok
 
     # --------------------------------------------------
     # DEVICE PRE-OPEN (latency hiding)
@@ -214,7 +229,23 @@ class RaScanPipeline:
             rospy.logwarn(f"  [Scan] Point {point_id}: no frames captured")
         return frames
 
-    def process(self, point_id, frames, cancelled=None, name_prefix=None):
+    def save_frames(self, point_id, frames, name_prefix=None, force=False):
+        """Write the frames as <name_prefix>_s<n>.png (no Ra in the name) into
+        output_dir NOW, before any inference — the step-evaluation stop shows
+        the photo as soon as it is taken. Returns the file names; [] when
+        save_images is off (force=True writes them anyway — the step
+        evaluation keeps every photo it scores)."""
+        if not frames or not (self.save_images or force):
+            return []
+        os.makedirs(self.output_dir, exist_ok=True)
+        names = []
+        for idx, img in enumerate(frames):
+            fname = image_file_name(point_id, idx + 1, None, name_prefix)
+            if cv2.imwrite(os.path.join(self.output_dir, fname), img):
+                names.append(fname)
+        return names
+
+    def process(self, point_id, frames, cancelled=None, name_prefix=None, save=True):
         """Infer, publish and persist the frames captured for one point.
 
         Safe to call from a thread other than the capture's: it touches no
@@ -226,6 +257,7 @@ class RaScanPipeline:
         `g<group>_p<point>_i<index>` so a frame can be paired with its Ra-map
         row and with a hand-measured Ra by name alone. None keeps the
         legacy `point_<id>_sample_<n>_ra_<model>.png` of the one-off tools.
+        save=False: infer only (the frames were saved by save_frames).
         """
         cancelled = cancelled or (lambda: False)
         results = []
@@ -277,11 +309,14 @@ class RaScanPipeline:
             'ra_min':      float(np.min(ra_values)),
             'ra_max':      float(np.max(ra_values)),
             'ra_values':   ra_values,
+            # model inference time alone (no capture, no PNG save), summed
+            # over the samples — what the step-evaluation UI shows
+            'infer_s':     float(sum(r['infer_ms'] for r in results) / 1000.0),
         }
         self.result_pub.publish(json.dumps(scan_result))
 
         scan_result['images'] = []
-        if self.save_images and images:
+        if save and self.save_images and images:
             os.makedirs(self.output_dir, exist_ok=True)
             for idx, img in enumerate(images):
                 fname = image_file_name(point_id, idx + 1, ra_values[idx],

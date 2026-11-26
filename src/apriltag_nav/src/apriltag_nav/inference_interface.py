@@ -32,6 +32,7 @@ records of what was measured; they are measurements of a different transform.
 Do not mix them in one analysis.
 """
 
+import threading
 from typing import Optional
 
 import rospy
@@ -40,26 +41,62 @@ from apriltag_nav.ra_predictor import RaPredictor
 
 
 class InferenceInterface:
-    """ONNX Runtime (CPU) inference for Ra surface roughness prediction."""
+    """ONNX Runtime (CPU) inference for Ra surface roughness prediction.
+
+    Holds every model it has loaded, keyed by path, and scores with the
+    SELECTED one (2026-11-13: the operator picks auto / flat-only /
+    curved-only per scan — ra_model_choice.py). `load_model(path)` is the old
+    call and selects what it loads; `preload_model` loads without switching
+    (a scan's worker may be scoring); `select_model` switches, loading first
+    when needed, and keeps the current model when the new one fails.
+    """
 
     def __init__(self):
         self._predictor = None
+        self._loaded = {}               # path -> RaPredictor
+        self._lock = threading.Lock()
+        self.model_path = None          # the selected model's path
+
+    def _load(self, model_path):
+        """The predictor of a path, loading it on first use. None on failure."""
+        with self._lock:
+            pred = self._loaded.get(model_path)
+            if pred is not None:
+                return pred
+            rospy.loginfo(f"[Inference] Loading ONNX model {model_path} ...")
+            pred = RaPredictor(slots=[('scan', model_path)], log=rospy.loginfo)
+            if pred.load() != 1:
+                rospy.logerr(f"[Inference] Failed to load: "
+                             f"{pred.failures().get('scan')}")
+                return None
+            rospy.loginfo("[Inference] ONNX model loaded successfully")
+            self._loaded[model_path] = pred
+            return pred
+
+    def preload_model(self, model_path: str) -> bool:
+        """Load a model into the cache WITHOUT selecting it."""
+        return self._load(model_path) is not None
+
+    def select_model(self, model_path: str) -> bool:
+        """Score with this model from now on. False (and the current model
+        kept) when it cannot be loaded."""
+        pred = self._load(model_path)
+        if pred is None:
+            return False
+        self._predictor, self.model_path = pred, model_path
+        return True
 
     def load_model(self, model_path: str) -> bool:
-        """Load one ONNX graph. Returns True on success.
+        """Load one ONNX graph (or a split .json manifest) and select it.
+        Returns True on success.
 
         ONNX only — RaPredictor refuses a .pt path rather than pulling in torch
         and unpickling a whole nn.Module. Convert checkpoints before deploying.
         """
-        rospy.loginfo("[Inference] Loading ONNX model...")
-        self._predictor = RaPredictor(
-            slots=[('scan', model_path)], log=rospy.loginfo)
-        if self._predictor.load() == 1:
-            rospy.loginfo("[Inference] ONNX model loaded successfully")
+        if self.select_model(model_path):
             return True
-        rospy.logerr(f"[Inference] Failed to load: "
-                     f"{self._predictor.failures().get('scan')}")
-        self._predictor = None
+        if self.model_path is None:
+            self._predictor = None
         return False
 
     def infer(self, image) -> Optional[float]:
@@ -70,10 +107,11 @@ class InferenceInterface:
         records success=False on None, so a garbage value would otherwise land
         in the Ra CSV as a real measurement.
         """
-        if self._predictor is None:
+        predictor = self._predictor
+        if predictor is None:
             return None
         try:
-            results, _elapsed = self._predictor.predict(image)
+            results, _elapsed = predictor.predict(image)
         except Exception as e:
             rospy.logerr(f"[Inference] Error: {e}")
             return None

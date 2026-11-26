@@ -1,0 +1,45 @@
+{
+  "model": "ra_B",
+  "label": "standard Ra (um)",
+  "package": "UPR_Ra_inference_v3_ko.zip (version 2026-11-13 v3, sha256 601a1feebcda19694e04e99fe744ed0fce5fe98d9defd54ab690fbcd9eb20422)",
+  "checkpoint": "work_dir/new1111/B_oldnew_full_mil2d_rel_s16/epoch_150.pt",
+  "architecture": "mil2d_multi (ImageNet ResNet-18 over 9 patches) + relative-error loss, 150 epochs, last epoch",
+  "training_data": "2026-10 UPR spotclean train+test (771) + 2026-11-11/12 all (991) = 1762 tiles",
+  "onnx_sha256": "af0c13282a6448573bf08a24a53d9e168bbf53a18df6be32139529e6daf717ac",
+  "preprocess": "spot_tile",
+  "nominal_spot_xy": [
+    2813,
+    1906
+  ],
+  "frame_size": [
+    5472,
+    3648
+  ],
+  "preprocess_note": "ra_predictor.spot_crop (= the v3 package predict.py, unchanged since 2026-11-10): 1100 px square centred on the laser spot found within 300 px of nominal_spot_xy, spot filled with the ring median, centre 900, grey copied to 3 channels, (x/255-0.5)/0.5",
+  "stages": [
+    "finishing",
+    "roughing",
+    "nc"
+  ],
+  "outputs": "output = Ra [um], shape (N, 1); stage_logits = [finishing, roughing, nc] (nc not trained)",
+  "train_ra_range": {
+    "finishing": [
+      0.111749,
+      1.476
+    ],
+    "roughing": [
+      0.0950444,
+      2.689
+    ]
+  },
+  "estimated_accuracy_pct": {
+    "new_test_295": 82.8,
+    "curved_finishing_100": 81.7,
+    "curved_roughing_70": 88.4,
+    "flat_finishing_65": 76.6,
+    "flat_roughing_60": 84.9,
+    "median_pred_over_true": 0.92,
+    "old_test_250": 63.4
+  },
+  "accuracy_note": "same recipe trained without the test split (295 new tiles), epoch 150"
+}

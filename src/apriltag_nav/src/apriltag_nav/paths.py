@@ -42,6 +42,9 @@ MAP_PATH = os.path.join(CONFIG_DIR, 'map.yaml')
 TASK_DIR = os.path.join(PKG_DIR, 'task', 'csv')
 MODEL_DIR = os.path.join(PKG_DIR, 'model')
 EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
+# Every earlier scan model (ra_standard / ra_new, resnet3D_multi, the 2025
+# resnet3D / resnet3D_gray), moved here 2026-11-13; nothing loads them by default.
+OLD_MODEL_DIR = os.path.join(EXPORTED_MODEL_DIR, 'old_models')
 
 # The graph the scan pipeline runs, and inference_node's primary slot — the same
 # file on purpose, so an on-demand Ra from the UI is comparable with the numbers
@@ -53,13 +56,35 @@ EXPORTED_MODEL_DIR = os.path.join(MODEL_DIR, 'exported')
 # spot (spot filled in) — its sidecar ra_standard.json says
 # `"preprocess": "spot_tile"`, see ra_predictor.py. Before it: resnet3D_multi
 # (2026-10-27, fixed window left of the spot; its sidecar and LFS pointer are
-# still in model/exported), and the 2025 resnet3D.onnx before that.
-MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_standard.onnx')
+# now in model/exported/old_models), and the 2025 resnet3D.onnx before that.
+#
+# ra_split since 2026-11-13 (UPR_Ra_inference v3, the package's recommended
+# model): ra_split.json is a SPLIT manifest, not a graph — model A's stage
+# head picks ra_finishing.onnx or ra_roughing.onnx per frame (ra_predictor.py,
+# "SPLIT SLOTS"). Same spot-tile input as ra_standard. The single-graph v3
+# models are RA_A_MODEL_PATH / RA_B_MODEL_PATH (B also knows the 2026-10
+# surfaces); ra_standard.onnx is RA_STANDARD_V1_MODEL_PATH (old_models/).
+MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_split.json')
+RA_A_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_A.onnx')
+RA_B_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_B.onnx')
+RA_STANDARD_V1_MODEL_PATH = os.path.join(OLD_MODEL_DIR, 'ra_standard.onnx')
+
+# The GEOMETRY models (UPR_Ra_inference_v3_geo, 2026-11-13): the same recipe
+# and spot-tile input, trained on the 2026-11-11/12 FLAT tiles only (418:
+# finishing + roughing) and on the CURVED tiles only (573). The package calls
+# them ra_flat.onnx / ra_curved.onnx; renamed `_only` here so the name says
+# what they were trained on. The geometry is NOT judged from the image — the
+# caller picks the model, and the wrong one reads nonsense. Loaded only when
+# the operator chooses them (/arm/ra_model flat | curved, ra_model_choice.py);
+# the default stays MODEL_PATH — the package itself recommends the split model
+# as the default.
+RA_FLAT_ONLY_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_flat_only.onnx')
+RA_CURVED_ONLY_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_curved_only.onnx')
 
 # The package's second model, the "new Ra" (legacy New Sum(Ra), deep valleys
 # limited) of the SAME frame — a second quantity, not a cross-check of the
 # first. Kept on disk and in the offline check, but NOT loaded anywhere.
-RA_NEW_MODEL_PATH = os.path.join(EXPORTED_MODEL_DIR, 'ra_new.onnx')
+RA_NEW_MODEL_PATH = os.path.join(OLD_MODEL_DIR, 'ra_new.onnx')
 
 # inference_node's secondary slot. '' since 2026-11-12 (user: the UI shows
 # only Ra, not the new Ra, and the inference time is Ra's alone), so the node

@@ -62,32 +62,49 @@ detail and the reasoning; HANDOVER.md holds the checklist.
   back to "automatic" every time.
 - **Sensor:** Keyence DL-EN1 (TCP)
 - **Inference:** ONNX Runtime (CPU), `RaPredictor` (`ra_predictor.py`, numpy +
-  cv2 preprocessing, no torch). **Scan model since 2026-11-11:
-  `model/exported/ra_standard.onnx`** (`paths.MODEL_PATH`; the
-  `UPR_Ra_inference` package of 2026-11-10 — standard / ISO Ra of UPR-die
-  finishing and roughing surfaces, 2D ResNet-18 over 9 patches, 45 MB), and
-  inference_node runs **`ra_standard` only since 2026-11-12** (user: the UI
-  shows Ra, not the new Ra, and the time is Ra's alone — `paths.
-  RA_MODEL_SECONDARY` ''; the package's `ra_new.onnx` stays on disk as
-  `paths.RA_NEW_MODEL_PATH`, set it back there to re-enable the second slot). ⚠️ **Spot-tile preprocessing** (sidecar `"preprocess": "spot_tile"`,
-  `nominal_spot_xy` (2813, 1906), `frame_size`): the 900 px window FOLLOWS
-  the Keyence laser spot — found within 300 px of nominal in the full grey
-  frame, 1100 px square on it, spot filled with the ring median, centre 900
-  (`ra_predictor.spot_crop`, copied from the package; do not change it). A
-  frame the package would flag (spot not found / weak / far, saturated,
-  underexposed, Ra outside the stage's training range) is LOGGED
-  (`WARNING frame flagged`) and its value kept. Scope, from the package:
-  UPR die finishing / roughing only (NC not trained), predictions ~12 % low
-  (median pred/true 0.88), accuracy 65 %. The previous model
-  `resnet3D_multi.onnx` (2026-10-27, fixed window at (2200, 1834) LEFT of
-  the spot, `crop_center_xy` sidecar — that path still works) stays in
-  `model/exported` as its sidecar + Git LFS entry. ⚠️ **`model/exported/*.onnx`
+  cv2 preprocessing, no torch). **Scan model since 2026-11-13:
+  `model/exported/ra_split.json`** (`paths.MODEL_PATH`; the `UPR_Ra_inference
+  v3` package of 2026-11-13, its recommended "split" model): a SPLIT MANIFEST,
+  not a graph — `ra_A.onnx`'s stage head picks `ra_finishing.onnx` or
+  `ra_roughing.onnx` per frame and that graph's Ra is the value (two model
+  runs per frame, ~1.7 s on the robot PC). Standard Ra, 2D ResNet-18 over 9
+  patches, trained on the 2026-11-11/12 data (flat / curved × finishing /
+  roughing); est. accuracy 84.7 %, predictions ~7 % low. `ra_A.onnx` /
+  `ra_B.onnx` (B also knows the 2026-10 surfaces) are `paths.RA_A_MODEL_PATH`
+  / `RA_B_MODEL_PATH`, not loaded by default. inference_node runs the primary
+  slot only (`paths.RA_MODEL_SECONDARY` ''). **Ra model CHOICE since 2026-11-13
+  (evening): `/arm/ra_model` `auto` | `flat` | `curved`** (web Task tab "Ra
+  model", chip `RA MODEL …`; state on the latched `/arm/ra_model_state`):
+  `auto` = the split model above, `flat` = `ra_flat_only.onnx`, `curved` =
+  `ra_curved_only.onnx` (the `UPR_Ra_inference_v3_geo` package's ra_flat /
+  ra_curved, trained on the flat / the curved tiles only;
+  `paths.RA_FLAT_ONLY_MODEL_PATH` / `RA_CURVED_ONLY_MODEL_PATH`,
+  `apriltag_nav/ra_model_choice.py`). The geometry is NOT judged from the
+  image — the operator picks, and the wrong geometry model reads nonsense
+  (~0.6 on a 1.2 µm flat surface). A TASK scan takes the choice at the start
+  of each group's scan, a step Estimate at once, inference_node (the Collect
+  tab's Ra) follows the state; rows scored by a geometry model end
+  `[Ra model ra_flat_only]`. Back to `auto` after every restart. ⚠️ **Spot-tile preprocessing**
+  (sidecar `"preprocess": "spot_tile"`, `nominal_spot_xy` (2813, 1906),
+  `frame_size`): the 900 px window FOLLOWS the Keyence laser spot — found
+  within 300 px of nominal in the full grey frame, 1100 px square on it, spot
+  filled with the ring median, centre 900 (`ra_predictor.spot_crop`, copied
+  from the package — identical in v3; do not change it). A frame the package
+  would flag (spot not found / weak / far, saturated, underexposed, Ra outside
+  the stage's training range) is LOGGED (`WARNING frame flagged`) and its
+  value kept. Scope: UPR die 2026-11-type surfaces (NC not trained); curved
+  roughing frames are ~43 % saturated, so per-point Ra there is not resolved.
+  Before: `ra_standard.onnx` (2026-11-11 … 11-13, `paths.RA_STANDARD_V1_MODEL_PATH`),
+  `resnet3D_multi.onnx` (2026-10-27, fixed-window sidecar, that path still
+  works) — **every earlier model + its sidecar is in `model/exported/old_models/`
+  since 2026-11-13** (`paths.OLD_MODEL_DIR`; `.gitattributes` / `.gitignore`
+  cover that folder too). ⚠️ **`model/exported/*.onnx`
   is routed to Git LFS** (`.gitattributes`): commit a model only from a
   machine with git-lfs (`sudo apt install git-lfs && git lfs install`); a
   pull without it leaves ~130-byte pointers, which the slot refuses to load.
-  **The robot PC has no git-lfs (2026-11-11), so `ra_standard.onnx` /
-  `ra_new.onnx` are on disk there but NOT committed.** Work Log 2026-11-11,
-  2026-10-27
+  **The robot PC has no git-lfs, so the v3 `.onnx` files (and ra_standard /
+  ra_new) are on disk there but NOT committed** — the `.json` sidecars and
+  the manifest are plain text and can be. Work Log 2026-11-13, 2026-11-11
 - **Transforms:** scipy, numpy
 
 ## Build & Run
@@ -601,7 +618,7 @@ owner node per device, other nodes reach it over topics/services.
 |------|------|-----------|
 | `task_executor.py` | orchestration, STATUS lamp, e-stop, battery. **Owns no device** | `/task_command` |
 | `mobile_node.py` | mobile base (**sole publisher** of `/cmd_vel` and `/robot_pose`) | `/mobile/goto_tag`, `/mobile/move_cmd` (manual distance / angle, JSON), `/mobile/{stop,cancel,clear_stop}` (srv), `/mobile/state`; **`/robot_pose`** (2026-09-28): `flag` True = the at-rest ARRIVAL pose, once per tag arrival (what pose-mode IK uses); `flag` False = the LIVE estimate at 10 Hz (`robot.robot_pose_live`) — from the map tag in front_cam while one is in view, else the last tag-based pose carried forward on `/odom`; not latched, `id` = the anchoring tag |
-| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `results/scan_images/<run>/<run>_ra_measured.csv`; `mark` (method B, redone 2026-10-07) captures as usual, stops at every scanned point at the standoff with a running number to write beside the case — the number goes into `_ra_measured.csv` right there as a PENDING row (Ra blank; same evening) — and after the GROUP's last point retreats once for the whole group's Ra entry, which REPLACES the pending rows in place (`mark_no` filled, numbers continuing across groups and a RESUME; an interrupted group's captured points are not re-shot, see RESUME); until 2026-10-07 it captured nothing and wrote `<run>_mark_template.csv`; `scan_progress` gains `wait` / `resume`; **a frameless scanned point is `failed` and `~capture_fail_abort` (2) consecutive ones abort the scan with `/scan_finished` False (2026-10-13, camera-lifecycle section)**; **`/arm/collect_save`** (JSON `{points:[…]}`, 2026-10-07 evening): write the rows typed so far at an entry stop into the CSV WITHOUT releasing it (web Save button / Enter on a row; `collect_state` carries `saved` / `n_saved`; the release takes the saved value for any point it does not name); `docs/RA_COLLECT_kr.md` |
+| `arm_node.py` | Fairino FR10v6 arm | `/arm/scan_command`, `/arm/cancel`, `/arm/move_home` (srv), **`/arm/move_cart` takes `"physical": true`** (2026-09-28: an ABSOLUTE target, the joint zero offsets pre-applied on the command side — while `~apply_joint_offsets_cmd` is true, which the launch sets since 2026-09-28 evening, **xy + rotation only, the commanded arm-frame z kept** (`~joint_offsets_cmd_skip_z` true); `_exec_pose` corrects every world point the same way; see the 2026-09-28 (night, tip tour) Work Log for why), **`/arm/ra_model`** (String `auto` \| `flat` \| `curved`, 2026-11-13: which Ra model scores the frames — the split scan model, `ra_flat_only` or `ra_curved_only`; latched `/arm/ra_model_state`), **`/arm/reset_error`** (srv, 2026-09-28: clear a latched controller error — joint limit / collision stop — without moving); `/arm/state` (10 Hz, pose kept live through a scan; **since 2026-10-06 `link_iface` / `link_up` / `link_down_count` = the carrier of the NIC that routes to the controller, read from sysfs, and `rpc_stalled` / `rpc_stall_count` / `rpc_last_stall` = every SDK call timed through `arm_link_watch.TimedRPC`, warning at `~rpc_stall_warn_s` 2 s — the arm Ethernet link flaps 5–23 times a day and each drop froze a scan 12–15 s inside a blocking RPC with no log line; robot_ui's ARM chip reads `LINK DOWN` / `RPC STALL`**), `/arm/scan_progress` (JSON per point: start / move / done / result / failed / finished — `done` when the frames are captured, `result` when the background inference has the Ra) ; **`/arm/standoff`** (JSON `{target_mm}`, optional — run the Keyence standoff loop from the current pose, completion via `motion_seq`) and **`/arm/standoff_state`** (per Keyence reading: raw, perpendicular, standoff mm, error vs target, out-of-range side) — robot_ui's distance-sensor assist, 2026-09-15; **`/arm/move_joint`** (JSON `{joints:[j1..j6 deg]}`, one MoveJ) and **`/arm/jog_joint`** (JSON `{joint:'j3'|3, delta}`, one joint by `delta` deg, bounded by `~jog_max_step`) — robot_ui's joint control, 2026-09-21, same busy / `motion_seq` rules as `move_cart` / `jog_cmd`, no reach or collision check; **`/arm/collect_mode`** (Bool) and **`/arm/scan_continue`** (JSON `{ra}` / `{readings:[..], note}` / `{skip:true}`) + latched **`/arm/collect_state`** + **`/arm/collect_config`** (JSON mode / batch_size / retreat / dwell) — the Ra DATA COLLECTION mode, 2026-10-06: `pause` (method A) stops after every `batch_size` scanned points with the tool retreated 80 mm along its z until the operator sends each point's hand-measured Ra (robot_ui Task tab lists the batch with every earlier point's offset from the tip, any LAN browser), recorded in `results/scan_images/<run>/<run>_ra_measured.csv`; `mark` (method B, redone 2026-10-07) captures as usual, stops at every scanned point at the standoff with a running number to write beside the case — the number goes into `_ra_measured.csv` right there as a PENDING row (Ra blank; same evening) — and after the GROUP's last point retreats once for the whole group's Ra entry, which REPLACES the pending rows in place (`mark_no` filled, numbers continuing across groups and a RESUME; an interrupted group's captured points are not re-shot, see RESUME); until 2026-10-07 it captured nothing and wrote `<run>_mark_template.csv`; `scan_progress` gains `wait` / `resume`; **a frameless scanned point is `failed` and `~capture_fail_abort` (2) consecutive ones abort the scan with `/scan_finished` False (2026-10-13, camera-lifecycle section)**; **`/arm/collect_save`** (JSON `{points:[…]}`, 2026-10-07 evening): write the rows typed so far at an entry stop into the CSV WITHOUT releasing it (web Save button / Enter on a row; `collect_state` carries `saved` / `n_saved`; the release takes the saved value for any point it does not name); `docs/RA_COLLECT_kr.md` |
 | `basler_camera_node.py` | wrist Basler **+ VISION lamp** | `/camera/capture` (srv) |
 | `keyence_dlen1_node.py` | Keyence DL-EN1 | `keyence/value` |
 | `robot_camera_node.py` | front_cam (Orbbec Femto Bolt) + side_cam (RealSense D405) + hand_cam (RealSense D435) AprilTag detection | `/<cam>/tag_detections`, `/<cam>/tag_overlay` (publish-only) |
@@ -2266,7 +2283,7 @@ of editing the guide.
 | Wherever `extrinsics.yaml`, `hand_eye/T_hc2ee.npz`, `arm_calibration` numbers or `vision_tip_offset_mm` appear | **every fixed transform lives in `apriltag_nav/config/tf/tf_chain.yaml` (+ a `<name>.npz` per transform) since 2026-09-21**, with design values and provenance in its comments; `tools/tf_chain_tool.py` shows / checks / sets them. The old files are deleted. |
 | Wherever the stop offset appears | the keys are now **`center_x_stop_offset`** (0 since 2026-09-02, forward), `center_x_stop_offset_reverse` (+400 px) and `stop_offset_skip_tag_ranges` (`[[500, 599]]` stop on the crosshair both ways); the fore/aft image axis moved from rows to columns 2026-08-13. |
 | Missing entirely (2026-09 … 10) | rosbridge :9090 / web UI :8080 / the systemd service / `stop_stack.sh`; CHARGE / UNDOCK and the charging manager; the RRT path dialect, retargeting, `csv_euler`, the tip → flange conversion; Keyence 37.1° / 16.5 mm zero / direct mode / seek off; the front_cam ground-plane correction and liveness guard; aim-and-drive, mandatory align, re-seat rules; pose-mode lift compensation; map.yaml x / y / yaw calibration; the live `/robot_pose`; joint offsets on the command side; the Basler dark-frame fix; Ra collect mode. The guide PDF named in the heading (`docs/mobile_manipulator_guide_kr.pdf`) does not exist on disk — `docs/build_guide_pdf.py` makes it. |
-| lines 856–857 (model files) | name `model/exported/resnet3D.onnx` / `resnet3D_gray.onnx`. Both were **deleted 2026-10-27**; the scan model is `ra_standard.onnx` since 2026-11-11 (+ `ra_new.onnx` in inference_node's second slot, each with a `.json` sidecar saying `spot_tile`; `resnet3D_multi.onnx` 10-27 … 11-11), `model/exported/*.onnx` goes through **Git LFS** — `git lfs install` on every machine. |
+| lines 856–857 (model files) | name `model/exported/resnet3D.onnx` / `resnet3D_gray.onnx`. Both were **deleted 2026-10-27**; the scan model is the v3 split manifest `ra_split.json` since 2026-11-13 (`ra_A` routes to `ra_finishing` / `ra_roughing`, spot-tile sidecars; `ra_standard.onnx` 11-11 … 11-13, `resnet3D_multi.onnx` 10-27 … 11-11), `model/exported/*.onnx` goes through **Git LFS** — `git lfs install` on every machine. |
 
 ## Work Log
 
@@ -2274,6 +2291,351 @@ Newest first. **Append an entry for every session that changes this workspace.**
 Record the *reasoning* and what was *verified*, not a file diff — the diff is in
 git, the reasoning is not. Keep entries short; promote anything that becomes a
 standing rule up into the sections above instead of leaving it buried here.
+
+### 2026-11-16 — Web UI log: "save" button (file on the robot PC) and millisecond timestamps
+
+User: "web ui log 를 로그파일로 저장 버튼 추가, 타임스탬프 ms 단위로 수정".
+`UiController.append_log` stamps `HH:MM:SS.mmm` (was whole seconds), and
+the page's own local lines (`appendLog` → `logStamp()`) the same. New
+**save** button beside **clear** in the Log box: the page sends the log AS
+SHOWN (up to its 2000 lines, local `[web]` lines included — the server only
+keeps the last 500 for late joiners) to `api_save_log(text)`, which writes
+`<ws>/log/robot_ui/web_ui_log_<YYYYMMDD_HHMMSS>.log` (`paths.UI_LOG_DIR`;
+header line with the full date + ms, line count and source; atomic via
+`.tmp`; a second save in the same second gets `_2`; text over 8 MB or an
+unwritable directory is refused with the reason) and logs `[log] saved N
+lines to <path>` to every browser. Decided without asking: the file goes to
+the ROBOT PC whichever browser pressed the button (the workspace rule), and
+when the call fails — disconnected, or a node older than the page — the
+browser downloads the same text under the same name instead. No text =
+the server's own lines. `log/robot_ui/*.log` is git-ignored. The Qt window
+was not touched (its stamps are still whole seconds).
+
+Verified offline: `check_web_ui.py` 168 → **177** (ms stamp on every line;
+file name / directory / header / body; path reported in the log; two saves
+in one second; server-side fallback writes its 500 lines; oversize and
+unwritable-directory refusals; no `.tmp` left), `check_task_list_ui.py` 119,
+pyflakes clean; the exact RPC the button sends, over a real WebSocket
+against the real `WebServer` + fake bridge → reply ok, file written, the
+`[log] saved` line broadcast; the real `app.js` in headless Chrome from a
+`file://` copy (no JS error, local lines stamped `16:07:44.805`, the click
+calls `save_log`, the disconnected case takes the download fallback, save /
+clear sit side by side). Chrome would not finish loading the SERVED page in
+this session (`Page load timed out` — the same environment problem
+`check_web_ui_browser.py` has), so the click → server path was not driven
+through a browser. **`robot_ui_web_node` restart required** for the
+server-side save and the server lines' ms stamps (`sudo systemctl restart
+mobile-manipulator`); until then a reloaded page already shows the button,
+stamps its own lines in ms and saves by browser download.
+
+**Then (user: "可以不显示推理结果吗" → "只显示推理时间" → "只在 log 中不显示"):
+the LOG no longer carries the model's Ra — inference time only.** Only the
+log lines changed; the line under the image, the Task-tab step list, the Ra
+map and the step CSV still hold the values. `[scan] 4/9 pt 8 g106:
+inference 1.71 s` (was `ra=0.4123`; `inference done` when the event has no
+time, `no Ra …` unchanged), a `done` event's ` ra=…` dropped, `[step] g106
+sp7: inference finishing 0.60 s · roughing 0.58 s · A 0.50 s -> <csv>` (no
+Ra, no ✓, no stage), `[inference] ra_split  in 0.50s  tag=…` (model name +
+time). The hand-measured `[collect] … Ra 0.4167 recorded` lines are not
+inference and stay. For the scan line's time `arm_controller` adds
+`infer_s` to the scan and step `result` progress events (`arm_node`
+restart; without it the line reads `inference done`). `check_web_ui.py`
+177 → **186**, `check_scan_progress.py` 265, `check_task_list_ui.py` 119,
+pyflakes clean. ⚠️ During this work a stray `git stash` set the whole
+uncommitted tree aside for ~30 s (16:14) and was popped at once; the staged
+`old_models/` renames were re-staged, every file verified back — but tracked
+files show a 16:14 mtime, and a node started or a page loaded in that
+window would have read HEAD's files.
+
+### 2026-11-13 (night, later) — New task `…_mid20mm_sidetrim_sel40`: 40 hand-picked work points (106: 20, 122: 20), `tools/select_task_points.py`
+
+User (handwritten list): from the mid20mm_sidetrim task make a new task with
+only these source points — g122 207 210 213 216 / 291 294 297 300 / 373 376
+379 382 / 455 458 461 464 / 536 539 542 545, g106 761 764 767 770 773 / 823
+826 829 832 835 / 887 890 893 896 899 / 933 936 939 942 945 — "곡면이라서
+경로 고려 필요". `tools/select_task_points.py JOINT POSE SUFFIX --points
+G:ids … [--surface POSE] [--keep-order] [--apply]`: per group home row →
+straight joint-linear approach → the selected points, one joint-linear move
+each (cut at 0.1 rad, transition rows) → straight retreat → home row; groups
+without a selected point are not in the new task. Lines (constant world y)
+are oriented serpentine. Decisions made without asking: **`source_point_id`
+/ pose `point_id` are KEPT from the input** (the UI / frame names / CSVs
+show the numbers on the user's sheet, and they match the earlier runs of
+the same file; only the joint path index is renumbered) — I had first told
+the user they would be renumbered; speed 10 on every row; suffix `sel40`.
+The check that decided the order: tip (URDF FK + T_ee2tip) and case bottom
+vs the surface of the planner ORIGINAL pose file (5907 points, plane fit
+within 25 mm) along every new move. In the listed order g106's last line
+change 899 → 933 is 203 mm and cuts 3.6 mm below the surface (case bottom
+13.4 mm); serpentine (899 → 945 … 933) makes it 58 mm. Result: g106 order
+761…773, 823…835, 887…899, 945 942 939 936 933 — 60 rows, largest dip
+0.46 mm, case bottom ≥ 16.56 mm, approach / retreat tip ≥ 19.8 mm beyond
+the last 20 mm; g122 order 207…216, 300…291, 373…382, 464…455, 536…545 —
+45 rows, dip ≤ 0.08 mm, approach / retreat 14.0 / 12.2 mm at 20 mm (the
+same slope as a straight approach to the planner's own first / last point
+there: 13.3 / 11.9). Largest joint step 5.68°. Verified: every task row
+equals its input row except point_id / speed, pose rows except speed; real
+`TaskManager` registers scan_joint / scan_pose `…_sel40` (tags 106, 122,
+40 scan points all with world xyz, lift 0); `check_scan_resume` 149;
+`RELOAD_TASKS` sent to the idle executor, `/task_list` lists both (12
+tasks). **Not run on the robot.** Tip / case only — no link model, nothing
+known about the die outside the surface points; the usual joint-replay
+hazard. ⚠️ The `scan_pose_…_sel40` twin is run by TaskManager in ascending
+point_id order, i.e. WITH the 203 mm move — use the joint task.
+
+### 2026-11-13 (night) — Ra model selectable in real use: `/arm/ra_model` auto | flat | curved, Task tab "Ra model"
+
+User, after the flat-only / curved-only models scored 89.3 % / 91.8 % on
+today's two runs: "실제사용에서 곡면 따로 평면 따로 모델선택할수있게". Built as
+ONE operator choice that every Ra path follows (standing text in Tech
+Stack): `apriltag_nav/ra_model_choice.py` (pure: choices, aliases incl.
+평면 / 곡면, file per choice, the state dict). `InferenceInterface` keeps
+every model it has loaded keyed by path (`preload_model` loads without
+switching, `select_model` switches and keeps the current model when the
+new one fails; `load_model` unchanged for callers), `RaScanPipeline`
+passes both through. `ArmController.set_ra_model` loads the model in the
+callback (a missing / broken file is refused at the command, choice kept,
+reason in the state's `error`), `_apply_ra_model` switches the pipeline at
+the start of each `execute_scan_points` call (one per group — the previous
+call's inference worker is joined by then, so no frame is scored halfway
+through a switch), `_ra_model_note` labels the Ra-map row. Step evaluation:
+with flat / curved an Estimate runs THAT one model (slot `flat_only` /
+`curved_only`, ~0.9 s instead of 2.4) and its value is the estimate; the
+choice is read per estimate, so changing it at a stop and pressing
+Estimate again scores the same photo with the other model; a geometry
+model that is not loaded FAILS the estimate (no other model's number under
+its name). `<run>_step_eval.csv` gained `ra_model`, `ra_flat_only`,
+`ra_curved_only`, `infer_flat_only_s`, `infer_curved_only_s` (an older
+file is set aside `_old_<ts>` at the first new row, as before).
+inference_node follows `/arm/ra_model_state` (`~follow_ra_model`, geometry
+predictors loaded on first use) and the Collect tab's line names a
+geometry model (`Ra 1.2612    (ra_flat_only)`). Web: Task tab group "Ra
+model" (select; follows arm_node's state, a refused choice shows its
+reason), system-bar chip `RA MODEL auto / ra_flat_only / ra_curved_only`
+(green / purple / red on error). Qt window not touched. Decisions made
+without asking: default and after-restart = auto (the package recommends
+split as the default; a stale flat choice on a curved surface would read
+0.6); one model per geometry estimate, not flat + split side by side; the
+choice is per robot, not per group of a task (a task whose groups mix flat
+and curved needs the choice changed between groups — it applies at the
+next group's scan).
+
+Verified offline: `check_scan_progress.py` 244 → **265** (aliases; flat
+loaded at the command and switched once before the first frame of the
+scan; rows labelled; no second switch; back to auto; load failure / missing
+file refused with the choice kept; a switch failing at the scan start
+leaves the scan on auto, unlabelled, error in the state; step: one model,
+row + CSV, not-loaded fails, auto → flat at one stop), `check_web_ui.py`
+162 → **168**, `check_task_list_ui.py` 119, `check_ra_predictor_crop.py`
+68, `check_scan_resume.py` 149, pyflakes clean; with the REAL models:
+`InferenceInterface` auto → flat → curved → auto on today's frames (1.4757 /
+1.1340 / 2.3761, auto identical after the round trip, a bad path keeps the
+model), the controller's `_step_score` per choice, inference_node's
+switching through `_cb_ra_model`; the page's `renderRaModel` /
+`stepEstimateText` run in headless Chrome. **Not run on the robot:
+`arm_node`, `inference_node` and `robot_ui_web_node` restart required**
+(`sudo systemctl restart mobile-manipulator`); the log should then show
+`Ra model <- flat (ra_flat_only)` on a selection and `this scan is scored
+with Ra model flat` at the scan start. Memory: each geometry model adds one
+45 MB graph to arm_node per use (scan cache + step predictor are separate
+sessions of the same file — not shared).
+
+### 2026-11-13 (evening, later) — Geometry models installed as `ra_flat_only` / `ra_curved_only`; flat roughing re-scored: 89.3 %
+
+User uploaded `model/exported/UPR_Ra_inference_v3_geo_ko.zip` (sha256
+91a15b3f…, left there): `ra_flat.onnx` (2026-11-11/12 FLAT tiles only,
+finishing 219 + roughing 199) and `ra_curved.onnx` (curved only, 573), same
+recipe and — verified by diffing `predict.py` — the same `spot_crop` as v3.
+Asked to name them so the training data is obvious: installed as
+**`ra_flat_only.onnx` / `ra_curved_only.onnx`** with sidecars (`model`,
+`geometry`, training data, ranges, the package's accuracy figures, `use`),
+`paths.RA_FLAT_ONLY_MODEL_PATH` / `RA_CURVED_ONLY_MODEL_PATH`. Comparison
+only: NOT wired into the scan path, the step evaluation or inference_node
+(the geometry is not judged from the image; the package itself recommends
+split as the default). Verified: the workspace `RaPredictor` on the
+package's four samples within 0.00005 µm of `expected_output_*.csv`;
+`check_ra_predictor_crop.py` 68. Flat roughing run `…_160955`, 12 measured
+points, accuracy vs the sheet's second measured column: **ra_flat_only
+89.3 %** (6 of 12 points ≥ 90, min 71.9; 90.8 vs the first column, 90.7 vs
+the mean of the two; pred/true 1.07), A 87.8, B 81.2, ra_roughing 54.8.
+Mean estimate 1.261 vs measured 1.19–1.20; point-to-point correlation with
+the measurement only 0.36 — the level is right, the per-point differences
+are not resolved (the two hand readings differ 5 %). Curved run `…_154343`
+for reference: ra_curved_only 91.8, ra_roughing 92.4, A 82.5. The wrong
+geometry model reads nonsense (curved_only on flat ≈ 0.6, flat_only on
+curved ≈ 0.7), as the README says. `<run>_model_compare.csv` in the flat
+run folder has the `ra_flat_only` column. The .onnx are not committed (no
+git-lfs here).
+
+### 2026-11-13 (evening) — Step-eval record sheets checked: the recorded "추정값" is ra_roughing (✓), not A; no flat-only model exists
+
+User: on flat roughing (`…ra_map_20261113_160955`, g122 sp207–218, 12
+hand-measured points) "model A" is under 90 %, re-estimate with a model
+trained on flat data only. Findings, no code changed: (1) **no flat-only
+model is on this PC** — v3 has finishing-only, roughing-only (both flat +
+curved), A, B; a flat-only one must be trained on the dev machine. (2) The
+value typed into both record sheets is the ✓ `ra_selected` = the
+**ra_roughing** graph, not A (flat D column == `ra_roughing` cell for cell;
+curved too). (3) The flat sheet's accuracy column is broken (row n uses
+D(n−1), F7 `#REF!`). Re-scored on the saved frames (reproduces the CSV to
+4 decimals), accuracy vs the sheet's second measured column: flat —
+**A 87.8 %** (pred/true 1.05), B 81.2, ra_roughing 54.8 (reads 1.5–1.9 on a
+1.06–1.48 surface), ra_standard(11-10) 59.5; curved (sp841–850) —
+ra_roughing 92.4, B 87.3, A 82.5. The two hand readings differ 5 % between
+themselves. Likely why ra_roughing fails here (inference, not proven):
+today's flat frames are brighter (mean 133, 27 % saturated) than the 11-11
+flat roughing training frames (115 / 21 %, where ra_roughing reads
+1.15–1.5, 89 % on a 20-frame sample) — it leans toward the curved-roughing
+look (170 / 39 %, Ra ~2.1). Per-point table:
+`<run>_model_compare.csv` in the flat run folder.
+
+### 2026-11-13 — Step evaluation mode: one work point per "Next point", capture + Ra only on "Estimate Ra"
+
+User: "현재 csv task 에서 스캔 중에 버튼 누르면 한 포인트 이동하고 또 한 버튼
+누르면 추정하는 평가용 기능". Built beside collect mode, same shape (state on
+a latched topic, released from the callback thread). `ArmController`:
+`step_enabled` (`~step_mode`, default off; `/arm/step_mode` Bool live,
+applies from the NEXT scan — a running scan keeps the mode it started with),
+`/arm/step_cmd` (`{"cmd": "next"|"estimate"}` or the bare word),
+`/arm/step_state` (latched JSON: waiting / kind start|point|failed / g p sp /
+scan_no of n_scan / standoff summary + converged / estimates list /
+n_estimated / last). Flow per `execute_scan_points` call (= per group): a
+**start** stop before ANY motion; Next drives the path — transition rows
+driven through as usual — to the next scanned point, runs the Keyence
+standoff and stops (**point** stop); Estimate = `pipeline.capture` +
+`pipeline.process` synchronously (the arm is still), as often as wanted,
+frames `g…_p…_sp…_i…[_e<n>]_s<k>.png`, every result listed; Next moves on.
+The Ra-map row takes the LAST estimate (`success` True, message `step: N
+estimate(s), last Ra …`); a point left without one is written `step: not
+estimated` with `success` False (so a RESUME offers it again). Decisions made
+without asking: nothing is captured unless asked (no preopen either); a
+failed move stops at a **failed** stop (Next only) instead of driving on;
+`keyence.require_converged` does not skip the point in step mode (the stop
+shows `⚠ NOT converged` and the operator decides); collect mode is ignored
+for a step scan (warning). Cancel / STOP ALL at any stop ends the scan there,
+no home move. UI: web Task tab group "Step evaluation" (Step mode checkbox,
+**Next point ▶**, **Estimate Ra**, readout + the estimates in large type),
+SCAN chip `STEP ready / STEP pt N / STEP move failed`, log lines `[step] …`;
+bridge `set_step_mode` / `step_cmd` / `step_state`. The Qt window was not
+touched. Verified offline: `check_scan_progress.py` 212 → **234** (start
+stop moves nothing; first Next drives traverse + work point and stops; second
+Next only to the next work point; Estimate refused at the start stop;
+captures only on Estimate, `_e2` naming, rows with / without estimate; cancel
+at a point stop; failed move → failed stop; collect ignored; mode off
+unchanged), `check_web_ui.py` 149 → **154**, `check_task_list_ui.py` 119,
+page loads in headless Chrome with its JS init run, pyflakes clean. **Not run
+on the robot: `arm_node` + `robot_ui_web_node` restart required** (`sudo
+systemctl restart mobile-manipulator`); browsers reload the page.
+**Then (user: "촬영 이미지 화면 출력, ra도 원래처럼 화면 밑에, 시간은 모델 추론시간만"):**
+every new estimate is shown like a Collect-tab capture — `robot_ui_web_node`
+reads the PNG arm_node just saved (same PC; `image_paths` in the estimate,
+needs arm_node `save_images` true, as the launch sets) off the ROS thread and
+pushes it to the main Basler view + Last-capture, and `ui.ra_text` (the line
+under the image) reads `Ra 0.4123    inference 0.85 s`. The time is the model
+inference alone: `RaScanPipeline.process` now returns `infer_s` (sum of the
+per-sample `inference.infer` times — no capture, no PNG save), the estimate
+carries it, the Task-tab list shows it instead of the capture-to-result
+`elapsed_s`. A failed estimate shows `Ra — failed`; a republished state does
+not reload the frame. `check_scan_progress.py` 235, `check_web_ui.py` 158.
+**Then (user: "next 버튼 클릭하며 이동하고 촬영까지 진행, 추정 버튼 누르면 추정
+진행하고 결과 보여주"): the capture moved from Estimate to Next.** Arriving at
+a point (after the standoff) the arm CAPTURES at once and saves the frames
+before any inference (`RaScanPipeline.save_frames` → `<prefix>_s<k>.png`; the
+state is `capturing` meanwhile, then `capture` {ok, images, image_paths}); the
+web UI puts that photo in the Basler view with `Ra — press Estimate (g p)`
+under it. Estimate = `process(..., save=False)` on THOSE frames (no second
+capture, no second write); a capture that failed on arrival is retried by
+Estimate first. Ra-map rows: `step: last Ra …` / `step: captured, not
+estimated` / `step: no frames`. The `_e<n>` frame names are gone (one photo
+per arrival). `check_scan_progress.py` 238, `check_web_ui.py` 160,
+`check_task_list_ui.py` 119.
+**Then (user: "g106 p21 소스포인트로 표시"):** every step label shows the work
+point by its SOURCE point id — `(g106 sp7)` under the image, `AT POINT g106
+sp7`, SCAN chip `STEP sp7`, `[step] at g106 sp7` log lines; the path row
+`p<n>` only when the file has no source_point_id. The step progress events
+carry `source_point_id`. Same check counts.
+**Then (user: "모델 결과 보여줄때 3개의 결과 다보여주고 이미지와 추정결과 시간 다
+남겨주"):** "3개" = the package's three standard-Ra models (README "표준 Ra
+모델 3종", `expected_output.csv` ra_split / ra_A / ra_B). A step estimate now
+runs its own `RaPredictor` with slots `split` (`paths.MODEL_PATH`, primary —
+its value goes into the Ra map), `A`, `B` (`ArmController.STEP_MODELS`;
+loaded once, in a thread at the step scan's start stop; nothing loads → the
+scan pipeline's single model as before). `predict_detail` gained `times`
+{slot: s of its own model run(s)} and `prep_s` (shared preprocessing).
+Under the image: `Ra  split 0.3896   A 0.4276   B 0.3596   (finishing)
+inference split 1.07 s · A 0.53 s · B 0.55 s`; the Task-tab list the same.
+Every estimate (ok or failed) appends a row to
+`results/scan_images/<run>/<run>_step_eval.csv` (stamp, run, index, g / p /
+sp, x y z, standoff, image names, ra_split / ra_A / ra_B, stage +
+p_finishing / p_roughing, flags, infer_split_s / infer_A_s / infer_B_s,
+prep_s, infer_total_s, capture_s, message) — versioned like the collect CSV
+(only png/jpg under scan_images are ignored). Step photos are saved even
+with `save_images` off (`save_frames(force=True)`). Verified: the real
+`_step_score` on the package's 4 sample frames = `expected_output.csv` to
+0.0000 µm for split / A / B and the stage; ~2.3–2.4 s per estimate on the
+robot PC with the stack running (split 1.0, A 0.55, B 0.55, prep 0.2 s; the
+first one +5 s if the models were not loaded yet). `check_scan_progress.py`
+242, `check_web_ui.py` 162, `check_ra_predictor_crop.py` 68,
+`check_task_list_ui.py` 119. Not run on the robot: `arm_node` +
+`robot_ui_web_node` restart.
+**Then (user: "b 를 제거하고 ra_finishing.onnx ra_roughing.onnx ra_A.onnx
+이렇게 보여주"):** the step models are the three GRAPHS, each run on its own
+— `STEP_MODELS` (A, finishing, roughing; A first so ITS stage head decides
+the stage, the split model's rule), shown as `STEP_SHOW` finishing / roughing
+/ A. The graph of the stage A reads is marked `selected` (✓ in the UI) and
+is the Ra-map value (= split's). UI: `Ra  finishing 0.3896 ✓   roughing
+1.3871   A 0.4276   (finishing)    inference finishing 0.60 s · roughing
+0.58 s · A 0.50 s`. `<run>_step_eval.csv` columns now ra_finishing /
+ra_roughing / ra_A / stage / ra_selected and infer_finishing_s /
+infer_roughing_s / infer_A_s; a file with the older column set is renamed
+`…_step_eval_old_<ts>.csv` before the first new row. Verified with the real
+graphs on the 4 package samples: selected = expected ra_split and A =
+ra_A to 0.00005 µm, stage 4/4; ~2.0 s per estimate (each graph 0.4–0.6 s,
+prep 0.2). ⚠️ The NON-selected graph is out of its training range and reads
+nonsense (curved roughing frame: finishing graph 0.158 vs 2.14; curved
+finishing frame: roughing graph 1.39 vs 0.39) — shown because asked, not to
+be read as a measurement. `check_scan_progress.py` 244, `check_web_ui.py`
+162.
+
+### 2026-11-13 — Scan Ra model → UPR_Ra_inference v3 "split" (ra_A routes to ra_finishing / ra_roughing)
+
+User: "UPR_Ra_inference_v3_ko.zip 이거는 새로운 모델이야 이거로 바꿔주" (zip in
+`model/exported/`, sha256 601a1fee…, left there). Four graphs: `ra_finishing`
++ `ra_roughing` (trained per stage on the 2026-11-11/12 data), `ra_A` (all of
+it, also the stage head), `ra_B` (+ the 2026-10 data); the package's
+recommended and default output is **split** — A's stage head (argmax of
+finishing / roughing) picks the stage graph per frame. Preprocessing
+(`spot_crop`) is byte-identical to the 11-10 package, so nothing about the
+input changed. What did: one slot is now three graphs. `ModelSlot` takes a
+`.json` path that is a `"kind": "split"` manifest (`router`, `by_stage`),
+loads the three parts (each with its own spot-tile sidecar), refuses a
+router without a stage head or parts preprocessed differently, and
+`run_all` returns the chosen graph's Ra with the router's logits — so
+`predict_detail`'s stage / flags / Ra-range check (the chosen stage's
+range) work unchanged, and `sidecar_meta` of the manifest names the slot
+`ra_split` in inference_node. `paths.MODEL_PATH` = `ra_split.json`; A / B
+reachable as `RA_A_MODEL_PATH` / `RA_B_MODEL_PATH`; `ra_standard.onnx` kept
+on disk (`RA_STANDARD_V1_MODEL_PATH`; then moved with every earlier model
+— ra_new, resnet3D_multi, the 2025 resnet3D / resnet3D_gray — into
+`model/exported/old_models/`, user: "이전모델들은 한폴더로 정리해주"; tracked
+sidecars + the resnet3D_multi LFS pointer by `git mv`). Decided without asking: split (the
+package's default and best, 84.7 %), stage chosen by the image, not by the
+run label (A's head was 100 % on the 295 test frames; no `--stage`
+equivalent was added).
+
+Verified on the robot PC: split / A / B on the package's 4 sample frames
+(flat / curved × finishing / roughing) within **0.00005 µm** of
+`expected_output.csv`, routed as it says, spot / stage identical, no flags;
+`InferenceInterface.load_model(MODEL_PATH)` (the scan path) gives the same
+1.2119 on mono and bgr8; split costs ~1.75 s / frame here (two runs; the
+stack was running). `check_ra_predictor_crop.py` 45 → **68** (real v3
+samples; fake split: routing to each stage, 2 graph runs, the chosen
+stage's range flags, five manifest refusals; deployed manifest + 5
+sidecars). **Not live until `sudo systemctl restart mobile-manipulator`**
+(arm_node and inference_node load the model at start; the log should show
+`slot 'scan' loaded (split): router ra_A.onnx, …`). Ra maps from now on are
+split values — not comparable with ra_standard's (11-11 … 11-13). Not
+committed: the four `.onnx` need git-lfs, which the robot PC does not have.
 
 ### 2026-11-13 — Three mid20mm_sidetrim runs zipped as 곡면정삭
 

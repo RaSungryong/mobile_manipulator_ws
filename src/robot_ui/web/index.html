@@ -26,6 +26,7 @@
     <span class="chip" id="chip-task">TASK —</span>
     <span class="chip" id="chip-scan">SCAN —</span>
     <span class="chip" id="chip-camera">CAM —</span>
+    <span class="chip" id="chip-ra-model" title="which Ra model scores the frames (Task tab, Ra model)">RA MODEL —</span>
     </div>
     <div id="sysbar-fixed">
     <span class="chip conn" id="chip-conn">connecting…</span>
@@ -201,6 +202,32 @@
                 <button id="btn-raw">Send</button>
               </div>
             </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Ra model  (choose by surface: flat / curved)</div>
+            <p class="note">Which model turns a photo into Ra. <b>Auto</b> = the standard split model (finishing / roughing told apart from the image, trained on flat + curved together). <b>평면 전용</b> = <code>ra_flat_only</code>, trained on flat-surface data only; <b>곡면 전용</b> = <code>ra_curved_only</code>, trained on curved-surface data only. Flat or curved is NOT detected from the image — pick the one that matches the surface under the tool; the other geometry model reads nonsense (≈ 0.6 on a 1.2 surface). Applies to the TASK scan (from the next group's scan), the step Estimate (at once) and the Collect tab's Ra. Back to Auto after a restart.</p>
+            <div class="toolbar">
+              <label>Ra model <select id="sel-ra-model" title="/arm/ra_model — the selector follows arm_node's own state (/arm/ra_model_state)">
+                <option value="auto">Auto — split (finishing / roughing)</option>
+                <option value="flat">평면 전용 — ra_flat_only (flat only)</option>
+                <option value="curved">곡면 전용 — ra_curved_only (curved only)</option>
+              </select></label>
+              <span class="spacer"></span>
+              <span class="detail" id="lbl-ra-model">— (no /arm/ra_model_state yet)</span>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Step evaluation  (one point per button)</div>
+            <p class="note">Tick <b>Step mode</b>, then send the TASK as usual. The arm waits before its first move; <b>Next point</b> drives the path (transition rows included) to the next scanned point, runs the Keyence standoff and takes the photo there — it appears in the Basler view (saved as g…_p…_s1.png); <b>Estimate Ra</b> runs the chosen Ra model (group above; change it and press Estimate again to compare) on that photo and shows the Ra under the image (time = model inference only); <b>Next point</b> again moves on. The Ra map row takes the estimate; a point moved past without one is written as "captured, not estimated". Collect mode is ignored while this is on. Applies from the next scan; Cancel arm motion / STOP ALL ends the scan where it stands.</p>
+            <div class="toolbar">
+              <label title="/arm/step_mode — applies from the next scan; the box follows arm_node's own state"><input type="checkbox" id="chk-step"> Step mode</label>
+              <button id="btn-step-next" class="btn-primary" disabled title="drive to the next scanned point (from the start stop: to the first one) and take the photo there">Next point ▶</button>
+              <button id="btn-step-estimate" disabled title="run the model on the photo taken at this point and show the Ra; the arm stays">Estimate Ra</button>
+              <span class="spacer"></span>
+              <span class="detail" id="lbl-step-count">estimated 0</span>
+            </div>
+            <div class="readout" id="lbl-step">step: — (no /arm/step_state yet)</div>
+            <div class="readout step-ra" id="lbl-step-ra" hidden></div>
           </div>
           <div class="group">
             <div class="group-title">Ra data collection  (hand roughness tester)</div>
@@ -380,6 +407,7 @@
       <!-- ---------- Log ---------- -->
       <div class="group" id="logbox">
         <div class="group-title">Log</div>
+        <button id="btn-save-log" class="log-clear log-save" title="Save the log shown here to a file on the robot PC: <ws>/log/robot_ui/web_ui_log_<YYYYMMDD_HHMMSS>.log (the path is printed in the log). If the server cannot be reached the browser downloads the file instead.">save</button>
         <button id="btn-clear-log" class="log-clear" title="Clear the log">clear</button>
         <pre id="log"></pre>
       </div>
